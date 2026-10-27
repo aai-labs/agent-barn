@@ -6,13 +6,163 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Current state
 
-- Delivered in this change: [AF-388 / WF01](https://aai-labs.atlassian.net/browse/AF-388) Agent-owned definitions, immutable schema-v1 versions, validated step/input schemas and manual authoring/inspection through the Agent’s Workflows tab. WF01 is merged into staging via PR #308, including its review follow-ups.
-- Implemented and locally verified: [AF-389 / WF02](https://aai-labs.atlassian.net/browse/AF-389) explicit version/input starts, steps run as sessions in the owning Agent under its own configuration, durable progression/cancellation, completed-step text summaries and a final text result stored in PostgreSQL. File artifacts and shared storage are deferred; no deployment or live schema change accompanies this work.
-- In transition: WF02 is committed on top of staging (which includes WF01) and remains unmerged. Natural-language generation remains a separate PR; file artifacts/shared storage and approvals/notifications are later slices.
-- Next: Merge/deployment coordination after the successful local Hermes run. Shared storage and workflow file artifacts need a separate scoped task/PR; generation and WF03 business actions remain independent follow-ups.
-- Verification limits: The original Agent-session checks passed 181 focused API, trigger-server, builder and contract tests. The wakeup repair passes 95 workflow/trigger-server tests plus lint, formatting and API type checks. A live two-step Research run on restarted local Hermes Agent Arlo completed successfully with both text summaries persisted. Live OpenClaw execution and a broad full-suite pass are not claimed.
+- Delivered: AF-388 manual authoring is merged through PR #308.
+- Dependency: AF-389 [PR #326](https://github.com/aai-labs/agent-barn/pull/326) is included in fetched staging via merge `42ea3fc7`. AF-415 originally launched from its feature branch and is now locally rebased onto `origin/staging` at `e207a212`. The PR delivery is being refreshed against staging after the independent review.
+- Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
+- Reviewed: the complete local feature at `36096b17` was independently reviewed against staging `e207a212`; the two blocking findings were fixed in `ef802873`, and an independent focused recheck approved that correction with no new blockers. Full-review and recheck scope/verification are distinguished in the artifact evidence.
+- Next: finalize PR delivery and AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
+- Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
+
+### 2026-10-26 — AF-415 — Artifacts navigation and PR delivery evidence
+
+- Changed: the Agent tab now reads Artifacts and uses the package icon; existing `tab=files` links remain valid. Accessible Agent/run/step labels and the real-browser probe use Artifacts consistently.
+- Developer guidance: README now includes the actual uv/Python bootstrap prerequisite, full-stack/native artifact setup, smoke test, maintenance/retry guidance, troubleshooting and focused checks. The artifact contract includes topology and asynchronous provisioning diagrams.
+- Evidence: fresh current-interface screenshots include navigation, common file formats, provisioning states, deletion confirmation and per-file errors. PR attachment captions label these fixture renders separately from real storage/runtime/browser verification.
+- Verification: all 16 artifact browser tests pass with the visible Artifacts label; the real image/API/persistent-Garage/browser contract passes after the rename (1 test, 26.58 seconds). API/UI quality, migration-head, chart, shell and local link checks pass. This navigation/docs/evidence follow-up was locally verified after independent approval of `ef802873`.
+- Evidence storage: screenshots are uploaded directly to the PR description; the repository screenshot evidence directory is removed at the maintainer's request.
+- Delivery: existing [AF-415 PR #328](https://github.com/aai-labs/agent-barn/pull/328) is refreshed against staging; no duplicate feature PR, runtime Agent deletion, merge or external deployment is included.
+
+### 2026-10-26 — AF-415 — independent-review cleanup pin correction (local, not pushed)
+
+- Review: the full Personal Codex review of `36096b17` against `origin/staging` at `e207a212` requested changes: a concurrent review pin could commit after cleanup's selection snapshot and still lose its file; current architecture/deployment/workflow guidance also contained superseded claims.
+- Fixed: cleanup now rechecks live-owner active references in a fresh statement after acquiring the artifact lock shared with pin acquisition, before transitioning to DELETING. Deleted-owner reclamation remains deliberate. A deterministic real PostgreSQL/Garage race regression fails on the prior implementation and passes after the fix, asserting both references and bytes.
+- Documentation: corrected API/maintenance management authority, deployment Secret comments, delivered run/step attachments and AF-389's merged status while retaining its open acceptance gaps.
+- Verification: the new real PostgreSQL/Garage race contract first failed on the old code, then passed both live/deleted-owner cases. All 89 affected storage/workflow tests, API quality, migration-head, artifact/workflow chart and whitespace checks pass. Independent recheck of `ef802873` returned Approve: F1/F2 resolved, no new Critical/Required findings. It independently passed 89 affected tests, both race cases, the guard-removal mutation and quality/migration/chart checks. The recheck extends the original full review rather than repeating all 124 files; no push, merge or external deployment.
+
+### 2026-10-26 — AF-415 — delete action in Agent Files (local, not pushed)
+
+- Delivered: users with `agent.update` can delete files through a trash action and the shared confirmation dialog. Successful deletion refreshes artifact lists; failures remain in the dialog, and pinned files remain protected by the existing API. Read-only users see no delete controls.
+- Verification: 16 artifact browser cases pass, including confirmation/cancel, successful removal, pin conflicts/retry and permission loss. Three real API/Garage checks cover pins, read-only credentials and tenant boundaries. UI types/lint and whitespace pass. No storage/API contract, migration or retained developer file was changed.
+
+### 2026-10-26 — AF-415 — file-list icons and row layout (local, not pushed)
+
+- Changed: file rows show format icons for common documents, spreadsheets, images, archives, code, audio/video and presentations, with a generic fallback. Compact metadata and a quieter checksum line accompany download icons and per-file link-request progress. Small-screen controls retain accessible filenames.
+- Verification: UI types/lint and all 12 artifact browser tests pass. The format/fallback fixture also covers a known extension with generic MIME metadata. Actual rendered fixture screenshots are captured; no API or storage contract changed.
+- Delivery: earlier provisioning, infinite-list and diagnostic work was committed as `d0ab467f`; the file-list presentation follow-up was committed as `73daa0dc`. Neither commit has been pushed.
+
+### 2026-10-26 — AF-415 — file-specific diagnostics and infinite Files (local, not pushed)
+
+- UI: provisioning states now follow the centered, dashed empty-card treatment used by Conversations, with state icons, progress and actions. Per-file failures use the shared icon alert card. UI types/lint and all 11 artifact browser cases pass after this presentation revision.
+- Changed: the Files UI uses infinite queries and scroll loading in 20-file pages, retaining earlier files during load-more failures. The API uses creation time plus ID ordering for timestamp ties.
+- Fixed: previous shared-layout files now receive an explicit authenticated 409 requiring migration or re-upload, instead of falsely reporting general storage unavailability. Current-layout credential failures have a separate safe 503 explanation. Errors appear beside the affected file; current files continue downloading. No legacy bytes or metadata were migrated or deleted.
+- Verification: 46 focused API tests plus 2 additional diagnostic/pagination tests, 11 browser cases and API/UI quality checks pass. The running local service confirms the reported file is in the former layout and a current 157-byte file still downloads with matching checksum. Actual-render fixture screenshots are captured; [exact evidence](../agent-artifacts/EVIDENCE.md#file-specific-download-errors-and-infinite-files--2026-10-26-local-not-pushed) separates fixture UI from real storage.
+
+### 2026-10-26 — AF-415 — asynchronous provisioning with Files feedback (local, not pushed)
+
+- Changed: maintainer requested nonblocking Agent creation and explicit provisioning for existing Agents. Creation now atomically commits PENDING storage intent, returns 201, then starts post-response work. The existing maintenance worker recovers durable requests; no discovery scanner or separate provisioner is introduced.
+- API/UI: status reads use current `agent.read`; Provision/retry uses `agent.update`, returns 202 and reuses the same key identity. Files displays not provisioned, provisioning, failure/retry and ready states, polling active requests. Provider failure preserves text-only Agent operation.
+- Operations: Compose maintenance runs every ten seconds; enabled Kubernetes maintenance recovers requests every ten minutes. No migration is required; existing journal states and encrypted credentials are reused. Verification: 51 focused API/storage/configuration/inventory tests, 14 final creation/scoped-role tests, 287 broader Agent/OpenRouter tests, 8 browser cases, both runtime CLI contracts and the real runtime/persistent-Garage/browser contract pass. The real HTTP/mutation checks prove creation returns before provider completion. Quality/migration/chart checks pass; [exact evidence](../agent-artifacts/EVIDENCE.md#asynchronous-provisioning-and-files-feedback--2026-10-26-local-not-pushed) distinguishes actual storage from mocked UI. Prior synchronous tests/reviews are historical evidence only; independent review and AF-389 live gaps remain.
+
+### 2026-10-26 — AF-415 — synchronous API storage preparation (local, not pushed)
+
+- Changed: maintainer requested removal of the isolated provisioner. Agent creation now invokes the internal artifact service directly, commits a durable reservation before provider I/O, verifies private bucket/key scope, and atomically commits Agent/access/events only for a READY unexpired reservation. Configured-storage failure returns retryable 503; deliberate storage disablement preserves text-only operation.
+- Operations: removed the provisioner Deployment/Compose service and Agent-discovery scan. API and existing artifact-purge receive private Garage management authority. Purge handles expired abandoned reservations and deleted-owner reclamation. Native development loads a generated loopback management endpoint; other application workloads and Agents receive no management/data secrets.
+- Verification: 303 Agent/create/persistence/OpenRouter tests and 39 storage/configuration tests pass, plus the 9-case creation rerun, 2 real-image CLI contracts, authenticated Chromium/persistent-storage contract and native-management persistence regression. API quality, migration-head and artifact/workflow chart checks pass; the deadline mutation is caught. Exact results and harness failures are in [artifact evidence](../agent-artifacts/EVIDENCE.md#direct-api-provisioning--2026-10-26-local-not-pushed). Local API/cleanup were refreshed and the retired worker removed; app health is 200. Earlier independent reviews do not cover this revision. No push, merge or external deployment.
+
+### 2026-10-26 — AF-415 — rebase onto fetched staging
+
+- Checkpoint: committed the storage revision before rebasing. Rebased onto fetched `origin/staging` at `e207a212`, including Agent Sizes and the AF-389 merge. Preserved both builders' fixed init-container resources, Agent-size and artifact API inventory entries, and both domains' cleanup/history.
+- Schema: retained the earlier artifact merge revision and added no-op merge `fac0030afc38`, joining staging's `8b2e4f61c9d3` with artifact head `a4152d0e1f32`. No schema/data operations are introduced by the merge itself.
+- Verification: 255 affected artifact/builder/inventory/Agent-size tests and 16 size-migration/resource tests pass. Both real-image CLI tests and authenticated browser/storage deployment contract pass; API/UI static checks, migration-head and artifact/workflow chart contracts pass. Local migrations are applied and app health is 200.
+- Delivery: local commits only; no remote force-push, PR retarget, merge or external deployment. Independent review of the current storage architecture remains outstanding; inherited AF-389 acceptance limitations are not resolved by the rebase.
+
+### 2026-10-26 — AF-415 — fixed Agent-derived bucket names (local, not pushed)
+
+- Simplified: removed `ARTIFACT_S3_BUCKET_PREFIX` from configuration, bootstrap state generation, application settings and tests. Names are always `agent-artifacts-<agent UUID hex>`; key-local aliases need no installation namespace setting. The existing endpoint determines whether storage is configured, without adding a replacement toggle.
+- Preserved: each Agent still owns a distinct actual provider bucket and scoped data key; exact owner/bucket validation, retry journals and provider-ID isolation remain intact. No existing-file migration is introduced.
+
+### 2026-10-26 — AF-415 — deployment review simplifications (local, not pushed)
+
+- Changed: the provisioner Deployment always runs; removed `ARTIFACT_PROVISIONER_ENABLED` and its chart gate. Signing uses the fixed `garage` region, with no `ARTIFACT_S3_REGION` configuration or override. These supersede the earlier configurable-region note.
+- Simplified: removed the optional `GARAGE_RPC_SECRET_NAME` deployment variable. The actual `garage-rpc` Secret remains mandatory for Garage RPC/node/CLI authentication and holds the separate private admin token.
+- Corrected: Kubernetes loads the admin token via a Secret-backed `GARAGE_ADMIN_TOKEN` environment reference, like the RPC secret. Garage rejects projected files with either world/group read permission, including `0440`; its strict check is not disabled. Local Compose retains its private `0600` file. The corrected three-node quorum/PVC contract passes in 254.69 seconds. Final focused verification passes 176 tests; API/static/migration/chart checks pass.
+
+### 2026-10-26 — AF-415 — per-Agent buckets and isolated provisioning (local, not pushed)
+
+- Changed: each Agent gets a distinct private provider bucket and read/write data key. The ordinary API and file-purge worker resolve the exact owner/bucket key from encrypted PostgreSQL metadata; neither receives a shared data key or provisioning token. Agent runtimes remain credential-free at the storage layer.
+- Boundary: the maintainer approved a separate privileged provisioner. Its dedicated process and private admin endpoint own bucket/key creation and deleted-owner reclamation. Durable intent precedes provider I/O; uncertain creation/revocation responses retry the same identities. Cleanup retains data keys until every artifact is purged.
+- Schema/configuration: `a4152d0e1f32` adds the durable bucket/key journal and guarded downgrade. `ARTIFACT_S3_BUCKET_PREFIX` replaces the shared bucket/credential configuration. Compose/Helm/CI isolate the dedicated control-plane Secret. Existing file migration/legacy access is deliberately out of scope at the maintainer's request; old local buckets/volumes are not deleted.
+- Verification: real-Garage isolation, uncertain-response, owner-deletion and migration regressions pass; both runtime CLI image contracts and the authenticated browser/private-storage contract pass. A test-only shared-provider-bucket mutation was caught. Exact totals and limitations are in [evidence](../agent-artifacts/EVIDENCE.md).
+- Local operations: the additive schema is applied and the provisioner/API/purge are refreshed. One local Agent bucket is READY; app health is 200. No external provisioning, deployment, push or merge occurred. Earlier independent approval does not cover this revision.
+
+### 2026-10-26 — AF-415 — single domain router and runtime URL (local, not pushed)
+
+- Changed: `subapi.include_router(agent_artifacts_router)` mounts a real composed APIRouter; the domain includes management, bearer-download and runtime children. The former mounting helper is removed.
+- Changed: runtime base URL is `/api/v1/agent-artifacts/runtime`; defaults, Helm/Compose wiring and runtime/integration callers move together. The old root path is removed. Runtime routes retain Agent-only credentials and remain excluded from the public user API schema.
+- Operational impact: update explicit `ARTIFACT_RUNTIME_BASE_URL` overrides and update/restart existing Agents. This wire change supersedes the routing-helper arrangement covered by the earlier independent review.
+- Configuration: the default S3 signing region is now `garage`; alternate providers require an explicit region override.
+- Pending: bucket-per-Agent storage and per-bucket data credentials are approved direction but not implemented by this routing change. Automatic provisioning still requires separately scoped administrative authority; its boundary must be settled before credential changes.
+
+### 2026-10-26 — AF-415 — domain-owned artifact route composition (local, not pushed)
+
+- Changed: app composition calls one `mount_agent_artifacts` entry point; the artifact domain mounts its management, bearer-download and runtime routers internally.
+- Preserved: product URLs/OpenAPI inventory, the root `/artifact-runtime/v1` machine protocol, and each surface's authentication boundary.
+- Review: independent Sol medium/full-access review approved the implementation with no required findings; optional follow-ups removed a stale SSH claim and added an actual ASGI disconnect cleanup regression. The focused suite passes 55 tests and API quality checks pass; inherited live acceptance gaps remain unchanged.
+
+### 2026-10-26 — AF-415 — natural file-delivery instructions (local, not pushed)
+
+- Changed: shared Hermes/OpenClaw instructions treat ordinary file/export requests as requests to create and publish the finished deliverable, with a user-facing download link; users need not mention the artifact CLI. Existing-file delivery renews the link instead of duplicating bytes.
+- Preserved: explicit keep-local requests, text/code-only replies, scratch-file exclusion, honest failure reporting, exact workflow references and existing tool/messaging approvals.
+- Verification boundary: generated runtime configuration tests check delivery policy and storage-disabled omission; live natural-language tool selection still needs a restarted Agent and a fresh conversation on each runtime.
+
+### 2026-10-26 — AF-415 — maintainer review corrections (local, not pushed)
+
+- Changed: app byte route is `/api/v1/agent-artifacts/...`; the provider-neutral storage contract retains the `ArtifactStorage` name.
+- Changed: Garage is an unconditional Helmfile release in every deployment workflow, with no `GARAGE_ENABLED` variable. Bootstrap remains an explicit operator prerequisite; private ingress settings are unchanged.
+- Documentation: removed setup-specific SSH instructions; clarified that `GARAGE_S3_PORT` is an optional loopback operator/native-development override, not a download or Agent requirement.
+
+### 2026-10-26 — AF-415 — private storage behind app byte downloads (local, not pushed)
+
+- Changed: app-facing download URLs and bounded API byte streaming replace direct storage URLs. Storage adapters retain provider signing, signature validation and expiry; the app treats download authority as opaque and adds no token issuer. The external app route is independent of the byte-store provider.
+- Preserved: private buckets, permission-checked issuance, bearer sharing, retention and workflow/checkpoint identity. Runtime retrieval uses its reachable app origin. Garage is loopback/private-service only; application Helmfile no longer creates a storage ingress or needs a separate storage hostname/TLS Secret.
+- Verification: real Garage regressions exercise same-app downloads, missing/tampered/expired provider authority, target substitution and actual streamed bytes. Operations guidance covers private storage connectivity, existing saved endpoints, logging, streaming and rollback. This replaces the unpushed separate public-storage endpoint workaround.
+
+### 2026-10-24 — AF-415 — update prerequisite base and full verification
+
+- Updated: integrated current prerequisite head `37901c38`, preserving incoming billing/staging work and the removal of the workflow active-run cap. Resolved shared test cleanup and epic-history conflicts by retaining both domains.
+- Schema: no-op merge revision `a4151c9d0e21` joins artifact head `a4150b8c9d10` and updated prerequisite head `b9e32d74a610`. Artifact publication, ownership and guarded rollback contracts remain unchanged.
+- Verification: final combined-source checks pass: 5,841 API tests, 984 browser cases with five existing Gmail OAuth skips, 29 runtime/deployment contracts and 58 focused migration/artifact/workflow cases; static checks, monitoring and builds pass. Unchanged Kubernetes/three-node storage checks retain their passing evidence. Earlier failed samples and independent-review limits remain explicit in the artifact evidence.
+- Delivery: the maintainer authorized pushing after verification; this updates draft PR #328 against its existing feature-branch base. No PR merge or deployment is authorized.
+
+### 2026-10-23 — AF-415 — main-stack review corrections (local, not pushed)
+
+- Fixed: root Compose parses before private Garage setup, restoring native db/redis commands and shutdown for existing users. Required Garage bind sources still fail when unconfigured; bootstrap refreshes only public saved settings in the application `.env`.
+- Fixed: unconfigured Compose uses separate sentinel paths/volume names, so a failed bare start cannot allocate volumes that block first-time bootstrap. Operators may remove leftover empty sentinel volumes after setup.
+- Fixed: backup/status queries select Garage alone, so another running app service cannot trigger a backup or restart an intentionally stopped Garage. The adoption fixture uses a unique project name.
+- Verification: review regressions reproduced and isolated mutations caught; the final 13-case configuration/storage/recovery suite passes, including missing/stopped containers and actual failed-pre-bootstrap recovery. Opus round 11 independently approved with no Required findings and passed its nine-case subset; exact evidence and limits are recorded in the artifact evidence. No push, merge or deployment.
+
+### 2026-10-23 — AF-415 — required main-stack storage (local, not pushed)
+
+- Changed: Garage and artifact-purge run in the main Compose project without a profile. Normal startup prepares private credentials and bootstraps Garage before API startup; API/purge depend on storage health.
+- Compatibility: adopting the earlier standalone local store preserves its exact volumes, keys, node identity and endpoint. Storage-only stop/failed-initialization cleanup targets Garage without stopping the application database.
+- Verification: nine focused configuration/persistence/recovery cases pass, including actual S3-byte adoption through root Compose; disabling adoption fails its project assertion. Python types/lint, shell syntax and artifact/workflow chart checks pass. The new Opus review attempt was rate-limited; earlier approvals cover their reviewed revisions.
+- Delivery: local verification is recorded in the artifact evidence. No push, merge or external deployment.
+
+### 2026-10-23 — AF-415 — persistent storage infrastructure (local, not pushed)
+
+- Added: persistent worktree-isolated Garage Compose service, private one-time bootstrap, API/native-development wiring, scheduled local purge, consistent backup and fresh-volume restore.
+- Deployment: namespace-scoped three-node Garage chart, separate RPC/application Secrets, non-root pods, PVCs, distinct-node scheduling, private networking and optional TLS; explicit idempotent layout/bucket bootstrap plus opt-in Helmfile/CI variables. No external installation deployment.
+- Verification: eight focused storage/configuration cases; both runtime-image CLIs and real authenticated Agent Files downloads after Garage replacement; two final fresh three-node samples pass quorum reads/writes, changed-pod-IP recovery and live RPC-address checks. Earlier failures and exact evidence remain in the artifact evidence, without a production HA claim.
+- Hardened after review: Traefik defaults/private networking, recoverable initial setup/restore, lost-volume and node-identity guards, stdin-only key import, saved settings protected from shell defaults, private state/backup paths and restored deployment/rollback guidance. Stable per-replica RPC Services preserve recovery across pod IP changes.
+- Delivery: infrastructure changes remain local for agreement before any push. AF-389 retry/stop/runtime acceptance and AF-390 approval integration remain separate dependencies.
+
+### 2026-10-23 — AF-415 — local independent-review corrections (not pushed)
+
+- Fixed: completion credentials stay out of prompts/CLI arguments; runtime identity plus an owning-Agent attempt fence authorizes file publication. S3 I/O holds only the file lock; finalization reacquires run then file locks and fences intervening cancellation/deletion.
+- Concurrency: overlapping publication/finalization uses nonblocking file locks; lock contention returns retryable 409 without failing another upload. The owning Agent trust boundary is explicit; there is no per-session isolation claim.
+- Bounded: 16 staged/READY files per attempt and 16,000 bytes of file references per run. Unsafe purge targets record attempts/backoff, and pin release preserves deletion retry timing.
+- Updated: RBAC runtime/background exceptions, attempt provenance, settled-run file polling, HTTP-only links, input validation and storage-disabled prompt behavior. Regression evidence and follow-up review are recorded with the artifact evidence.
+- Review: Opus 5.5 approved the final local working tree with no Required findings; its 15 review regressions passed against PostgreSQL/Garage. The proposed whole-Agent trust boundary still awaits maintainer agreement.
+- Delivery: these corrections remain local pending the maintainer's explicit agreement to push; PR #328 still contains the earlier revision.
+
+### 2026-10-22 — AF-415 — [PR #328](https://github.com/aai-labs/agent-barn/pull/328) — shared Agent artifacts and file sharing
+
+- Changed: Additive artifact/reference schema, private Garage-compatible S3 adapter, credential-derived runtime identity and current attempt/initiator fences. Published bytes are immutable and verified before READY.
+- Delivered: one scoped CLI on both runtimes, ordinary chat publication, fresh signed links, Agent Files and workflow downloads alongside text results; active run pins and 30-day retention after release; deletion journals survive aggregate hard deletion.
+- Operations: storage remains optional for text-only work. Documented service-only bucket access, limits, URL bearer semantics, migration/guarded rollback, recovery and bounded purge CronJob. No production provisioning, merge or deployment.
+- Verification: see [evidence](../agent-artifacts/EVIDENCE.md), which distinguishes disposable real storage/runtime contracts from intercepted UI tests and unperformed live messaging/deployment acceptance.
 
 ### 2026-10-22 — AF-389 — update from latest staging
 

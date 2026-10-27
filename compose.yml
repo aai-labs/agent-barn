@@ -3,6 +3,11 @@
 # ./run.sh (which drives this file) gives you the same hot reload as
 # `make dev-api`/`dev-ui`/`dev-worker`, just fully containerized.
 
+# Garage is part of this project, with the same service definition used by the
+# operator's isolated backup/restore commands. ./run.sh prepares its private files.
+include:
+  - path: docker/garage/compose.yml
+
 x-api-env: &api-env
   # Container-network hostnames override the localhost defaults in .env.
   DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
@@ -17,7 +22,18 @@ x-api-env: &api-env
   HINDSIGHT_DB_PASSWORD: ""
   HINDSIGHT_LITELLM_API_KEY: ""
   # Agent pods in k3d report workflow step outcomes to the API through the host.
+  ARTIFACT_RUNTIME_BASE_URL: ${ARTIFACT_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/api/v1/agent-artifacts/runtime}
   WORKFLOW_RUNTIME_BASE_URL: ${WORKFLOW_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/workflow-runtime/v1}
+  # Unprivileged processes override these; API/cleanup load the private management file.
+  ARTIFACT_S3_ACCESS_KEY: ""
+  ARTIFACT_S3_SECRET_KEY: ""
+
+# Shared application processes do not need object-store credentials.
+x-unprivileged-env: &unprivileged-env
+  <<: *api-env
+  ARTIFACT_PROVISIONER_URL: ""
+  ARTIFACT_PROVISIONER_TOKEN: ""
+  ARTIFACT_S3_ENDPOINT_URL: ""
 
 services:
   # Opt in with COMPOSE_PROFILES=local-hindsight. The backend has no published
@@ -105,6 +121,8 @@ services:
         uvicorn api.memory_runtime_main:app --host 0.0.0.0 --port 8004 --reload --no-access-log &
         exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
+      garage:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
@@ -113,10 +131,16 @@ services:
     # CLOUDFLARE_*, SENDER_EMAIL, GOOGLE_CLOUD_*, ...); `environment:` below overrides only the
     # values that must point at in-network container hostnames.
     env_file:
-      - .env
+      - path: .env
+      - path: .garage/application.env
+        required: false
+      - path: .garage/provisioner.env
+        required: false
     environment:
       <<: *api-env
+      ARTIFACT_PROVISIONER_URL: http://garage:3903
       MEMORY_RUNTIME_SERVICE_KEY: ${MEMORY_RUNTIME_SERVICE_KEY:-}
+      ARTIFACT_S3_ENDPOINT_URL: http://garage:3900
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
@@ -218,7 +242,7 @@ services:
     env_file:
       - .env
     environment:
-      <<: *api-env
+      <<: *unprivileged-env
       # Playbook Extractions call models through the proxy over the compose network;
       # .env's LITELLM_BASE_URL is host-facing, as for the api service above.
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
@@ -248,7 +272,7 @@ services:
     env_file:
       - .env
     environment:
-      <<: *api-env
+      <<: *unprivileged-env
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
       K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
     extra_hosts:
@@ -272,7 +296,7 @@ services:
     env_file:
       - .env
     environment:
-      <<: *api-env
+      <<: *unprivileged-env
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
       K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
     extra_hosts:
@@ -294,7 +318,7 @@ services:
     env_file:
       - .env
     environment:
-      <<: *api-env
+      <<: *unprivileged-env
       # Agent Barn Telegram forwards linked users' updates to the Agent's webhook in
       # k3d, which this container cannot resolve; `make forward-telegram` bridges it.
       AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL: ${AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:8443/telegram}
@@ -316,11 +340,37 @@ services:
     env_file:
       - .env
     environment:
-      <<: *api-env
+      <<: *unprivileged-env
     volumes:
       - ./api:/app/api
     ports:
       - "${GATEWAY_PORT:-8004}:8003"
+
+  artifact-purge:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "api.domains.artifacts.maintenance", "--interval", "10"]
+    env_file:
+      - path: .env
+      - path: .garage/application.env
+        required: false
+      - path: .garage/provisioner.env
+        required: false
+    environment:
+      <<: *api-env
+      ARTIFACT_PROVISIONER_URL: http://garage:3903
+      ARTIFACT_S3_ENDPOINT_URL: http://garage:3900
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+    depends_on:
+      garage:
+        condition: service_healthy
+      db:
+        condition: service_healthy
 
   ui:
     build:

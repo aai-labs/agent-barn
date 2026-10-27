@@ -340,3 +340,10 @@ How much CPU and memory the container is using, against its limits, is a separat
 read behind the same `activity.read`: the Resource usage tab. See
 [`resource-usage.md`](resource-usage.md). Its out-of-memory callout reads
 `termination_reason` from these diagnostics.
+
+When artifact storage is configured, Agent creation queues a durable storage
+request in its creation transaction and returns without waiting for Garage.
+Storage failures leave the Agent available for text. Existing Agents can request
+storage from Files; progress and retry follow the
+[artifact lifecycle](agent-artifacts.md#per-agent-storage-authority).
+Deliberately disabled storage creates no provisioning request.

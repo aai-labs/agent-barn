@@ -31,6 +31,7 @@ from api.domains.agents.models import (
     PlatformAgentRow,
     SecretProvider,
 )
+from api.domains.artifacts.models import ArtifactBucket
 from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.models import (
     AgentEmailAddress,
@@ -897,6 +898,7 @@ class AgentRepository:
         secrets: list[AgentSecret] | None = None,
         skills: list[AgentSkill] | None = None,
         actor_display: str | None = None,
+        artifact_bucket: ArtifactBucket | None = None,
         agent_limit: int | None = None,
     ) -> AgentLifecycleEventResult:
         """Create an Agent and its initial resources in one transaction.
@@ -930,6 +932,10 @@ class AgentRepository:
                 size = self._lock_choosable_size(session, agent.organization_id, agent.agent_size_id, any_enabled=False)
                 if size.is_default:
                     agent.agent_size_id, size = None, None
+            if artifact_bucket is not None:
+                if artifact_bucket.agent_id != agent.id or artifact_bucket.organization_id != agent.organization_id:
+                    raise ValueError("Agent storage request owner mismatch")
+                session.add(artifact_bucket)
             session.add(agent)
             session.flush()
             if membership_id is not None:

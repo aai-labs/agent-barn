@@ -1,0 +1,8 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "rpcTimeoutMilliseconds": {"type": "integer", "minimum": 1},
+    "rpcPingTimeoutMilliseconds": {"type": "integer", "minimum": 1}
+  }
+}
