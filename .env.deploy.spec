@@ -195,7 +195,7 @@ AGENT_DEFAULT_MODEL=
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
 
-# Required private Garage: complete docs/guidelines/garage.md bootstrap before deployment.
-# Cluster RPC/admin authority and application settings live in pre-created Kubernetes Secrets, not CI.
-# Maintenance defaults to enabled. Complete the Kubernetes bootstrap in garage.md first.
+# Garage credentials for CI are GitHub Secrets; see docs/guidelines/garage.md.
+# For deploy.sh, prepare the fixed Kubernetes Secrets and Garage layout first.
+# Maintenance defaults to enabled.
 ARTIFACT_PURGE_ENABLED=

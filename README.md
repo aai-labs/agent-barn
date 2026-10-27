@@ -362,9 +362,20 @@ export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 
 ### Agent artifacts in development
 
-The full-stack path (`./run.sh --detach`) prepares Garage, applies the artifact
-migrations, and starts background maintenance automatically. After completing the
-setup and sign-in above:
+Local artifacts use a private, single-node Garage container and persistent Docker
+volumes. **No AWS account, S3 credentials, GitHub Secrets, or manual Kubernetes
+bootstrap is needed locally.** Docker Compose 2.24+ and uv are required. The first
+startup generates local credentials in the ignored `.garage/` directory; later
+starts reuse them and the existing volumes.
+
+For the full-stack path, complete the `.env` setup above and start the stack:
+
+```bash
+./run.sh --detach
+```
+
+The launcher prepares Garage, applies the artifact migrations, and starts background
+maintenance automatically. After signing in, check storage with:
 
 ```bash
 make garage-status
@@ -397,6 +408,11 @@ make dev-ui
 make purge-artifacts
 ```
 
+For an Agent running in k3d, `ARTIFACT_RUNTIME_BASE_URL` in `.env` must point to
+the native API address reachable from Agent containers. The default uses
+`host.docker.internal:8000`; if `API_DEV_PORT` differs, update that URL and restart
+the API and the Agent. The browser-facing download origin is `WEB_APP_URL`.
+
 Native post-response provisioning runs immediately, but unattended retry needs the
 maintenance worker; `make purge-artifacts` provides an explicit one-shot recovery
 pass. Restart the native API after re-running storage bootstrap. Garage management
@@ -406,7 +422,8 @@ restore and cluster installation are documented in [Garage operations](docs/guid
 
 | Symptom | What to check |
 | --- | --- |
-| Storage unavailable / not configured | Run `make garage-up`, then restart the API so it loads generated settings. Check `make garage-status`. |
+| Storage unavailable / not configured | Confirm Docker is running, run `make garage-up`, then restart the API so it loads generated settings. Check `make garage-status`. |
+| Garage cannot start on port 3900 | Set `GARAGE_S3_PORT` in `.env` before the first `make garage-up`. Existing initialized stores keep their saved port; follow the operations guide to migrate or restore. |
 | Provisioning failed or stays pending | Check `docker compose logs --tail=100 api artifact-purge garage`; in native development run `make purge-artifacts` and retry from Artifacts. |
 | Download links use the wrong host/port | `WEB_APP_URL` must match the UI origin that download clients can reach. Adjust it for a second worktree and restart the API. |
 | A file uses the previous storage layout | This PR deliberately does not migrate old shared-bucket files. Re-upload or plan a verified migration; provisioning a new bucket does not move old bytes. |
