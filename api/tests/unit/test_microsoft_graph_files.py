@@ -130,6 +130,29 @@ def test_an_item_last_changed_by_an_app_says_so(graph):
     assert_that(item.modified_by_app, equal_to(True))
 
 
+def test_an_app_acting_for_a_person_is_the_persons_change(graph):
+    office_edit = {
+        **_FILE,
+        "lastModifiedBy": {
+            "application": {"displayName": "Microsoft Office"},
+            "user": {"email": "dominykas@aai-labs.com", "displayName": "Dominykas"},
+        },
+    }
+    graph(httpx.Response(200, json=office_edit))
+
+    item = MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id=_FILE_ID)
+
+    assert_that(item.modified_by_app, equal_to(False))
+
+
+def test_a_persons_edit_carries_no_application(graph):
+    graph(httpx.Response(200, json=_FILE))
+
+    item = MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id=_FILE_ID)
+
+    assert_that(item.modified_by_app, equal_to(False))
+
+
 def test_an_item_is_read_by_a_path_under_a_folder_with_each_segment_encoded(graph):
     recorder = graph(httpx.Response(200, json=_FILE))
 

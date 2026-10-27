@@ -250,6 +250,7 @@ def _drive_item(payload: object) -> DriveItem:
     parent = _object(item.get("parentReference"))
     hashes = _object(_object(item.get("file")).get("hashes"))
     modified = _text(item.get("lastModifiedDateTime"))
+    modified_by = _object(item.get("lastModifiedBy"))
     size = item.get("size")
     is_folder = "folder" in item
     return DriveItem(
@@ -264,6 +265,6 @@ def _drive_item(payload: object) -> DriveItem:
         is_folder=is_folder,
         deleted="deleted" in item,
         modified_at=_timestamp(modified) if modified else None,
-        modified_by_app="application" in _object(item.get("lastModifiedBy")),
+        modified_by_app="application" in modified_by and _text(_object(modified_by.get("user")).get("email")) is None,
         web_url=_text(item.get("webUrl")),
     )

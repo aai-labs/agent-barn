@@ -222,7 +222,7 @@ After the folders, each pass reads the provider's changes under "Agent Barn" sin
 - **Stopped Agents:** their jobs wait in `sync_file` until the pod asks for them.
 
 A changed item is matched to its Agent Folder by its first path segment, and to its `sync_file` row by the provider's item id, across every folder of the connection.
-- **Always ignored:** changes the provider attributes to an app, which includes the engine's own moves and renames, and anything inside `<Agent>/_Not synced/`.
+- **Always ignored:** changes made by an app acting on its own (an application named and no user email), which is how Agent Barn's own uploads, moves and renames appear, and anything inside `<Agent>/_Not synced/`. A change carrying a person's email counts as the person's, even when an application such as an Office client is named too.
 - **Inactive folders:** files in a folder that is not active are ignored.
 
 Files a person adds, removes or moves:
