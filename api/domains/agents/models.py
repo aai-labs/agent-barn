@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
+from api.domains.agent_sizes.models import AgentSizeOption
 from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
@@ -551,6 +552,29 @@ class Agent(BaseModel, table=True):
     running_config_digest: str = SqlField(
         default="",
         sa_column=Column(sa.String(64), nullable=False, server_default=""),
+    )
+    # The Agent Size the Organization, or a Platform Administrator, chose. None follows the
+    # platform default, so moving the default moves every Agent that never chose. See
+    # docs/features/agent-sizes.md.
+    agent_size_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_sizes.id",
+        nullable=True,
+        ondelete="RESTRICT",
+        index=True,
+    )
+    # A Platform Administrator set `agent_size_id`; the Organization cannot change it until
+    # the override is cleared.
+    agent_size_set_by_platform: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
+    # The container requests and limits the running pod was started with, as
+    # `RunningResources`; None means "not running". Like `running_model`, it stays put
+    # while the size changes underneath it, which is how a pending size is told apart.
+    running_resources: dict[str, int] | None = SqlField(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
     )
     # The exact runtime image this Agent starts on. Empty means "follow the
     # platform pin" (config.openclaw_image / config.hermes_image). Only a
@@ -1147,6 +1171,9 @@ class AgentCreate(PydanticBaseModel):
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
     file_sync_enabled: bool = True
+    # None, or the default's id, follows the platform default. Anything else needs
+    # agent.size.manage and a size the Organization may choose.
+    agent_size_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -1582,6 +1609,15 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
+    #: The stored choice: null means the Agent follows the platform default size.
+    agent_size_id: UUID | None = None
+    #: The size it would start on now: its chosen one, else the default.
+    agent_size: AgentSizeOption | None = None
+    #: True only when a running Agent's pod started with other resources than
+    #: `agent_size` gives, so a restart would change them.
+    pending_size: bool = False
+    #: A Platform Administrator set the size; the Organization cannot change it.
+    agent_size_set_by_platform: bool = False
     update_available: bool = False
     #: A managed update is running. Lifecycle and restore point actions are
     #: refused until it ends; a client polls until this goes back to false.
@@ -1628,6 +1664,46 @@ class PlatformAgentIdentity(NamedTuple):
     status: AgentStatus
     organization_id: UUID
     organization_name: str
+
+
+class PlatformAgentRow(NamedTuple):
+    """An Agent as the Platform Agents page reads it: identity, lifecycle and its size.
+
+    A fixed column list, like `PlatformAgentIdentity`; `running_resources` is read only to
+    tell whether a size is pending and never leaves the service.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    agent_type: AgentType
+    created_at: datetime
+    organization_id: UUID
+    organization_name: str
+    agent_size_id: UUID | None
+    agent_size_set_by_platform: bool
+    running_resources: dict[str, int] | None
+
+
+class PlatformAgentRead(PydanticBaseModel):
+    """One Agent on the Platform Agents page, as Platform Oversight Data.
+
+    Identity, lifecycle and the size it runs on; never its configuration, so this is not
+    `AgentRead` with fields removed. `agent_size` is the size it would start on now, and
+    `pending_size` says a running Agent's pod was started on another.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    agent_type: AgentType
+    created_at: datetime
+    organization_id: UUID
+    organization_name: str
+    agent_size_id: UUID | None
+    agent_size: AgentSizeOption
+    agent_size_set_by_platform: bool
+    pending_size: bool
 
 
 class AgentRuntimeDiagnosticsRead(PydanticBaseModel):

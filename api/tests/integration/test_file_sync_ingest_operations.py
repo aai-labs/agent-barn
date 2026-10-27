@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -7,6 +8,7 @@ from sqlmodel import Session
 
 from api.domains.agents.models import Agent
 from api.domains.file_sync.models import SyncActivityKind, SyncFile, SyncPendingAction
+from api.domains.sync_provider.plugins.base import ProviderUnavailable
 from api.tests.core.givenpy import given
 from api.tests.steps.file_sync_ingest import (
     AGENT_KEY,
@@ -269,3 +271,34 @@ def test_handing_out_jobs_records_contact_and_never_returns_anything_but_links()
 
         assert_that(sorted(operation), equal_to(["action", "expires_at", "path", "url", "version"]))
         assert_that(synced_files(context)[_PATH].lease_until, not_none())
+
+
+def test_a_claimed_job_is_leased_just_past_the_pods_wait():
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        _user_edited(context, agent)
+
+        _claim(context, agent)
+
+        lease_until = _row(context).lease_until
+        assert lease_until is not None
+        lease = (lease_until - datetime.now(UTC)).total_seconds()
+        assert_that(lease, close_to(180, 10))
+
+
+def test_a_provider_failure_is_logged_before_the_502(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        _user_edited(context, agent)
+
+        def unavailable(root, *, item_id: str) -> str:
+            raise ProviderUnavailable("Microsoft couldn't be reached")
+
+        monkeypatch.setattr(fake_drive(context), "download_url", unavailable)
+
+        with caplog.at_level(logging.WARNING):
+            response = _claim(context, agent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        logged = [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+        assert_that(any("ProviderUnavailable" in line and str(agent.id) in line for line in logged), equal_to(True))

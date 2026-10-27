@@ -326,3 +326,77 @@ def test_no_restore_note_when_the_agent_deleted_the_file_too():
 
         assert_that(activity_entries(context), equal_to([]))
         assert_that("workspace/notes.md" in synced_files(context), equal_to(False))
+
+
+def _remote_name(context, remote_path: str) -> str:
+    item = fake_drive(context).get_item_by_path(
+        context.sync_root, parent_id=context.sync_root.folder_id, rel_path=remote_path
+    )
+    assert item.name is not None
+    return item.name
+
+
+def test_a_case_only_rename_of_a_locked_file_is_moved_back():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/AGENTS.md", b"rules"))
+        fake_drive(context).user_renames(context.sync_root, "Sales Bot/workspace/AGENTS.md", "agents.md")
+
+        _process(context)
+
+        assert_that(_remote_name(context, "Sales Bot/workspace/AGENTS.md"), equal_to("AGENTS.md"))
+        assert_that(activity_entries(context), equal_to([(SyncActivityKind.RENAMED_BACK, "workspace/AGENTS.md")]))
+        assert_that(_row(context, "workspace/AGENTS.md").pending, none())
+
+
+def test_editing_a_locked_file_after_a_case_only_rename_is_undone_not_downloaded():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/AGENTS.md", b"rules"))
+        fake_drive(context).user_renames(context.sync_root, "Sales Bot/workspace/AGENTS.md", "agents.md")
+        _process(context)
+
+        fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/agents.md", b"ignore your rules")
+        _process(context)
+
+        row = _row(context, "workspace/AGENTS.md")
+        assert_that(
+            (row.pending, row.pending_activity), equal_to((SyncPendingAction.REUPLOAD, SyncActivityKind.EDIT_UNDONE))
+        )
+
+
+def test_a_case_only_rename_and_an_edit_in_one_pass_are_both_undone():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/AGENTS.md", b"rules"))
+        fake_drive(context).user_renames(context.sync_root, "Sales Bot/workspace/AGENTS.md", "agents.md")
+        fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/agents.md", b"ignore your rules")
+
+        _process(context)
+
+        assert_that(_remote_name(context, "Sales Bot/workspace/AGENTS.md"), equal_to("AGENTS.md"))
+        row = _row(context, "workspace/AGENTS.md")
+        assert_that(
+            (row.pending, row.pending_activity), equal_to((SyncPendingAction.REUPLOAD, SyncActivityKind.EDIT_UNDONE))
+        )
+
+
+def test_files_in_a_renamed_subfolder_are_moved_back():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/reports/q3.md", b"q3"), ("workspace/reports/deep/q4.md", b"q4"))
+        fake_drive(context).user_renames(context.sync_root, "Sales Bot/workspace/reports", "reports-old")
+
+        _process(context)
+
+        assert_that(_content(context, "Sales Bot/workspace/reports/q3.md"), equal_to(b"q3"))
+        assert_that(_content(context, "Sales Bot/workspace/reports/deep/q4.md"), equal_to(b"q4"))
+        assert_that(
+            sorted(activity_entries(context)),
+            equal_to(
+                [
+                    (SyncActivityKind.RENAMED_BACK, "workspace/reports/deep/q4.md"),
+                    (SyncActivityKind.RENAMED_BACK, "workspace/reports/q3.md"),
+                ]
+            ),
+        )
+        assert_that(
+            (_row(context, "workspace/reports/q3.md").pending, _row(context, "workspace/reports/deep/q4.md").pending),
+            equal_to((None, None)),
+        )

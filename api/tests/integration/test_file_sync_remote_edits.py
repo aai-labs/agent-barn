@@ -193,7 +193,7 @@ def test_a_pending_undo_is_not_replaced_by_a_later_edit():
         assert_that(activity_entries(context), equal_to([]))
 
 
-def test_a_change_while_the_agents_upload_is_under_way_is_left_to_the_upload():
+def test_a_change_while_the_agents_upload_is_under_way_is_left_to_the_upload_and_recorded_as_a_conflict():
     with given(_BASE) as context:
         agent = _connected_with(context, ("workspace/notes.md", b"hello"))
         context.ingest_client.post(
@@ -206,6 +206,7 @@ def test_a_change_while_the_agents_upload_is_under_way_is_left_to_the_upload():
         _process(context)
 
         assert_that(_row(context, "workspace/notes.md").pending, none())
+        assert_that(activity_entries(context), equal_to([(SyncActivityKind.CONFLICT_AGENT_WON, "workspace/notes.md")]))
 
 
 def test_a_persons_edit_over_the_size_limit_is_skipped_and_recorded():
@@ -298,3 +299,14 @@ def test_the_undo_note_is_written_when_the_agents_copy_is_back():
         assert_that([(note.kind, note.path) for note in notes], equal_to([("edit_undone", "workspace/AGENTS.md")]))
         assert_that(notes[0].occurred_at >= before, equal_to(True))
         assert_that(_row(context, "workspace/AGENTS.md").pending_activity, none())
+
+
+def test_an_edit_reported_without_a_path_is_still_found():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/notes.md", b"hello"))
+        fake_drive(context).omit_paths_in_changes = True
+        fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/notes.md", b"edited")
+
+        _process(context)
+
+        assert_that(_row(context, "workspace/notes.md").pending, equal_to(SyncPendingAction.DOWNLOAD))

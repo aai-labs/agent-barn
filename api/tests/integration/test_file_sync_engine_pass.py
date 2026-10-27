@@ -175,3 +175,18 @@ def test_an_item_open_for_editing_is_retried_on_the_next_pass_without_an_error(c
         assert_that(_connection(context, connection).sync_retry_at, none())
         _run_pass(context)
         assert_that(_folder_names(context, connection), equal_to(["Sales Bot"]))
+
+
+def test_a_pass_reports_progress_for_each_connection_and_each_page_of_changes():
+    with given(_BASE) as context:
+        _connected_organization(context, "Acme", "Sales Bot")
+        _run_pass(context)
+        plugin = fake_drive(context)
+        plugin.page_size = 1
+        for name in ("a.md", "b.md", "c.md"):
+            plugin.user_adds(context.sync_root, f"Sales Bot/workspace/{name}", b"x")
+        ticks: list[int] = []
+
+        context.injector.get(FileSyncEngine).run_pass(datetime.now(UTC), progress=lambda: ticks.append(1))
+
+        assert_that(len(ticks) >= 4, equal_to(True))

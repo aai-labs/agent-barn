@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 
+import { useOrganizationAgentSizes } from "@/features/agent-sizes/hooks/use-organization-agent-sizes";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+
 import {
   coerceBooleanFields,
   expandGithubContent,
@@ -59,6 +62,13 @@ export function useHireAgentForm({ onHired, templatePagination }: {
   const { defaultModel } = useModels();
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
   const [fileSyncEnabled, setFileSyncEnabled] = useState(true);
+  // Offered only to Owners and Admins of an Organization the platform lets choose; anyone
+  // else hires on the default without being asked.
+  const { role } = useActiveOrgRole();
+  const { agentSizes } = useOrganizationAgentSizes();
+  const sizeChoices = (role === "OWNER" || role === "ADMIN") && agentSizes?.canChoose ? agentSizes.sizes : null;
+  // null is the default, which is also what is preselected.
+  const [agentSizeId, setAgentSizeId] = useState<string | null>(null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
@@ -169,6 +179,7 @@ export function useHireAgentForm({ onHired, templatePagination }: {
         ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
         ...approval,
         ...(fileSyncEnabled ? {} : { fileSyncEnabled: false }),
+        ...(sizeChoices && agentSizeId ? { agentSizeId } : {}),
       });
       setCreatedAgent({ id: agent.id, name: agent.name });
       await startCreatedAgent({ id: agent.id, name: agent.name });
@@ -217,6 +228,9 @@ export function useHireAgentForm({ onHired, templatePagination }: {
     setApprovalMode,
     fileSyncEnabled,
     setFileSyncEnabled,
+    sizeChoices,
+    agentSizeId,
+    setAgentSizeId,
     selectedSkillIds,
     setSelectedSkillIds,
     skillCredentials,

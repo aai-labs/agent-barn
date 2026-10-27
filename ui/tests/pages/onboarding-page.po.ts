@@ -34,7 +34,7 @@ export class OnboardingPage {
   }
 
   stepCounter(): Locator {
-    return this.page.getByText(/^Step \d of 4$/);
+    return this.page.getByText(/^Step \d of 5$/);
   }
 
   heading(name: string | RegExp): Locator {
@@ -56,6 +56,22 @@ export class OnboardingPage {
 
   copyLink(): Locator {
     return this.page.getByRole("button", { name: "Copy link" });
+  }
+
+  gmailAddress(): Locator {
+    return this.page.getByLabel("Gmail address");
+  }
+
+  gmailAppPassword(): Locator {
+    return this.page.getByLabel("App password");
+  }
+
+  connectGmail(): Locator {
+    return this.page.getByRole("button", { name: "Connect Gmail" });
+  }
+
+  skipGmail(): Locator {
+    return this.page.getByRole("button", { name: "Skip", exact: true });
   }
 
   continueAction(): Locator {

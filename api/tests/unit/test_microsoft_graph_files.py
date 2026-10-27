@@ -18,6 +18,7 @@ from api.domains.agents.microsoft_graph_files import (
     GraphRequestRejected,
     GraphResyncRequired,
     GraphThrottled,
+    GraphTokenRejected,
     GraphUnavailable,
     MicrosoftGraphFiles,
     UploadSession,
@@ -128,6 +129,29 @@ def test_an_item_last_changed_by_an_app_says_so(graph):
     item = MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id=_FILE_ID)
 
     assert_that(item.modified_by_app, equal_to(True))
+
+
+def test_an_app_acting_for_a_person_is_the_persons_change(graph):
+    office_edit = {
+        **_FILE,
+        "lastModifiedBy": {
+            "application": {"displayName": "Microsoft Office"},
+            "user": {"email": "dominykas@aai-labs.com", "displayName": "Dominykas"},
+        },
+    }
+    graph(httpx.Response(200, json=office_edit))
+
+    item = MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id=_FILE_ID)
+
+    assert_that(item.modified_by_app, equal_to(False))
+
+
+def test_a_persons_edit_carries_no_application(graph):
+    graph(httpx.Response(200, json=_FILE))
+
+    item = MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id=_FILE_ID)
+
+    assert_that(item.modified_by_app, equal_to(False))
 
 
 def test_an_item_is_read_by_a_path_under_a_folder_with_each_segment_encoded(graph):
@@ -323,12 +347,11 @@ def test_an_empty_file_is_written_directly_because_upload_sessions_refuse_it(gra
     ("status", "error"),
     [
         (400, GraphRequestRejected),
-        (401, GraphAccessRefused),
+        (401, GraphTokenRejected),
         (403, GraphAccessRefused),
         (412, GraphPreconditionFailed),
         (423, GraphItemLocked),
         (500, GraphUnavailable),
-        (503, GraphUnavailable),
     ],
 )
 def test_graph_failures_map_to_typed_errors(graph, status, error):
@@ -388,3 +411,25 @@ def test_retry_after_keeps_its_cap_unless_a_caller_lifts_it():
     assert_that(retry_after_seconds("0", max_seconds=None), equal_to(1))
     assert_that(retry_after_seconds(None, max_seconds=None), equal_to(1))
     assert_that(retry_after_seconds("soon", max_seconds=None), equal_to(1))
+
+
+def test_a_rejected_token_is_still_access_refused_for_callers_that_dont_retry():
+    assert_that(issubclass(GraphTokenRejected, GraphAccessRefused), equal_to(True))
+
+
+def test_service_unavailable_is_throttling_with_microsofts_wait(graph):
+    graph(httpx.Response(503, headers={"Retry-After": "7"}))
+
+    with pytest.raises(GraphThrottled) as exc:
+        MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id="item-1")
+
+    assert_that(exc.value.retry_after, equal_to(7))
+
+
+def test_service_unavailable_without_retry_after_waits_the_default(graph):
+    graph(httpx.Response(503))
+
+    with pytest.raises(GraphThrottled) as exc:
+        MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id="item-1")
+
+    assert_that(exc.value.retry_after, equal_to(1))

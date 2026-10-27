@@ -13,7 +13,14 @@ from api.domains.communications.plugins.agentbarn_telegram import (
 )
 from api.domains.file_sync.rules import rules_manifest
 
-from .common import _labels, _resource_name, _setting_ids
+from .artifacts import (
+    ARTIFACT_COMMAND,
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_TOOL,
+    artifact_command_mount,
+    artifact_command_volume,
+)
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_PLUGIN_PATH,
@@ -22,16 +29,6 @@ from .memory import (
     memory_command_mount,
     memory_command_volume,
     openclaw_memory_settings,
-)
-
-# Explicit so agents stop inheriting the namespace LimitRange default of
-# 512Mi request / 2Gi limit. requests.memory is the binding quota axis
-# (20Gi hard), so the request sets how many agents fit; the 1Gi limit halves
-# limits.memory consumption and caps V8, which sizes its heap at ~51% of the
-# cgroup limit -- a 2Gi limit invites a 1Gi heap with no leak involved.
-AGENT_RESOURCES = client.V1ResourceRequirements(
-    requests={"memory": "320Mi", "cpu": "50m"},
-    limits={"memory": "1Gi", "cpu": "500m"},
 )
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
@@ -374,15 +371,20 @@ def build_config_map(
     gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    artifacts_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn_artifacts.py": ARTIFACT_TOOL,
+        "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md
+        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -462,7 +464,14 @@ def build_deployment(
     namespace: str,
     image: str,
     image_pull_secret: str = "",
+    *,
+    resources: client.V1ResourceRequirements,
 ) -> client.V1Deployment:
+    """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
+
+    The limit also sizes OpenClaw's heap: V8 sets its ceiling at about half the cgroup
+    limit, so a bigger size gives Node more heap with no other change.
+    """
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id, runtime="openclaw")
 
@@ -494,8 +503,8 @@ def build_deployment(
                             security_context=client.V1SecurityContext(
                                 run_as_user=0,
                             ),
-                            # See the same line in hermes.py: the pod is charged for its biggest container.
-                            resources=AGENT_RESOURCES,
+                            # Fixed, not the size: see INIT_CONTAINER_RESOURCES.
+                            resources=INIT_CONTAINER_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="data",
@@ -509,7 +518,7 @@ def build_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
-                            resources=AGENT_RESOURCES,
+                            resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",
@@ -522,6 +531,7 @@ def build_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -535,6 +545,7 @@ def build_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        artifact_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

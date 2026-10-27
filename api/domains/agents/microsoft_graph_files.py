@@ -35,6 +35,10 @@ class GraphAccessRefused(Exception):
     """Graph refused the app (401 or 403)."""
 
 
+class GraphTokenRejected(GraphAccessRefused):
+    pass
+
+
 class GraphRequestRejected(GraphUnavailable):
     """Graph rejected the request itself (400), for example a name it does not allow."""
 
@@ -56,7 +60,8 @@ class GraphItemLocked(GraphUnavailable):
 
 
 class GraphThrottled(GraphUnavailable):
-    """Graph is limiting requests (429). ``retry_after`` is the wait it asked for, in seconds."""
+    """Graph is limiting requests (429), or is briefly unavailable (503). ``retry_after`` is the wait it
+    asked for, in seconds."""
 
     def __init__(self, retry_after: int):
         super().__init__(f"HTTP 429, retry after {retry_after}s")
@@ -139,6 +144,18 @@ class MicrosoftGraphFiles:
         except GraphItemNotFound:
             pass
 
+    def list_children(self, token: str, *, site_id: str, item_id: str) -> list[DriveItem]:
+        url: str | None = f"{_drive(site_id)}/items/{item_id}/children"
+        children: list[DriveItem] = []
+        while url is not None:
+            payload = _object(self._call("GET", url, token))
+            entries = payload.get("value")
+            if not isinstance(entries, list):
+                raise GraphUnavailable("children page without a value list")
+            children.extend(_drive_item(entry) for entry in entries)
+            url = _text(payload.get("@odata.nextLink"))
+        return children
+
     def delta_page(self, token: str, url: str) -> DeltaPage:
         """One page of the change feed at ``url``: a start URL, a ``nextLink`` or a ``deltaLink``."""
         payload = _object(self._call("GET", url, token))
@@ -193,9 +210,11 @@ class MicrosoftGraphFiles:
         status = response.status_code
         if status == 404:
             raise GraphItemNotFound(f"HTTP {status}")
-        if status in (401, 403):
+        if status == 401:
+            raise GraphTokenRejected(f"HTTP {status}")
+        if status == 403:
             raise GraphAccessRefused(f"HTTP {status}")
-        if status == 429:
+        if status in (429, 503):
             raise GraphThrottled(retry_after_seconds(response.headers.get("Retry-After"), max_seconds=None))
         if status == 400:
             raise GraphRequestRejected(f"HTTP {status}")
@@ -237,6 +256,7 @@ def _drive_item(payload: object) -> DriveItem:
     parent = _object(item.get("parentReference"))
     hashes = _object(_object(item.get("file")).get("hashes"))
     modified = _text(item.get("lastModifiedDateTime"))
+    modified_by = _object(item.get("lastModifiedBy"))
     size = item.get("size")
     is_folder = "folder" in item
     return DriveItem(
@@ -251,6 +271,6 @@ def _drive_item(payload: object) -> DriveItem:
         is_folder=is_folder,
         deleted="deleted" in item,
         modified_at=_timestamp(modified) if modified else None,
-        modified_by_app="application" in _object(item.get("lastModifiedBy")),
+        modified_by_app="application" in modified_by and _text(_object(modified_by.get("user")).get("email")) is None,
         web_url=_text(item.get("webUrl")),
     )

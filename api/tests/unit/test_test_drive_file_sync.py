@@ -174,6 +174,71 @@ def test_an_upload_lands_only_when_the_pod_completes_it_and_replaces_the_file():
     assert_that(uploaded.content_version == old.content_version, is_(False))
 
 
+def test_an_uploaded_office_file_is_stored_larger_as_sharepoint_does():
+    plugin, root = _connected()
+    folder = plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")
+
+    word = plugin.complete_upload(
+        plugin.upload_target(root, parent_id=folder.id, rel_path="workspace/report.docx").url, b"x" * 877
+    )
+    text = plugin.complete_upload(
+        plugin.upload_target(root, parent_id=folder.id, rel_path="workspace/notes.md").url, b"x" * 15
+    )
+
+    assert_that(word.size > 877, is_(True))
+    assert_that(text.size, equal_to(15))
+
+
+def test_an_item_reports_when_it_last_changed():
+    plugin, root = _connected()
+    item = plugin.user_adds(root, "Sales Bot/notes.md", b"x")
+    node = plugin.nodes[item.id]
+    node.modified_at = node.modified_at.replace(year=2020)
+
+    stale = plugin.get_item(root, item_id=item.id)
+    edited = plugin.user_edits(root, "Sales Bot/notes.md", b"y")
+
+    assert_that(stale.modified_at is not None and stale.modified_at.year == 2020, is_(True))
+    assert_that(edited.modified_at is not None and edited.modified_at.year > 2020, is_(True))
+
+
+def test_listing_a_folder_returns_every_file_below_it_with_its_path():
+    plugin, root = _connected()
+    plugin.user_adds(root, "Sales Bot/workspace/reports/a.md", b"a")
+    plugin.user_adds(root, "Sales Bot/workspace/reports/q3/b.md", b"b")
+    plugin.user_adds(root, "Sales Bot/workspace/other.md", b"o")
+    reports = plugin.get_item_by_path(root, parent_id=root.folder_id, rel_path="Sales Bot/workspace/reports")
+
+    files = plugin.list_files(root, folder_id=reports.id)
+
+    assert_that(
+        sorted(item.path or "" for item in files),
+        equal_to(["Sales Bot/workspace/reports/a.md", "Sales Bot/workspace/reports/q3/b.md"]),
+    )
+
+
+def test_changes_can_leave_out_paths_as_microsoft_documents():
+    plugin, root = _connected()
+    cursor = plugin.changes(root, None).cursor
+    plugin.user_adds(root, "Sales Bot/notes.md", b"x")
+    plugin.omit_paths_in_changes = True
+
+    page = plugin.changes(root, cursor)
+
+    assert_that({item.path for item in page.items}, equal_to({None}))
+    assert_that(plugin.get_item(root, item_id=page.items[-1].id).path is not None, is_(True))
+
+
+def test_deleting_with_a_token_deletes_and_records_the_token():
+    plugin, root = _connected()
+    item = plugin.user_adds(root, "Sales Bot/notes.md", b"x")
+
+    plugin.delete_item_with("admin-token", root, item_id=item.id)
+
+    assert_that(plugin.nodes[item.id].deleted, is_(True))
+    assert_that(plugin.delegated_tokens, equal_to(["admin-token"]))
+
+
 def test_downloads_and_empty_files_need_no_upload():
     plugin, root = _connected()
     folder = plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")

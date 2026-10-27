@@ -212,7 +212,9 @@ _FILE_SYNC_METHODS = (
     "get_item_by_path",
     "move_item",
     "delete_item",
+    "delete_item_with",
     "changes",
+    "list_files",
     "upload_target",
     "download_url",
     "write_empty_file",
@@ -255,8 +257,14 @@ class _FileSync(_Stub):
     def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
         return None
 
+    def delete_item_with(self, token: str, root: SyncRoot, *, item_id: str) -> None:
+        return None
+
     def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
         return RemoteChanges(items=[], cursor="next", more=False)
+
+    def list_files(self, root: SyncRoot, *, folder_id: str) -> list[RemoteItem]:
+        return [_ITEM]
 
     def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
         return UploadTarget(url="https://stub.example.test/upload", expires_at=datetime(2026, 10, 22, tzinfo=UTC))
@@ -952,7 +960,6 @@ def test_onedrive_writes_go_where_the_engine_asks(graph):
         (httpx.Response(412), RemoteChangeRejected),
         (httpx.Response(410), RemoteResyncRequired),
         (httpx.Response(423), RemoteItemLocked),
-        (httpx.Response(401), LocationAccessRefused),
         (httpx.Response(403), LocationAccessRefused),
         (httpx.Response(500), ProviderUnavailable),
         (httpx.ConnectError("boom"), ProviderUnavailable),
@@ -1001,3 +1008,82 @@ def test_onedrive_a_root_without_a_site_is_refused_before_calling_microsoft(grap
         plugin.get_item(no_site, item_id="x")
 
     assert_that((recorder.calls, identity.app_token_requests), equal_to(([], [])))
+
+
+def test_onedrive_refreshes_a_rejected_token_once_and_retries(graph):
+    item = _graph_item("notes.md", "/drives/b!x/root:/Agent Barn/Sales Bot/workspace")
+    recorder = graph(httpx.Response(401), httpx.Response(200, json=item))
+    plugin, identity, _ = _onedrive()
+
+    found = plugin.get_item(_SYNC_ROOT, item_id="id-notes.md")
+
+    assert_that(found.path, equal_to("Sales Bot/workspace/notes.md"))
+    assert_that((len(identity.app_token_requests), len(recorder.calls)), equal_to((2, 2)))
+
+
+def test_onedrive_reports_access_lost_when_a_fresh_token_is_rejected_too(graph):
+    graph(httpx.Response(401), httpx.Response(401))
+    plugin, identity, _ = _onedrive()
+
+    with pytest.raises(LocationAccessRefused):
+        plugin.get_item(_SYNC_ROOT, item_id="x")
+
+    assert_that(len(identity.app_token_requests), equal_to(2))
+
+
+def test_onedrive_service_unavailable_passes_on_microsofts_wait(graph):
+    graph(httpx.Response(503, headers={"Retry-After": "45"}))
+
+    with pytest.raises(ProviderThrottled) as exc:
+        _onedrive()[0].get_item(_SYNC_ROOT, item_id="x")
+
+    assert_that(exc.value.retry_after, equal_to(45))
+
+
+def test_onedrive_lists_every_file_below_a_folder_across_pages_and_subfolders(graph):
+    reports = "/drives/b!x/root:/Agent Barn/Sales Bot/workspace/reports"
+    first_page = {
+        "value": [_graph_item("q3", reports, folder={"childCount": 1}), _graph_item("a.md", reports)],
+        "@odata.nextLink": f"{_GRAPH_DRIVE}/items/folder-1/children?$skiptoken=2",
+    }
+    recorder = graph(
+        httpx.Response(200, json=first_page),
+        httpx.Response(200, json={"value": [_graph_item("b.md", reports)]}),
+        httpx.Response(200, json={"value": [_graph_item("c.md", f"{reports}/q3")]}),
+    )
+
+    files = _onedrive()[0].list_files(_SYNC_ROOT, folder_id="folder-1")
+
+    assert_that(
+        sorted(item.path or "" for item in files),
+        equal_to(
+            [
+                "Sales Bot/workspace/reports/a.md",
+                "Sales Bot/workspace/reports/b.md",
+                "Sales Bot/workspace/reports/q3/c.md",
+            ]
+        ),
+    )
+    assert_that(
+        [call["url"] for call in recorder.calls],
+        equal_to(
+            [
+                f"{_GRAPH_DRIVE}/items/folder-1/children",
+                f"{_GRAPH_DRIVE}/items/folder-1/children?$skiptoken=2",
+                f"{_GRAPH_DRIVE}/items/id-q3/children",
+            ]
+        ),
+    )
+
+
+def test_onedrive_deletes_with_the_administrators_own_token_not_the_apps(graph):
+    recorder = graph(httpx.Response(204))
+    plugin, identity, _ = _onedrive()
+
+    plugin.delete_item_with("delegated-admin-token", _SYNC_ROOT, item_id="folder-1")
+
+    assert_that(identity.app_token_requests, equal_to([]))
+    assert_that(
+        (recorder.calls[0]["method"], recorder.calls[0]["url"], recorder.calls[0]["headers"]),
+        equal_to(("DELETE", f"{_GRAPH_DRIVE}/items/folder-1", {"Authorization": "Bearer delegated-admin-token"})),
+    )

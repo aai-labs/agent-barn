@@ -36,7 +36,7 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
   const noun = provider.locationNoun ?? "location";
   const hasPicker = provider.capabilities.includes(LOCATION_PICKER) && provider.locationNoun !== null;
   const afterDisconnect = provider.capabilities.includes(FILE_SYNC)
-    ? "Each Agent's folder inside the Agent Barn folder is deleted first. The Agent Barn folder stays, and the Agents keep their own files."
+    ? "Each Agent's folder inside the Agent Barn folder is deleted once access is removed. The Agent Barn folder stays, and the Agents keep their own files."
     : "The Agent Barn folder and its files stay where they are.";
 
   if (!provider.available) {

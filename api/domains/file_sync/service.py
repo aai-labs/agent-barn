@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.file_sync.engine import delete_agent_folder, sync_root
+from api.domains.file_sync.engine import sync_root
 from api.domains.file_sync.models import (
     AgentFileSyncActivityRead,
     AgentFileSyncProviderRead,
@@ -25,9 +26,11 @@ from api.domains.file_sync.repository import AgentFileSyncRepository, FileSyncRe
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
-from api.domains.sync_provider.plugins.base import SyncProviderPlugin
+from api.domains.sync_provider.plugins.base import RemoteItemMissing, SyncProviderError, SyncProviderPlugin
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 DISCONNECT_LOCK_WAIT_SECONDS = 15
 NOT_SYNCING_AFTER = timedelta(minutes=10)
@@ -50,10 +53,22 @@ class FileSyncFolderRemoval:
                 raise FileSyncBusy
             yield
 
-    def remove_agent_folders(self, connection: SyncProviderConnection, plugin: SyncProviderPlugin) -> None:
+    def remove_agent_folders(self, connection: SyncProviderConnection, plugin: SyncProviderPlugin, token: str) -> None:
         root = sync_root(connection)
         for folder in self.repository.folders(connection.id):
-            delete_agent_folder(plugin, root, self.repository, folder)
+            if root is not None and folder.folder_item_id is not None:
+                try:
+                    plugin.delete_item_with(token, root, item_id=folder.folder_item_id)
+                except RemoteItemMissing:
+                    pass
+                except SyncProviderError as exc:
+                    logger.warning(
+                        "Disconnect left the folder of Agent %s at the provider: %s: %s",
+                        folder.agent_id,
+                        type(exc).__name__,
+                        exc.message,
+                    )
+            self.repository.remove_folder(folder.id)
 
 
 @inject

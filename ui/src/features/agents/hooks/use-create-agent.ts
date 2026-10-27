@@ -26,6 +26,8 @@ export type CreateAgentData = {
   sharedCredentials?: Array<{ sharedCredentialId: string }>;
   approvalMode?: "manual" | "auto" | "off";
   fileSyncEnabled?: boolean;
+  // Omitted hires on the platform default; Owners and Admins may name another allowed size.
+  agentSizeId?: string;
 };
 
 export function useCreateAgent() {

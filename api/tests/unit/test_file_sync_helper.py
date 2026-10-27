@@ -36,6 +36,8 @@ class _Ingest:
         self.known: dict[str, str] = {}
         self.report_status: list[tuple[int, dict]] = []
         self.hang = False
+        self.hang_on: set[str] = set()
+        self.refused_results: dict[str, int] = {}
         self.request_times: list[float] = []
         self.operations: list[dict] = []
         self.rounds = 0
@@ -99,8 +101,8 @@ class _Ingest:
                 self.wfile.write(body)
 
             def do_POST(self):
-                if ingest.hang:
-                    time.sleep(30)
+                if ingest.hang or any(self.path.endswith(suffix) for suffix in ingest.hang_on):
+                    time.sleep(5)
                 if self.headers.get("Authorization") != f"Bearer {_KEY}":
                     self._send(401)
                     return
@@ -123,7 +125,11 @@ class _Ingest:
                     ingest.completed.append(done.path)
                     self._send(204)
                 elif self.path == f"{_BASE_PATH}/operations/result":
-                    ingest.results.append(FileSyncOperationResultCreate.model_validate_json(self._body()))
+                    result = FileSyncOperationResultCreate.model_validate_json(self._body())
+                    if result.path in ingest.refused_results:
+                        self._send(ingest.refused_results[result.path], {"detail": "x"})
+                        return
+                    ingest.results.append(result)
                     self._send(204)
                 else:
                     self._send(404)
@@ -289,6 +295,36 @@ def test_hermes_paths_are_reported_from_the_hermes_layout(tmp_path):
     assert_that(
         sorted(entry.path for entry in ingest.reports[0].entries),
         equal_to(["SOUL.md", "memories/USER.md", "workspace/notes.md"]),
+    )
+
+
+def test_hidden_files_and_virtualenvs_are_never_reported_but_protected_hidden_names_are(tmp_path):
+    volume = tmp_path / "volume"
+    for rel in (
+        "workspace/notes.md",
+        "workspace/.env",
+        "workspace/project/.netrc",
+        "workspace/.venv/lib/site.py",
+        "workspace/venv/lib/site.py",
+        "workspace/.cache/pip/wheel.whl",
+        "workspace/.cursorrules",
+        "workspace/.cursor/rules/style.mdc",
+        "workspace/.hermes.md",
+    ):
+        _write(volume, rel, b"x")
+    with _Ingest() as ingest:
+        _run(tmp_path, ingest.url, "hermes")
+
+    assert_that(
+        sorted(entry.path for entry in ingest.reports[0].entries),
+        equal_to(
+            [
+                "workspace/.cursor/rules/style.mdc",
+                "workspace/.cursorrules",
+                "workspace/.hermes.md",
+                "workspace/notes.md",
+            ]
+        ),
     )
 
 
@@ -605,6 +641,23 @@ def test_the_pod_and_the_server_classify_every_path_alike(runtime):
         "workspace/skillsX/a.md",
         "workspace/AGENTS.md",
         "workspace/AGENTS.md/nested.md",
+        "workspace/agents.md",
+        "workspace/AGENTS.override.md",
+        "workspace/HERMES.md",
+        "workspace/.hermes.md",
+        "workspace/CLAUDE.md",
+        "workspace/.cursorrules",
+        "workspace/.cursor/rules/style.mdc",
+        "workspace/.cursor/settings.json",
+        "workspace/.env",
+        "workspace/project/.env",
+        "workspace/.venv/lib/site.py",
+        "workspace/venv/lib/site.py",
+        "workspace/.cache/x",
+        "workspace/Skills/jira/SKILL.md",
+        "memories/user.md",
+        "workspace/memory.md",
+        "soul.md",
         "workspace/USER.md",
         "workspace/MEMORY.md",
         "memories/USER.md",
@@ -633,3 +686,56 @@ def test_the_pod_and_the_server_classify_every_path_alike(runtime):
             (path, helper.synced(path, rules)),
             equal_to((path, classify(runtime, path) != SyncCategory.NEVER)),
         )
+
+
+def test_a_volume_without_its_workspace_never_reports_complete(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "memories/USER.md", b"profile")
+    with _Ingest() as ingest:
+        _run(tmp_path, ingest.url, "hermes")
+
+    report = ingest.reports[0]
+    assert_that(report.complete, equal_to(False))
+    assert_that([entry.path for entry in report.entries], equal_to(["memories/USER.md"]))
+
+
+def _cycle(tmp_path: Path, ingest: _Ingest, helper, runtime: str = "openclaw") -> None:
+    helper.INGEST_TIMEOUT_SECONDS = 1
+    rules = json.loads(_rules(tmp_path, runtime, tmp_path / "volume").read_text())
+    client = helper.Ingest(f"{ingest.url}/ingest/v1", _AGENT_ID, _KEY)
+    helper.run_cycle(client, rules, str(tmp_path / "state.json"), settle_seconds=0)
+
+
+def test_a_timed_out_upload_confirmation_does_not_stop_the_jobs(tmp_path):
+    helper = _load()
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/new.md", b"agent wrote this")
+    _write(volume, "workspace/notes.md", b"agent text")
+    with _Ingest() as ingest:
+        ingest.known["workspace/notes.md"] = _sha(b"agent text")
+        ingest.download("workspace/notes.md", b"person's edit")
+        ingest.hang_on.add("/uploads/complete")
+
+        _cycle(tmp_path, ingest, helper)
+
+    assert_that(
+        [(result.path, result.outcome) for result in ingest.results], equal_to([("workspace/notes.md", "done")])
+    )
+    assert_that((volume / "workspace/notes.md").read_bytes(), equal_to(b"person's edit"))
+
+
+def test_a_refused_job_result_does_not_stop_the_next_job(tmp_path):
+    helper = _load()
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/a.md", b"a")
+    _write(volume, "workspace/b.md", b"b")
+    with _Ingest() as ingest:
+        ingest.known.update({"workspace/a.md": _sha(b"a"), "workspace/b.md": _sha(b"b")})
+        ingest.download("workspace/a.md", b"edited a")
+        ingest.download("workspace/b.md", b"edited b")
+        ingest.refused_results["workspace/a.md"] = 500
+
+        _cycle(tmp_path, ingest, helper)
+
+    assert_that([(result.path, result.outcome) for result in ingest.results], equal_to([("workspace/b.md", "done")]))
+    assert_that((volume / "workspace/b.md").read_bytes(), equal_to(b"edited b"))

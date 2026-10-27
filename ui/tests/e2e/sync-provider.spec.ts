@@ -329,7 +329,7 @@ test.describe("Settings · Sync · disconnecting", () => {
     await sync.open();
 
     await sync.disconnect(ONEDRIVE).click();
-    await expect(sync.dialog).toContainText("Each Agent's folder inside the Agent Barn folder is deleted");
+    await expect(sync.dialog).toContainText("Each Agent's folder inside the Agent Barn folder is deleted once access is removed.");
     await expect(sync.dialog).toContainText("The Agent Barn folder stays, and the Agents keep their own files");
     await sync.dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
 

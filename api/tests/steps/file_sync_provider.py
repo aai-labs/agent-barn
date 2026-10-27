@@ -1,7 +1,7 @@
 import hashlib
 import itertools
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from injector import Module, provider, singleton
@@ -38,6 +38,8 @@ TEST_DRIVE_TOKEN = "test-drive-token"
 UPLOAD_URL_PREFIX = "https://testdrive.example.test/upload/"
 DOWNLOAD_URL_PREFIX = "https://testdrive.example.test/download/"
 UPLOAD_LIFETIME = timedelta(minutes=15)
+OFFICE_EXTENSIONS = (".docx", ".xlsx", ".pptx")
+OFFICE_REWRITE = b"<sharepoint properties>" * 64
 
 
 @dataclass
@@ -52,6 +54,7 @@ class _Node:
     deleted: bool = False
     modified_by_app: bool = True
     seq: int = 0
+    modified_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -74,6 +77,8 @@ class TestDrivePlugin(SyncProviderPlugin):
     moved_out: set[str] = field(default_factory=set)
     throttled_calls: dict[str, int] = field(default_factory=dict)
     failing_calls: dict[str, SyncProviderError] = field(default_factory=dict)
+    omit_paths_in_changes: bool = False
+    delegated_tokens: list[str] = field(default_factory=list)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -126,6 +131,13 @@ class TestDrivePlugin(SyncProviderPlugin):
         if node is not None and not node.deleted:
             self._delete(node)
 
+    def delete_item_with(self, token: str, root: SyncRoot, *, item_id: str) -> None:
+        self._call("delete_item_with")
+        self.delegated_tokens.append(token)
+        node = self.nodes.get(item_id)
+        if node is not None and not node.deleted:
+            self._delete(node)
+
     def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
         self._call("changes")
         if cursor is None and not from_start:
@@ -147,11 +159,23 @@ class TestDrivePlugin(SyncProviderPlugin):
         page = changed[offset : offset + self.page_size]
         more = offset + self.page_size < len(changed)
         next_cursor = f"{kind}:{since}:{offset + self.page_size}" if more else f"after:{self.seq}:0"
-        return RemoteChanges(
-            items=[self._item(root, node, gone=node.id in self.moved_out) for node in page],
-            cursor=next_cursor,
-            more=more,
-        )
+        items = [self._item(root, node, gone=node.id in self.moved_out) for node in page]
+        if self.omit_paths_in_changes:
+            items = [replace(item, path=None) for item in items]
+        return RemoteChanges(items=items, cursor=next_cursor, more=more)
+
+    def list_files(self, root: SyncRoot, *, folder_id: str) -> list[RemoteItem]:
+        self._call("list_files")
+        files: list[RemoteItem] = []
+        folders = [self._live(folder_id).id]
+        while folders:
+            parent = folders.pop()
+            for node in [node for node in self.nodes.values() if node.parent_id == parent and not node.deleted]:
+                if node.is_folder:
+                    folders.append(node.id)
+                else:
+                    files.append(self._item(root, node))
+        return files
 
     def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
         self._call("upload_target")
@@ -169,6 +193,8 @@ class TestDrivePlugin(SyncProviderPlugin):
 
     def complete_upload(self, url: str, content: bytes) -> RemoteItem:
         root, parent_id, rel_path = self.uploads.pop(url)
+        if rel_path.lower().endswith(OFFICE_EXTENSIONS):
+            content += OFFICE_REWRITE
         return self._item(root, self._write(parent_id, rel_path, content, by_app=True))
 
     def content_at(self, download_url: str) -> bytes:
@@ -238,6 +264,7 @@ class TestDrivePlugin(SyncProviderPlugin):
         if content_changed:
             node.content_version += 1
         node.modified_by_app = by_app
+        node.modified_at = datetime.now(UTC)
 
     def _live(self, item_id: str) -> _Node:
         node = self.nodes.get(item_id)
@@ -335,7 +362,7 @@ class TestDrivePlugin(SyncProviderPlugin):
             content_hash=None if node.is_folder else hashlib.sha256(node.content).hexdigest(),
             is_folder=node.is_folder,
             deleted=deleted,
-            modified_at=datetime.now(UTC),
+            modified_at=node.modified_at,
             modified_by_app=False if deleted else node.modified_by_app,
             web_url=f"https://testdrive.example.test/{node.id}",
         )

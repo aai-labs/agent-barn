@@ -1,6 +1,7 @@
 import {
   Activity,
   BookOpen,
+  Bot,
   Brain,
   Building2,
   CreditCard,
@@ -10,6 +11,7 @@ import {
   LayoutDashboard,
   Layers,
   LayoutGrid,
+  PackageOpen,
   MessageSquare,
   MessagesSquare,
   Receipt,
@@ -119,6 +121,19 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     ],
   },
   {
+    key: "agents",
+    label: "Agents",
+    icon: Bot,
+    pages: [
+      {
+        key: "agents",
+        label: "Agents",
+        href: `${PLATFORM_BASE}/agents`,
+        icon: Bot,
+      },
+    ],
+  },
+  {
     key: "spend",
     label: "Spend",
     icon: Wallet,
@@ -195,6 +210,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   logs: SquareTerminal,
   memory: Brain,
   workflows: Workflow,
+  files: PackageOpen,
   playbooks: BookOpen,
   "file-sync": FolderSync,
   activity: Activity,
@@ -206,7 +222,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "playbooks", "file-sync"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "file-sync"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 

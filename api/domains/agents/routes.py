@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.agent_sizes.models import AgentSizeChoice
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
@@ -34,6 +35,7 @@ from api.domains.agents.models import (
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
+from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.integrations.service import IntegrationIsolationService
@@ -57,10 +59,14 @@ def apply_integration_isolation(
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
 def create_agent(
     data: AgentCreate,
+    background_tasks: BackgroundTasks,
+    storage: Annotated[ArtifactBucketProvisioner, Injected(ArtifactBucketProvisioner)],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
 ):
-    return service.create_agent(data, context)
+    agent = service.create_agent(data, context)
+    background_tasks.add_task(storage.process_agent, agent.id, agent.organization_id)
+    return agent
 
 
 @agents_router.get("", response_model=PaginatedItems[AgentRead])
@@ -205,6 +211,21 @@ def set_agent_llm_budget(
 ):
     """Set the Agent's own spend limit, or clear it to follow the default."""
     return service.set_llm_budget(agent_id, budget.budget_usd, context)
+
+
+@agents_router.put("/{agent_id}/agent-size", response_model=AgentRead)
+def set_agent_size(
+    agent_id: UUID,
+    choice: AgentSizeChoice,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    """Choose the size the Agent starts on next, or null to follow the platform default.
+
+    Separate from the Agent update so it is accepted while the Agent runs; the change
+    applies at the next start, and `pending_size` says so until then.
+    """
+    return service.set_agent_size(agent_id, choice.agent_size_id, context)
 
 
 @agents_router.get("/{agent_id}/configuration", response_model=AgentConfigurationRead)

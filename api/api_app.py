@@ -25,10 +25,17 @@ from api.domains.activity.routes import activity_router
 from api.domains.agent_memory.platform_routes import platform_memory_router
 from api.domains.agent_memory.routes import agent_memory_router, memory_grants_router, organization_memory_router
 from api.domains.agent_settings.routes import agent_settings_router
+from api.domains.agent_sizes.routes import (
+    organization_agent_sizes_router,
+    platform_agent_sizes_router,
+    platform_organization_agent_sizes_router,
+)
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
+from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.api_keys.routes import router as api_keys_router
+from api.domains.artifacts.routing import router as agent_artifacts_router
 from api.domains.auth.routes import auth_router
 from api.domains.billing.routes import (
     billing_router,
@@ -144,11 +151,16 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
+    subapi.include_router(agent_artifacts_router)
     subapi.include_router(workflows_router)
     subapi.include_router(workflow_runs_router)
     app_v1.include_router(workflow_runtime_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
+    subapi.include_router(platform_agent_sizes_router)
+    subapi.include_router(platform_organization_agent_sizes_router)
+    subapi.include_router(platform_agents_router)
+    subapi.include_router(organization_agent_sizes_router)
     subapi.include_router(platform_trial_settings_router)
     subapi.include_router(onboarding_router)
     subapi.include_router(billing_router)

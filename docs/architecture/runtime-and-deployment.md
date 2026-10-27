@@ -14,6 +14,30 @@ Agent's own tools, Integrations, approval mode and spend limits govern it. The
 owns admission and text-checkpoint invariants; [operations](../guidelines/operations.md#workflow-execution-wf02)
 owns installation prerequisites.
 
+Both runtime builders mount the shared `agentbarn-artifacts` CLI. They append its
+instructions to AGENTS.md when artifact storage is configured at Agent start.
+Enabling storage requires restarting existing Agents to load those instructions;
+the per-step workflow prompt checks current API storage configuration live. The runtime Secret contains a purpose-separated
+per-start Agent service capability and no bucket credentials. File publication
+and sharing follow the [artifact contract](../features/agent-artifacts.md), using
+existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
+supports text-only operation when storage is unavailable. Normal local startup
+requires Garage and the purge worker in the
+main Compose project, without a profile opt-in. The Garage chart owns persistent
+replicated storage; operator bootstrap owns layout and private control-plane
+configuration. Agent creation atomically queues per-Agent storage requests; post-response API work
+provisions them. The existing purge worker recovers persisted requests and reclaims
+deleted-owner buckets. Both receive the private
+management credential; other workloads and Agent runtimes do not. Neither uses a
+shared data key. Local Compose storage uses named volumes and ignored private
+configuration. Garage remains private: Compose publishes loopback-only S3 and native-management
+ports, while API/purge use service DNS; application Helmfile leaves Garage ingress
+disabled. Garage is an unconditional Helmfile release in all application deployments;
+initial operator bootstrap is required before deploying. Download links use the existing app origin and the API streams bytes,
+with opaque signed authority generated and validated by the storage adapter.
+There is no app-managed download token issuer or separate public storage URL.
+See [Garage operations](../guidelines/garage.md).
+
 Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.
@@ -24,13 +48,15 @@ Starting an agent is an API-orchestrated deployment flow:
 6. Resolve per-binding isolation and materialize aai-cli, gog and Firecrawl artifacts through the tool adapters.
 7. Append tool pointers, integration policy, and unconditional runtime behaviour policies to rendered Markdown.
 8. Generate fresh Ingest and Communications protocol credentials, and an Agent Memory credential when opted in.
-9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration.
+9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration. The agent container's CPU and memory come from the Agent's [Agent Size](../features/agent-sizes.md), resolved at this start.
 10. Apply resources through the Kubernetes client and mark the Agent running.
 11. Record the runtime configuration digest the pod was built from.
 
 Runtime behaviour policies are appended to `AGENTS.md` rather than stored in a template, because both runtimes auto-load `AGENTS.md` into the startup system prompt. They are unconditional and carry no role-specific wording, so custom and forked templates inherit them and the role-scope policy defers to whatever role the agent's own template defines.
 
 A Kubernetes/runtime start failure can place the Agent in `ERROR`; successful start clears the prior lifecycle error. Hermes and OpenClaw Deployments repair ownership of their root-mounted persistent state in a root init container before starting their non-root runtime, and pre-create Hermes' `workspace` subPath. Hermes base-image CI starts the real image against a fresh root-owned Docker volume, executes the generated init-container command as root, then proves the default `hermes` user can create the startup directories and write through the persistent workspace. Isolated Google Workspace uses a ConfigMap-mounted gog wrapper installed by `gog-setup.sh`; direct Google imports credentials into its disposable keyring. The [integration contract](../features/integrations.md#credential-adapters) owns these routes. Connection validation and provider-session failures instead update that Communication Connection's observed health and do not change Agent lifecycle.
+
+The agent container's resources are its Agent Size, read from the catalog at every start (the size the Agent's Organization chose for it, else the default; see [`../features/agent-sizes.md`](../features/agent-sizes.md)); the start records the values in `Agent.running_resources` beside `running_model`, and stop clears them, and rendered by `container_resources` in the same units the builders always wrote, so the seeded Standard size produces the same pod spec Agents had before sizes existed. Requests and limits are kept apart because the namespace quota binds on `requests.memory`. The root `fix-pvc-owner` init container does not follow the size: it keeps a fixed block (`INIT_CONTAINER_RESOURCES`, the pre-sizes values), since without one the LimitRange fills in its larger default and a pod is charged the larger of its containers added up and its biggest init container. A size below Standard is therefore still charged Standard's request while it starts. OpenClaw's V8 heap follows the cgroup limit, so a larger size gives it more heap with no other change; CPython never reads the limit, so for Hermes it is a hard cap on the working set.
 
 Command approval (the persisted `approval_mode` field) is mapped onto a runtime policy only for Hermes: `builders/hermes.py` maps `manual`→`manual`, `auto`→`smart`, and `off`→`off` into the Hermes `approvals.mode` config. OpenClaw has no user-configurable command-approval control — `build_openclaw_gateway_config` never receives or emits an approvals block — so the API rejects an explicit non-default `approval_mode` for an OpenClaw Agent instead of accepting and silently ignoring it. OpenClaw-specific command approval is tracked as a separate follow-up.
 
@@ -68,12 +94,13 @@ These **under-report** — a real change that the digest does not move:
 
 - **Mutable image tags.** The digest folds in the image *reference*, not its content, so rebuilding and pushing the same tag (`:dev`, `:latest`) leaves it unchanged. Immutable or digest-pinned tags do not have this problem.
 - **Deployment environment beyond the two image references.** `ingest_base_url`, `communications_base_url`, and the Firecrawl settings are read at start but excluded, because a curated `Config` subset would reintroduce exactly the hand-maintained list this design exists to avoid.
+- **Agent Size values.** A size is data, read at start, so choosing another one, editing one, or changing the default reaches each Agent on it at its next start without moving the digest or offering an update. `AgentRead.pending_size` is the restart-needed signal for this instead, comparing `running_resources` with the size's values now.
 - **Dynamic dispatch and runtime registration** are invisible to static analysis. The assembly path uses neither today, and introducing one edits a call site that is itself inside the closure, so it registers once.
 
 These **over-report** — the digest moves without a behavioural change:
 
 - The two asset roots are compared byte for byte, so a comment-only edit to `start.sh` or `init-openclaw.js` moves the digest. Shell and JavaScript cannot be normalised the way Python can.
-- `Agent` is inside the closure, so adding any column to that table moves the digest once.
+- `Agent` is inside the closure, so adding any column to that table moves the digest once. Agent Sizes PR 2 (`agent_size_id`, `running_resources`) did, together with its provisioning change, and PR 3 (`agent_size_set_by_platform`) did again.
 - A Python minor-version upgrade can change `ast.dump` output, moving the digest once across the fleet.
 
 Over-reporting is the safe direction: the prompt is advisory, and a restart preserves the PVC, conversation history, Communication Connections, and Hermes `always` grants, rebuilding only the ConfigMap, Secret, and per-start credentials. The under-reporting cases are the ones to watch, because an Agent silently keeps serving older behaviour.
@@ -190,7 +217,8 @@ The API image also runs Domain Event delivery workloads with different commands:
 
 The Sync Engine is a separate Deployment of the API image (`api/sync_engine_main.py`, chart value `syncEngine`). Every 30 s it runs [Agent file sync](../features/sync-provider/README.md#agent-file-sync) for each active Sync Provider Connection whose provider supports it.
 - **Pod lifecycle:** it uses a non-overlapping rolling update like the worker, and has one replica. A per-connection PostgreSQL advisory lock still keeps two copies off the same connection during a rollout.
-- **Liveness:** the probe fails when the heartbeat file it writes after each completed pass is older than `syncEngine.heartbeatMaxAgeSeconds` (120 s).
+- **Liveness:** the probe fails when the heartbeat file is older than `syncEngine.heartbeatMaxAgeSeconds` (600 s). The engine writes it after each page of changes, each connection and each completed pass, so a long pass stays alive.
+- **No Kubernetes access:** the engine never calls the Kubernetes API, so its pod sets `automountServiceAccountToken: false` and mounts no kubeconfig. It keeps the release's service account name, like every other Deployment in the chart, but receives no credential for it.
 - **What it needs:** the API Secret. It needs no Redis, no LiteLLM and no Kubernetes access.
 - **Local runs:** `make dev-sync-engine`, or the `sync-engine` Compose service.
 
