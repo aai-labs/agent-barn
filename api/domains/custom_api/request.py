@@ -10,6 +10,16 @@ import ssl
 from urllib.parse import unquote, urlencode, urlsplit
 
 MAX_BYTES = 1024 * 1024
+#: Authentication through an OAuth2 client-credentials grant (RFC 6749 section 4.4). The
+#: gateway exchanges the client id and secret for a short-lived bearer token itself, so the
+#: secret never has to be materialized into the pod and the agent-side CLI needs no new
+#: authentication type. Connections with this type are therefore isolated only.
+OAUTH2_CLIENT_CREDENTIALS = "oauth2_client_credentials"
+TOKEN_EXCHANGE_TIMEOUT = 10
+DEFAULT_TOKEN_LIFETIME = 3600
+#: Bound on the lifetime a token endpoint reports, so a wrong or huge ``expires_in`` cannot
+#: keep a stale token cached for days.
+MAX_TOKEN_LIFETIME = 24 * 3600
 BLOCKED_HEADERS = frozenset(
     {
         "host",
@@ -29,6 +39,19 @@ BLOCKED_HEADERS = frozenset(
 
 class RequestRefused(ValueError):
     pass
+
+
+class TokenExchangeFailed(Exception):
+    """The token endpoint refused the client credentials or answered unusably.
+
+    ``refused`` is True when the endpoint answered and rejected the credentials, which the
+    caller reports as an authentication problem, and False when it could not be reached or
+    did not answer like a token endpoint.
+    """
+
+    def __init__(self, message: str, *, refused: bool) -> None:
+        super().__init__(message)
+        self.refused = refused
 
 
 def parse_url(value: str, *, base: bool = False):
@@ -107,11 +130,39 @@ def header_name(name: str) -> str:
     return name
 
 
-def credential_headers(config: dict) -> tuple[dict[str, str], list[str]]:
+def client_credentials(auth: dict) -> tuple[str, str, str, str | None]:
+    """Validate an OAuth2 client-credentials configuration without contacting anything."""
+    token_url = auth.get("token_url")
+    if not isinstance(token_url, str):
+        raise RequestRefused("An absolute HTTPS token URL is required")
+    parse_url(token_url)
+    values = []
+    for field in ("client_id", "client_secret"):
+        value = auth.get(field)
+        if not isinstance(value, str) or not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise RequestRefused("Client credentials must be present and free of control characters")
+        values.append(value)
+    scope = auth.get("scope")
+    if scope is not None and (
+        not isinstance(scope, str) or not scope or any(ord(c) < 32 or ord(c) == 127 for c in scope)
+    ):
+        raise RequestRefused("Scope must be a non-empty string without control characters")
+    return token_url, values[0], values[1], scope
+
+
+def credential_headers(config: dict, *, access_token: str | None = None) -> tuple[dict[str, str], list[str]]:
+    """Headers that authenticate an upstream request, and every value to redact from its answer.
+
+    An OAuth2 client-credentials connection authenticates with the ``access_token`` the
+    gateway obtained through ``fetch_access_token``; without one, only its configuration is
+    validated and no authorization header is produced.
+    """
     headers: dict[str, str] = {}
     sensitive: list[str] = []
     auth = config.get("auth", {})
     kind = auth.get("type", "none")
+    if access_token is not None and kind != OAUTH2_CLIENT_CREDENTIALS:
+        raise RequestRefused("An access token applies only to OAuth2 client credentials")
     if kind == "bearer":
         headers["authorization"] = "Bearer " + header_value(auth["token"])
         sensitive.append(auth["token"])
@@ -129,6 +180,12 @@ def credential_headers(config: dict) -> tuple[dict[str, str], list[str]]:
         encoded = base64.b64encode(f"{user}:{password}".encode()).decode()
         headers["authorization"] = "Basic " + encoded
         sensitive.extend([password, encoded])
+    elif kind == OAUTH2_CLIENT_CREDENTIALS:
+        _, _, client_secret, _ = client_credentials(auth)
+        sensitive.append(client_secret)
+        if access_token is not None:
+            headers["authorization"] = "Bearer " + header_value(access_token)
+            sensitive.append(access_token)
     elif kind != "none":
         raise RequestRefused("Unsupported authentication type")
     for item in config.get("headers", []):
@@ -143,8 +200,8 @@ def credential_headers(config: dict) -> tuple[dict[str, str], list[str]]:
 
 
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, host: str, address: str, port: int = 443):
-        super().__init__(host, port=port, timeout=30, context=ssl.create_default_context())
+    def __init__(self, host: str, address: str, port: int = 443, timeout: int = 30):
+        super().__init__(host, port=port, timeout=timeout, context=ssl.create_default_context())
         self.address = address
         self.tls_context = ssl.create_default_context()
 
@@ -172,7 +229,74 @@ def redact(value, sensitive: list[str]):
     return value
 
 
-def execute(config: dict, request: dict) -> dict:
+def fetch_access_token(auth: dict, *, timeout: int = TOKEN_EXCHANGE_TIMEOUT) -> tuple[str, int]:
+    """Exchange OAuth2 client credentials for a bearer token and its remaining lifetime.
+
+    The credentials go in the form body (``client_secret_post``), which every client-credentials
+    endpoint seen so far accepts, to the token URL under the same destination policy as a
+    request: public HTTPS, a pinned public address, and no redirects. The endpoint's answer
+    is trusted only for the token itself; the lifetime is bounded.
+    """
+    token_url, client_id, client_secret, scope = client_credentials(auth)
+    parsed = parse_url(token_url)
+    form = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
+    if scope:
+        form["scope"] = scope
+    path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+    connection = None
+    try:
+        # Inside the try because a DNS failure is an OSError too; a private or missing
+        # address is a configuration refusal and stays a RequestRefused.
+        addresses = public_addresses(parsed.hostname, parsed.port or 443)
+        connection = PinnedHTTPSConnection(parsed.hostname, addresses[0], parsed.port or 443, timeout=timeout)
+        connection.request(
+            "POST",
+            path,
+            body=urlencode(form).encode(),
+            headers={"content-type": "application/x-www-form-urlencoded", "accept": "application/json"},
+        )
+        response = connection.getresponse()
+        status = response.status
+        content = response.read(MAX_BYTES + 1)
+    except RequestRefused:
+        raise
+    except (OSError, http.client.HTTPException) as exc:
+        raise TokenExchangeFailed("The token endpoint could not be reached", refused=False) from exc
+    finally:
+        if connection is not None:
+            connection.close()
+    if 300 <= status < 400:
+        raise TokenExchangeFailed("The token endpoint redirected; redirects are not followed", refused=False)
+    if status in {400, 401, 403}:
+        # The statuses a token endpoint uses for invalid_client and invalid_request. Anything
+        # else (429, 404, 5xx) says nothing about the credentials, so it is unavailability.
+        raise TokenExchangeFailed(f"The token endpoint refused the client credentials (HTTP {status})", refused=True)
+    if status != 200:
+        raise TokenExchangeFailed(f"The token endpoint is unavailable (HTTP {status})", refused=False)
+    try:
+        payload = json.loads(content[:MAX_BYTES].decode("utf-8", errors="replace"))
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        raise TokenExchangeFailed("The token endpoint did not answer with a JSON object", refused=False)
+    token = payload.get("access_token")
+    token_type = payload.get("token_type")
+    if (
+        not isinstance(token, str)
+        or not token
+        or any(ord(c) < 32 or ord(c) > 126 for c in token)
+        or (token_type is not None and str(token_type).lower() != "bearer")
+    ):
+        raise TokenExchangeFailed("The token endpoint did not issue a usable bearer token", refused=False)
+    try:
+        # OverflowError: json.loads accepts Infinity.
+        lifetime = int(payload.get("expires_in", DEFAULT_TOKEN_LIFETIME))
+    except TypeError, ValueError, OverflowError:
+        lifetime = DEFAULT_TOKEN_LIFETIME
+    return token, max(0, min(lifetime, MAX_TOKEN_LIFETIME))
+
+
+def execute(config: dict, request: dict, *, access_token: str | None = None) -> dict:
     """Attach credentials only after scope validation and pin the validated DNS address."""
     url = request.get("url", "")
     check_scope(config["base_url"], url)
@@ -180,7 +304,9 @@ def execute(config: dict, request: dict) -> dict:
     method = request.get("method", "GET").upper()
     if method not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}:
         raise RequestRefused("Unsupported HTTP method")
-    headers, sensitive = credential_headers(config)
+    if config.get("auth", {}).get("type") == OAUTH2_CLIENT_CREDENTIALS and access_token is None:
+        raise RequestRefused("OAuth2 client credentials are usable only through the credential gateway")
+    headers, sensitive = credential_headers(config, access_token=access_token)
     for item in request.get("headers", []):
         name = header_name(item["name"]).lower()
         if name in headers:
