@@ -507,6 +507,24 @@ def test_teams_app_package_manifest_id_is_stable_per_connection() -> None:
     assert manifest_id(connection_id) != manifest_id(uuid4())
 
 
+def test_teams_app_package_version_increases_with_each_download(monkeypatch) -> None:
+    plugin = _teams_plugin()
+    settings = plugin.settings_model.model_validate({})
+    credentials = _teams_credentials(plugin)
+    connection_id = uuid4()
+
+    def version_at(now: float) -> tuple[int, ...]:
+        monkeypatch.setattr("api.infrastructure.msteams.manifest.time.time", lambda: now)
+        _, payload = plugin.build_app_package(settings, credentials, connection_id=connection_id, display_name="Aria")
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            version = json.loads(archive.read("manifest.json"))["version"]
+        return tuple(int(part) for part in version.split("."))
+
+    # Teams Admin Center rejects an update whose version does not exceed the installed one,
+    # including packages built before versions were time-based (1.0.1).
+    assert (1, 0, 1) < version_at(1_760_000_000) < version_at(1_760_000_001)
+
+
 def test_teams_app_package_never_carries_credentials() -> None:
     plugin = _teams_plugin()
 

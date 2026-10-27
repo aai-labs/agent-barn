@@ -32,8 +32,12 @@ def marker(tmp_path, monkeypatch):
     return path
 
 
-def write_marker(path, *, at: float) -> None:
-    path.write_text(json.dumps({"code": "SPEND_LIMIT_REACHED", "at": at}))
+def write_marker(path, *, at: float, code: str = "SPEND_LIMIT_REACHED") -> None:
+    path.write_text(json.dumps({"code": code, "at": at}))
+
+
+# On credit the proxies record CREDIT_EXHAUSTED instead (AF-381); Web Chat treats both alike.
+SPENT_CODES = pytest.mark.parametrize("code", ["SPEND_LIMIT_REACHED", "CREDIT_EXHAUSTED"])
 
 
 # --- the in-pod proxy records why it refused --------------------------------------
@@ -63,7 +67,8 @@ def completions(calls):
     return [payload for url, payload in calls if url.endswith("/complete")]
 
 
-def test_an_openclaw_turn_stopped_by_the_limit_is_reported_as_such(monkeypatch, marker):
+@SPENT_CODES
+def test_an_openclaw_turn_stopped_by_the_limit_is_reported_as_such(monkeypatch, marker, code):
     adapter = _load_adapter(monkeypatch, runtime_kind="openclaw")
     calls = []
 
@@ -72,20 +77,21 @@ def test_an_openclaw_turn_stopped_by_the_limit_is_reported_as_such(monkeypatch, 
         if url.endswith("/v1/chat/completions"):
             # The proxy refused a model call during this turn; OpenClaw then
             # answered with its own, unrelated error.
-            write_marker(marker, at=time.time())
+            write_marker(marker, at=time.time(), code=code)
             raise RuntimeError("HTTP 402: returned a billing error")
 
     monkeypatch.setattr(adapter, "http_request", fake_http_request)
     adapter.run_delivery_chat_completions(_DELIVERY)
 
-    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code=code)))
 
 
 def replies(calls):
     return [payload for url, payload in calls if url.endswith("/replies")]
 
 
-def test_an_openclaw_turn_answered_with_the_notice_is_still_a_spend_limit_failure(monkeypatch, marker):
+@SPENT_CODES
+def test_an_openclaw_turn_answered_with_the_notice_is_still_a_spend_limit_failure(monkeypatch, marker, code):
     """The proxy answered the refused call with the notice as a reply so native chat can
     post it; Web Chat must keep it as a failure under the message, not an Agent reply."""
     adapter = _load_adapter(monkeypatch, runtime_kind="openclaw")
@@ -94,7 +100,7 @@ def test_an_openclaw_turn_answered_with_the_notice_is_still_a_spend_limit_failur
     def fake_http_request(method, url, *, headers, payload=None, timeout=None):
         calls.append((url, payload))
         if url.endswith("/v1/chat/completions"):
-            write_marker(marker, at=time.time())
+            write_marker(marker, at=time.time(), code=code)
             return {"choices": [{"message": {"content": SPEND_LIMIT_NOTICE}}]}
         return None
 
@@ -102,17 +108,18 @@ def test_an_openclaw_turn_answered_with_the_notice_is_still_a_spend_limit_failur
     adapter.run_delivery_chat_completions(_DELIVERY)
 
     assert_that(replies(calls), equal_to([]))
-    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code=code)))
 
 
-def test_a_hermes_run_completed_with_the_notice_is_still_a_spend_limit_failure(monkeypatch, marker):
+@SPENT_CODES
+def test_a_hermes_run_completed_with_the_notice_is_still_a_spend_limit_failure(monkeypatch, marker, code):
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
     calls = []
 
     def fake_http_request(method, url, *, headers, payload=None, timeout=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
-            write_marker(marker, at=time.time())
+            write_marker(marker, at=time.time(), code=code)
             return {"run_id": "run-1"}
         return None
 
@@ -123,7 +130,7 @@ def test_a_hermes_run_completed_with_the_notice_is_still_a_spend_limit_failure(m
     adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
 
     assert_that(replies(calls), equal_to([]))
-    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code=code)))
 
 
 def test_an_ordinary_successful_turn_still_posts_its_reply(monkeypatch, marker):
@@ -159,14 +166,15 @@ def test_a_refusal_from_an_earlier_turn_is_not_blamed_for_this_one(monkeypatch, 
     assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="RuntimeError")))
 
 
-def test_a_hermes_run_stopped_by_the_limit_is_reported_as_such(monkeypatch, marker):
+@SPENT_CODES
+def test_a_hermes_run_stopped_by_the_limit_is_reported_as_such(monkeypatch, marker, code):
     adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
     calls = []
 
     def fake_http_request(method, url, *, headers, payload=None, timeout=None):
         calls.append((url, payload))
         if url.endswith("/v1/runs"):
-            write_marker(marker, at=time.time())
+            write_marker(marker, at=time.time(), code=code)
             return {"run_id": "run-1"}
         return None
 
@@ -178,7 +186,7 @@ def test_a_hermes_run_stopped_by_the_limit_is_reported_as_such(monkeypatch, mark
     )
     adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
 
-    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code=code)))
 
 
 def test_no_record_at_all_keeps_the_runtimes_own_error(monkeypatch, marker):
@@ -211,6 +219,24 @@ def test_the_code_becomes_the_spend_limit_notice_and_is_not_retried():
     assert_that(normalized.code, equal_to("SPEND_LIMIT_REACHED"))
     # Said plainly, without "(HTTP 402, ...)": this is read by the person chatting.
     assert_that(normalized.summary, equal_to(SPEND_LIMIT_NOTICE))
+    assert normalized.details is not None
+    assert_that(normalized.details.retryable, is_(False))
+
+
+def test_running_out_of_credit_becomes_the_add_credit_notice_and_is_not_retried():
+    normalized = normalize_communication_error(
+        error_code="CREDIT_EXHAUSTED",
+        error_message="HTTP 402: returned a billing error — your API key has run out of credits",
+        operation="runtime_processing",
+    )
+    assert_that(normalized.code, equal_to("CREDIT_EXHAUSTED"))
+    assert_that(
+        normalized.summary,
+        equal_to(
+            "This organization has used all its credit, so this agent cannot reply right now. "
+            "Ask the organization's owner to add more credit."
+        ),
+    )
     assert normalized.details is not None
     assert_that(normalized.details.retryable, is_(False))
 

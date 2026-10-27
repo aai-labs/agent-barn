@@ -85,7 +85,7 @@ export const WorkflowSchema = z.object({
   archivedAt: z.string().nullable(),
   version: WorkflowVersionSchema,
   allowedActions: z.array(z.enum(["save_version", "archive"])),
-  executionAvailable: z.literal(false),
+  executionAvailable: z.boolean(),
 });
 export const WorkflowSummarySchema = WorkflowSchema.extend({
   version: z.object({
@@ -107,7 +107,7 @@ export const WorkflowListSchema = z.object({
 });
 export const WorkflowCapabilitiesSchema = z.object({
   authoring: z.boolean(),
-  execution: z.literal(false),
+  execution: z.boolean(),
   reviewDestinations: z.array(z.literal("web")),
 });
 export type WorkflowDraft = z.infer<typeof WorkflowDraftSchema>;

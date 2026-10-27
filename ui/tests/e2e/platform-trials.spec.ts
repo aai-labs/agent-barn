@@ -266,3 +266,69 @@ test.describe("Platform trials", () => {
     await expect(page.getByRole("heading", { name: "Free trial" })).toHaveCount(0);
   });
 });
+
+test.describe("Platform · Agent limits", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  async function openOrganization(page: Page, organization: Record<string, unknown>, saved: unknown[]) {
+    const data = await signInAsPlatformAdmin(page);
+    await data.organizations.interceptGetPlatformOrganizationMembers();
+    await data.organizations.interceptGetOrganizationLlmCoverage();
+    let current: Record<string, unknown> = trialOrganization({
+      is_trial: false,
+      llm_budget_duration: "30d",
+      ...organization,
+    });
+    await page.route(`**/api/v1/platform/organizations/${ORG_A_ID}`, (route) => route.fulfill({ json: current }));
+    await page.route(`**/api/v1/platform/organizations/${ORG_A_ID}/agent-limit`, (route) => {
+      const body = route.request().postDataJSON() as { agent_limit: number | null };
+      saved.push(body);
+      current = { ...current, agent_limit: body.agent_limit, agent_limit_in_force: body.agent_limit ?? 5 };
+      return route.fulfill({ json: current });
+    });
+    await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
+    return page.getByRole("region", { name: "Agents" });
+  }
+
+  test("a Platform Administrator sets how many agents an organization may run", async ({ page }) => {
+    const saved: unknown[] = [];
+    const card = await openOrganization(page, { agent_limit: null, agent_limit_in_force: null }, saved);
+    await expect(card).toContainText("No limit");
+
+    await card.getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Agents it may run").fill("3");
+    await dialog.getByRole("button", { name: "Save" }).click();
+
+    await expect.poll(() => saved).toEqual([{ agent_limit: 3 }]);
+    await expect(card).toContainText("3 agents");
+    await expect(card).toContainText("Set for this organization");
+  });
+
+  test("clearing it returns the organization to the default", async ({ page }) => {
+    const saved: unknown[] = [];
+    const card = await openOrganization(page, { agent_limit: 3, agent_limit_in_force: 3 }, saved);
+
+    await card.getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Use the default" }).click();
+    await dialog.getByRole("button", { name: "Save" }).click();
+
+    await expect.poll(() => saved).toEqual([{ agent_limit: null }]);
+    await expect(card).toContainText("5 agents");
+    await expect(card).toContainText("The default");
+  });
+
+  test("a negative or fractional number is refused before any request", async ({ page }) => {
+    const saved: unknown[] = [];
+    const card = await openOrganization(page, { agent_limit: null, agent_limit_in_force: null }, saved);
+
+    await card.getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Agents it may run").fill("1.5");
+
+    await expect(dialog.getByText("Enter a whole number of zero or more.")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(saved).toEqual([]);
+  });
+});

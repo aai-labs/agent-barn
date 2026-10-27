@@ -6,7 +6,6 @@ from uuid import UUID
 from fastapi import HTTPException
 from injector import inject, singleton
 
-from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
@@ -32,15 +31,17 @@ from api.infrastructure.shared.models import PaginatedItems
 class WorkflowService:
     repository: WorkflowRepository
     authorization: AgentAuthorization
-    config: Config
     settings: PlatformWorkflowRepository
 
     def _authoring_enabled(self) -> bool:
-        return self.settings.read(self.config.workflow_authoring_enabled).authoring_enabled
+        return self.settings.read().authoring_enabled
 
     def capabilities(self, agent_id: UUID, context: CurrentUserContext) -> WorkflowCapabilitiesRead:
         self.authorization.require_visible(context, agent_id)
-        return WorkflowCapabilitiesRead(authoring=self._authoring_enabled())
+        return WorkflowCapabilitiesRead(
+            authoring=self._authoring_enabled(),
+            execution=True,
+        )
 
     def _require_authoring(self, agent_id: UUID, context: CurrentUserContext) -> None:
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
@@ -73,6 +74,7 @@ class WorkflowService:
             archived_at=workflow.archived_at,
             version=self._version_read(version),
             allowed_actions=self._actions(workflow.archived_at, can_author),
+            execution_available=True and workflow.archived_at is None,
         )
 
     def _summary_read(self, row: WorkflowSummaryRow, can_author: bool) -> WorkflowSummaryRead:
@@ -92,6 +94,7 @@ class WorkflowService:
                 input_count=row.input_count,
             ),
             allowed_actions=self._actions(row.archived_at, can_author),
+            execution_available=True and row.archived_at is None,
         )
 
     @staticmethod

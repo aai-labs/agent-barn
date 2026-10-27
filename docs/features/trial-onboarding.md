@@ -28,8 +28,9 @@ This stage does not create or start an Agent; errors retain the setup retry scre
 After completion, the ready screen retains this visit's setup summary and navigation
 targets: the refreshed API status no longer includes the trial setup details.
 
-After sign-in, `/onboarding` uses four steps: **Signed in → Choose how to start →
-Connect Telegram or Set up your agent → You're ready**. Signed in is already complete.
+After sign-in, `/onboarding` uses five steps: **Signed in → Choose how to start →
+Connect Telegram or Set up your agent → Connect Gmail → You're ready**. Signed in is
+already complete.
 The frame shows a step rail on desktop and compact progress on small screens; Trial
 Credit appears in the desktop rail.
 
@@ -56,8 +57,8 @@ Credit appears in the desktop rail.
    browser click. Pressing Start links the account; expired 10-minute tokens are
    replaced. Only links opened from this step show an expiry warning; unopened
    links refresh silently. Account polling stops once linking succeeds.
-   Already-linked users can Continue. **Skip, I'll chat on the web** records
-   completion and opens this Agent's Web Chat without requiring a Telegram link.
+   Already-linked users can Continue. **Skip, I'll chat on the web** leads,
+   through the Gmail step, to this Agent's Web Chat without requiring a Telegram link.
 3. **Build my own: Set up your agent**. The wizard shares the hire dialog's form logic
    and ordinary create/start calls, including template-required Skills, group choices,
    credential validation, model inheritance and Hermes command approval. No quick-start
@@ -71,7 +72,19 @@ Credit appears in the desktop rail.
    generated name, required Skills, and entered credentials persist while browsing.
    **I'll do this later** is also available here when no hire/start request is in flight;
    it creates no Agent and preserves any Agent already created by a failed start.
-4. **You're ready**. Successful linking or hiring records `user.onboarding_completed_at`
+4. **Connect Gmail** (optional, both paths). Once the Agent exists, the user can give it
+   read-only Gmail with a Google app password, or **Skip** to the ready screen;
+   **I'll do this later** records completion and opens the dashboard. Connecting uses the
+   agent settings calls: stop the Agent if it is running, save the
+   `gmail_app_password` credential, check the sign-in with the integration validate
+   endpoint, and start the Agent again. Updates don't check credentials with the
+   provider, so a password Gmail rejects is removed again before the restart and the
+   step explains why; a failed restart offers Try again, which only starts the Agent.
+   Telegram's **Skip, I'll chat on the web** still comes here, and every way out of this
+   step then opens Web Chat instead of the ready screen or dashboard. When setting up the
+   Agent failed, that skip goes straight to Web Chat. One-click Gmail sign-in is not offered here or anywhere else until the
+   Google app is verified; see [Google OAuth](integrations.md#google-oauth).
+5. **You're ready**. Finishing or skipping the Gmail step records `user.onboarding_completed_at`
    through `POST /onboarding/complete`. The first completion also emits `user.onboarding.completed`
    for product analytics, and so does every exit that records completion, such as
    **I'll do this later** or **Skip, I'll chat on the web**; a repeat writes and emits nothing. A completion failure retries only that save,
@@ -97,11 +110,12 @@ self-signed-up user back to `/onboarding` until they finish.
 
 | Rule | Where |
 | --- | --- |
-| One trial per email address, ever: signup records a hash of the lowercased address in `trial_grant`, kept when the account is deleted; a recorded address is refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
-| A self-signed-up user creates no Organizations until a Platform Administrator has ended their trial (`user.trial_ended_at`), so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option) | `OrganizationService.create_organization_for_current_user` |
-| A Trial Organization runs at most the platform's trial agent limit, counted under a lock as an Agent is stored (409). The limit applies to existing trials at once; a trial over a lowered limit keeps its Agents but hires no more | `AgentRepository.create_with_creator_access`, `AgentService.create_agent` |
-| At most the platform's cap on active trials exist at once, counted under a lock at sign-up; a sign-up past it is refused (`?error=trials_full`) with nothing created or recorded, so the address can come back. Ending or deleting a trial frees its place; no cap is the default | `GoogleSignInService._sign_up`, `TrialSettingsService.trials_full` |
-| Trial Credit is a one-off Model Spend Limit | [Costs](costs.md#organization-llm-budgets) |
+| One trial per email inbox, ever: signup records a hash of the normalised address in `trial_grant` (lowercased, any `+tag` dropped, and for Gmail dots dropped and googlemail.com read as gmail.com), kept when the account is deleted; a recorded address, or one recorded before normalisation by its lowercased form, is refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
+| A self-signed-up user creates no Organizations until their trial has ended (`user.trial_ended_at`), by a credit purchase or a Platform Administrator, so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option). Once it has ended, every Organization they create runs on Credit, starting with none, as does every Organization created by anyone a Platform Administrator didn't set up, except that an invited member whose address never had a trial gets one as their first Organization ([Credit](credit.md)). Those trials skip onboarding, which is for self-signups | `OrganizationService.create_organization_for_current_user` |
+| A Trial Organization runs at most the platform's trial agent limit, unless a Platform Administrator set its own [Agent Limit](identity-and-organizations.md#agent-limit), counted under a lock as an Agent is stored (409). The limit applies to existing trials at once; a trial over a lowered limit keeps its Agents but hires no more | `AgentRepository.create_with_creator_access`, `AgentService.create_agent` |
+| At most the platform's cap on active trials exist at once, counted under a lock at sign-up; a sign-up past it is refused (`?error=trials_full`) with nothing created or recorded, so the address can come back. Ending, expiring or deleting a trial frees its place; no cap is the default | `GoogleSignInService._sign_up`, `TrialSettingsService.trials_full` |
+| Trial Credit is a one-off Model Spend Limit: the first grant on the Organization's [Credit](credit.md) ledger | [Costs](costs.md#organization-llm-budgets) |
+| A trial whose credit runs out is expired (`trial_expired_at`, `organization.trial.expired`) when its budget-exhausted alert is delivered: it keeps its Agents and stays a trial, but no longer counts as active. A Platform Administrator raising its credit makes it active again (if still spent, the next alert expires it again). Buying credit converts it (or any trial) into an ordinary Organization that stays on Credit | `OrganizationTrialExpiryHandler`, `OrganizationService.convert_trial` |
 | A Platform Administrator ends a trial, choosing the spend limit and renewal window it goes on to | `POST /platform/organizations/{id}/end-trial` with `{budget_usd, budget_duration}`, the platform Organization page |
 
 Platform Administrators enable or disable self-signup and set the Trial Credit for new trials, the trial agent limit and
@@ -116,7 +130,8 @@ credit is refused while signup remains enabled; negative or non-finite credit is
 refused. A database constraint also enforces the positive-credit requirement. Signup
 reads its enabled state and credit together and holds them stable until trial creation
 commits. Changes apply without a restart. An active trial is any Organization still
-on a trial, including one whose credit is spent. An existing trial's spend limit is changed on its Organization page, like any other Organization's; the platform
+on a trial whose credit has not run out. An existing trial's spend limit is changed on
+its Organization page, like any other Organization's; the platform
 Organizations list marks trials.
 
 An Owner may delete their Trial Organization (after deleting its Agents). The delete

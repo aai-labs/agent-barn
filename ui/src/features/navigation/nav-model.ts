@@ -1,8 +1,10 @@
 import {
   Activity,
   BookOpen,
+  Bot,
   Brain,
   Building2,
+  CreditCard,
   Cpu,
   FileText,
   LayoutDashboard,
@@ -117,6 +119,19 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     ],
   },
   {
+    key: "agents",
+    label: "Agents",
+    icon: Bot,
+    pages: [
+      {
+        key: "agents",
+        label: "Agents",
+        href: `${PLATFORM_BASE}/agents`,
+        icon: Bot,
+      },
+    ],
+  },
+  {
     key: "spend",
     label: "Spend",
     icon: Wallet,
@@ -126,6 +141,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Costs",
         href: `${PLATFORM_BASE}/costs`,
         icon: Receipt,
+      },
+      {
+        key: "billing",
+        label: "Billing",
+        href: `${PLATFORM_BASE}/billing`,
+        icon: CreditCard,
       },
       {
         key: "resources",

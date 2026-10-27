@@ -14,6 +14,7 @@ from api.domains.rbac.catalog import (
     IMPLICIT_AGENT_OWNER_ROLES,
     SYSTEM_AGENT_ACCESS_ROLE_GRANTS,
     PermissionKey,
+    organization_role_allows,
 )
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 
@@ -27,6 +28,7 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_MEMORY_MANAGE,
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
+    PermissionKey.AGENT_SIZE_MANAGE,
     PermissionKey.TASK_READ,
 )
 # A read-only Personal API Key keeps only the read Permissions, so a new one needs no edit here.
@@ -148,9 +150,11 @@ class AgentAuthorization:
             return {}
         membership = context.require_current_user_organization()
         if membership.role in IMPLICIT_AGENT_OWNER_ROLES:
-            permissions_by_agent = {
-                agent.id: set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID]) for agent in agents
-            }
+            implicit = set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID])
+            # Organization-scoped and held by role alone, so no Agent Access Role grants it.
+            if organization_role_allows(membership.role, PermissionKey.AGENT_SIZE_MANAGE):
+                implicit.add(PermissionKey.AGENT_SIZE_MANAGE)
+            permissions_by_agent = {agent.id: set(implicit) for agent in agents}
         else:
             permissions_by_agent = self.repository.find_agent_permissions(
                 membership.id,

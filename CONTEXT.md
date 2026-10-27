@@ -33,12 +33,28 @@ The most an Organization may spend on model calls in one renewal period, set by 
 _Avoid_: allowance, plan limit, platform budget
 
 **Trial Organization**:
-The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
+The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A trial whose credit runs out is expired: it keeps its Agents but no longer counts as active. A Platform Administrator ends the trial, choosing the spend limit it goes on to, or buying credit converts it while it stays on Credit; either way it is then an ordinary Organization.
 _Avoid_: free plan, trial account, demo org
 
 **Trial Credit**:
 The one-off Model Spend Limit a new Trial Organization starts with, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
 _Avoid_: free credits, balance, allowance
+
+**Agent Limit**:
+How many live Agents an Organization may run: its own, when a Platform Administrator has set one, otherwise the trial setting for a Trial Organization or the deployment's default for any other. Lowering it never removes Agents; it only refuses new hires.
+_Avoid_: seat count, agent quota, plan size
+
+**Credit**:
+How an Organization on a one-off Model Spend Limit pays for model spend: in advance, never renewed. Its ceiling is the sum of its Credit Grants, and its Agents spend from it down to zero; no Organization or Agent limit sits beneath it. Trial Organizations start on Credit.
+_Avoid_: prepaid budget, wallet, tokens
+
+**Credit Grant**:
+One recorded change to an Organization's Credit: its Trial Credit, a purchase, a refund or chargeback (negative), or a Platform Administrator's adjustment.
+_Avoid_: top-up record, transaction, payment
+
+**Credit Balance**:
+An Organization's Credit less everything it has spent. It can fall below zero, for example after a chargeback of credit already spent, and the next Credit Grant pays that off first.
+_Avoid_: remaining budget, wallet balance
 
 **Trial Onboarding**:
 The steps a self-signed-up user goes through after their first sign-in: their Agent is set up and started, they link Telegram to it, and they finish. Returning users who finished go straight to the dashboard.
@@ -223,6 +239,10 @@ _Avoid_: integration, runtime plugin, dynamically installed plugin
 **Agent Email Address**:
 The email address Agent Barn allocates to one Communication Connection on a Platform that is reached by mailbox rather than by a per-Connection endpoint. It is claimed when the Connection is created and released when the Connection is retired or its Agent is deleted; a released address stops routing, but its local part is never reissued, so a former correspondent can never reach a different Agent.
 _Avoid_: mailbox, alias, inbox
+
+**Agent Size**:
+A named amount of CPU and memory, as a request and a limit, from the platform-wide catalog Platform Administrators keep. Every Agent runs on one: the size its Organization chose for it, or the catalog's default. A Platform Administrator decides which sizes each Organization may choose, and its Owners and Admins choose among them; a Platform Administrator may also set one Agent's size, which its Organization then cannot change. Values are chosen from the catalog, never typed in per Agent.
+_Avoid_: preset (a Template word), plan, tier, instance type
 
 **Template**:
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.

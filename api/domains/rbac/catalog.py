@@ -37,6 +37,8 @@ class PermissionKey(str, Enum):
     COST_READ = "cost.read"
     TASK_READ = "task.read"
     LLM_BUDGET_MANAGE = "llm_budget.manage"
+    AGENT_SIZE_MANAGE = "agent.size.manage"
+    BILLING_MANAGE = "billing.manage"
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,8 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ),
     PermissionSeed(UUID("cb4bbe39-bbc4-5569-b1f4-8aeefa91b419"), PermissionKey.TASK_READ),
     PermissionSeed(UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90"), PermissionKey.LLM_BUDGET_MANAGE),
+    PermissionSeed(UUID("bdca6a6b-54cd-5741-98ef-6cdc10cfea69"), PermissionKey.AGENT_SIZE_MANAGE),
+    PermissionSeed(UUID("9a3e6c1f-2b74-5d08-8e5a-4c7f1b2d6e33"), PermissionKey.BILLING_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
@@ -119,11 +123,17 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         # Organization-scoped only: an Agent's own Owner cannot set its limit, since
         # dividing the allowance is the Organization's decision.
         PermissionKey.LLM_BUDGET_MANAGE,
+        # Organization-scoped only, like the spend limit: a bigger size spends the
+        # Organization's shared capacity, so Agent Owners and Editors cannot pick one.
+        PermissionKey.AGENT_SIZE_MANAGE,
+        # Buying credit spends the Owner's money, so it stays with the Owner.
+        PermissionKey.BILLING_MANAGE,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {
     PermissionKey.ORGANIZATION_DELETE,
     PermissionKey.ORGANIZATION_OWNERSHIP_TRANSFER,
+    PermissionKey.BILLING_MANAGE,
 }
 _MEMBER_ORGANIZATION_KEYS = frozenset(
     {
