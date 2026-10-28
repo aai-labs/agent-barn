@@ -7,7 +7,7 @@ export class SettingsAgentDefaultsPage {
   constructor(private page: Page) {}
 
   get heading() {
-    return this.page.getByRole("heading", { name: "Models" });
+    return this.page.getByRole("heading", { name: "Models", exact: true });
   }
 
   get defaultModelSection() {

@@ -74,6 +74,9 @@ test.describe("Settings · Models", () => {
   test("shows model cards with catalog information", async ({ page }) => {
     await dataSupport.agents.interceptGetModelsRequest({ body: [
       { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
+      { value: "litellm/openrouter/anthropic/claude-sonnet", label: "Claude Sonnet", context_length: 200000, pricing: { prompt: "0.000003", completion: "0.000015" } },
+      { value: "litellm/openrouter/google/gemini-pro", label: "Gemini Pro", context_length: 1000000, pricing: { prompt: "0.00000125", completion: "0.000005" } },
+      { value: "litellm/openrouter/deepseek/deepseek-chat", label: "DeepSeek Chat", context_length: 64000, pricing: { prompt: "0.0000002", completion: "0.0000004" } },
     ] });
     await settings.open();
     const section = page.getByRole("region", { name: "Allowed models" });
