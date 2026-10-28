@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Loader2, Search, X } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SettingsErrorText } from "@/components/settings/settings-error-text";
 import { SettingsSectionHeading } from "@/components/settings/settings-section-heading";
 import { SettingsSection } from "@/components/settings/settings-section";
@@ -40,6 +41,15 @@ function modelDetails(model: { value: string; contextLength?: number | null; pri
   return { provider, context: model.contextLength ? `${model.contextLength.toLocaleString()} tokens` : null, input, output };
 }
 
+function ProviderIcon({ provider }: { provider: string }) {
+  return <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold uppercase" style={{ background: "var(--bg-soft)", border: "1px solid var(--line)", color: "var(--ink-2)" }}>
+    {providerIcons[provider] ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={`/brand/models/${providerIcons[provider]}.svg`} alt="" className="h-5 w-5 dark:invert" />
+    ) : provider.slice(0, 2)}
+  </span>;
+}
+
 export function AllowedModelsSection({
   canEdit,
   editing,
@@ -53,7 +63,7 @@ export function AllowedModelsSection({
   const organizationId = selectedOrganization?.id ?? "";
   const { organization } = useOrganization(organizationId);
   // The full catalog, not the allowlisted subset — this control is what edits it.
-  const { models, isLoading } = useModels({ catalog: true });
+  const { models, isLoading, error: catalogError } = useModels({ catalog: true });
   const { settings } = useAgentSettings();
   // The guard's refusal names the Agents in the way; that belongs beside the list.
   const updateOrg = useUpdateOrganization({ toastOnError: false });
@@ -71,6 +81,9 @@ export function AllowedModelsSection({
   const [selectedDraft, setSelectedDraft] = useState<string[] | null>(null);
   const [orphanDraft, setOrphanDraft] = useState<string[] | null>(null);
   const [search, setSearch] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [toAdd, setToAdd] = useState<string[]>([]);
 
   const baseline = useMemo(
     () => getEffectiveModels(organization?.allowedModels, models, requiredModel),
@@ -84,14 +97,16 @@ export function AllowedModelsSection({
   const selected = selectedDraft ?? baseline;
   const orphaned = orphanDraft ?? baselineOrphans;
 
-  const filtered = useMemo(() => {
-    if (!search) return models;
-    const query = search.toLowerCase();
-    return models.filter(
-      (model) =>
-        model.label.toLowerCase().includes(query) || model.value.toLowerCase().includes(query),
-    );
-  }, [models, search]);
+  const query = search.toLowerCase();
+  const visibleSelected = selected.filter((value) => {
+    const model = models.find((entry) => entry.value === value);
+    return !query || value.toLowerCase().includes(query) || model?.label.toLowerCase().includes(query);
+  });
+  const visibleOrphans = orphaned.filter((value) => value.toLowerCase().includes(query));
+  const catalogQuery = catalogSearch.toLowerCase();
+  const filteredCatalog = models.filter((model) =>
+    model.label.toLowerCase().includes(catalogQuery) || model.value.toLowerCase().includes(catalogQuery),
+  );
 
   const isDirty =
     JSON.stringify([...selected].sort()) !== JSON.stringify([...baseline].sort()) ||
@@ -120,6 +135,8 @@ export function AllowedModelsSection({
     setSelectedDraft(null);
     setOrphanDraft(null);
     setSearch("");
+    setDialogOpen(false);
+    setToAdd([]);
     updateOrg.reset();
     onEdit();
   }
@@ -134,7 +151,7 @@ export function AllowedModelsSection({
       onApply={applyChanges}
       onCancel={cancelChanges}
       onApplied={onEdit}
-      applyDisabled={!isDirty || updateOrg.isPending}
+      applyDisabled={!isDirty || updateOrg.isPending || !!catalogError}
       errorsShownInline
       applyLabel="Save models"
       applyPendingLabel="Saving…"
@@ -154,156 +171,74 @@ export function AllowedModelsSection({
             title="Allowed models"
             description="The models Agents in this organization may be pointed at."
           />
-          {(selected.length > 0 || orphaned.length > 0) && (
-            <div className="flex flex-wrap gap-2">
-              {selected.map((value) => {
-                const model = models.find((entry) => entry.value === value);
-                const required = value === requiredModel;
-                return (
-                  <span
-                    key={value}
-                    className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.78rem]"
-                    style={{
-                      background: "var(--bg-soft)",
-                      border: "1px solid var(--line)",
-                      color: "var(--ink-2)",
-                    }}
-                  >
-                    {model ? model.label : stripPrefix(value)}
-                    {required ? (
-                      <span className="text-[0.7rem]" style={{ color: "var(--ink-4)" }}>
-                        default
-                      </span>
-                    ) : (
-                      editing &&
-                      canEdit && (
-                        <button
-                          type="button"
-                          aria-label={`Remove ${model ? model.label : stripPrefix(value)}`}
-                          onClick={() => toggle(value)}
-                          style={{ color: "var(--ink-4)" }}
-                        >
-                          <X size={14} />
-                        </button>
-                      )
-                    )}
-                  </span>
-                );
-              })}
-              {orphaned.map((value) => (
-                <span
-                  key={`orphan-${value}`}
-                  title="Previously allowed but no longer in the OpenRouter catalog. It stays in the list unless removed."
-                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.78rem]"
-                  style={{
-                    background: "var(--warn-soft)",
-                    border: "1px solid var(--warn)",
-                    color: "var(--warn)",
-                  }}
-                >
-                  {value}
-                  <span className="text-[0.7rem]">not in catalog</span>
-                  {editing && canEdit && (
-                    <button
-                      type="button"
-                      aria-label={`Remove ${value}`}
-                      onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}
-                      style={{ color: "var(--warn)" }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {editing && canEdit ? (
+          {catalogError ? (
+            <SettingsErrorText>Could not load the model catalog. Reload the page to try again.</SettingsErrorText>
+          ) : (
             <>
-              <div className="relative max-w-md">
-                <Search
-                  size={15}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2"
-                  style={{ color: "var(--ink-4)" }}
-                  aria-hidden
-                />
-                <input
-                  type="text"
-                  className="af-input pl-9"
-                  placeholder="Search models…"
-                  aria-label="Search models"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
-              <div className="grid max-h-[36rem] grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
-                {filtered.map((model) => {
-                  const required = model.value === requiredModel;
-                  const details = modelDetails(model);
-                  const checked = selected.includes(model.value);
-                  return (
-                    <label
-                      key={model.value}
-                      className="af-hover-bg flex cursor-pointer flex-col gap-3 rounded-xl p-4"
-                      style={{ border: `1px solid ${checked ? "var(--line-strong)" : "var(--line)"}`, background: checked ? "var(--bg-soft)" : undefined }}
-                    >
-                      <span className="flex items-start gap-3">
-                        <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold uppercase" style={{ background: "var(--bg-soft)", border: "1px solid var(--line)", color: "var(--ink-2)" }}>
-                          {providerIcons[details.provider] ? (
-                            // Provider logos are decorative; the provider name is alongside them.
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={`/brand/models/${providerIcons[details.provider]}.svg`} alt="" className="h-5 w-5 dark:invert" />
-                          ) : details.provider.slice(0, 2)}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{model.label}</span>
-                          <span className="block text-[0.75rem]" style={{ color: "var(--ink-3)" }}>{details.provider}</span>
-                        </span>
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded disabled:opacity-50"
-                          style={{ accentColor: "var(--ink)", borderColor: "var(--line-strong)" }}
-                          checked={checked}
-                          disabled={required}
-                          onChange={() => toggle(model.value)}
-                          aria-label={`${model.label}${required ? " (default, required)" : ""}`}
-                        />
-                      </span>
-                      <span className="flex flex-wrap gap-2 text-[0.72rem]" style={{ color: "var(--ink-3)" }}>
-                        {required && <span>Default · required</span>}
-                        {details.context && <span>{details.context} context</span>}
-                      </span>
-                      <span className="flex flex-wrap justify-between gap-2 border-t pt-3 text-[0.72rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>
-                        <span>Input {details.input ?? "—"} / 1M tokens</span>
-                        <span>Output {details.output ?? "—"} / 1M tokens</span>
-                      </span>
-                    </label>
-                  );
-                })}
-                {filtered.length === 0 && (
-                  <div className="px-2.5 py-2 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-                    No models match.
-                  </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>{selected.length + orphaned.length} enabled</span>
+                {editing && canEdit && (
+                  <button type="button" className="af-btn af-btn-primary" onClick={() => { setToAdd([]); setCatalogSearch(""); setDialogOpen(true); }}>
+                    Add models
+                  </button>
                 )}
               </div>
-              <p className="m-0 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
-                The default model must stay in this list. To remove it, change the default
-                first — and point any Agent pinned to a model at something else before
-                removing that one.
-              </p>
-              {updateOrg.error && (
-                <SettingsErrorText>
-                  {updateOrg.error instanceof Error ? updateOrg.error.message : "Save failed"}
-                </SettingsErrorText>
-              )}
+              <div className="relative max-w-md">
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--ink-4)" }} aria-hidden />
+                <input className="af-input pl-9" placeholder="Search enabled models…" aria-label="Search enabled models" value={search} onChange={(event) => setSearch(event.target.value)} />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {visibleSelected.map((value) => {
+                  const model = models.find((entry) => entry.value === value);
+                  const details = modelDetails(model ?? { value });
+                  const required = value === requiredModel;
+                  return (
+                    <div key={value} className="flex flex-col gap-3 rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                      <div className="flex items-start gap-3">
+                        <ProviderIcon provider={details.provider} />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{model?.label ?? stripPrefix(value)}</div>
+                          <div className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>{details.provider}</div>
+                        </div>
+                        {required ? <span className="text-[0.72rem]">Default · required</span> : editing && canEdit && <button type="button" className="text-[0.75rem]" onClick={() => toggle(value)} aria-label={`Remove ${model?.label ?? stripPrefix(value)}`}>Remove</button>}
+                      </div>
+                      {details.context && <div className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>{details.context} context</div>}
+                      <div className="flex flex-wrap justify-between gap-2 border-t pt-3 text-[0.72rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>
+                        <span>Input {details.input ?? "—"} / 1M tokens</span><span>Output {details.output ?? "—"} / 1M tokens</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {visibleOrphans.map((value) => (
+                  <div key={value} className="flex items-center justify-between gap-3 rounded-xl p-4 text-[0.8rem]" style={{ border: "1px solid var(--warn)", color: "var(--warn)" }}>
+                    <span>{value} · not in catalog</span>
+                    {editing && canEdit && <button type="button" aria-label={`Remove ${value}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</button>}
+                  </div>
+                ))}
+              </div>
+              {visibleSelected.length + visibleOrphans.length === 0 && <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>{search ? "No enabled models match." : "No models are allowed yet, so Agents cannot be created."}</p>}
+              {editing && canEdit && <p className="m-0 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>An organization-owned default must stay in this list. Point any Agent pinned to a model at something else before removing it.</p>}
+              {updateOrg.error && <SettingsErrorText>{updateOrg.error instanceof Error ? updateOrg.error.message : "Save failed"}</SettingsErrorText>}
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogContent className="max-h-[85vh] sm:max-w-2xl">
+                  <DialogHeader><DialogTitle>Add models</DialogTitle><DialogDescription>Search the OpenRouter catalog and select models to allow.</DialogDescription></DialogHeader>
+                  <input className="af-input" placeholder="Search by model or provider…" aria-label="Search catalog" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} />
+                  <div className="max-h-[50vh] overflow-y-auto">
+                    {filteredCatalog.map((model) => {
+                      const details = modelDetails(model);
+                      const enabled = selected.includes(model.value);
+                      return <label key={model.value} className="flex items-center gap-3 border-b py-3" style={{ borderColor: "var(--line)" }}>
+                        <ProviderIcon provider={details.provider} />
+                        <span className="min-w-0 flex-1"><span className="block text-[0.84rem] font-medium">{model.label}</span><span className="block text-[0.72rem]" style={{ color: "var(--ink-3)" }}>{details.provider}{details.context && ` · ${details.context} context`}{details.input && ` · ${details.input} input / 1M`}{details.output && ` · ${details.output} output / 1M`}</span></span>
+                        {enabled ? <span className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>Already enabled</span> : <input type="checkbox" aria-label={model.label} checked={toAdd.includes(model.value)} onChange={() => setToAdd((current) => current.includes(model.value) ? current.filter((item) => item !== model.value) : [...current, model.value])} />}
+                      </label>;
+                    })}
+                    {filteredCatalog.length === 0 && <p className="text-sm">No models match.</p>}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>{toAdd.length} selected</span><div className="flex gap-2"><button type="button" className="af-btn" onClick={() => setDialogOpen(false)}>Cancel</button><button type="button" className="af-btn af-btn-primary" disabled={!toAdd.length} onClick={() => { setSelectedDraft([...new Set([...selected, ...toAdd])]); setDialogOpen(false); }}>Add {toAdd.length} {toAdd.length === 1 ? "model" : "models"}</button></div></div>
+                </DialogContent>
+              </Dialog>
             </>
-          ) : (
-            selected.length === 0 &&
-            orphaned.length === 0 && (
-              <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-                No models are allowed yet, so Agents cannot be created.
-              </p>
-            )
           )}
         </div>
       )}

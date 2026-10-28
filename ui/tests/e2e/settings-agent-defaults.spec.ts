@@ -81,7 +81,14 @@ test.describe("Settings · Models", () => {
     await settings.open();
     const section = page.getByRole("region", { name: "Allowed models" });
     await section.getByRole("button", { name: "Edit" }).click();
-    await expect(section.getByRole("checkbox", { name: "GPT-5 mini" })).toBeChecked();
+    await expect(section.getByText("GPT-5 mini", { exact: true })).toBeVisible();
+    await section.getByRole("button", { name: "Remove Claude Sonnet" }).click();
+    await section.getByRole("button", { name: "Add models" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add models" });
+    await dialog.getByLabel("Search catalog").fill("claude");
+    await dialog.getByRole("checkbox", { name: "Claude Sonnet" }).check();
+    await dialog.getByRole("button", { name: "Add 1 model" }).click();
+    await expect(section.getByText("Claude Sonnet", { exact: true })).toBeVisible();
     await expect(section.getByText("128,000 tokens context")).toBeVisible();
     await expect(section.getByText("Input $2.5 / 1M tokens")).toBeVisible();
     await expect(section.getByText("Output $10 / 1M tokens")).toBeVisible();
