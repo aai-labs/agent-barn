@@ -1129,15 +1129,16 @@ class AgentRepository:
         *,
         restore_point_id: UUID | None,
         failure_reason: str | None = None,
+        pinned_runtime_image: str | None = None,
     ) -> None:
-        self._update_agent(
-            agent_id,
-            {
-                "managed_update_outcome": outcome,
-                "managed_update_restore_point_id": restore_point_id,
-                "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
-            },
-        )
+        values: dict[str, Any] = {
+            "managed_update_outcome": outcome,
+            "managed_update_restore_point_id": restore_point_id,
+            "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
+        }
+        if pinned_runtime_image is not None:
+            values["pinned_runtime_image"] = pinned_runtime_image
+        self._update_agent(agent_id, values)
 
     def _update_agent(self, agent_id: UUID, values: dict[str, Any], *conditions: Any) -> None:
         with Session(self.delegate.engine) as session:

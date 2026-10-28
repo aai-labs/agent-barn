@@ -818,6 +818,67 @@ def test_an_update_without_a_backup_that_never_comes_up_leaves_the_agent_stopped
             assert_that(_stored_agent(context).pinned_runtime_image, equal_to(_OLD_IMAGE))
 
 
+def _capture_fails(context) -> None:
+    k8s = _k8s(context)
+    k8s.get_job.return_value = _job_with({"failed": 1})
+    k8s.read_job_logs.return_value = "capture failed: disk full"
+    k8s.read_pod_logs.return_value = ""
+
+
+def test_a_failed_backup_pins_the_image_the_pod_ran_and_a_failed_update_without_one_goes_back_to_it():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _capture_fails(context)
+        k8s = _k8s(context)
+        k8s.get_pod_image.return_value = _OLD_IMAGE
+
+        with when("the backup before the update fails"):
+            _run(context)
+
+        with then("the Agent is pinned to the image its pod ran, so a plain start keeps that version"):
+            assert_that(_stored_agent(context).pinned_runtime_image, equal_to(_OLD_IMAGE))
+
+        k8s.get_pod_image.return_value = None
+        k8s.get_pod_readiness.return_value = _CRASH_LOOP
+        _new_version_crash_loops(context)
+
+        with when("the update without a backup crash-loops"):
+            _skip_backup(context)
+
+        with then("the Agent is stopped on that image again, not on the new version"):
+            stored = _stored_agent(context)
+            assert_that(stored.status, equal_to(AgentStatus.STOPPED))
+            assert_that(stored.managed_update_outcome, equal_to(ManagedUpdateOutcome.UPDATE_FAILED))
+            assert_that(stored.pinned_runtime_image, equal_to(_OLD_IMAGE))
+
+
+def test_a_failed_backup_with_no_image_to_read_leaves_the_agent_unpinned():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _capture_fails(context)
+
+        with when("the backup fails and neither the pod nor a pin says which image ran"):
+            _run(context)
+
+        with then("no pin is set, since the platform's image may already be the new version"):
+            stored = _stored_agent(context)
+            assert_that(stored.managed_update_outcome, equal_to(ManagedUpdateOutcome.BACKUP_FAILED))
+            assert_that(stored.pinned_runtime_image, equal_to(""))
+
+
+def test_an_update_without_a_backup_that_succeeds_clears_the_pin_the_failed_backup_set():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _pin(context, _OLD_IMAGE)
+        _backup_failed(context)
+        _k8s(context).get_pod_readiness.return_value = _READY
+
+        with when("I update without a backup and the new version comes up"):
+            _skip_backup(context)
+
+        with then("the Agent follows the platform again"):
+            stored = _stored_agent(context)
+            assert_that(stored.managed_update_outcome, equal_to(ManagedUpdateOutcome.SUCCEEDED))
+            assert_that(stored.pinned_runtime_image, equal_to(""))
+
+
 def test_skipping_the_backup_is_refused_unless_a_backup_just_failed():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         with when("I skip the backup on a running Agent"):

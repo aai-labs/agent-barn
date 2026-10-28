@@ -200,7 +200,8 @@ export function AgentUpdateOutcomeNote({
     message = (
       <>
         The update, run without a backup, did not come up healthy. There was nothing to roll back
-        to, so {agent.name} was stopped. Start it to try again.
+        to, so {agent.name} was stopped. Start it to go back to the version it ran before the
+        update.
       </>
     );
   } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING") {

@@ -298,6 +298,17 @@ def _managed_update_failure_text(exc: Exception) -> str:
 
 
 @dataclass(frozen=True)
+class _PreviousRuntime:
+    """The image an Agent's pod ran before a managed update stopped it."""
+
+    # What a rollback starts: the pod's image, else the Agent's pin, else the platform pin.
+    image: str
+    # The same without the platform pin, which may already name the new version. Empty
+    # when neither the pod nor the pin said which image the Agent ran.
+    known_image: str
+
+
+@dataclass(frozen=True)
 class _NativeConnectionConfiguration:
     settings: dict[str, Any]
     credentials: dict[str, Any]
@@ -3116,27 +3127,18 @@ class AgentService:
 
         # 1-2. Stop, then capture the pre-update state. Nothing about the Agent
         #      has changed yet, so a failure here only ends the update, saying why.
+        previous: _PreviousRuntime | None = None
         try:
-            previous_image = self._stop_for_update(agent_id, actor)
-            if previous_image is None:
+            previous = self._stop_for_update(agent_id, actor)
+            if previous is None:
                 return
             backup = self._capture_for_update(agent_id, context)
         except Exception as exc:
             logger.exception("Managed update for agent %s could not take its backup", agent_id)
-            self.repository.record_managed_update_outcome(
-                agent_id,
-                ManagedUpdateOutcome.BACKUP_FAILED,
-                restore_point_id=None,
-                failure_reason=_managed_update_failure_text(exc),
-            )
+            self._record_backup_failed(agent_id, previous, None, _managed_update_failure_text(exc))
             return
         if backup.status != RestorePointStatus.READY:
-            self.repository.record_managed_update_outcome(
-                agent_id,
-                ManagedUpdateOutcome.BACKUP_FAILED,
-                restore_point_id=backup.id,
-                failure_reason=backup.failure_reason,
-            )
+            self._record_backup_failed(agent_id, previous, backup.id, backup.failure_reason)
             return
 
         # 3. Start on the platform image and watch it come up. A start that fails
@@ -3150,7 +3152,28 @@ class AgentService:
 
         # 4. Roll back: free the volume, restore the archive and the recorded
         #    configuration, then start the image the pod ran before.
-        self._rollback_managed_update(agent_id, backup.id, context, actor, previous_image)
+        self._rollback_managed_update(agent_id, backup.id, context, actor, previous.image)
+
+    def _record_backup_failed(
+        self,
+        agent_id: UUID,
+        previous: _PreviousRuntime | None,
+        restore_point_id: UUID | None,
+        failure_reason: str | None,
+    ) -> None:
+        """End the update as BACKUP_FAILED, pinned to the image the Agent ran.
+
+        The platform pin already names the new version, so without this a plain start
+        would run it with no backup, and an update without one that fails would put back
+        an empty pin and start the new version again.
+        """
+        self.repository.record_managed_update_outcome(
+            agent_id,
+            ManagedUpdateOutcome.BACKUP_FAILED,
+            restore_point_id=restore_point_id,
+            failure_reason=failure_reason,
+            pinned_runtime_image=previous.known_image if previous and previous.known_image else None,
+        )
 
     def _update_without_backup(self, agent_id: UUID, actor: ActorIdentity, pinned_image: str) -> None:
         try:
@@ -3221,7 +3244,7 @@ class AgentService:
             logger.exception("Managed update could not start agent %s", agent_id)
             return False
 
-    def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> str | None:
+    def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> _PreviousRuntime | None:
         """Stop the Agent and return the image its pod was running.
 
         None means the Agent was not running after all, so there is nothing to do.
@@ -3237,11 +3260,15 @@ class AgentService:
                 return None
             # What the pod proves it ran, not what the pin or the platform says:
             # both can move underneath a long-running pod.
-            previous_image = self.k8s.get_pod_image(
-                f"agent-{agent_id}", self.config.k8s_namespace
-            ) or self._effective_runtime_image(current)
+            known_image = (
+                self.k8s.get_pod_image(f"agent-{agent_id}", self.config.k8s_namespace) or current.pinned_runtime_image
+            )
+            previous = _PreviousRuntime(
+                image=known_image or self._effective_runtime_image(current),
+                known_image=known_image,
+            )
             self._stop_agent_unchecked(current, actor)
-        return previous_image
+        return previous
 
     def _capture_for_update(self, agent_id: UUID, context: CurrentUserContext) -> AgentRestorePoint:
         self._wait_for_volume_release(agent_id)

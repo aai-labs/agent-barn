@@ -250,6 +250,24 @@ test.describe("Agent update banner", () => {
     await expect(note).toContainText(/not changed/i);
   });
 
+  test("when the update without a backup failed, says starting goes back to the old version", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        last_managed_update: { outcome: "UPDATE_FAILED", restore_point_id: null, failure_reason: null },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    const note = agentDetailPage.updateOutcome();
+    await expect(note).toContainText(/nothing to roll back to/i);
+    await expect(note).toContainText(/version it ran before the update/i);
+    await expect(agentDetailPage.updateSkipBackupButton()).toHaveCount(0);
+  });
+
   test("when the rollback failed, points at the restore points", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: {
