@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Download, Loader2 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -9,8 +10,11 @@ import { formatDate } from "@/shared/date";
 import { toastError } from "@/shared/toast";
 
 import { useAgentTask, useDownloadTaskFile } from "../hooks/use-agent-task";
-import type { AgentTask, AgentTaskDetail } from "../schemas";
+import type { AgentTaskDetail } from "../schemas";
+import type { OpenTask } from "../utils";
 import { TaskStatusBadge } from "./task-status-badge";
+
+const SECTION_HEADING = "mb-2 mt-0 text-[0.84rem] font-semibold";
 
 function TaskFiles({ task }: { task: AgentTaskDetail }) {
   const download = useDownloadTaskFile(task.agentId, task.id);
@@ -30,8 +34,10 @@ function TaskFiles({ task }: { task: AgentTaskDetail }) {
           style={{ borderColor: "var(--line)" }}
         >
           <div className="min-w-0">
-            <div className="truncate text-[0.86rem] font-medium">{file.filename}</div>
-            <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>
+            <div className="truncate text-[0.86rem] font-medium" title={file.filename}>
+              {file.filename}
+            </div>
+            <div className="text-[0.76rem]" style={{ color: "var(--ink-3)" }}>
               {formatBytes(file.sizeBytes)} · {formatDate(file.createdAt)}
             </div>
           </div>
@@ -60,8 +66,8 @@ function TaskNotes({ task }: { task: AgentTaskDetail }) {
   return (
     <ol className="m-0 list-none space-y-3 p-0">
       {task.notes.map((note) => (
-        <li key={note.id} className="border-l-2 pl-3" style={{ borderColor: "var(--line)" }}>
-          <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>
+        <li key={note.id} className="border-l pl-3" style={{ borderColor: "var(--line-strong)" }}>
+          <div className="text-[0.76rem]" style={{ color: "var(--ink-3)" }}>
             {formatDate(note.createdAt)}
           </div>
           <p className="m-0 whitespace-pre-wrap text-[0.86rem]">{note.body}</p>
@@ -71,36 +77,89 @@ function TaskNotes({ task }: { task: AgentTaskDetail }) {
   );
 }
 
-/** A Task with its notes and files, opened from a Task list. */
-export function TaskDetailDialog({ task, onClose }: { task: AgentTask | null; onClose: () => void }) {
-  const { task: detail, isLoading, error } = useAgentTask(task?.agentId ?? "", task?.id ?? null);
+function TaskDates({ task }: { task: AgentTaskDetail }) {
+  const started = formatDate(task.createdAt);
+  const updated = formatDate(task.updatedAt);
+  return started === updated ? <>{started}</> : <>Started {started} · Updated {updated}</>;
+}
+
+/**
+ * The open Task with its notes and files. A failed Task leads with its notes, which say
+ * what went wrong; otherwise the files it produced come first.
+ */
+export function TaskDetailDialog({
+  openTask,
+  onClose,
+  agentName,
+  agentHref,
+}: {
+  openTask: OpenTask | null;
+  onClose: () => void;
+  /** Named on pages that span Agents. */
+  agentName?: string;
+  agentHref?: string;
+}) {
+  const { task, isLoading, error, refetch } = useAgentTask(openTask?.agentId ?? "", openTask?.taskId ?? null);
+  const files = task && (
+    <section aria-labelledby="task-files-heading">
+      <h3 id="task-files-heading" className={SECTION_HEADING}>
+        Files
+      </h3>
+      <TaskFiles task={task} />
+    </section>
+  );
+  const notes = task && (
+    <section aria-labelledby="task-notes-heading">
+      <h3 id="task-notes-heading" className={SECTION_HEADING}>
+        Notes
+      </h3>
+      <TaskNotes task={task} />
+    </section>
+  );
+
   return (
-    <Dialog open={task !== null} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={openTask !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex flex-wrap items-center gap-2">
-            {task?.title}
-            {task && <TaskStatusBadge status={detail?.status ?? task.status} />}
+          <DialogTitle className="flex flex-wrap items-center gap-2 pr-6">
+            {task?.title ?? "Task"}
+            {task && <TaskStatusBadge status={task.status} />}
           </DialogTitle>
           <DialogDescription>
-            {task ? `Started ${formatDate(task.createdAt)} · Updated ${formatDate(detail?.updatedAt ?? task.updatedAt)}` : ""}
+            {agentName &&
+              (agentHref ? (
+                <Link href={agentHref} className="font-medium underline-offset-2 hover:underline">
+                  {agentName}
+                </Link>
+              ) : (
+                <span className="font-medium">{agentName}</span>
+              ))}
+            {agentName && task && " · "}
+            {task && <TaskDates task={task} />}
           </DialogDescription>
         </DialogHeader>
         {isLoading ? (
-          <Loader2 size={16} className="animate-spin" aria-label="Loading task" />
+          <div role="status" className="flex items-center gap-2 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+            <Loader2 size={16} className="animate-spin" aria-hidden /> Loading task…
+          </div>
         ) : error ? (
-          <AppErrorState error={error} title="Could not load the task" />
-        ) : detail ? (
-          <div className="max-h-[60vh] space-y-5 overflow-auto">
-            {detail.description && <p className="m-0 whitespace-pre-wrap text-[0.88rem]">{detail.description}</p>}
-            <section aria-label="Files">
-              <h4 className="mb-2 mt-0 text-[0.88rem] font-semibold">Files</h4>
-              <TaskFiles task={detail} />
-            </section>
-            <section aria-label="Notes">
-              <h4 className="mb-2 mt-0 text-[0.88rem] font-semibold">Notes</h4>
-              <TaskNotes task={detail} />
-            </section>
+          <AppErrorState error={error} title="Could not load the task" onRetry={() => void refetch()} />
+        ) : task ? (
+          <div className="max-h-[60vh] space-y-6 overflow-auto">
+            {task.description && (
+              <p className="m-0 whitespace-pre-wrap text-[0.9rem] leading-relaxed">{task.description}</p>
+            )}
+            {task.status === "failed" ? (
+              <>
+                {notes}
+                {files}
+              </>
+            ) : (
+              <>
+                {files}
+                {notes}
+              </>
+            )}
           </div>
         ) : null}
       </DialogContent>

@@ -39,3 +39,15 @@ export function taskListParams(page: number, filter: { agentId?: string | null; 
   if (filter.status) params.set("status", filter.status);
   return params.toString();
 }
+
+/** The open Task, kept in the URL as `<agentId>.<taskId>` so it can be linked to and Back closes it. */
+export type OpenTask = { agentId: string; taskId: string };
+
+export function parseOpenTask(value: string | null): OpenTask | null {
+  const [agentId, taskId, ...rest] = value?.split(".") ?? [];
+  return agentId && taskId && rest.length === 0 ? { agentId, taskId } : null;
+}
+
+export function serializeOpenTask(task: OpenTask | null): string | null {
+  return task ? `${task.agentId}.${task.taskId}` : null;
+}

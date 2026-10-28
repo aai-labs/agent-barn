@@ -8,23 +8,31 @@ export const MOCK_TASK_ID = "aaaaaaaa-0000-4000-8000-0000000000a1";
 export const MOCK_TASK_FILE_ID = "aaaaaaaa-0000-4000-8000-0000000000f1";
 export const MOCK_TASK_ARTIFACT_ID = "aaaaaaaa-0000-4000-8000-0000000000c1";
 
+const MOCK_TASK = {
+  id: MOCK_TASK_ID,
+  agent_id: MOCK_AGENT_ID,
+  title: "Reconcile March invoices",
+  description: "Match every March invoice to a payment",
+  status: "done",
+  origin: "agent",
+  created_at: "2026-10-20T09:00:00Z",
+  updated_at: "2026-10-20T09:30:00Z",
+};
+
+/** A Task as the lists return it, with what it produced. */
 export function mockTask(overrides: Json = {}): Json {
   return {
-    id: MOCK_TASK_ID,
-    agent_id: MOCK_AGENT_ID,
-    title: "Reconcile March invoices",
-    description: "Match every March invoice to a payment",
-    status: "done",
-    origin: "agent",
-    created_at: "2026-10-20T09:00:00Z",
-    updated_at: "2026-10-20T09:30:00Z",
+    ...MOCK_TASK,
+    file_count: 1,
+    note_count: 1,
+    latest_note: "Two invoices had no payment",
     ...overrides,
   };
 }
 
 export function mockTaskDetail(overrides: Json = {}): Json {
   return {
-    ...mockTask(),
+    ...MOCK_TASK,
     notes: [{ id: "aaaaaaaa-0000-4000-8000-0000000000b1", body: "Two invoices had no payment", created_at: "2026-10-20T09:20:00Z" }],
     files: [
       {

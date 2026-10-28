@@ -1,44 +1,33 @@
 "use client";
 
-import { useState } from "react";
-
 import { AppErrorState } from "@/components/app-error-state";
-import { formatDate } from "@/shared/date";
 
 import { useTasks, type TaskScope } from "../hooks/use-agent-tasks";
-import type { AgentTask, AgentTaskStatus } from "../schemas";
-import { TaskDetailDialog } from "./task-detail-dialog";
+import type { AgentTaskStatus, AgentTaskSummary } from "../schemas";
 import { TaskStatusBadge } from "./task-status-badge";
+import { TASK_FOCUS_RING, TaskSummaryMeta } from "./task-summary";
 
 /** A paged list of Tasks, each opening its notes and files. */
 export function TaskList({
-  tasks,
-  isLoading,
-  error,
-  refetch,
-  hasMore,
-  loadMore,
-  isLoadingMore,
+  scope,
+  status,
   emptyMessage,
   agentName,
+  onOpen,
 }: {
-  tasks: AgentTask[];
-  isLoading: boolean;
-  error: Error | null;
-  refetch: () => unknown;
-  hasMore: boolean;
-  loadMore: () => unknown;
-  isLoadingMore: boolean;
+  scope: TaskScope;
+  status: AgentTaskStatus | null;
   emptyMessage: string;
   /** Names each Task's Agent, on lists that span Agents. */
   agentName?: (agentId: string) => string | undefined;
+  onOpen: (task: AgentTaskSummary) => void;
 }) {
-  const [openTask, setOpenTask] = useState<AgentTask | null>(null);
+  const { tasks, isLoading, error, refetch, hasMore, loadMore, isLoadingMore } = useTasks(scope, status);
 
   return (
     <section className="af-card overflow-hidden" aria-label="Tasks">
       {isLoading ? (
-        <div className="px-5 py-4 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+        <div role="status" className="px-5 py-4 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
           Loading tasks…
         </div>
       ) : error ? (
@@ -46,7 +35,7 @@ export function TaskList({
           <AppErrorState error={error} title="Could not load tasks" onRetry={() => void refetch()} />
         </div>
       ) : tasks.length === 0 ? (
-        <div className="px-5 py-4 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+        <div role="status" className="px-5 py-4 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
           {emptyMessage}
         </div>
       ) : (
@@ -60,16 +49,16 @@ export function TaskList({
             >
               <button
                 type="button"
-                className="flex w-full flex-wrap items-center justify-between gap-3 px-5 py-3 text-left hover:bg-[var(--bg-soft)]"
-                onClick={() => setOpenTask(task)}
+                className={`flex w-full items-start justify-between gap-3 px-5 py-3 text-left hover:bg-[var(--bg-soft)] ${TASK_FOCUS_RING} focus-visible:-outline-offset-2`}
+                onClick={() => onOpen(task)}
               >
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{task.title}</span>
-                  <span className="block text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
-                    {[agentName?.(task.agentId), `Updated ${formatDate(task.updatedAt)}`].filter(Boolean).join(" · ")}
-                  </span>
+                  <TaskSummaryMeta task={task} agentName={agentName?.(task.agentId)} />
                 </span>
-                <TaskStatusBadge status={task.status} />
+                <span className="shrink-0 pt-0.5">
+                  <TaskStatusBadge status={task.status} />
+                </span>
               </button>
             </li>
           ))}
@@ -82,23 +71,6 @@ export function TaskList({
           </button>
         </footer>
       )}
-      <TaskDetailDialog task={openTask} onClose={() => setOpenTask(null)} />
     </section>
   );
-}
-
-/** The list for a scope, loading its Tasks only while it is shown. */
-export function ScopedTaskList({
-  scope,
-  status,
-  emptyMessage,
-  agentName,
-}: {
-  scope: TaskScope;
-  status: AgentTaskStatus | null;
-  emptyMessage: string;
-  agentName?: (agentId: string) => string | undefined;
-}) {
-  const tasks = useTasks(scope, status);
-  return <TaskList {...tasks} emptyMessage={emptyMessage} agentName={agentName} />;
 }

@@ -130,3 +130,14 @@ test("the board shows each Agent's Tasks by status and follows the Agent filter"
   await expect(tasksPage.column("Done")).toContainText("No tasks.");
   await expect(page).toHaveURL(new RegExp(`agent=${OTHER_AGENT_ID}`));
 });
+
+test("the Task dialog names the Agent and links to its Tasks", async ({ page }) => {
+  const { tasksPage } = await open(page);
+
+  await tasksPage.openCard("Reconcile March invoices");
+
+  await expect(tasksPage.detail().getByRole("link", { name: "Maya" })).toHaveAttribute(
+    "href",
+    `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=tasks`,
+  );
+});

@@ -3,6 +3,7 @@
 import { KanbanSquare, List } from "lucide-react";
 
 import type { TaskView } from "../utils";
+import { TASK_FOCUS_RING } from "./task-summary";
 
 const VIEWS: { view: TaskView; label: string; icon: typeof List }[] = [
   { view: "board", label: "Board", icon: KanbanSquare },
@@ -23,7 +24,7 @@ export function TaskViewToggle({ value, onChange }: { value: TaskView; onChange:
           key={view}
           type="button"
           aria-pressed={value === view}
-          className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.82rem]"
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.82rem] ${TASK_FOCUS_RING}`}
           style={
             value === view
               ? { background: "var(--bg-soft)", color: "var(--ink)" }

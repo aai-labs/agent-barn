@@ -22,7 +22,12 @@ export function useAgentTask(agentId: string, taskId: string | null) {
       ).data,
     enabled: taskId !== null,
   });
-  return { task: query.data, isLoading: query.isPending && query.fetchStatus !== "idle", error: query.error };
+  return {
+    task: query.data,
+    isLoading: query.isPending && query.fetchStatus !== "idle",
+    error: query.error,
+    refetch: query.refetch,
+  };
 }
 
 /**

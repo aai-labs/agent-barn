@@ -122,3 +122,49 @@ test("the chosen view is kept across a reload", async ({ page }) => {
   await expect(tasksPage.rows()).toHaveCount(1);
   await expect(tasksPage.cards()).toHaveCount(0);
 });
+
+test("a card says what the Task produced, and a failed one says why", async ({ page }) => {
+  const { tasksPage } = await open(page, {
+    tasks: [
+      mockTask({ file_count: 2, note_count: 3 }),
+      mockTask({
+        id: "aaaaaaaa-0000-4000-8000-0000000000a2",
+        title: "Summarise the board deck",
+        status: "failed",
+        file_count: 0,
+        note_count: 1,
+        latest_note: "The deck link needs a sign-in",
+      }),
+    ],
+  });
+
+  const done = tasksPage.cards().filter({ hasText: "Reconcile March invoices" });
+  await expect(done).toContainText("2 files");
+  await expect(done).toContainText("3 notes");
+  await expect(done).not.toContainText("Two invoices had no payment");
+  await expect(tasksPage.cards().filter({ hasText: "Summarise the board deck" })).toContainText(
+    "The deck link needs a sign-in",
+  );
+});
+
+test("an open Task has its own link", async ({ page }) => {
+  const { tasksPage } = await open(page);
+
+  await tasksPage.openCard("Reconcile March invoices");
+  await expect(tasksPage.detail()).toContainText("Two invoices had no payment");
+  await expect(page).toHaveURL(/task=/);
+
+  await page.reload();
+  await expect(tasksPage.detail()).toContainText("Two invoices had no payment");
+
+  await page.keyboard.press("Escape");
+  await expect(tasksPage.detail()).toHaveCount(0);
+  await expect(page).not.toHaveURL(/task=/);
+});
+
+test("a board without Tasks says so once", async ({ page }) => {
+  const { tasksPage } = await open(page, { tasks: [] });
+
+  await expect(page.getByText("This Agent hasn't recorded any tasks yet.")).toBeVisible();
+  await expect(tasksPage.column("Open")).toHaveCount(0);
+});
