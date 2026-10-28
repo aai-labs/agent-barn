@@ -34,6 +34,11 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Delivered: the update accepts `skip_backup` only for a `STOPPED` Agent whose last outcome is
   `BACKUP_FAILED`. If the new image fails there is no rollback: the Agent is stopped and the
   outcome is the new `UPDATE_FAILED`.
+- Delivered: a backup that fails before an update pins the Agent to the image its pod ran. The
+  platform pin already names the new version, so before this a plain start ran it with no backup,
+  and a failed update without a backup put back an empty pin and so started the new version again.
+  Reverses "a capture that fails leaves the pin alone". The image comes from the pod or an existing
+  pin only; when neither has it, no pin is set, since the platform's may already be the new one.
 - Delivered: a restore that skipped its backup and then fails during extraction returns its target
   to `READY` with the reason on the row, so it can be tried again.
 - Delivered: audit — `agent.managed_update.backup_skipped` and `backup_skipped` on
