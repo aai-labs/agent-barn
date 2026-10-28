@@ -262,7 +262,7 @@ class ArtifactRepository:
                     col(ArtifactReference.artifact_id) == row.id, col(ArtifactReference.released_at).is_(None)
                 )
             ).first():
-                raise HTTPException(409, "An active run or review pins this file")
+                raise HTTPException(409, "This file is in use by a run, review or Task, so it cannot be deleted")
             row.state, row.expires_at = "DELETING", datetime.now(UTC)
             session.add(row)
             session.commit()

@@ -112,11 +112,6 @@ RESTORE_POINT_MAX_PER_AGENT=5
 # an extraction, so it is given longer.
 RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
 RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
-# Task Files are stored in the application database. The largest single file
-# (default 20 MiB) and the total across one Organization's Tasks (default 2 GiB),
-# in bytes.
-TASK_FILE_MAX_BYTES=20971520
-TASK_ORGANIZATION_STORAGE_MAX_BYTES=2147483648
 # Managed updates: how long the new pod has to report ready before the update
 # rolls back to the captured restore point, and how often it is checked. The
 # window includes pulling the new image. Defaults to 600 and 5 when unset.

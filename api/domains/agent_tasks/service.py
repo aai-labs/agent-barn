@@ -1,12 +1,9 @@
-from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
-from api.core.config import Config
-from api.domains.agent_tasks.file_storage import TaskFileStorage
 from api.domains.agent_tasks.models import (
     AgentTaskCreate,
     AgentTaskDetail,
@@ -18,30 +15,17 @@ from api.domains.agent_tasks.models import (
     AgentTaskRead,
     AgentTaskStatus,
 )
-from api.domains.agent_tasks.repository import (
-    AgentTaskRepository,
-    EmptyTaskFileError,
-    OrganizationTaskStorageFullError,
-)
+from api.domains.agent_tasks.repository import AgentTaskRepository
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.artifacts.models import ArtifactLinkRead
+from api.domains.artifacts.service import ArtifactService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-
-class _TaskFileTooLargeError(Exception):
-    pass
-
-
-def _within_file_limit(data: Iterable[bytes], max_bytes: int) -> Iterator[bytes]:
-    """Pass the upload through, stopping as soon as it passes the per-file limit."""
-    total = 0
-    for piece in data:
-        total += len(piece)
-        if total > max_bytes:
-            raise _TaskFileTooLargeError
-        yield piece
+# The Artifact pin kind for Task Files; each pin's owner is the File's id.
+_TASK_FILE_PIN = "task"
 
 
 def _task_not_found(task_id: UUID) -> HTTPException:
@@ -58,9 +42,8 @@ class AgentTaskService:
     already authenticated the Agent, so there is no Permission to check.
     """
 
-    config: Config
     repository: AgentTaskRepository
-    file_storage: TaskFileStorage
+    artifacts: ArtifactService
     agent_authorization: AgentAuthorization
 
     def create_task(self, organization_id: UUID, agent_id: UUID, data: AgentTaskCreate) -> AgentTaskRead:
@@ -86,48 +69,28 @@ class AgentTaskService:
         return AgentTaskNoteRead.model_validate(note)
 
     def attach_file(
-        self,
-        organization_id: UUID,
-        agent_id: UUID,
-        task_id: UUID,
-        metadata: AgentTaskFileCreate,
-        data: Iterable[bytes],
+        self, organization_id: UUID, agent_id: UUID, task_id: UUID, data: AgentTaskFileCreate
     ) -> AgentTaskFileRead:
-        """Store an upload as it is read; it is refused as soon as it passes either limit."""
-        max_bytes = self.config.task_file_max_bytes
-        try:
-            stored = self.repository.add_file(
-                organization_id,
-                agent_id,
-                task_id,
-                metadata,
-                _within_file_limit(data, max_bytes),
-                self.config.task_organization_storage_max_bytes,
-            )
-        except EmptyTaskFileError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The file is empty.") from None
-        except _TaskFileTooLargeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"The file is larger than the {max_bytes}-byte limit.",
-            ) from None
-        except OrganizationTaskStorageFullError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The file is larger than the space left for this Organization's Task Files.",
-            ) from None
+        """Attach one of the Agent's own published Artifacts; attaching it again returns the same File."""
+        stored = self.repository.add_file(
+            organization_id,
+            agent_id,
+            task_id,
+            data.artifact_id,
+            lambda session, file_id: self.artifacts.pin(
+                session, data.artifact_id, agent_id, organization_id, _TASK_FILE_PIN, file_id
+            ),
+        )
         if stored is None:
             raise _task_not_found(task_id)
         return AgentTaskFileRead.model_validate(stored)
 
-    def read_file(
-        self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext
-    ) -> tuple[AgentTaskFileRead, Iterator[bytes]]:
+    def file_link(self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext) -> ArtifactLinkRead:
         scope = self._agent_read_scope(agent_id, context)
         stored = self.repository.get_file(agent_id, task_id, file_id, scope)
         if stored is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File {file_id} not found")
-        return AgentTaskFileRead.model_validate(stored), self.file_storage.read(stored.id)
+        return self.artifacts.link(stored.artifact_id, agent_id, scope)
 
     def list_agent_tasks(
         self,

@@ -35,6 +35,17 @@ def pin(
         raise HTTPException(409, "Released artifact references cannot be reactivated")
 
 
+def pin_published(
+    session: Session, artifact_id: UUID, agent_id: UUID, organization_id: UUID, kind: str, owner_id: UUID
+) -> Artifact:
+    """Pin a READY Artifact by id alone, for owners that never recorded its checksum."""
+    artifact = session.exec(select(Artifact).where(col(Artifact.id) == artifact_id)).one_or_none()
+    if artifact is None:
+        raise HTTPException(404, "Artifact not found")
+    pin(session, artifact_id, artifact.checksum, agent_id, organization_id, kind, owner_id)
+    return artifact
+
+
 def attempt_files(session: Session, attempt_id: UUID) -> list[dict]:
     rows = session.exec(
         select(Artifact)

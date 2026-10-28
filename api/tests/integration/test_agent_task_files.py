@@ -1,22 +1,22 @@
-"""AF-411 Task Files: stored in Postgres in chunks, limited per file and per Organization,
-and readable only by people who may read the Agent's Tasks."""
+"""AF-411 Task Files: an Agent attaches files it has already published as Artifacts, and
+each attachment keeps its Artifact from expiring for as long as the Task has it."""
 
-import time
-from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+import hashlib
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 import pytest
 from fastapi import HTTPException, status
-from hamcrest import assert_that, calling, contains_inanyorder, equal_to, has_properties, raises
-from sqlmodel import Session
+from hamcrest import assert_that, equal_to, has_item, has_properties, is_not
+from injector import Module, provider, singleton
+from sqlmodel import Session, col, select
 
-from api.domains.agent_tasks.file_storage import CHUNK_BYTES, TaskFileStorage
 from api.domains.agent_tasks.models import AgentTaskCreate, AgentTaskFileCreate
-from api.domains.agent_tasks.repository import AgentTaskRepository
 from api.domains.agent_tasks.service import AgentTaskService
-from api.domains.agents.repository import AgentRepository
+from api.domains.artifacts.models import Artifact, ArtifactReference
+from api.domains.artifacts.repository import ArtifactRepository
+from api.domains.artifacts.service import ArtifactService
+from api.domains.artifacts.storage import ArtifactDownload, ArtifactStorage
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
@@ -32,14 +32,38 @@ from api.tests.steps.organization import there_is_an_organization
 from api.tests.steps.user import there_is_a_user
 
 
-def _given(**env: str):
-    return [
-        set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY, **env}),
-        prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
-        database_repo_is_ready(),
-        database_is_clean(),
-        there_is_an_organization(),
-    ]
+class _FakeArtifactStorage(ArtifactStorage):
+    """Signs a download without a bucket behind it; Tasks never touch the bytes."""
+
+    def put(self, artifact: Artifact, content: bytes) -> None:
+        raise AssertionError("Tasks never upload bytes")
+
+    def issue_download(self, artifact: Artifact, seconds: int) -> str:
+        return f"signed-{artifact.id}"
+
+    def download(self, artifact: Artifact, access: str) -> ArtifactDownload:
+        raise AssertionError("Tasks never stream bytes")
+
+    def delete(self, artifact: Artifact) -> None:
+        raise AssertionError("Tasks never delete bytes")
+
+
+class _FakeArtifactStorageModule(Module):
+    @provider
+    @singleton
+    def provide_artifact_storage(self) -> ArtifactStorage:
+        return _FakeArtifactStorage()
+
+
+_GIVEN = [
+    set_env_variable(
+        {"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY, "ARTIFACT_S3_ENDPOINT_URL": "http://garage.invalid"}
+    ),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), _FakeArtifactStorageModule()]),
+    database_repo_is_ready(),
+    database_is_clean(),
+    there_is_an_organization(),
+]
 
 
 def _signed_in(role: OrganizationRole):
@@ -60,21 +84,42 @@ def _task(context, agent=None):
     return _service(context).create_task(agent.organization_id, agent.id, AgentTaskCreate(title="Report"))
 
 
-def _attach(context, task, data: bytes | Iterable[bytes], agent=None, filename: str = "report.csv"):
+def _artifact(context, agent=None, *, state: str = "READY", filename: str = "report.csv") -> Artifact:
+    """An Artifact the Agent has published, recorded the way the Artifacts domain records one."""
+    agent = agent or context.agent
+    content = f"bytes of {filename}".encode()
+    row = Artifact(
+        organization_id=agent.organization_id,
+        agent_id=agent.id,
+        filename=filename,
+        content_type="text/csv",
+        size=len(content),
+        checksum=hashlib.sha256(content).hexdigest(),
+        state=state,
+        bucket=f"bucket-{agent.id}",
+        object_key=f"objects/{uuid7()}",
+        published_at=datetime.now(UTC) if state == "READY" else None,
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        source="chat",
+    )
+    with Session(context.postgres_delegate.engine, expire_on_commit=False) as session:
+        session.add(row)
+        session.commit()
+    return row
+
+
+def _attach(context, task, artifact: Artifact, agent=None):
     agent = agent or context.agent
     return _service(context).attach_file(
-        agent.organization_id,
-        agent.id,
-        task.id,
-        AgentTaskFileCreate(filename=filename, content_type="text/csv"),
-        [data] if isinstance(data, bytes) else data,
+        agent.organization_id, agent.id, task.id, AgentTaskFileCreate(artifact_id=artifact.id)
     )
 
 
-def _pieces_then_fail(*pieces: bytes) -> Iterator[bytes]:
-    """Yield the pieces, then fail the test if the upload is read any further."""
-    yield from pieces
-    raise AssertionError("the upload was read past its limit")
+def _references(context, artifact_id: UUID) -> list[ArtifactReference]:
+    with Session(context.postgres_delegate.engine) as session:
+        return list(
+            session.exec(select(ArtifactReference).where(col(ArtifactReference.artifact_id) == artifact_id)).all()
+        )
 
 
 def _status_code(call) -> int:
@@ -83,123 +128,160 @@ def _status_code(call) -> int:
     return raised.value.status_code
 
 
-def test_a_file_larger_than_one_chunk_reads_back_unchanged():
-    with given([*_given(), there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+def test_an_attached_artifact_is_listed_on_the_task_with_its_name_type_and_size():
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
         task = _task(context)
-        data = bytes(range(256)) * ((2 * CHUNK_BYTES + 1000) // 256)
+        artifact = _artifact(context)
 
-        with when("the Agent streams it in pieces that do not line up with chunks"):
-            stored = _attach(
-                context, task, (data[offset : offset + 700_001] for offset in range(0, len(data), 700_001))
-            )
-
-            with then("its size is recorded and the same bytes come back"):
-                metadata, chunks = _service(context).read_file(
-                    context.agent.id, task.id, stored.id, context.current_user_context
-                )
-                assert_that(
-                    (metadata, b"".join(chunks)),
-                    equal_to((stored, data)),
-                )
-                assert_that(stored, has_properties(filename="report.csv", size_bytes=len(data)))
-
-
-def test_attached_files_are_listed_on_the_task():
-    with given([*_given(), there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
-        task = _task(context)
-        stored = _attach(context, task, b"a,b\n1,2\n")
+        stored = _attach(context, task, artifact)
 
         detail = _service(context).get_task(context.agent.id, task.id, context.current_user_context)
-
         assert_that(detail.files, equal_to([stored]))
-
-
-def test_an_empty_file_is_rejected():
-    with given([*_given(), there_is_an_agent()]) as context:
-        task = _task(context)
-
-        assert_that(_status_code(lambda: _attach(context, task, b"")), equal_to(status.HTTP_400_BAD_REQUEST))
-
-
-def test_a_file_over_the_per_file_limit_is_rejected():
-    with given([*_given(TASK_FILE_MAX_BYTES="10"), there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
-        task = _task(context)
-
-        with when("the Agent attaches 11 bytes"):
-            code = _status_code(lambda: _attach(context, task, b"x" * 11))
-
-            with then("it is rejected and nothing is stored"):
-                detail = _service(context).get_task(context.agent.id, task.id, context.current_user_context)
-                assert_that((code, detail.files), equal_to((status.HTTP_400_BAD_REQUEST, [])))
-
-
-def test_a_file_that_would_take_the_organization_over_its_limit_is_rejected():
-    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent()]) as context:
-        task = _task(context)
-        _attach(context, task, b"x" * 6)
-
         assert_that(
-            _status_code(lambda: _attach(context, task, b"x" * 5, filename="second.csv")),
-            equal_to(status.HTTP_400_BAD_REQUEST),
+            stored,
+            has_properties(
+                artifact_id=artifact.id, filename="report.csv", content_type="text/csv", size_bytes=artifact.size
+            ),
         )
 
 
-def test_a_file_that_exactly_fills_the_organization_limit_is_accepted():
-    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent()]) as context:
+def test_attaching_pins_the_artifact_to_that_task_file():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
         task = _task(context)
-        _attach(context, task, b"x" * 6)
+        artifact = _artifact(context)
 
-        stored = _attach(context, task, b"x" * 4, filename="second.csv")
-
-        assert_that(stored.size_bytes, equal_to(4))
-
-
-def test_another_organizations_files_do_not_count_towards_the_limit():
-    with given(
-        [*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent_in_another_org(), there_is_an_agent()]
-    ) as context:
-        other_task = _task(context, context.other_org_agent)
-        _attach(context, other_task, b"x" * 10, agent=context.other_org_agent)
-        task = _task(context)
-
-        stored = _attach(context, task, b"x" * 10)
-
-        assert_that(stored.size_bytes, equal_to(10))
-
-
-def test_a_file_cannot_be_attached_to_another_agents_task():
-    with given([*_given(), there_is_an_agent()]) as context:
-        task = _task(context)
-        there_is_an_agent(name="Second")(context)
+        stored = _attach(context, task, artifact)
 
         assert_that(
-            _status_code(lambda: _attach(context, task, b"data", agent=context.agent)),
+            [(ref.kind, ref.owner_id, ref.released_at) for ref in _references(context, artifact.id)],
+            equal_to([("task", stored.id, None)]),
+        )
+
+
+def test_a_pinned_artifact_outlives_its_expiry():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+        _attach(context, task, artifact)
+
+        with when("the Artifact's retention has run out"):
+            with Session(context.postgres_delegate.engine) as session:
+                row = session.get_one(Artifact, artifact.id)
+                row.expires_at = datetime.now(UTC) - timedelta(days=1)
+                session.add(row)
+                session.commit()
+            candidates = context.injector.get(ArtifactRepository).cleanup_candidates()
+
+            with then("cleanup leaves it alone"):
+                assert_that(candidates, is_not(has_item(artifact.id)))
+
+
+def test_attaching_the_same_artifact_twice_keeps_one_file_and_one_pin():
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+
+        first = _attach(context, task, artifact)
+        second = _attach(context, task, artifact)
+
+        detail = _service(context).get_task(context.agent.id, task.id, context.current_user_context)
+        assert_that(
+            (second, detail.files, len(_references(context, artifact.id))),
+            equal_to((first, [first], 1)),
+        )
+
+
+def test_one_artifact_can_be_attached_to_two_tasks():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        artifact = _artifact(context)
+
+        first = _attach(context, _task(context), artifact)
+        second = _attach(context, _task(context), artifact)
+
+        assert_that(
+            {ref.owner_id for ref in _references(context, artifact.id)},
+            equal_to({first.id, second.id}),
+        )
+
+
+def test_an_artifact_that_is_still_uploading_cannot_be_attached():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context, state="UPLOADING")
+
+        assert_that(_status_code(lambda: _attach(context, task, artifact)), equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_another_agents_artifact_cannot_be_attached():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        owner = context.agent
+        there_is_an_agent(name="Second")(context)
+        artifact = _artifact(context)
+
+        assert_that(
+            _status_code(lambda: _attach(context, task, artifact, agent=owner)),
             equal_to(status.HTTP_404_NOT_FOUND),
         )
 
 
-def test_a_member_without_access_cannot_read_a_file():
-    with given([*_given(), there_is_an_agent(), _signed_in(OrganizationRole.MEMBER)]) as context:
+def test_another_organizations_artifact_cannot_be_attached():
+    with given([*_GIVEN, there_is_an_agent_in_another_org(), there_is_an_agent()]) as context:
         task = _task(context)
-        stored = _attach(context, task, b"secret figures")
+        artifact = _artifact(context, context.other_org_agent)
+
+        assert_that(_status_code(lambda: _attach(context, task, artifact)), equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_a_file_cannot_be_attached_to_another_agents_task():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        there_is_an_agent(name="Second")(context)
+        artifact = _artifact(context)
+
+        with when("the second Agent attaches its own Artifact to the first Agent's Task"):
+            code = _status_code(lambda: _attach(context, task, artifact))
+
+            with then("the Task is not found and nothing is pinned"):
+                assert_that((code, _references(context, artifact.id)), equal_to((status.HTTP_404_NOT_FOUND, [])))
+
+
+def test_a_reader_gets_a_download_link_for_the_files_artifact():
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+        stored = _attach(context, task, artifact)
+
+        link = _service(context).file_link(context.agent.id, task.id, stored.id, context.current_user_context)
+
+        assert_that(
+            (link.artifact.id, f"/{artifact.id}?" in link.url, f"signed-{artifact.id}" in link.url),
+            equal_to((artifact.id, True, True)),
+        )
+
+
+def test_a_member_without_access_cannot_get_a_download_link():
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.MEMBER)]) as context:
+        task = _task(context)
+        stored = _attach(context, task, _artifact(context))
 
         assert_that(
             _status_code(
-                lambda: _service(context).read_file(context.agent.id, task.id, stored.id, context.current_user_context)
+                lambda: _service(context).file_link(context.agent.id, task.id, stored.id, context.current_user_context)
             ),
             equal_to(status.HTTP_404_NOT_FOUND),
         )
 
 
 def test_a_file_is_not_found_through_a_different_task():
-    with given([*_given(), there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
         task = _task(context)
         other_task = _task(context)
-        stored = _attach(context, task, b"data")
+        stored = _attach(context, task, _artifact(context))
 
         assert_that(
             _status_code(
-                lambda: _service(context).read_file(
+                lambda: _service(context).file_link(
                     context.agent.id, other_task.id, stored.id, context.current_user_context
                 )
             ),
@@ -207,122 +289,17 @@ def test_a_file_is_not_found_through_a_different_task():
         )
 
 
-@pytest.mark.parametrize("filename", ["../secrets.txt", "dir\\file.txt", "line\nbreak.txt"])
-def test_a_filename_with_a_path_or_control_character_is_rejected(filename: str):
-    assert_that(
-        calling(AgentTaskFileCreate).with_args(filename=filename, content_type="text/plain"),
-        raises(ValueError),
-    )
-
-
-@dataclass
-class _SlowStorage:
-    """Holds each write open long enough for a second upload to overlap it."""
-
-    inner: TaskFileStorage
-
-    def write(self, session: Session, file_id: UUID, data: Iterable[bytes]) -> int:
-        time.sleep(0.5)
-        return self.inner.write(session, file_id, data)
-
-    def read(self, file_id: UUID) -> Iterator[bytes]:
-        return self.inner.read(file_id)
-
-
-def test_two_uploads_at_once_cannot_together_exceed_the_organization_limit():
-    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent()]) as context:
-        task = _task(context)
-        repository = context.injector.get(AgentTaskRepository)
-        repository.file_storage = _SlowStorage(repository.file_storage)
-
-        def upload(name: str) -> int:
-            try:
-                _attach(context, task, b"x" * 6, filename=name)
-                return status.HTTP_201_CREATED
-            except HTTPException as error:
-                return error.status_code
-
-        with when("two 6-byte files are attached at the same time"):
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                outcomes = list(pool.map(upload, ["a.csv", "b.csv"]))
-
-            with then("only one fits"):
-                assert_that(outcomes, contains_inanyorder(status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST))
-
-
-def test_an_oversized_upload_is_rejected_without_reading_the_rest():
-    with given([*_given(TASK_FILE_MAX_BYTES="10"), there_is_an_agent()]) as context:
-        task = _task(context)
-
-        assert_that(
-            _status_code(lambda: _attach(context, task, _pieces_then_fail(b"x" * 6, b"x" * 6))),
-            equal_to(status.HTTP_400_BAD_REQUEST),
-        )
-
-
-def test_an_upload_past_the_organization_limit_is_rejected_without_reading_the_rest():
-    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent()]) as context:
-        task = _task(context)
-        _attach(context, task, b"x" * 4)
+def test_an_artifact_attached_to_a_task_cannot_be_deleted():
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+        artifact = _artifact(context)
+        _attach(context, _task(context), artifact)
 
         with pytest.raises(HTTPException) as raised:
-            _attach(context, task, _pieces_then_fail(b"x" * 4, b"x" * 4), filename="second.csv")
+            context.injector.get(ArtifactService).delete(artifact.id, context.agent.id, context.current_user_context)
 
         assert_that(
             (raised.value.status_code, raised.value.detail),
             equal_to(
-                (
-                    status.HTTP_400_BAD_REQUEST,
-                    "The file is larger than the space left for this Organization's Task Files.",
-                )
+                (status.HTTP_409_CONFLICT, "This file is in use by a run, review or Task, so it cannot be deleted")
             ),
         )
-
-
-def test_an_upload_does_not_block_updates_to_its_agent():
-    with given([*_given(), there_is_an_agent()]) as context:
-        task = _task(context)
-        repository = context.injector.get(AgentTaskRepository)
-        repository.file_storage = _SlowStorage(repository.file_storage)
-        agent_repository = context.injector.get(AgentRepository)
-
-        def rename() -> float:
-            time.sleep(0.1)
-            started = time.monotonic()
-            agent = agent_repository.get_by_id(context.agent.id)
-            assert agent is not None
-            agent.name = "Renamed"
-            agent_repository.delegate.save(agent)
-            return time.monotonic() - started
-
-        with when("the Agent is renamed while one of its uploads is being written"):
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                upload = pool.submit(_attach, context, task, b"data")
-                took = pool.submit(rename).result()
-                upload.result()
-
-            with then("the rename does not wait for the upload"):
-                assert_that(took < 0.3, equal_to(True))
-
-
-@pytest.mark.parametrize("filename", [".", "..", 'quote".txt', "bidi\u202etxt.exe", "del\x7f.txt", "c1\x85.txt"])
-def test_a_filename_that_is_unsafe_to_offer_back_is_rejected(filename: str):
-    assert_that(
-        calling(AgentTaskFileCreate).with_args(filename=filename, content_type="text/plain"),
-        raises(ValueError),
-    )
-
-
-@pytest.mark.parametrize("content_type", ["text", "text/plain\r\nX-Injected: 1", "text/plain; charset=utf-8", "/plain"])
-def test_a_content_type_that_is_not_a_bare_media_type_is_rejected(content_type: str):
-    assert_that(
-        calling(AgentTaskFileCreate).with_args(filename="a.txt", content_type=content_type),
-        raises(ValueError),
-    )
-
-
-@pytest.mark.parametrize(
-    "content_type", ["text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
-)
-def test_a_bare_media_type_is_accepted(content_type: str):
-    assert_that(AgentTaskFileCreate(filename="a.txt", content_type=content_type).content_type, equal_to(content_type))

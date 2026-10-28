@@ -1,7 +1,9 @@
 """AF-411 Agent Task tables: the migration round-trips, the schema matches the models, and
 the database keeps Tasks inside their Agent's Organization and removes their children."""
 
+import hashlib
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid7
@@ -18,7 +20,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 
 from api.core.config import get_config
-from api.domains.agent_tasks.models import AgentTask, AgentTaskFile, AgentTaskFileChunk, AgentTaskNote
+from api.domains.agent_tasks.models import AgentTask, AgentTaskFile, AgentTaskNote
+from api.domains.artifacts.models import Artifact
 from api.domains.rbac.catalog import (
     AGENT_EDITOR_ROLE_ID,
     AGENT_OWNER_ROLE_ID,
@@ -41,8 +44,11 @@ from api.tests.steps.organization import there_is_an_organization
 PRE_AF411_REVISION = "a4e9c2d7b615"
 AF411_TASK_TABLES_REVISION = "b7d4e1a9c362"
 AF411_TASK_READ_REVISION = "d2f8a6c41e07"
+AF411_ARTIFACTS_MERGE_REVISION = "c41a7e2d9b10"
+AF411_TASK_FILES_REVISION = "e8b3f1a2c4d5"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
-AF411_TABLES = ("agent_task", "agent_task_note", "agent_task_file", "agent_task_file_chunk")
+AF411_TABLES = ("agent_task", "agent_task_note", "agent_task_file")
+AF411_TASK_TABLES = ("agent_task", "agent_task_note")
 
 _GIVEN = [
     set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY}),
@@ -89,7 +95,7 @@ def _status_enum_exists(engine) -> bool:
 
 def test_agent_task_tables_downgrade_cleanly_and_upgrade_again(scratch_database):
     command.upgrade(scratch_database.config, AF411_TASK_TABLES_REVISION)
-    assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TABLES)))
+    assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TASK_TABLES)))
 
     command.downgrade(scratch_database.config, PRE_AF411_REVISION)
     scratch_database.engine.dispose()
@@ -99,6 +105,19 @@ def test_agent_task_tables_downgrade_cleanly_and_upgrade_again(scratch_database)
     )
 
     command.upgrade(scratch_database.config, AF411_TASK_TABLES_REVISION)
+    scratch_database.engine.dispose()
+    assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TASK_TABLES)))
+
+
+def test_the_task_file_table_downgrades_cleanly_and_upgrades_again(scratch_database):
+    command.upgrade(scratch_database.config, AF411_TASK_FILES_REVISION)
+    assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TABLES)))
+
+    command.downgrade(scratch_database.config, AF411_ARTIFACTS_MERGE_REVISION)
+    scratch_database.engine.dispose()
+    assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TASK_TABLES)))
+
+    command.upgrade(scratch_database.config, AF411_TASK_FILES_REVISION)
     scratch_database.engine.dispose()
     assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TABLES)))
 
@@ -156,33 +175,26 @@ def test_a_task_cannot_belong_to_an_agent_in_another_organization():
                 assert_that(calling(insert), raises(IntegrityError))
 
 
-def test_an_empty_file_is_rejected():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        with Session(context.postgres_delegate.engine) as session:
-            task = AgentTask(organization_id=context.organization.id, agent_id=context.agent.id, title="Report")
-            session.add(task)
-            session.commit()
-            task_id = task.id
-
-        with when("a File records zero bytes"):
-            empty = AgentTaskFile(
-                organization_id=context.organization.id,
-                task_id=task_id,
-                filename="empty.txt",
-                content_type="text/plain",
-                size_bytes=0,
-            )
-
-            def insert():
-                with Session(context.postgres_delegate.engine) as session:
-                    session.add(empty)
-                    session.commit()
-
-            with then("the database rejects it"):
-                assert_that(calling(insert), raises(IntegrityError))
+def _artifact(session: Session, agent) -> Artifact:
+    artifact = Artifact(
+        organization_id=agent.organization_id,
+        agent_id=agent.id,
+        filename="report.csv",
+        content_type="text/csv",
+        size=3,
+        checksum=hashlib.sha256(b"a,b").hexdigest(),
+        state="READY",
+        bucket=f"bucket-{agent.id}",
+        object_key=f"objects/{uuid7()}",
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        source="chat",
+    )
+    session.add(artifact)
+    session.flush()
+    return artifact
 
 
-def test_deleting_a_task_removes_its_notes_files_and_chunks():
+def test_deleting_a_task_removes_its_notes_and_files_but_not_their_artifacts():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         engine = context.postgres_delegate.engine
         with Session(engine) as session:
@@ -190,33 +202,34 @@ def test_deleting_a_task_removes_its_notes_files_and_chunks():
             session.add(task)
             session.flush()
             session.add(AgentTaskNote(task_id=task.id, body="Started"))
-            stored = AgentTaskFile(
-                organization_id=context.organization.id,
-                task_id=task.id,
-                filename="report.csv",
-                content_type="text/csv",
-                size_bytes=3,
+            artifact = _artifact(session, context.agent)
+            session.add(
+                AgentTaskFile(
+                    organization_id=context.organization.id,
+                    task_id=task.id,
+                    artifact_id=artifact.id,
+                    filename="report.csv",
+                    content_type="text/csv",
+                    size_bytes=3,
+                )
             )
-            session.add(stored)
-            session.flush()
-            session.add(AgentTaskFileChunk(file_id=stored.id, sequence=0, data=b"a,b"))
             session.commit()
-            task_id = task.id
+            task_id, artifact_id = task.id, artifact.id
 
         with when("the Task row is deleted"):
             with engine.begin() as connection:
                 connection.execute(text("DELETE FROM agent_task WHERE id = :id"), {"id": task_id})
 
-            with then("no note, file or chunk is left behind"):
+            with then("no note or file is left behind, and the Artifact is still there"):
                 with Session(engine) as session:
                     left = (
                         session.scalar(select(func.count()).select_from(AgentTaskNote)),
                         session.scalar(
                             select(func.count()).select_from(AgentTaskFile).where(col(AgentTaskFile.task_id) == task_id)
                         ),
-                        session.scalar(select(func.count()).select_from(AgentTaskFileChunk)),
+                        session.get(Artifact, artifact_id) is not None,
                     )
-                assert_that(left, equal_to((0, 0, 0)))
+                assert_that(left, equal_to((0, 0, True)))
 
 
 def test_a_file_cannot_be_charged_to_another_organization():
@@ -224,13 +237,15 @@ def test_a_file_cannot_be_charged_to_another_organization():
         with Session(context.postgres_delegate.engine) as session:
             task = AgentTask(organization_id=context.organization.id, agent_id=context.own_agent.id, title="Report")
             session.add(task)
+            artifact = _artifact(session, context.own_agent)
             session.commit()
-            task_id = task.id
+            task_id, artifact_id = task.id, artifact.id
 
         with when("a File on that Task names the other Organization"):
             stored = AgentTaskFile(
                 organization_id=context.other_org_agent.organization_id,
                 task_id=task_id,
+                artifact_id=artifact_id,
                 filename="report.csv",
                 content_type="text/csv",
                 size_bytes=3,

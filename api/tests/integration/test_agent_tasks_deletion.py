@@ -4,7 +4,9 @@ Agent deletion is a soft delete, so foreign-key cascades never fire; the deletio
 transaction has to remove them itself.
 """
 
-from uuid import uuid4
+import hashlib
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4, uuid7
 
 import pytest
 from hamcrest import assert_that, equal_to
@@ -15,13 +17,13 @@ from api.domains.agent_tasks.models import (
     AgentTask,
     AgentTaskCreate,
     AgentTaskFile,
-    AgentTaskFileChunk,
     AgentTaskFileCreate,
     AgentTaskNote,
     AgentTaskNoteCreate,
 )
 from api.domains.agent_tasks.service import AgentTaskService
 from api.domains.agents.repository import AgentRepository
+from api.domains.artifacts.models import Artifact
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -32,23 +34,31 @@ def _record_work(context, agent) -> None:
     service: AgentTaskService = context.injector.get(AgentTaskService)
     task = service.create_task(agent.organization_id, agent.id, AgentTaskCreate(title=f"{agent.name} work"))
     service.add_note(agent.organization_id, agent.id, task.id, AgentTaskNoteCreate(body="Started"))
-    service.attach_file(
-        agent.organization_id,
-        agent.id,
-        task.id,
-        AgentTaskFileCreate(filename="out.csv", content_type="text/csv"),
-        [b"a,b\n"],
+    artifact = Artifact(
+        organization_id=agent.organization_id,
+        agent_id=agent.id,
+        filename="out.csv",
+        content_type="text/csv",
+        size=4,
+        checksum=hashlib.sha256(b"a,b\n").hexdigest(),
+        state="READY",
+        bucket=f"bucket-{agent.id}",
+        object_key=f"objects/{uuid7()}",
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        source="chat",
     )
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine, expire_on_commit=False) as session:
+        session.add(artifact)
+        session.commit()
+    service.attach_file(agent.organization_id, agent.id, task.id, AgentTaskFileCreate(artifact_id=artifact.id))
 
 
 def _counts(context, agent) -> tuple[int, ...]:
     task_ids = select(AgentTask.id).where(col(AgentTask.agent_id) == agent.id)
-    file_ids = select(AgentTaskFile.id).where(col(AgentTaskFile.task_id).in_(task_ids))
     queries = (
         select(func.count()).select_from(AgentTask).where(col(AgentTask.agent_id) == agent.id),
         select(func.count()).select_from(AgentTaskNote).where(col(AgentTaskNote.task_id).in_(task_ids)),
         select(func.count()).select_from(AgentTaskFile).where(col(AgentTaskFile.task_id).in_(task_ids)),
-        select(func.count()).select_from(AgentTaskFileChunk).where(col(AgentTaskFileChunk.file_id).in_(file_ids)),
     )
     with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
         return tuple(session.scalar(query) or 0 for query in queries)
@@ -65,7 +75,7 @@ def test_deleting_an_agent_removes_its_tasks_notes_and_files():
             )
 
             with then("none of its Task records remain"):
-                assert_that((response.status_code, _counts(context, context.billing)), equal_to((204, (0, 0, 0, 0))))
+                assert_that((response.status_code, _counts(context, context.billing)), equal_to((204, (0, 0, 0))))
 
 
 def test_deleting_an_agent_keeps_other_agents_tasks():
@@ -80,7 +90,7 @@ def test_deleting_an_agent_keeps_other_agents_tasks():
             )
 
             with then("the other Agent's Task records are untouched"):
-                assert_that(_counts(context, context.triage), equal_to((1, 1, 1, 1)))
+                assert_that(_counts(context, context.triage), equal_to((1, 1, 1)))
 
 
 def test_a_failed_deletion_keeps_the_agents_tasks(monkeypatch):
@@ -99,4 +109,4 @@ def test_a_failed_deletion_keeps_the_agents_tasks(monkeypatch):
                 )
 
             with then("the Agent's Task records are still there"):
-                assert_that(_counts(context, context.billing), equal_to((1, 1, 1, 1)))
+                assert_that(_counts(context, context.billing), equal_to((1, 1, 1)))

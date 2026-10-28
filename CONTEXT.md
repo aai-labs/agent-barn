@@ -181,8 +181,8 @@ An append-only entry on a Task's timeline. Notes are never edited or removed on 
 _Avoid_: comment, log line
 
 **Task File**:
-A file an Agent attaches to a Task. Task Files are limited in size per file and in total per Organization.
-_Avoid_: attachment, artifact, upload
+An Agent Artifact the Agent attaches to a Task. The Task keeps the Artifact for as long as the Task exists.
+_Avoid_: attachment, upload
 
 **Platform**:
 The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
