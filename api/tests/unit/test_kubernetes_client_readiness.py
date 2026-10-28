@@ -225,6 +225,29 @@ def test_a_finished_or_running_install_is_not_a_failure():
         assert _client_listing(pod).get_init_container_failure(_DEPLOYMENT, _NAMESPACE, "install-addons") is None
 
 
+def test_an_earlier_failure_is_ignored_once_a_retry_is_running_or_has_succeeded():
+    earlier = _terminated(1, '{"addon_id": "01a1795e-0cc7-72ff-897d-4f2780e7b5c1", "reason": "failed"}')
+    retried = [
+        _pod(
+            "agent-new",
+            "Running",
+            created=_NEWER,
+            init_container_statuses=[_init_status("install-addons", state=_terminated(0), last_state=earlier)],
+        ),
+        _pod(
+            "agent-new",
+            "Pending",
+            created=_NEWER,
+            init_container_statuses=[
+                _init_status("install-addons", state=SimpleNamespace(waiting=None, terminated=None), last_state=earlier)
+            ],
+        ),
+    ]
+
+    for pod in retried:
+        assert _client_listing(pod).get_init_container_failure(_DEPLOYMENT, _NAMESPACE, "install-addons") is None
+
+
 def test_an_install_killed_without_a_report_is_still_a_failure():
     pod = _pod(
         "agent-new",

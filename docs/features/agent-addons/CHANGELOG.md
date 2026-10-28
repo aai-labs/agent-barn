@@ -27,6 +27,7 @@ An Organization Owner or Admin requests extra libraries or tools for one Agent, 
   - Command add-ons: run with `HOME=/opt/addons/home`, so a `curl | bash` installer works as pasted; the executables it leaves in HOME's usual bin directories are linked into `/opt/addons/bin`, never shadowing a command the runtime image has. A command that changes nothing in the volume fails. The install hash covers the install script, so a new script reinstalls every volume once.
   - Provisioning error: `ADDON_INSTALL_FAILED`. Pod readiness counts a crash-looping init container as crashed.
   - Decision: [Platform Administrators approve Agent Add-ons](../../adr/2026-10-26-platform-administrators-approve-agent-add-ons.md), superseding the platform-oversight ADR in part.
+  - Review fixes: add-ons are appended to `PATH` after the image's own, so none can replace a runtime command; an install retry that is running or has succeeded overrides an earlier failure; the wipe opens read-only directories first and reports a volume it cannot clear; the docs and ADR say that only what a request names is pinned, not its dependencies.
   - UI: Agent configuration → Add-ons and its request dialog; Platform → Add-ons, with its own rail entry.
   - Docs: [`../agent-addons.md`](../agent-addons.md), `CONTEXT.md`, the RBAC brief, domain events, agents, Agent Sizes, runtime and deployment, resource usage, platform administration, testing, the index.
 - Follow-up: none.

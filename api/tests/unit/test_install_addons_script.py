@@ -8,12 +8,14 @@ termination message, leaves no marker, and exits non-zero.
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from hamcrest import assert_that, contains_string, equal_to, is_
 
 from api.domains.agents.builders.addons import INSTALL_ADDONS_PY
@@ -144,6 +146,42 @@ def test_a_new_hash_wipes_the_volume_and_installs_everything_again(tmp_path) -> 
             assert_that((context.addons / "bin" / "drawtool").exists(), is_(False))
             assert_that((context.addons / "bin" / "hello").exists(), is_(True))
             assert_that(_runs(context), equal_to(2))
+
+
+def test_a_new_hash_wipes_what_an_installer_left_read_only(tmp_path) -> None:
+    with given([install_root_is_ready(tmp_path)]) as context:
+        # Go's module cache is written read-only; nothing in a read-only directory can be deleted.
+        read_only_cache = _command_addon(
+            context,
+            f'echo run >> {context.counter} && mkdir -p "$HOME/go/pkg/mod/example" '
+            '&& echo module > "$HOME/go/pkg/mod/example/go.mod" && chmod -R a-w "$HOME/go"',
+        )
+        run_install(context, [read_only_cache])
+
+        with when("the hash moves"):
+            result = run_install(context, [_command_addon(context)], plan_hash="hash-2")
+
+        with then("the read-only tree is removed and the new plan installs"):
+            assert_that(result.returncode, equal_to(0), result.output)
+            assert_that((context.addons / "home" / "go").exists(), is_(False))
+            assert_that((context.addons / "bin" / "hello").exists(), is_(True))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything, so the volume cannot be made uncleared")
+def test_a_volume_that_cannot_be_cleared_fails_the_install_naming_no_add_on(tmp_path) -> None:
+    with given([install_root_is_ready(tmp_path)]) as context:
+        run_install(context, [_command_addon(context)])
+        context.addons.chmod(0o555)
+        try:
+            with when("the hash moves but the volume's own entries cannot be removed"):
+                result = run_install(context, [_command_addon(context)], plan_hash="hash-2")
+
+            with then("the install fails with a report naming no add-on, so the API keeps its log"):
+                assert_that(result.returncode, equal_to(1))
+                assert_that(result.termination, equal_to({"addon_id": "", "reason": "failed"}))
+                assert_that(result.output, contains_string("could not clear the add-ons volume"))
+        finally:
+            context.addons.chmod(0o755)
 
 
 def test_a_checksum_mismatch_fails_the_install_naming_the_add_on(tmp_path) -> None:

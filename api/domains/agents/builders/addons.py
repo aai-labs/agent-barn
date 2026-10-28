@@ -168,7 +168,8 @@ def addons_agent_mount() -> client.V1VolumeMount:
 
 def addons_agent_env() -> list[client.V1EnvVar]:
     """Where the agent finds its add-ons. PATH cannot be set here without replacing the
-    image's own, so start.sh prepends `AGENTBARN_ADDONS_PATH` to it."""
+    image's own, so start.sh appends `AGENTBARN_ADDONS_PATH` to it, after the image's
+    directories, so an add-on never replaces a runtime command."""
     return [
         client.V1EnvVar(name="AGENTBARN_ADDONS_PATH", value=ADDONS_PATH),
         client.V1EnvVar(name="PYTHONPATH", value=ADDONS_PYTHONPATH),

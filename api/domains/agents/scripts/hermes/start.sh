@@ -40,10 +40,11 @@ for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
 done
 
-# Approved Agent Add-ons, mounted read-only. Behind the gog wrapper below, so an
-# add-on cannot shadow a command Agent Barn manages.
+# Approved Agent Add-ons, mounted read-only. After the image's own PATH and the
+# gog wrapper below, so an add-on can add commands but never replace the runtime's
+# (hermes, python3, node) or one Agent Barn manages.
 if [ -n "${AGENTBARN_ADDONS_PATH:-}" ]; then
-    export PATH="$AGENTBARN_ADDONS_PATH:$PATH"
+    export PATH="$PATH:$AGENTBARN_ADDONS_PATH"
 fi
 
 # The gog wrapper installs here when Google Workspace is brokered through the

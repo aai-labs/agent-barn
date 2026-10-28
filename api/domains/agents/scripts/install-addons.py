@@ -11,13 +11,15 @@ an install that fails or is cut short is redone from the start next time.
 
 If an add-on fails, the script writes `{"addon_id": ..., "reason": ...}` to the container's
 termination message, which is how the API learns which one, and exits non-zero, which fails
-the start. Its output is the install log the Organization sees.
+the start. A volume it cannot clear fails the same way, naming no add-on. Its output is the
+install log the Organization sees.
 """
 
 import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -78,8 +80,8 @@ def link_home_executables() -> None:
     """Link the executables command add-ons installed under HOME into bin, so they are on PATH.
 
     The links are relative, so they resolve wherever the volume is mounted. Nothing in bin is
-    replaced, and a name the runtime image already has (node, python3, git) is left alone:
-    bin comes ahead of the image's PATH, and the runtime runs those.
+    replaced, and a name the runtime image already has (node, python3, git) is not linked:
+    bin comes after the image's PATH, so the image's own would always win.
     """
     image_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     bin_dir = ADDONS_DIR / "bin"
@@ -102,12 +104,27 @@ def link_home_executables() -> None:
                 log(f"linked {executable.name} -> {executable}")
 
 
+def make_removable(directory: Path) -> None:
+    """Give the owner full access to a tree's directories, so everything in them can be removed.
+
+    Some installers leave directories read-only (Go's module cache does), and nothing in a
+    read-only directory can be deleted. Each directory is opened up before it is listed.
+    """
+    directory.chmod(stat.S_IRWXU)
+    for root, dirs, _ in os.walk(directory):
+        for name in dirs:
+            path = os.path.join(root, name)
+            if not os.path.islink(path):
+                os.chmod(path, stat.S_IRWXU)
+
+
 def wipe() -> None:
     for entry in ADDONS_DIR.iterdir():
         # A volume formatted as ext4 keeps lost+found, which belongs to root.
         if entry.name == "lost+found":
             continue
         if entry.is_dir() and not entry.is_symlink():
+            make_removable(entry)
             shutil.rmtree(entry)
         else:
             entry.unlink()
@@ -290,9 +307,15 @@ def main() -> int:
 
     deadline = time.monotonic() + max(int(plan.get("timeout_seconds", 600)) - DEADLINE_MARGIN_SECONDS, 30)
     log("installing add-ons from scratch")
-    wipe()
-    for directory in ("python", "node", "src", "bin", "home"):
-        (ADDONS_DIR / directory).mkdir(parents=True, exist_ok=True)
+    try:
+        wipe()
+        for directory in ("python", "node", "src", "bin", "home"):
+            (ADDONS_DIR / directory).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # No add-on to name: the API reports an unnamed failure and keeps this log.
+        log(f"FAILED: could not clear the add-ons volume: {exc}")
+        report_failure("", "failed")
+        return 1
 
     with tempfile.TemporaryDirectory(prefix="install-addons-") as scratch:
         installer = Installer(deadline, Path(scratch))

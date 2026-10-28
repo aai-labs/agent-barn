@@ -23,6 +23,13 @@ from api.core.config import Config
 _SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 
+def _failure_message(terminated: client.V1ContainerStateTerminated | None) -> str | None:
+    """A terminated run's message if it failed, "" for a failure without one, else None."""
+    if terminated is None or terminated.exit_code in (None, 0):
+        return None
+    return terminated.message or ""
+
+
 @inject
 @dataclass
 @singleton
@@ -398,8 +405,9 @@ class KubernetesClient:
         """Whether the newest pod's named init container has failed, and its termination message.
 
         None when it has not failed (or there is no pod). A failure answers its termination
-        message, or "" when it left none. The message is the container's own report, read from
-        the current run or, once the kubelet is backing off, the last one.
+        message, or "" when it left none. The current attempt decides: a failure is the current
+        run's, or, while the kubelet is backing off before the next one, the last run's. An
+        earlier failure is ignored once a retry is running or has succeeded.
         """
         pod = self._newest_pod(f"app={deployment_name}", namespace)
         if pod is None:
@@ -407,10 +415,11 @@ class KubernetesClient:
         for status in pod.status.init_container_statuses or []:
             if status.name != container:
                 continue
-            for state in (status.state, status.last_state):
-                terminated = state.terminated if state else None
-                if terminated is not None and terminated.exit_code not in (None, 0):
-                    return terminated.message or ""
+            current = status.state
+            if current is not None and current.terminated is not None:
+                return _failure_message(current.terminated)
+            if current is not None and current.waiting is not None and status.last_state is not None:
+                return _failure_message(status.last_state.terminated)
         return None
 
     def read_init_container_logs(

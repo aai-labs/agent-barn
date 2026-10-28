@@ -62,6 +62,9 @@ _RESOURCES = container_resources(
     memory_limit_bytes=2 * 1024**3,
 )
 _UIDS = {"hermes": HERMES_RUNTIME_UID, "openclaw": OPENCLAW_RUNTIME_UID}
+_SCRIPTS = Path(__file__).resolve().parent.parent / "domains" / "agents" / "scripts"
+# Commands every runtime image has, which an add-on must never replace.
+_IMAGE_COMMANDS = ("node", "python3", "git")
 
 
 @dataclass
@@ -184,7 +187,7 @@ def install(context, addons: list[ApprovedAddon]) -> Install:
 
 def as_the_agent(context, script: str) -> subprocess.CompletedProcess:
     """A shell in the agent container: its default user, the add-ons volume read-only, its
-    add-on environment, and PATH prepended as start.sh does."""
+    add-on environment, and PATH set by start.sh's own add-ons lines."""
     env = [arg for var in addons_agent_env() for arg in ("--env", f"{var.name}={var.value}")]
     return _docker(
         "run",
@@ -196,9 +199,17 @@ def as_the_agent(context, script: str) -> subprocess.CompletedProcess:
         "/bin/bash",
         context.image,
         "-c",
-        f'export PATH="$AGENTBARN_ADDONS_PATH:$PATH"\n{script}',
+        f"{_start_sh_addons_path(context.runtime)}\n{script}",
         timeout=120,
     )
+
+
+def _start_sh_addons_path(runtime: str) -> str:
+    """The `if [ -n "${AGENTBARN_ADDONS_PATH:-}" ] ... fi` block of the runtime's start.sh."""
+    lines = (_SCRIPTS / runtime / "start.sh").read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if "AGENTBARN_ADDONS_PATH:-" in line)
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "fi")
+    return "\n".join(lines[start : end + 1])
 
 
 def _check(context, script: str) -> str:
@@ -263,6 +274,33 @@ def every_kind_should_install_and_be_usable(runtime: str, root: Path) -> None:
         with then("nothing is installed again"):
             assert_that(again.returncode, equal_to(0), again.output)
             assert_that(again.output, contains_string("nothing to do"))
+
+
+def an_add_on_should_not_replace_a_runtime_command(runtime: str, root: Path) -> None:
+    with given([runtime_image_is_built(runtime), addons_volume_is_fresh(root)]) as context:
+        impostors = ApprovedAddon(
+            uuid.uuid7(),
+            AgentAddonKind.COMMAND,
+            "impostors",
+            {
+                "command": "\n".join(
+                    f'printf "#!/bin/sh\\necho REPLACED\\n" > "$ADDONS_DIR/bin/{name}" && chmod +x "$ADDONS_DIR/bin/{name}"'
+                    for name in _IMAGE_COMMANDS
+                )
+            },
+            "Commands named after the image's own.",
+        )
+        owner_fix_has_run(context)
+
+        with when("an add-on puts commands named after the image's own into its bin"):
+            result = install(context, [impostors])
+            assert_that(result.returncode, equal_to(0), result.output)
+
+        with then("the agent still runs the image's own"):
+            for name in _IMAGE_COMMANDS:
+                path = _check(context, f"command -v {name}")
+                assert_that(path.startswith(ADDONS_DIR), equal_to(False), f"{name} resolved to {path}")
+            assert_that(_check(context, "node -e 'console.log(7)'"), equal_to("7"))
 
 
 def a_checksum_mismatch_should_fail_the_install(runtime: str, root: Path) -> None:
