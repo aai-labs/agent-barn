@@ -5,7 +5,8 @@ import { useState } from "react";
 import { AppErrorState } from "@/components/app-error-state";
 import { formatDate } from "@/shared/date";
 
-import type { AgentTask } from "../schemas";
+import { useTasks, type TaskScope } from "../hooks/use-agent-tasks";
+import type { AgentTask, AgentTaskStatus } from "../schemas";
 import { TaskDetailDialog } from "./task-detail-dialog";
 import { TaskStatusBadge } from "./task-status-badge";
 
@@ -84,4 +85,20 @@ export function TaskList({
       <TaskDetailDialog task={openTask} onClose={() => setOpenTask(null)} />
     </section>
   );
+}
+
+/** The list for a scope, loading its Tasks only while it is shown. */
+export function ScopedTaskList({
+  scope,
+  status,
+  emptyMessage,
+  agentName,
+}: {
+  scope: TaskScope;
+  status: AgentTaskStatus | null;
+  emptyMessage: string;
+  agentName?: (agentId: string) => string | undefined;
+}) {
+  const tasks = useTasks(scope, status);
+  return <TaskList {...tasks} emptyMessage={emptyMessage} agentName={agentName} />;
 }

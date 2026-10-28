@@ -45,6 +45,7 @@ async function open(page: Page, { tasks }: { tasks?: Record<string, unknown>[] }
 
 test("the Organization's Tasks are listed with the Agent that did them", async ({ page }) => {
   const { tasksPage } = await open(page);
+  await tasksPage.showList();
 
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await expect(tasksPage.rows()).toHaveCount(2);
@@ -55,6 +56,7 @@ test("the Organization's Tasks are listed with the Agent that did them", async (
 
 test("the Agent and status filters narrow the list", async ({ page }) => {
   const { mock, tasksPage } = await open(page);
+  await tasksPage.showList();
   await expect(tasksPage.rows()).toHaveCount(2);
 
   await tasksPage.filterBy("Agent", "Rex");
@@ -74,7 +76,7 @@ test("the Agent and status filters narrow the list", async ({ page }) => {
 
 test("only Agents whose tasks the viewer can see are offered as a filter", async ({ page }) => {
   const { tasksPage } = await open(page);
-  await expect(tasksPage.rows()).toHaveCount(2);
+  await expect(tasksPage.cards()).toHaveCount(2);
 
   await page.getByRole("combobox", { name: "Agent" }).click();
 
@@ -85,6 +87,7 @@ test("only Agents whose tasks the viewer can see are offered as a filter", async
 
 test("a Task opens with its notes and files", async ({ page }) => {
   const { tasksPage } = await open(page);
+  await tasksPage.showList();
 
   await tasksPage.open("Reconcile March invoices");
 
@@ -93,7 +96,8 @@ test("a Task opens with its notes and files", async ({ page }) => {
 });
 
 test("an Organization without Tasks says so", async ({ page }) => {
-  await open(page, { tasks: [] });
+  const { tasksPage } = await open(page, { tasks: [] });
+  await tasksPage.showList();
 
   await expect(page.getByText("Your Agents haven't recorded any tasks yet.")).toBeVisible();
 });
@@ -110,4 +114,19 @@ test("the page lists across Agents until one is chosen", async ({ page }) => {
   await expect.poll(() => mock.listRequests.length).toBeGreaterThan(0);
   expect(mock.listRequests[0].searchParams.get("agent_id")).toBeNull();
   expect(mock.listRequests[0].pathname).not.toContain(`/agents/${MOCK_AGENT_ID}/`);
+});
+
+test("the board shows each Agent's Tasks by status and follows the Agent filter", async ({ page }) => {
+  const { tasksPage } = await open(page);
+
+  await expect(tasksPage.column("Done")).toContainText("Reconcile March invoices");
+  await expect(tasksPage.column("Done")).toContainText("Maya");
+  await expect(tasksPage.column("In progress")).toContainText("Review pull requests");
+  await expect(tasksPage.column("In progress")).toContainText("Rex");
+
+  await tasksPage.filterBy("Agent", "Rex");
+
+  await expect(tasksPage.cards()).toHaveCount(1);
+  await expect(tasksPage.column("Done")).toContainText("No tasks.");
+  await expect(page).toHaveURL(new RegExp(`agent=${OTHER_AGENT_ID}`));
 });

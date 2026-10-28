@@ -8,13 +8,34 @@ import { api } from "@/shared/api";
 import { PaginatedAgentTasksSchema, type AgentTaskStatus, type PaginatedAgentTasks } from "../schemas";
 import { taskListParams, tasksKey } from "../utils";
 
+/** Whose Tasks a list or board shows: one Agent's, or the Organization's, optionally narrowed to one Agent. */
+export type TaskScope = { kind: "agent"; agentId: string } | { kind: "organization"; agentId: string | null };
+
 function nextPage(lastPage: PaginatedAgentTasks) {
   return lastPage.page * lastPage.pageSize < lastPage.total ? lastPage.page + 1 : undefined;
 }
 
-function pagedTasks(query: ReturnType<typeof useInfiniteQuery<PaginatedAgentTasks>>) {
+/** Tasks in a scope, newest first, optionally of one status. */
+export function useTasks(scope: TaskScope, status: AgentTaskStatus | null) {
+  const orgApiBase = useOrganizationApiBase();
+  const query = useInfiniteQuery({
+    queryKey:
+      scope.kind === "agent"
+        ? tasksKey.agentTasks(scope.agentId, orgApiBase, status)
+        : tasksKey.organizationTasks(orgApiBase, scope.agentId, status),
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const url =
+        scope.kind === "agent"
+          ? `${orgApiBase}/agents/${scope.agentId}/tasks?${taskListParams(pageParam, { status })}`
+          : `${orgApiBase}/tasks?${taskListParams(pageParam, { agentId: scope.agentId, status })}`;
+      return (await api.get<PaginatedAgentTasks>(url, { schema: PaginatedAgentTasksSchema })).data;
+    },
+    getNextPageParam: nextPage,
+  });
   return {
     tasks: query.data?.pages.flatMap((page) => page.items) ?? [],
+    total: query.data?.pages[0]?.total ?? 0,
     isLoading: query.isPending && query.fetchStatus !== "idle",
     error: query.error,
     refetch: query.refetch,
@@ -22,40 +43,4 @@ function pagedTasks(query: ReturnType<typeof useInfiniteQuery<PaginatedAgentTask
     loadMore: query.fetchNextPage,
     isLoadingMore: query.isFetchingNextPage,
   };
-}
-
-/** One Agent's Tasks, newest first, optionally of one status. */
-export function useAgentTasks(agentId: string, status: AgentTaskStatus | null) {
-  const orgApiBase = useOrganizationApiBase();
-  const query = useInfiniteQuery({
-    queryKey: tasksKey.agentTasks(agentId, orgApiBase, status),
-    initialPageParam: 1,
-    queryFn: async ({ pageParam }) =>
-      (
-        await api.get<PaginatedAgentTasks>(
-          `${orgApiBase}/agents/${agentId}/tasks?${taskListParams(pageParam as number, { status })}`,
-          { schema: PaginatedAgentTasksSchema },
-        )
-      ).data,
-    getNextPageParam: nextPage,
-  });
-  return pagedTasks(query);
-}
-
-/** Tasks across every Agent the viewer can read Tasks on, optionally of one Agent or status. */
-export function useOrganizationTasks(agentId: string | null, status: AgentTaskStatus | null) {
-  const orgApiBase = useOrganizationApiBase();
-  const query = useInfiniteQuery({
-    queryKey: tasksKey.organizationTasks(orgApiBase, agentId, status),
-    initialPageParam: 1,
-    queryFn: async ({ pageParam }) =>
-      (
-        await api.get<PaginatedAgentTasks>(
-          `${orgApiBase}/tasks?${taskListParams(pageParam as number, { agentId, status })}`,
-          { schema: PaginatedAgentTasksSchema },
-        )
-      ).data,
-    getNextPageParam: nextPage,
-  });
-  return pagedTasks(query);
 }

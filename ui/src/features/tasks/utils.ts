@@ -5,6 +5,9 @@ import type { AgentTaskStatus } from "./schemas";
 
 export const TASKS_PAGE_SIZE = 20;
 
+export type TaskView = "board" | "list";
+export const TASK_VIEWS: TaskView[] = ["board", "list"];
+
 export const TASK_STATUSES: AgentTaskStatus[] = ["open", "in_progress", "done", "failed"];
 
 export const TASK_STATUS_LABEL: Record<AgentTaskStatus, string> = {

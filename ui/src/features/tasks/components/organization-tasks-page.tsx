@@ -5,11 +5,12 @@ import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { canAgent } from "@/features/agents/utils";
 
-import { useOrganizationTasks } from "../hooks/use-agent-tasks";
 import type { AgentTaskStatus } from "../schemas";
-import { TASK_STATUSES, TASK_STATUS_OPTIONS } from "../utils";
+import { TASK_STATUSES, TASK_STATUS_OPTIONS, TASK_VIEWS, type TaskView } from "../utils";
+import { TaskBoard } from "./task-board";
 import { TaskFilterSelect } from "./task-filter-select";
-import { TaskList } from "./task-list";
+import { ScopedTaskList } from "./task-list";
+import { TaskViewToggle } from "./task-view-toggle";
 
 /** Tasks across every Agent whose Tasks the viewer can see. */
 export function OrganizationTasksPage() {
@@ -17,14 +18,16 @@ export function OrganizationTasksPage() {
     {
       agent: parseAsString,
       status: parseAsStringEnum<AgentTaskStatus>(TASK_STATUSES),
+      view: parseAsStringEnum<TaskView>(TASK_VIEWS).withDefault("board"),
     },
     { history: "replace", scroll: false },
   );
   const { agents } = useAgents();
   const taskAgents = agents.filter((agent) => canAgent(agent, "task.read"));
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
-  const tasks = useOrganizationTasks(filters.agent, filters.status);
+  const scope = { kind: "organization", agentId: filters.agent } as const;
   const isFiltered = filters.agent !== null || filters.status !== null;
+  const agentName = (agentId: string) => agentNames.get(agentId);
 
   return (
     <div>
@@ -37,7 +40,7 @@ export function OrganizationTasksPage() {
             What your Agents have worked on, and the files they produced.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-end gap-3">
           <TaskFilterSelect
             label="Agent"
             allLabel="All agents"
@@ -45,20 +48,29 @@ export function OrganizationTasksPage() {
             options={taskAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
             onChange={(agent) => void setFilters({ agent })}
           />
-          <TaskFilterSelect
-            label="Status"
-            allLabel="All statuses"
-            value={filters.status}
-            options={TASK_STATUS_OPTIONS}
-            onChange={(status) => void setFilters({ status: status as AgentTaskStatus | null })}
-          />
+          {/* The board's columns already split Tasks by status. */}
+          {filters.view === "list" && (
+            <TaskFilterSelect
+              label="Status"
+              allLabel="All statuses"
+              value={filters.status}
+              options={TASK_STATUS_OPTIONS}
+              onChange={(status) => void setFilters({ status: status as AgentTaskStatus | null })}
+            />
+          )}
+          <TaskViewToggle value={filters.view} onChange={(view) => void setFilters({ view })} />
         </div>
       </div>
-      <TaskList
-        {...tasks}
-        agentName={(agentId) => agentNames.get(agentId)}
-        emptyMessage={isFiltered ? "No tasks match these filters." : "Your Agents haven't recorded any tasks yet."}
-      />
+      {filters.view === "board" ? (
+        <TaskBoard scope={scope} agentName={agentName} />
+      ) : (
+        <ScopedTaskList
+          scope={scope}
+          status={filters.status}
+          agentName={agentName}
+          emptyMessage={isFiltered ? "No tasks match these filters." : "Your Agents haven't recorded any tasks yet."}
+        />
+      )}
     </div>
   );
 }

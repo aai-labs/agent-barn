@@ -29,6 +29,27 @@ export class TasksPage {
     return this.page.getByTestId("task-row");
   }
 
+  /** A board column, named by its status. */
+  column(status: string): Locator {
+    return this.page.getByRole("region", { name: `${status} tasks` });
+  }
+
+  cards(): Locator {
+    return this.page.getByTestId("task-card");
+  }
+
+  viewButton(name: "Board" | "List"): Locator {
+    return this.page.getByRole("group", { name: "View" }).getByRole("button", { name });
+  }
+
+  async showList() {
+    await this.viewButton("List").click();
+  }
+
+  async openCard(title: string) {
+    await this.cards().filter({ hasText: title }).click();
+  }
+
   detail(): Locator {
     return this.page.getByRole("dialog");
   }
