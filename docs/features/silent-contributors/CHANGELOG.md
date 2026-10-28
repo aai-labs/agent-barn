@@ -8,12 +8,21 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. No product behaviour has changed yet.
-- In transition: nothing.
-- Next: PR 1, which removes Discord's "Require @mention" switch on both runtimes.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`).
+- In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
+- Next: PR 3, which adds the silent-listening switch and Slack listen-in channels. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-10-28 — MDP-118 PR 1 — retire Discord's Require @mention
+
+- Delivered: Discord server messages always require a mention on Hermes and OpenClaw, so every platform shares one rule before listen-in channels arrive. Connections that had the setting off become mention-only at the Agent's next start.
+- Changed:
+  - Schema: migration `16ac819db080` strips `require_mention` from Discord Connection settings and stamps schema version 3. Its downgrade restores the former default, `true`.
+  - API: `DiscordSettings` drops the field and discards it on read. The Hermes builder no longer takes `discord_require_mention`.
+  - Docs: [runtime and deployment](../../architecture/runtime-and-deployment.md#mention-gating), [communications](../communications/CHANGELOG.md).
+- Follow-up: remove the legacy-key discard once every replica runs schema version 3.
 
 ### 2026-10-28 — MDP-118 PR 0 — spike
 

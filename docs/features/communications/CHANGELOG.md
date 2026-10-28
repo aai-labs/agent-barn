@@ -15,6 +15,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-28 — MDP-118 — Retire Discord's Require @mention setting — PR pending
+
+- Removed: Discord Connections no longer offer **Require @mention**. Server messages always require a mention of the bot on both runtimes, in parent channels and Hermes threads, as Slack and Telegram already do. Turning the setting off had made Agents answer every message in every allowed channel. Listen-in channels ([silent contributors](../silent-contributors/CHANGELOG.md)) replace it.
+- Changed: Discord's Connection schema advances to version 3. Migration `16ac819db080` removes `require_mention` from persisted Discord Connection settings. Validation temporarily discards that one legacy key, so Connections written by an older replica stay usable during a rolling deployment. Other unknown settings remain rejected. Connections that had it off become mention-only at the Agent's next start.
+
 ### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
 
 - Fixed: a Teams app package's manifest `id` now derives from the organization's first Connection for the same Microsoft App ID, including retired ones, instead of from the current Connection. Re-creating a Connection for a bot previously produced a second Teams app for that bot. Once both reached the org catalogue, Teams reported "Invalid Bot" on the new one, even though the bot was healthy.

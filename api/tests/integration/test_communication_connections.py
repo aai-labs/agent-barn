@@ -206,6 +206,9 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             slack = next(item for item in catalogue if item["key"] == "slack")
             assert_that(slack["schema_version"], equal_to(2))
             assert_that(slack["settings_schema"]["properties"], not_(has_key("verbose_mode")))
+            discord = next(item for item in catalogue if item["key"] == "discord")
+            assert_that(discord["schema_version"], equal_to(3))
+            assert_that(discord["settings_schema"]["properties"], not_(has_key("require_mention")))
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
                 hints["slack"],
@@ -832,7 +835,6 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                         "allowed_user_ids": [],
                         "allowed_role_ids": [],
                         "allow_all_users": False,
-                        "require_mention": True,
                         "home_channel_id": None,
                     },
                     external_identity="validation-skipped",

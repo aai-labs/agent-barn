@@ -290,7 +290,7 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
     assert gated["groupPolicy"] == "allowlist"
     assert gated["guilds"] == {
         "*": {
-            "requireMention": False,
+            "requireMention": True,
             "users": ["u1"],
             "roles": ["r1"],
             "channels": {"c1": {"enabled": True, "autoThread": True}},

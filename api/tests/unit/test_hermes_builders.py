@@ -101,15 +101,10 @@ def test_native_slack_env_maps_connection_policy() -> None:
 
 
 def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
-    config = build_hermes_gateway_config(
-        "litellm/gpt-5",
-        "http://litellm:4000",
-        native_discord=True,
-        discord_require_mention=False,
-    )
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_discord=True)
 
     assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
-    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
+    assert config["discord"] == {"require_mention": True, "thread_require_mention": True}
     assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
 
     verbose = build_hermes_gateway_config(

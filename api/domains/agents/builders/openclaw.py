@@ -220,7 +220,7 @@ def native_discord_channel(settings: dict) -> dict:
     roles = _setting_ids(settings, "allowed_role_ids")
     channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
-    guild: dict = {"requireMention": settings.get("require_mention", True)}
+    guild: dict = {"requireMention": True}
     if not allow_all:
         if users:
             guild["users"] = users

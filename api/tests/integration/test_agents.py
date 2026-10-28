@@ -2666,7 +2666,7 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
-            assert_that(cfg["discord"], equal_to({"require_mention": False, "thread_require_mention": False}))
+            assert_that(cfg["discord"], equal_to({"require_mention": True, "thread_require_mention": True}))
             assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
 
             secret = k8s.create_secret.call_args.args[1].string_data
