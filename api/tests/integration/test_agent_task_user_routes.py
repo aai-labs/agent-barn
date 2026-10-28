@@ -374,3 +374,36 @@ def test_listed_tasks_say_how_many_files_and_notes_they_have_and_their_latest_no
                     has_entries(file_count=1, note_count=2, latest_note="Two invoices are still unpaid"),
                 )
                 assert_that(by_title["Send reminders"], has_entries(file_count=0, note_count=0, latest_note=None))
+
+
+def _the_first_task_changes_last():
+    def step(context):
+        _service(context).update_status(
+            context.organization.id, context.agent.id, context.first.id, AgentTaskStatus.DONE
+        )
+
+    return step
+
+
+def test_lists_put_the_most_recently_changed_task_first():
+    with given(
+        _api_setup(
+            there_is_an_agent(),
+            _a_task("Reconcile invoices"),
+            lambda context: setattr(context, "first", context.task),
+            _a_bare_task("Send reminders"),
+            _the_first_task_changes_last(),
+        )
+    ) as context:
+        with when("the Owner lists the Agent's Tasks and the Organization's Tasks"):
+            listings = [
+                context.client.get(_agent_tasks(context), headers=_auth(context)),
+                context.client.get(_ORG_TASKS, headers=_auth(context)),
+            ]
+
+        with then("the Task that changed last comes first, though it was created first"):
+            for listing in listings:
+                assert_that(
+                    [task["title"] for task in listing.json()["items"]],
+                    contains_exactly("Reconcile invoices", "Send reminders"),
+                )

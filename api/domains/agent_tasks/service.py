@@ -134,7 +134,7 @@ class AgentTaskService:
         scope = self._agent_read_scope(agent_id, context)
         return self._summarized(
             self.repository.find_in_organization(
-                task_filter.model_copy(update={"agent_id": agent_id}), pagination, scope
+                task_filter.model_copy(update={"agent_id": agent_id}), pagination, scope, recently_changed_first=True
             )
         )
 
@@ -145,9 +145,12 @@ class AgentTaskService:
         pagination: Pagination,
     ) -> PaginatedItems[AgentTaskSummary]:
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.TASK_READ)
-        return self._summarized(self.repository.find_in_organization(task_filter, pagination, scope))
+        return self._summarized(
+            self.repository.find_in_organization(task_filter, pagination, scope, recently_changed_first=True)
+        )
 
     def _summarized(self, page: PaginatedItems[AgentTaskRead]) -> PaginatedItems[AgentTaskSummary]:
+        """People's lists put the most recently changed Task first, matching the time they show."""
         return PaginatedItems[AgentTaskSummary](
             page=page.page, page_size=page.page_size, total=page.total, items=self.repository.summarize(page.items)
         )
