@@ -232,6 +232,10 @@ _Avoid_: mailbox, alias, inbox
 A named amount of CPU and memory, as a request and a limit, from the platform-wide catalog Platform Administrators keep. Every Agent runs on one: the size its Organization chose for it, or the catalog's default. A Platform Administrator decides which sizes each Organization may choose, and its Owners and Admins choose among them; a Platform Administrator may also set one Agent's size, which its Organization then cannot change. Values are chosen from the catalog, never typed in per Agent.
 _Avoid_: preset (a Template word), plan, tier, instance type
 
+**Agent Add-on**:
+A library or tool installed into one Agent on top of its Runtime: a pinned Python or npm package, a git repository at a commit, a checksummed download, or a reviewed install command. An Organization Owner or Admin requests it for one Agent, saying why; a Platform Administrator approves exactly that request, rejects it, or later revokes it, and nobody edits it. An approved add-on is installed when the Agent starts, into a volume the Agent can use but not change. It never changes the Runtime's image and is never shared with another Agent. "Add-on" in the UI. See [Agent Add-ons](docs/features/agent-addons.md).
+_Avoid_: plugin (a Platform Plugin or runtime plugin is release-shipped), package, binary, extension
+
 **Template**:
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
@@ -438,6 +442,7 @@ _Avoid_: webhook
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
+- An **Agent** has zero or more **Agent Add-ons**, at most 20 of them Pending or Approved at once; each belongs to that one Agent and stays as history when the Agent is deleted.
 - An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Playbook Extraction** reads one source **Agent** and writes into one **Organization Skill**'s **Skill Draft**; a **Playbook** may be refreshed by later extractions from the same or other Agents.

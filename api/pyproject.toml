@@ -66,6 +66,7 @@ line-length = 120
 "domains/agents/scripts/retire-messaging.py" = "py312"
 "domains/agents/scripts/memory-gateway-ready.py" = "py312"
 "domains/agents/scripts/agentbarn_memory.py" = "py312"
+"domains/agents/scripts/install-addons.py" = "py312"
 "domains/agents/scripts/agentbarn_artifacts.py" = "py312"
 
 [tool.ruff.lint]

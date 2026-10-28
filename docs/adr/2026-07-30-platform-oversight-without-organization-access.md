@@ -1,6 +1,6 @@
 # Expose allowlisted Platform Oversight Data without Organization access
 
-Status: Accepted; superseded in part by [Platform Administrators set one Agent's size](2026-10-22-platform-administrators-set-an-agents-size.md)
+Status: Accepted; superseded in part by [Platform Administrators set one Agent's size](2026-10-22-platform-administrators-set-an-agents-size.md) and [Platform Administrators approve Agent Add-ons](2026-10-26-platform-administrators-approve-agent-add-ons.md)
 Date: 2026-07-30
 Origin: AF-237
 

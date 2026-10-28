@@ -355,6 +355,7 @@ hooks directly. Shared setup lives in
   removing the stale `message` deny. Hermes checks that its send engine is absent
   from the agent tool registry. Scheduler fixtures simulate model/provider execution;
   message fixtures use dry runs. These checks send no live provider messages.
+- `../../api/runtime_tests/addons_contract.py` (`test_{hermes,openclaw}_addons.py`) builds the real Deployment with Agent Add-ons and runs its `fix-pvc-owner` and `install-addons` init containers, as specified, against a fresh Docker volume. It then checks, as the agent container's user with the volume read-only, that a pinned pip package (`humanize`), an npm package, a git commit, a checksummed download and a reviewed command each work, that the agent cannot change them, that an unchanged plan skips the install, and that a checksum mismatch fails it by name. Unlike the other runtime contracts it needs network access to PyPI, npm and GitHub, as an Agent's pod has. The install script's own cache, wipe and failure rules run offline in `../../api/tests/unit/test_install_addons_script.py`.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The

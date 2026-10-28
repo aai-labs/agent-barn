@@ -40,6 +40,7 @@ MAX_PROVISIONING_DETAIL_CHARS = 500
 
 
 class AgentProvisioningErrorCategory(str, enum.Enum):
+    ADDON_INSTALL_FAILED = "addon_install_failed"
     QUOTA_EXHAUSTED = "quota_exhausted"
     LIMIT_EXCEEDED = "limit_exceeded"
     CLUSTER_PERMISSION_DENIED = "cluster_permission_denied"
@@ -65,6 +66,7 @@ _LEAD_BY_OPERATION: dict[AgentProvisioningOperation, str] = {
 
 
 _ERROR_CODES: dict[AgentProvisioningErrorCategory, str] = {
+    AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED: "ADDON_INSTALL_FAILED",
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: "QUOTA_EXHAUSTED",
     AgentProvisioningErrorCategory.LIMIT_EXCEEDED: "LIMIT_EXCEEDED",
     AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: "CLUSTER_PERMISSION_DENIED",
@@ -79,6 +81,10 @@ _CATEGORY_BY_CODE: dict[str, AgentProvisioningErrorCategory] = {
 }
 
 _CONDITION_BY_CATEGORY: dict[AgentProvisioningErrorCategory, str] = {
+    AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED: (
+        "an approved add-on failed to install. The install log is in the agent's logs. "
+        "Start the agent again to retry, or ask a platform administrator to revoke the add-on."
+    ),
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: (
         "its namespace has run out of resource quota. Ask an administrator to free up or raise it."
     ),
@@ -137,6 +143,30 @@ _STORED_RBAC = re.compile(rf"(?:cannot {_VERB} {_RESOURCE}|creating {_RESOURCE})
 _EXCEPTION_NAMES = frozenset({"ValueError", "RuntimeError", "TypeError", "KeyError", "ApiException"})
 _QUOTA_KEYWORD_LABELS = (("requested", "requested"), ("used", "used"), ("limited", "limit"))
 _MAX_REPORTED_QUOTA_AXES = 3
+
+
+# Why an add-on failed, as the install script reports it, and how the detail says it.
+ADDON_FAILURE_PHRASES = {
+    "failed": "install failed",
+    "timeout": "timed out",
+    "checksum": "checksum mismatch",
+}
+# The add-on's name, which its own grammar bounds (see agent_addons.models), and one of the
+# phrases above. Nothing from the cluster or the install log ever reaches it.
+_STORED_ADDON_FAILURE = re.compile(
+    r"(?:@[a-z0-9][a-z0-9._~-]{0,99}/)?[A-Za-z0-9][A-Za-z0-9._~-]{0,99}: "
+    r"(?:" + "|".join(ADDON_FAILURE_PHRASES.values()) + r")"
+)
+
+
+class AgentAddonInstallFailed(Exception):
+    """The `install-addons` init container failed. `addon_name` is None when it could not
+    say which add-on, for instance when it was killed before it could report."""
+
+    def __init__(self, addon_name: str | None, reason: str = "failed") -> None:
+        super().__init__(addon_name or "unknown add-on")
+        self.addon_name = addon_name
+        self.reason = reason if reason in ADDON_FAILURE_PHRASES else "failed"
 
 
 @dataclass(frozen=True)
@@ -254,6 +284,8 @@ def _classify(
     status_code: int | None,
     message: str | None,
 ) -> AgentProvisioningErrorCategory:
+    if isinstance(exc, AgentAddonInstallFailed):
+        return AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED
     # Everything below matches wording the Kubernetes API uses. An exception from
     # anywhere else in provisioning carries unrelated text, and a RuntimeError
     # saying "skill version not found" is not the namespace being unreachable.
@@ -312,7 +344,13 @@ def _detail_for(
     message: str,
     exc: Exception,
 ) -> str | None:
-    if category is AgentProvisioningErrorCategory.QUOTA_EXHAUSTED:
+    if category is AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED:
+        detail = (
+            f"{exc.addon_name}: {ADDON_FAILURE_PHRASES[exc.reason]}"
+            if isinstance(exc, AgentAddonInstallFailed) and exc.addon_name
+            else None
+        )
+    elif category is AgentProvisioningErrorCategory.QUOTA_EXHAUSTED:
         detail = _quota_detail(message)
     elif category is AgentProvisioningErrorCategory.LIMIT_EXCEEDED:
         detail = _limit_detail(message)
@@ -376,7 +414,12 @@ def _exception_name(exc: Exception) -> str | None:
 
 def _bounded_safe_detail(detail: str | None, category: AgentProvisioningErrorCategory) -> str | None:
     """Reject details outside the category's complete grammar, including on reads."""
-    if not detail or len(detail) > MAX_PROVISIONING_DETAIL_CHARS or _contains_sensitive(detail):
+    if not detail or len(detail) > MAX_PROVISIONING_DETAIL_CHARS:
+        return None
+    if category is AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED:
+        # Checked against its own grammar alone: a package called tiktoken is not a token.
+        return detail if _STORED_ADDON_FAILURE.fullmatch(detail) else None
+    if _contains_sensitive(detail):
         return None
     if category is AgentProvisioningErrorCategory.QUOTA_EXHAUSTED:
         return detail if _STORED_QUOTA.fullmatch(detail) else None

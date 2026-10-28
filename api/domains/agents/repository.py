@@ -11,6 +11,7 @@ from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.agent_addons.repository import stage_pending_addons_withdrawn
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agent_sizes.models import AgentSize, OrganizationAgentSize
 from api.domains.agents.exceptions import AgentLimitReached
@@ -1167,6 +1168,7 @@ class AgentRepository:
             persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
             persisted.running_resources = agent.running_resources
+            persisted.running_addons_hash = agent.running_addons_hash
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
@@ -1419,6 +1421,7 @@ class AgentRepository:
         actor_display: str | None = None,
         correlation_id: UUID | None = None,
     ) -> AgentLifecycleEventResult:
+        correlation_id = correlation_id or uuid4()
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             persisted = session.exec(select(Agent).where(col(Agent.id) == agent.id).with_for_update()).first()
             if persisted is None:
@@ -1480,7 +1483,7 @@ class AgentRepository:
                     id=persisted.id,
                     organization_id=persisted.organization_id,
                 ),
-                correlation_id=correlation_id or uuid4(),
+                correlation_id=correlation_id,
                 payload={
                     "organization_id": persisted.organization_id,
                     "agent_id": persisted.id,
@@ -1491,7 +1494,20 @@ class AgentRepository:
                 },
             )
             self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            # Pending add-on requests can no longer be decided; approved ones stay as history.
+            addon_event_ids = stage_pending_addons_withdrawn(
+                session,
+                self.outbox_repository,
+                persisted,
+                actor=actor,
+                actor_display=actor_display or actor.type.value,
+                correlation_id=correlation_id,
+            )
+            delivery_ids = list(
+                session.exec(
+                    select(EventDelivery.id).where(col(EventDelivery.event_id).in_([event.event_id, *addon_event_ids]))
+                )
+            )
             session.commit()
             return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
 

@@ -1,6 +1,7 @@
 from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
+from api.domains.agent_addons.event_handlers import AgentAddonEmailHandler
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
 from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
@@ -106,6 +107,7 @@ class AppModule(Module):
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
         organization_trial_expiry_handler: OrganizationTrialExpiryHandler,
         agent_budget_email_handler: AgentBudgetEmailHandler,
+        agent_addon_email_handler: AgentAddonEmailHandler,
         security_audit_projection: SecurityAuditProjection,
         product_analytics_handler: ProductAnalyticsHandler,
         workflow_controller_handler: WorkflowControllerHandler,
@@ -116,6 +118,7 @@ class AppModule(Module):
                 organization_budget_email_handler,
                 organization_trial_expiry_handler,
                 agent_budget_email_handler,
+                agent_addon_email_handler,
                 security_audit_projection,
                 product_analytics_handler,
                 workflow_controller_handler,

@@ -22,7 +22,7 @@ def _waiting_status(reason):
     return SimpleNamespace(state=SimpleNamespace(terminated=None, waiting=SimpleNamespace(reason=reason)))
 
 
-def _pod(name, phase, *, created, deleting=False, ready=False, container_statuses=None):
+def _pod(name, phase, *, created, deleting=False, ready=False, container_statuses=None, init_container_statuses=None):
     conditions = [SimpleNamespace(type="Ready", status="True" if ready else "False")]
     return SimpleNamespace(
         metadata=SimpleNamespace(
@@ -30,7 +30,12 @@ def _pod(name, phase, *, created, deleting=False, ready=False, container_statuse
             creation_timestamp=created,
             deletion_timestamp=datetime(2026, 9, 21, 14, 17, 35, tzinfo=UTC) if deleting else None,
         ),
-        status=SimpleNamespace(phase=phase, conditions=conditions, container_statuses=container_statuses),
+        status=SimpleNamespace(
+            phase=phase,
+            conditions=conditions,
+            container_statuses=container_statuses,
+            init_container_statuses=init_container_statuses,
+        ),
     )
 
 
@@ -160,3 +165,95 @@ def test_newest_pod_wins_when_several_are_alive():
     newer = _pod("agent-newer", "Running", created=_NEWER, ready=True)
 
     assert _readiness(older, newer) == ("ready", None)
+
+
+def _init_status(name, *, state=None, last_state=None):
+    return SimpleNamespace(name=name, state=state, last_state=last_state)
+
+
+def _terminated(exit_code, message=None):
+    return SimpleNamespace(waiting=None, terminated=SimpleNamespace(exit_code=exit_code, message=message, reason=None))
+
+
+def _waiting(reason):
+    return SimpleNamespace(terminated=None, waiting=SimpleNamespace(reason=reason))
+
+
+def test_an_init_container_crash_looping_holds_the_pod_as_crashed():
+    pod = _pod(
+        "agent-new",
+        "Pending",
+        created=_NEWER,
+        init_container_statuses=[_init_status("install-addons", state=_waiting("CrashLoopBackOff"))],
+    )
+
+    assert _readiness(pod) == ("crashed", "CrashLoopBackOff")
+
+
+def test_a_failed_install_reports_its_termination_message_from_the_last_run():
+    report = '{"addon_id": "01a1795e-0cc7-72ff-897d-4f2780e7b5c1", "reason": "checksum"}'
+    pod = _pod(
+        "agent-new",
+        "Pending",
+        created=_NEWER,
+        init_container_statuses=[
+            _init_status("fix-pvc-owner", state=_terminated(0)),
+            _init_status("install-addons", state=_waiting("CrashLoopBackOff"), last_state=_terminated(1, report)),
+        ],
+    )
+
+    failure = _client_listing(pod).get_init_container_failure(_DEPLOYMENT, _NAMESPACE, "install-addons")
+
+    assert failure == report
+
+
+def test_a_finished_or_running_install_is_not_a_failure():
+    finished = _pod(
+        "agent-new",
+        "Running",
+        created=_NEWER,
+        init_container_statuses=[_init_status("install-addons", state=_terminated(0))],
+    )
+    running = _pod(
+        "agent-new",
+        "Pending",
+        created=_NEWER,
+        init_container_statuses=[_init_status("install-addons", state=SimpleNamespace(waiting=None, terminated=None))],
+    )
+
+    for pod in (finished, running):
+        assert _client_listing(pod).get_init_container_failure(_DEPLOYMENT, _NAMESPACE, "install-addons") is None
+
+
+def test_an_earlier_failure_is_ignored_once_a_retry_is_running_or_has_succeeded():
+    earlier = _terminated(1, '{"addon_id": "01a1795e-0cc7-72ff-897d-4f2780e7b5c1", "reason": "failed"}')
+    retried = [
+        _pod(
+            "agent-new",
+            "Running",
+            created=_NEWER,
+            init_container_statuses=[_init_status("install-addons", state=_terminated(0), last_state=earlier)],
+        ),
+        _pod(
+            "agent-new",
+            "Pending",
+            created=_NEWER,
+            init_container_statuses=[
+                _init_status("install-addons", state=SimpleNamespace(waiting=None, terminated=None), last_state=earlier)
+            ],
+        ),
+    ]
+
+    for pod in retried:
+        assert _client_listing(pod).get_init_container_failure(_DEPLOYMENT, _NAMESPACE, "install-addons") is None
+
+
+def test_an_install_killed_without_a_report_is_still_a_failure():
+    pod = _pod(
+        "agent-new",
+        "Pending",
+        created=_NEWER,
+        init_container_statuses=[_init_status("install-addons", state=_terminated(124))],
+    )
+
+    assert _client_listing(pod).get_init_container_failure(_DEPLOYMENT, _NAMESPACE, "install-addons") == ""

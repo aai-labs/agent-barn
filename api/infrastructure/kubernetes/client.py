@@ -23,6 +23,13 @@ from api.core.config import Config
 _SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 
+def _failure_message(terminated: client.V1ContainerStateTerminated | None) -> str | None:
+    """A terminated run's message if it failed, "" for a failure without one, else None."""
+    if terminated is None or terminated.exit_code in (None, 0):
+        return None
+    return terminated.message or ""
+
+
 @inject
 @dataclass
 @singleton
@@ -406,11 +413,70 @@ class KubernetesClient:
             conditions = pod.status.conditions or []
             if any(c.type == "Ready" and c.status == "True" for c in conditions):
                 return "ready", None
-            for cs in pod.status.container_statuses or []:
+            # An init container that keeps failing (an add-on install) holds the pod in Pending
+            # for good, just as a crashing agent container does.
+            for cs in [*(pod.status.init_container_statuses or []), *(pod.status.container_statuses or [])]:
                 if cs.state and cs.state.waiting and cs.state.waiting.reason in self._TERMINAL_WAITING_REASONS:
                     return "crashed", cs.state.waiting.reason
             return "initializing", None
         return None, None
+
+    def get_init_container_failure(self, deployment_name: str, namespace: str, container: str) -> str | None:
+        """Whether the newest pod's named init container has failed, and its termination message.
+
+        None when it has not failed (or there is no pod). A failure answers its termination
+        message, or "" when it left none. The current attempt decides: a failure is the current
+        run's, or, while the kubelet is backing off before the next one, the last run's. An
+        earlier failure is ignored once a retry is running or has succeeded.
+        """
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return None
+        for status in pod.status.init_container_statuses or []:
+            if status.name != container:
+                continue
+            current = status.state
+            if current is not None and current.terminated is not None:
+                return _failure_message(current.terminated)
+            if current is not None and current.waiting is not None and status.last_state is not None:
+                return _failure_message(status.last_state.terminated)
+        return None
+
+    def read_init_container_logs(
+        self, deployment_name: str, namespace: str, container: str, tail_lines: int = 50
+    ) -> str | None:
+        """The last lines an init container of the newest pod wrote, whatever the pod's phase.
+
+        A container the kubelet is backing off has no current run, so its previous one is read.
+        """
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return None
+        for previous in (False, True):
+            try:
+                response = self._core_v1.read_namespaced_pod_log(
+                    pod.metadata.name,
+                    namespace,
+                    container=container,
+                    previous=previous,
+                    tail_lines=tail_lines,
+                    limit_bytes=32000,
+                    _preload_content=False,
+                    _request_timeout=10,
+                )
+            except ApiException as e:
+                if e.status in (400, 403, 404):
+                    continue
+                raise
+            try:
+                if response.status >= 400:
+                    continue
+                text = response.data.decode("utf-8", errors="replace")
+            finally:
+                response.close()
+            if text.strip():
+                return text
+        return None
 
     def runtime_has_exited(self, deployment_name: str, namespace: str) -> bool:
         """Runtime exit evidence, excluding retryable image/configuration failures."""

@@ -7,6 +7,7 @@ import { CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AgentAddonsSettings } from "@/features/agent-addons/components/agent-addons-settings";
 import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
 import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
 
@@ -233,6 +234,9 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 editing={editingSection === "memory"}
                 onEdit={() => toggleEditing("memory")}
               />
+            )}
+            {activeSection === "addons" && canAgent(agent, "agent.addon.manage") && (
+              <AgentAddonsSettings agent={agent} />
             )}
             {activeSection === "keys" && (
               <>

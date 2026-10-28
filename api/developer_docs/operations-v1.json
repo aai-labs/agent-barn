@@ -291,6 +291,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/addons",
+    "list_agent_addons_organizations__organization_id__agents__agent_id__addons_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts",
     "list_artifacts_organizations__organization_id__agents__agent_id__artifacts_get"
   ],
@@ -746,6 +751,11 @@
   ],
   [
     "GET",
+    "/platform/agent-addons",
+    "list_platform_agent_addons_platform_agent_addons_get"
+  ],
+  [
+    "GET",
     "/platform/agent-sizes",
     "list_agent_sizes_platform_agent_sizes_get"
   ],
@@ -1121,6 +1131,16 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/addons",
+    "request_agent_addon_organizations__organization_id__agents__agent_id__addons_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/addons/{addon_id}/withdraw",
+    "withdraw_agent_addon_organizations__organization_id__agents__agent_id__addons__addon_id__withdraw_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts",
     "create_artifact_organizations__organization_id__agents__agent_id__artifacts_post"
   ],
@@ -1413,6 +1433,21 @@
     "POST",
     "/organizations/{organization_id}/transfer-ownership",
     "transfer_ownership_organizations__organization_id__transfer_ownership_post"
+  ],
+  [
+    "POST",
+    "/platform/agent-addons/{addon_id}/approve",
+    "approve_platform_agent_addon_platform_agent_addons__addon_id__approve_post"
+  ],
+  [
+    "POST",
+    "/platform/agent-addons/{addon_id}/reject",
+    "reject_platform_agent_addon_platform_agent_addons__addon_id__reject_post"
+  ],
+  [
+    "POST",
+    "/platform/agent-addons/{addon_id}/revoke",
+    "revoke_platform_agent_addon_platform_agent_addons__addon_id__revoke_post"
   ],
   [
     "POST",

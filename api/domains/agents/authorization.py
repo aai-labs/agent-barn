@@ -29,6 +29,7 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
     PermissionKey.AGENT_SIZE_MANAGE,
+    PermissionKey.AGENT_ADDON_MANAGE,
 )
 
 
@@ -146,9 +147,10 @@ class AgentAuthorization:
         membership = context.require_current_user_organization()
         if membership.role in IMPLICIT_AGENT_OWNER_ROLES:
             implicit = set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID])
-            # Organization-scoped and held by role alone, so no Agent Access Role grants it.
-            if organization_role_allows(membership.role, PermissionKey.AGENT_SIZE_MANAGE):
-                implicit.add(PermissionKey.AGENT_SIZE_MANAGE)
+            # Organization-scoped and held by role alone, so no Agent Access Role grants them.
+            for organization_permission in (PermissionKey.AGENT_SIZE_MANAGE, PermissionKey.AGENT_ADDON_MANAGE):
+                if organization_role_allows(membership.role, organization_permission):
+                    implicit.add(organization_permission)
             permissions_by_agent = {agent.id: set(implicit) for agent in agents}
         else:
             permissions_by_agent = self.repository.find_agent_permissions(

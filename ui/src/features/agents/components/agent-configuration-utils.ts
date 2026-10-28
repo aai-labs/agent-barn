@@ -4,6 +4,7 @@ import {
   History,
   KeyRound,
   MessageSquare,
+  Package,
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
@@ -36,6 +37,7 @@ export type AgentConfigurationSectionKey =
   | "webhooks"
   | "skills"
   | "memory"
+  | "addons"
   | "keys"
   | "override"
   | "restore"
@@ -80,6 +82,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     description: "Built-in memory is always on; long-term memory is an optional add-on.",
   },
   {
+    key: "addons",
+    label: "Add-ons",
+    description: "Extra libraries and tools for this Agent, reviewed by the platform before they are installed.",
+  },
+  {
     key: "keys",
     label: "Integrations",
     description: "Platform tokens and encrypted integration credentials.",
@@ -113,6 +120,7 @@ export const AGENT_CONFIGURATION_ICONS = {
   webhooks: Webhook,
   skills: Sparkles,
   memory: Brain,
+  addons: Package,
   keys: KeyRound,
   override: SlidersHorizontal,
   restore: History,
@@ -129,16 +137,20 @@ export function configurationSectionLabel(
 /**
  * The configuration sections this viewer may open. Restore points read from the
  * activity surface and the spend limit from the cost surface, so an Agent the viewer
- * can see without that access does not offer them.
+ * can see without that access does not offer them. Add-ons are Organization Owners' and
+ * Admins' alone.
  */
 export function visibleAgentConfigurationSections(
   agent: Pick<Agent, "allowedActions"> | null | undefined,
 ): AgentConfigurationSection[] {
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
+  const canManageAddons = canAgent(agent, "agent.addon.manage");
   return AGENT_CONFIGURATION_SECTIONS.filter(
     (item) =>
-      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
+      (item.key !== "restore" || canReadActivity) &&
+      (item.key !== "spend" || canReadCosts) &&
+      (item.key !== "addons" || canManageAddons),
   );
 }
 
