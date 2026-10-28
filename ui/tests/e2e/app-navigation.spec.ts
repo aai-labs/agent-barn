@@ -120,13 +120,13 @@ test.describe("App navigation", () => {
     test("names the whole way to a section in the path bar, each earlier step a link", async ({ page }) => {
       await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
 
-      await expect(navigation.breadcrumbCurrent()).toHaveText("Agents");
+      await expect(navigation.breadcrumbCurrent()).toHaveText("Models");
       await expect(navigation.breadcrumb().getByRole("link", { name: "Settings", exact: true })).toHaveAttribute(
         "href",
         `/dashboard/${TEST_ORG_ID}/settings`,
       );
       // The section is the page's heading; the path bar and panel say it is Settings.
-      await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Models", level: 1 })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Settings", exact: true })).toHaveCount(0);
     });
 
