@@ -27,6 +27,8 @@ An Agent Setting is resolved, never snapshotted. That single decision is what th
 - Because of that, an Agent has two distinct model facts and a surface must not confuse them: `effective_model` is what it *would* start on now, while `running_model` records what its pod actually started on. `start_agent` writes the latter and `stop_agent` clears it; `pending_model` is set only when the two disagree, which is what lets a running Agent be shown as still serving the old model. The Agent detail page shows that state as a banner naming both models, with a Restart action for lifecycle managers; team cards do not show it. Nothing recomputes this from Kubernetes — the runtime merges its config once at container start and never re-reads it.
 - Agent counts exposed alongside the setting cover every non-deleted Agent in the Organization, not only those visible to the caller. They state how far a change reaches; they do not name Agents.
 
+The Organization settings **Models** tab presents the default and allowed models. The catalog includes context length and input/output prices when available; prices are displayed per million tokens. Provider logos are from [Simple Icons](https://simpleicons.org/) (CC0) and [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT); unknown providers use initials.
+
 ## Primary flows
 
 ### Read

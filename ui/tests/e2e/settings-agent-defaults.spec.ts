@@ -18,7 +18,7 @@ function memberContext() {
   };
 }
 
-test.describe("Settings · Agents", () => {
+test.describe("Settings · Models", () => {
   test.describe.configure({ mode: "serial" });
 
   let dataSupport: DataSupport;
@@ -38,7 +38,7 @@ test.describe("Settings · Agents", () => {
     await dataSupport.agents.interceptGetModelsRequest();
   });
 
-  test("opens on Agents and reports the platform default", async ({ page }) => {
+  test("opens on Models and reports the platform default", async ({ page }) => {
     await settings.open();
 
     await expect(settings.heading).toBeVisible();
@@ -71,14 +71,27 @@ test.describe("Settings · Agents", () => {
     await expect(page.getByText("This organization", { exact: true })).toBeVisible();
   });
 
-  test("a member never sees the Agents tab", async ({ page }) => {
+  test("shows model cards with catalog information", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({ body: [
+      { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
+    ] });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    await section.getByRole("button", { name: "Edit" }).click();
+    await expect(section.getByRole("checkbox", { name: "GPT-5 mini" })).toBeChecked();
+    await expect(section.getByText("128,000 tokens context")).toBeVisible();
+    await expect(section.getByText("Input $2.5 / 1M tokens")).toBeVisible();
+    await expect(section.getByText("Output $10 / 1M tokens")).toBeVisible();
+  });
+
+  test("a member never sees the Models tab", async ({ page }) => {
     await dataSupport.users.interceptGetUserContextRequest({
       userContext: memberContext(),
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
 
-    await expect(page.getByRole("complementary").getByRole("link", { name: "Agents", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Models", exact: true })).toHaveCount(0);
     // It falls back to the first section a Member can actually see.
     await expect(page.getByRole("heading", { name: "Templates" })).toBeVisible();
   });

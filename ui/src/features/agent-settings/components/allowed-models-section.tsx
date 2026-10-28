@@ -18,6 +18,28 @@ import {
 } from "../allowed-models-utils";
 import { useAgentSettings } from "../hooks/use-agent-settings";
 
+const providerIcons: Record<string, string> = {
+  openai: "openai",
+  anthropic: "anthropic",
+  google: "googlegemini",
+  "meta-llama": "meta",
+  mistralai: "mistralai",
+  deepseek: "deepseek",
+};
+
+function modelDetails(model: { value: string; contextLength?: number | null; pricing?: unknown }) {
+  const provider = stripPrefix(model.value).split("/")[0];
+  const pricing = model.pricing && typeof model.pricing === "object" ? model.pricing as Record<string, unknown> : {};
+  const price = (value: unknown) => {
+    if (typeof value !== "string" && typeof value !== "number") return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? `$${(number * 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })}` : null;
+  };
+  const input = price(pricing.prompt);
+  const output = price(pricing.completion);
+  return { provider, context: model.contextLength ? `${model.contextLength.toLocaleString()} tokens` : null, input, output };
+}
+
 export function AllowedModelsSection({
   canEdit,
   editing,
@@ -214,46 +236,46 @@ export function AllowedModelsSection({
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </div>
-              <div
-                className="flex max-h-[19rem] flex-col gap-1 overflow-y-auto rounded-xl p-1"
-                style={{ border: "1px solid var(--line)" }}
-              >
+              <div className="grid max-h-[36rem] grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
                 {filtered.map((model) => {
                   const required = model.value === requiredModel;
+                  const details = modelDetails(model);
+                  const checked = selected.includes(model.value);
                   return (
                     <label
                       key={model.value}
-                      className="af-hover-bg flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2"
+                      className="af-hover-bg flex cursor-pointer flex-col gap-3 rounded-xl p-4"
+                      style={{ border: `1px solid ${checked ? "var(--line-strong)" : "var(--line)"}`, background: checked ? "var(--bg-soft)" : undefined }}
                     >
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded disabled:opacity-50"
-                        style={{ accentColor: "var(--ink)", borderColor: "var(--line-strong)" }}
-                        checked={selected.includes(model.value)}
-                        disabled={required}
-                        onChange={() => toggle(model.value)}
-                      />
-                      <span className="flex min-w-0 flex-col">
-                        <span
-                          className="truncate text-[0.84rem] font-medium"
-                          style={{ color: "var(--ink)" }}
-                        >
-                          {model.label}
-                          {required && (
-                            <span
-                              className="ml-2 text-[0.7rem] font-normal"
-                              style={{ color: "var(--ink-4)" }}
-                            >
-                              default — required
-                            </span>
-                          )}
+                      <span className="flex items-start gap-3">
+                        <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold uppercase" style={{ background: "var(--bg-soft)", border: "1px solid var(--line)", color: "var(--ink-2)" }}>
+                          {providerIcons[details.provider] ? (
+                            // Provider logos are decorative; the provider name is alongside them.
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={`/brand/models/${providerIcons[details.provider]}.svg`} alt="" className="h-5 w-5 dark:invert" />
+                          ) : details.provider.slice(0, 2)}
                         </span>
-                        <span
-                          className="truncate font-mono text-[0.72rem]"
-                          style={{ color: "var(--ink-4)" }}
-                        >
-                          {model.value}
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{model.label}</span>
+                          <span className="block text-[0.75rem]" style={{ color: "var(--ink-3)" }}>{details.provider}</span>
                         </span>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded disabled:opacity-50"
+                          style={{ accentColor: "var(--ink)", borderColor: "var(--line-strong)" }}
+                          checked={checked}
+                          disabled={required}
+                          onChange={() => toggle(model.value)}
+                          aria-label={`${model.label}${required ? " (default, required)" : ""}`}
+                        />
+                      </span>
+                      <span className="flex flex-wrap gap-2 text-[0.72rem]" style={{ color: "var(--ink-3)" }}>
+                        {required && <span>Default · required</span>}
+                        {details.context && <span>{details.context} context</span>}
+                      </span>
+                      <span className="flex flex-wrap justify-between gap-2 border-t pt-3 text-[0.72rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>
+                        <span>Input {details.input ?? "—"} / 1M tokens</span>
+                        <span>Output {details.output ?? "—"} / 1M tokens</span>
                       </span>
                     </label>
                   );
