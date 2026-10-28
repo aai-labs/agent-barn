@@ -26,6 +26,9 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+# Lists show a failed Task's latest Note in two lines; the Task's own page has all of it.
+LATEST_NOTE_PREVIEW_CHARS = 300
+
 
 def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) -> bool:
     """Hold the Agent row against a concurrent soft delete for the rest of the transaction.
@@ -280,7 +283,7 @@ class AgentTaskRepository:
             ranked = (
                 select(
                     AgentTaskNote.task_id,
-                    AgentTaskNote.body,
+                    func.left(col(AgentTaskNote.body), LATEST_NOTE_PREVIEW_CHARS).label("body"),
                     func.count().over(partition_by=col(AgentTaskNote.task_id)).label("note_count"),
                     func.row_number()
                     .over(

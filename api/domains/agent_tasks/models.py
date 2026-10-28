@@ -175,6 +175,7 @@ class AgentTaskSummary(AgentTaskRead):
 
     file_count: int
     note_count: int
+    # The start of the latest Note, as a preview.
     latest_note: str | None
 
 

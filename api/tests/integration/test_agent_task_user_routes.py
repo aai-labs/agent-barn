@@ -407,3 +407,13 @@ def test_lists_put_the_most_recently_changed_task_first():
                     [task["title"] for task in listing.json()["items"]],
                     contains_exactly("Reconcile invoices", "Send reminders"),
                 )
+
+
+def test_a_long_latest_note_is_listed_as_a_preview():
+    with given(_api_setup(there_is_an_agent(), _a_task("Reconcile invoices"), _a_later_note("x" * 1000))) as context:
+        with when("the Owner lists the Agent's Tasks"):
+            listing = context.client.get(_agent_tasks(context), headers=_auth(context))
+
+        with then("the latest Note is cut to a preview; the Task itself still has all of it"):
+            [task] = listing.json()["items"]
+            assert_that(task["latest_note"], equal_to("x" * 300))
