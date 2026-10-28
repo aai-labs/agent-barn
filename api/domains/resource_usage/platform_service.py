@@ -316,6 +316,21 @@ class PlatformResourceUsageService:
             ],
         )
 
+    def namespace_capacity(self, now: datetime) -> PlatformCapacityRead:
+        """The CPU and memory ceilings beside what the namespace commits, for the environment health page.
+
+        The same figures as the usage response's `capacity`. The committed ones are None when
+        Prometheus is not configured or cannot answer; the ceilings are there either way.
+        """
+        limits = self.resource_limits_service.get_limits()
+        if not self.usage_repository.is_configured:
+            return _capacity(limits, None)
+        try:
+            return _capacity(limits, self.usage_repository.committed(at=now))
+        except PrometheusError:
+            logger.warning("Namespace commitments are unavailable", exc_info=True)
+            return _capacity(limits, None)
+
     def _agent_requests(self, now: datetime) -> dict[UUID, dict[str, float]]:
         """What each live Agent's pod requests. Unknown when the source cannot say, and only that.
 

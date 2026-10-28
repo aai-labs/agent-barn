@@ -197,7 +197,9 @@ class KubernetesClient:
         return self._get_or_none(self._apps_v1.read_namespaced_deployment, name, namespace)
 
     def list_deployments(self, namespace: str, label_selector: str = "") -> list[client.V1Deployment]:
-        return self._apps_v1.list_namespaced_deployment(namespace, label_selector=label_selector).items
+        return self._apps_v1.list_namespaced_deployment(
+            namespace, label_selector=label_selector, _request_timeout=10
+        ).items
 
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
         # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
@@ -241,7 +243,9 @@ class KubernetesClient:
         return self._get_or_none(self._core_v1.read_namespaced_persistent_volume_claim, name, namespace)
 
     def list_pvcs(self, namespace: str, label_selector: str = "") -> list[client.V1PersistentVolumeClaim]:
-        return self._core_v1.list_namespaced_persistent_volume_claim(namespace, label_selector=label_selector).items
+        return self._core_v1.list_namespaced_persistent_volume_claim(
+            namespace, label_selector=label_selector, _request_timeout=10
+        ).items
 
     def create_secret(self, namespace: str, manifest: client.V1Secret) -> client.V1Secret:
         return self._create_or_get(
@@ -292,6 +296,22 @@ class KubernetesClient:
 
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
+
+    # Namespace-wide reads for the environment health page. Each is bounded by a request
+    # timeout, since one slow answer should not hold the page, and each raises ApiException
+    # as the cluster answered it: the caller tells a refusal (403) from an outage.
+
+    def list_pods(self, namespace: str) -> list[client.V1Pod]:
+        return self._core_v1.list_namespaced_pod(namespace, _request_timeout=10).items
+
+    def list_stateful_sets(self, namespace: str) -> list[client.V1StatefulSet]:
+        return self._apps_v1.list_namespaced_stateful_set(namespace, _request_timeout=10).items
+
+    def list_resource_quotas(self, namespace: str) -> list[client.V1ResourceQuota]:
+        return self._core_v1.list_namespaced_resource_quota(namespace, _request_timeout=10).items
+
+    def list_warning_events(self, namespace: str) -> list[client.CoreV1Event]:
+        return self._core_v1.list_namespaced_event(namespace, field_selector="type=Warning", _request_timeout=10).items
 
     def _newest_pod(self, label_selector: str, namespace: str) -> client.V1Pod | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=label_selector)

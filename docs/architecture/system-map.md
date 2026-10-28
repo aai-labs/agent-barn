@@ -72,6 +72,7 @@ the artifact domain router but excluded from the public user API schema.
 - Product analytics consumes selected Domain Events through the `product_analytics.posthog` Event Handler and posts them to PostHog through the PostHog client. Services make no analytics calls. See [`../features/product-analytics.md`](../features/product-analytics.md).
 - Costs are queried from LiteLLM and joined to agents by LiteLLM key identity; they are not derived from conversation or tool-call records.
 - Agent Resource Usage is read from Prometheus, not stored. Each Agent reports its own container's CPU and memory, and the `resource_usage` domain queries them by `app` and `org_id`; see [`../features/resource-usage.md`](../features/resource-usage.md).
+- Environment health is read live from the Agent namespace and Prometheus, not stored. The `environment_health` domain lists the namespace's pods, workloads, volume claims, quotas and Warning Events read-only, and names each Agent from the database; see [`../features/environment-health.md`](../features/environment-health.md).
 
 ## Cross-cutting invariants
 

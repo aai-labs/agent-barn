@@ -374,6 +374,16 @@ jobs:
           esac
           [ -n "$secret" ] || { echo "::error::$name is unset while its agent email domain is configured; inbound email would 401."; exit 1; }
 
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Bootstrap private Garage
+        env:
+          GARAGE_RPC_SECRET_INPUT: ${{ secrets[format('{0}ARTIFACT_STORAGE_SECRET', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          GARAGE_ADMIN_TOKEN_INPUT: ${{ secrets[format('{0}ARTIFACT_PROVISIONER_SECRET', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          NAMESPACE: ${{ needs.resolve-env.outputs.namespace }}
+          STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
+        run: uv run --project api --frozen python -m api.scripts.bootstrap_garage_ci --namespace "$NAMESPACE" --kubeconfig "$HOME/.kube/config" --storage-class "$STORAGE_CLASS"
+
       - name: Helmfile sync
         env:
           KUBECONFIG: /home/runner/.kube/config
@@ -413,9 +423,7 @@ jobs:
           AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENTBARN_TELEGRAM_BOT_TOKEN || secrets.AGENTBARN_TELEGRAM_BOT_TOKEN }}
           AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ github.ref_name == 'staging' && vars.STAGING_AGENTBARN_TELEGRAM_BOT_USERNAME || vars.AGENTBARN_TELEGRAM_BOT_USERNAME }}
           STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
-          ARTIFACT_STORAGE_SECRET: ${{ vars[format('{0}ARTIFACT_STORAGE_SECRET', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           ARTIFACT_PURGE_ENABLED: ${{ vars[format('{0}ARTIFACT_PURGE_ENABLED', github.ref_name == 'staging' && 'STAGING_' || '')] }}
-          ARTIFACT_PROVISIONER_SECRET: ${{ vars[format('{0}ARTIFACT_PROVISIONER_SECRET', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENT_TOKEN_ENCRYPTION_KEY || secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
