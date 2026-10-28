@@ -182,3 +182,15 @@ test("Back after closing a Task leaves it closed", async ({ page }) => {
   await expect(page).toHaveURL(tabUrl);
   await expect(tasksPage.detail()).toHaveCount(0);
 });
+
+test("leaving the Tasks tab leaves its view and open Task behind", async ({ page }) => {
+  const { tasksPage } = await open(page);
+  await tasksPage.showList();
+  await tasksPage.open("Reconcile March invoices");
+  await expect(page).toHaveURL(/taskView=list.*task=|task=.*taskView=list/);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
+
+  await expect(page).not.toHaveURL(/taskView=|taskStatus=|[?&]task=/);
+});
