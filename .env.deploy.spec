@@ -201,3 +201,8 @@ AGENT_DEFAULT_MODEL=
 # $KUBECONFIG (deploy.sh derives it). Set only if the API pod must use a
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
+
+# Garage credentials for CI are GitHub Secrets; see docs/guidelines/garage.md.
+# For deploy.sh, prepare the fixed Kubernetes Secrets and Garage layout first.
+# Maintenance defaults to enabled.
+ARTIFACT_PURGE_ENABLED=

@@ -315,3 +315,16 @@ resources:
   limits:
     memory: 1Gi
     cpu: 500m
+
+# Private per-Agent storage. No installation-wide data credentials.
+artifacts:
+  purgeEnabled: false
+  # Private control-plane Secret for API provisioning and artifact-purge cleanup only.
+  # Contains ARTIFACT_PROVISIONER_URL/TOKEN.
+  provisionerSecret: "garage-artifact-provisioner"
+  # ARTIFACT_S3_ENDPOINT_URL only; no data/provisioning keys or bucket naming options.
+  existingSecret: ""
+  runtimeBaseUrl: ""
+  maxBytes: 26214400
+  linkMaxSeconds: 3600
+  retentionDays: 30

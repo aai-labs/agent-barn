@@ -189,7 +189,24 @@ def test_a_users_messages_arrive_in_order_and_wait_behind_a_failed_one() -> None
         _queue(context, "first")
         _queue(context, "second")
         _queue(context, "hello from sam", user=_SAM)
-        pod = Pod(503, 200)
+        # Force Sam to arrive first: delivery across users is concurrent and
+        # the failure must belong to Jane rather than the first worker scheduled.
+        sam_arrived = threading.Event()
+        jane_attempts = 0
+
+        class UserAwarePod(Pod):
+            def __call__(self, request: httpx.Request) -> httpx.Response:
+                nonlocal jane_attempts
+                user = json.loads(request.content)["message"]["from"]["id"]
+                if user == _JANE:
+                    assert sam_arrived.wait(timeout=5), "Sam's independent delivery did not proceed"
+                    jane_attempts += 1
+                self.received.append(request)
+                if user == _SAM:
+                    sam_arrived.set()
+                return httpx.Response(503 if user == _JANE and jane_attempts == 1 else 200)
+
+        pod = UserAwarePod()
 
         with when("the pod rejects Jane's first message, then everything is retried later"):
             _forward(context, pod)
@@ -197,8 +214,8 @@ def test_a_users_messages_arrive_in_order_and_wait_behind_a_failed_one() -> None
             _forward(context, pod, now=datetime.now(UTC) + timedelta(minutes=1))
 
         with then("Sam is not held up, and Jane's messages arrive in the order she sent them"):
-            assert_that(after_failure, equal_to(["first", "hello from sam"]))
-            assert_that(pod.texts(), equal_to(["first", "hello from sam", "first", "second"]))
+            assert_that(after_failure, equal_to(["hello from sam", "first"]))
+            assert_that(pod.texts(), equal_to(["hello from sam", "first", "first", "second"]))
 
 
 def test_a_slow_start_tells_the_user_once_that_their_agent_is_waking_up() -> None:

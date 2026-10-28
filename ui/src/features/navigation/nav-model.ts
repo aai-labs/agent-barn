@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Layers,
   LayoutGrid,
+  PackageOpen,
   MessageSquare,
   MessagesSquare,
   Receipt,
@@ -23,6 +24,7 @@ import {
   Wrench,
   type LucideIcon,
   Workflow,
+  HeartPulse,
 } from "lucide-react";
 
 import type { AgentPageTab } from "@/features/agents/agent-page-tabs";
@@ -179,7 +181,14 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     key: "system",
     label: "System",
     icon: Server,
+    // Environment health first: it is where the System button lands.
     pages: [
+      {
+        key: "environment-health",
+        label: "Environment health",
+        href: `${PLATFORM_BASE}/environment-health`,
+        icon: HeartPulse,
+      },
       {
         key: "event-deliveries",
         label: "Event deliveries",
@@ -208,6 +217,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   logs: SquareTerminal,
   memory: Brain,
   workflows: Workflow,
+  files: PackageOpen,
   playbooks: BookOpen,
   activity: Activity,
   costs: Wallet,
@@ -218,7 +228,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "playbooks"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 

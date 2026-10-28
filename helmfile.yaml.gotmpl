@@ -14,6 +14,21 @@ helmDefaults:
   timeout: 600
 
 releases:
+  - name: garage
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/garage
+    # Bootstrap Garage with helm and cluster-init before application deployment.
+    # CLI --wait overrides this default; normal deploys wait for existing storage.
+    wait: false
+    labels:
+      name: garage
+    values:
+      - storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        replicas: {{ env "GARAGE_REPLICAS" | default "1" }}
+        replicationFactor: {{ env "GARAGE_REPLICATION_FACTOR" | default "1" }}
+        requireDistinctNodes: {{ env "GARAGE_REQUIRE_DISTINCT_NODES" | default "false" }}
+        ingress:
+          enabled: false
   - name: postgres-hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -158,6 +173,12 @@ releases:
     labels:
       name: agentbarn-api
     set:
+      - name: artifacts.existingSecret
+        value: "garage-artifact-storage"
+      - name: artifacts.purgeEnabled
+        value: {{ env "ARTIFACT_PURGE_ENABLED" | default "true" }}
+      - name: artifacts.provisionerSecret
+        value: "garage-artifact-provisioner"
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
