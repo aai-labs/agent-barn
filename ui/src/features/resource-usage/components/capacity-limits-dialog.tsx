@@ -13,38 +13,73 @@ import {
 } from "@/components/ui/dialog";
 
 import { useUpdateResourceLimits } from "../hooks/use-update-resource-limits";
-import type { PlatformCapacity } from "../schemas";
+import type { ResourceLimits, ResourceLimitsUpdate } from "../schemas";
 
 const BYTES_PER_GIB = 1024 ** 3;
 const NUMBER_PATTERN = /^\d+(\.\d+)?$/;
+const WHOLE_PATTERN = /^\d+$/;
 
-type FieldKey = "limitsMemory" | "limitsCpu" | "requestsMemory" | "requestsCpu";
+export type CeilingKey = keyof ResourceLimitsUpdate;
 
 interface Field {
-  key: FieldKey;
+  key: CeilingKey;
   /** Named as the quota names it, so it reads the same as `kubectl describe quota`. */
   label: string;
   placeholder: string;
+  /** How the box shows the stored figure: GiB for bytes, or the number as it is. */
+  unit: "gib" | "cores" | "count";
 }
 
-const FIELDS: Field[] = [
-  { key: "limitsMemory", label: "limits.memory (GiB)", placeholder: "e.g. 50" },
-  { key: "limitsCpu", label: "limits.cpu (cores)", placeholder: "e.g. 30" },
-  { key: "requestsMemory", label: "requests.memory (GiB)", placeholder: "e.g. 20" },
-  { key: "requestsCpu", label: "requests.cpu (cores)", placeholder: "e.g. 5" },
+const FIELDS: Record<CeilingKey, Field> = {
+  limitsMemoryBytes: { key: "limitsMemoryBytes", label: "limits.memory (GiB)", placeholder: "e.g. 50", unit: "gib" },
+  limitsCpuCores: { key: "limitsCpuCores", label: "limits.cpu (cores)", placeholder: "e.g. 30", unit: "cores" },
+  requestsMemoryBytes: {
+    key: "requestsMemoryBytes",
+    label: "requests.memory (GiB)",
+    placeholder: "e.g. 20",
+    unit: "gib",
+  },
+  requestsCpuCores: { key: "requestsCpuCores", label: "requests.cpu (cores)", placeholder: "e.g. 5", unit: "cores" },
+  requestsStorageBytes: {
+    key: "requestsStorageBytes",
+    label: "requests.storage (GiB)",
+    placeholder: "e.g. 30",
+    unit: "gib",
+  },
+  pods: { key: "pods", label: "pods", placeholder: "e.g. 50", unit: "count" },
+};
+
+/** The four lines the Platform Resource Usage page compares with what pods commit. */
+export const CPU_AND_MEMORY_CEILINGS: CeilingKey[] = [
+  "limitsMemoryBytes",
+  "limitsCpuCores",
+  "requestsMemoryBytes",
+  "requestsCpuCores",
 ];
 
+/** Every line, storage and pods first, since those are what stop a new agent first. */
+export const ALL_CEILINGS: CeilingKey[] = ["requestsStorageBytes", "pods", ...CPU_AND_MEMORY_CEILINGS];
+
 /** A ceiling as the text box shows it: whole when it is whole, else up to three decimals. */
-function toText(value: number | null): string {
-  return value === null ? "" : String(Number(value.toFixed(3)));
+function toText(value: number | null | undefined, unit: Field["unit"]): string {
+  if (value === null || value === undefined) return "";
+  const shown = unit === "gib" ? value / BYTES_PER_GIB : value;
+  return String(Number(shown.toFixed(3)));
 }
 
-/** Blank clears the ceiling (null). Anything else must be a number above zero. */
-function parseLimit(text: string): { value: number | null; invalid: boolean } {
+/** Blank clears the ceiling (null). Anything else must be a number above zero, and a count a whole one. */
+function parseLimit(text: string, unit: Field["unit"]): { value: number | null; invalid: boolean } {
   const trimmed = text.trim();
   if (trimmed === "") return { value: null, invalid: false };
-  const value = NUMBER_PATTERN.test(trimmed) ? Number(trimmed) : Number.NaN;
+  const pattern = unit === "count" ? WHOLE_PATTERN : NUMBER_PATTERN;
+  const value = pattern.test(trimmed) ? Number(trimmed) : Number.NaN;
   return value > 0 ? { value, invalid: false } : { value: null, invalid: true };
+}
+
+/** What the API stores: whole bytes for GiB, the number itself otherwise. */
+function toStored(value: number | null, unit: Field["unit"]): number | null {
+  if (value === null) return null;
+  return unit === "gib" ? Math.round(value * BYTES_PER_GIB) : value;
 }
 
 function formatChanged(iso: string): string {
@@ -57,18 +92,11 @@ function formatChanged(iso: string): string {
   });
 }
 
-function savedText(capacity: PlatformCapacity): Record<FieldKey, string> {
-  const gib = (bytes: number | null) => (bytes === null ? null : bytes / BYTES_PER_GIB);
-  return {
-    limitsMemory: toText(gib(capacity.limitsMemoryBytes)),
-    limitsCpu: toText(capacity.limitsCpuCores),
-    requestsMemory: toText(gib(capacity.requestsMemoryBytes)),
-    requestsCpu: toText(capacity.requestsCpuCores),
-  };
-}
-
 interface CapacityLimitsDialogProps {
-  capacity: PlatformCapacity;
+  /** What is saved; the boxes start from it. */
+  ceilings: Partial<ResourceLimits>;
+  /** The quota lines to offer. Only these are sent, so the others stay as they are. */
+  fields?: CeilingKey[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -76,34 +104,35 @@ interface CapacityLimitsDialogProps {
 /**
  * Where a Platform Administrator types in the namespace's ResourceQuota ceilings.
  *
- * They are typed in because the quota cannot be read with the access we have. Shown in GiB
- * and cores, the way `kubectl describe quota` prints them, and sent as whole bytes.
+ * They are typed in because the quota cannot be read with the access we have. Shown in GiB,
+ * cores and pods, the way `kubectl describe quota` prints them, and sent as whole bytes.
  */
-export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityLimitsDialogProps) {
+export function CapacityLimitsDialog({
+  ceilings,
+  fields: keys = CPU_AND_MEMORY_CEILINGS,
+  open,
+  onOpenChange,
+}: CapacityLimitsDialogProps) {
+  const fields = keys.map((key) => FIELDS[key]);
   // Keyed on `open` by the parent, so each opening starts from what is saved.
-  const [values, setValues] = useState(() => savedText(capacity));
+  const [values, setValues] = useState<Partial<Record<CeilingKey, string>>>(() =>
+    Object.fromEntries(fields.map((field) => [field.key, toText(ceilings[field.key], field.unit)])),
+  );
   const [showErrors, setShowErrors] = useState(false);
   const update = useUpdateResourceLimits();
 
-  const parsed = Object.fromEntries(FIELDS.map((field) => [field.key, parseLimit(values[field.key])])) as Record<
-    FieldKey,
-    ReturnType<typeof parseLimit>
-  >;
-  const anyInvalid = FIELDS.some((field) => parsed[field.key].invalid);
+  const parsed = Object.fromEntries(
+    fields.map((field) => [field.key, parseLimit(values[field.key] ?? "", field.unit)]),
+  ) as Record<CeilingKey, ReturnType<typeof parseLimit>>;
+  const anyInvalid = fields.some((field) => parsed[field.key].invalid);
 
   function save() {
     setShowErrors(true);
     if (anyInvalid) return;
-    const bytes = (value: number | null) => (value === null ? null : Math.round(value * BYTES_PER_GIB));
-    update.mutate(
-      {
-        limitsMemoryBytes: bytes(parsed.limitsMemory.value),
-        limitsCpuCores: parsed.limitsCpu.value,
-        requestsMemoryBytes: bytes(parsed.requestsMemory.value),
-        requestsCpuCores: parsed.requestsCpu.value,
-      },
-      { onSuccess: () => onOpenChange(false) },
+    const body: ResourceLimitsUpdate = Object.fromEntries(
+      fields.map((field) => [field.key, toStored(parsed[field.key].value, field.unit)]),
     );
+    update.mutate(body, { onSuccess: () => onOpenChange(false) });
   }
 
   const failure = update.error instanceof Error ? update.error.message : null;
@@ -115,9 +144,10 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
           <DialogTitle>Namespace quota</DialogTitle>
           <DialogDescription>
             Enter the namespace ResourceQuota values, the Hard column of{" "}
-            <code>kubectl describe quota</code>. A new pod is refused when any one of the four would go
-            over, so enter all of them. We can&apos;t read them ourselves, so the page compares what you
-            enter with what the namespace has committed. Leave a field blank for no quota.
+            <code>kubectl describe quota</code>. Anything new is refused when any one line would go
+            over, so enter every line the quota has. We can&apos;t read them ourselves, so the page
+            compares what you enter with what the namespace has committed. Leave a field blank for no
+            quota.
           </DialogDescription>
         </DialogHeader>
 
@@ -129,7 +159,7 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
           }}
         >
           <div className="grid gap-4 sm:grid-cols-2">
-            {FIELDS.map((field) => (
+            {fields.map((field) => (
               <div key={field.key} className="flex flex-col gap-1.5">
                 <label
                   className="text-[0.8rem] font-medium"
@@ -141,9 +171,9 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
                 <input
                   id={`capacity-input-${field.key}`}
                   type="text"
-                  inputMode="decimal"
+                  inputMode={field.unit === "count" ? "numeric" : "decimal"}
                   className="af-input w-full"
-                  value={values[field.key]}
+                  value={values[field.key] ?? ""}
                   onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
                   placeholder={field.placeholder}
                   autoComplete="off"
@@ -151,7 +181,9 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
                 />
                 {showErrors && parsed[field.key].invalid && (
                   <p className="m-0 text-[0.78rem]" style={{ color: "var(--err)" }} role="alert">
-                    Enter a number above 0, or leave it blank.
+                    {field.unit === "count"
+                      ? "Enter a whole number above 0, or leave it blank."
+                      : "Enter a number above 0, or leave it blank."}
                   </p>
                 )}
               </div>
@@ -169,9 +201,9 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
             </p>
           )}
 
-          {capacity.ceilingsUpdatedAt && (
+          {ceilings.updatedAt && (
             <p className="m-0 text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
-              Last changed {formatChanged(capacity.ceilingsUpdatedAt)}
+              Last changed {formatChanged(ceilings.updatedAt)}
             </p>
           )}
 

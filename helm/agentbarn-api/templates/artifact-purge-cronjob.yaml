@@ -1,0 +1,40 @@
+{{- if .Values.artifacts.purgeEnabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-artifact-purge
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: agentbarn-api
+            app.kubernetes.io/component: artifact-purge
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: artifact-purge
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-m", "api.domains.artifacts.maintenance"]
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+                - secretRef:
+                    name: {{ .Values.artifacts.existingSecret | required "artifacts.existingSecret is required when purge is enabled" }}
+                - secretRef:
+                    name: {{ .Values.artifacts.provisionerSecret | required "artifacts.provisionerSecret is required for bucket cleanup" }}
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+{{- end }}

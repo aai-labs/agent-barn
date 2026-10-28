@@ -221,6 +221,24 @@ def persisted_provisioning_error(
     return _for_category(category, detail=_bounded_safe_detail(detail, category))
 
 
+def cluster_rejection_detail(message: str) -> tuple[AgentProvisioningErrorCategory, str] | None:
+    """The quota or LimitRange rejection in a Kubernetes message that came without an exception.
+
+    For an Event's text, such as a ReplicaSet that could not create its pod. Only a complete
+    quota or LimitRange rejection yields anything, rebuilt from validated fragments and held to
+    the same stored grammar as a provisioning failure's detail; every other message yields
+    None, so its text is never passed on.
+    """
+    for category, extract in (
+        (AgentProvisioningErrorCategory.QUOTA_EXHAUSTED, _quota_detail),
+        (AgentProvisioningErrorCategory.LIMIT_EXCEEDED, _limit_detail),
+    ):
+        detail = _bounded_safe_detail(extract(message), category)
+        if detail:
+            return category, detail
+    return None
+
+
 def _for_category(
     category: AgentProvisioningErrorCategory,
     *,

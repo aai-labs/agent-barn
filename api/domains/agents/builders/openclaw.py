@@ -19,6 +19,13 @@ from .addons import (
     addons_volumes,
     install_addons_container,
 )
+from .artifacts import (
+    ARTIFACT_COMMAND,
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_TOOL,
+    artifact_command_mount,
+    artifact_command_volume,
+)
 from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
@@ -369,15 +376,20 @@ def build_config_map(
     gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    artifacts_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn_artifacts.py": ARTIFACT_TOOL,
+        "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md
+        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -538,6 +550,7 @@ def build_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -552,6 +565,7 @@ def build_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        artifact_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

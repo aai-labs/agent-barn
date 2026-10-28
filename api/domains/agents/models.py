@@ -1668,6 +1668,23 @@ class PlatformAgentIdentity(NamedTuple):
     organization_name: str
 
 
+class PlatformFailedAgent(NamedTuple):
+    """An Agent in ERROR as the Platform view may show it: identity and the stored failure.
+
+    The failure columns are read only to be rebuilt through `persisted_provisioning_error`,
+    which keeps the category's fixed copy and a detail that matches its grammar.
+    """
+
+    id: UUID
+    name: str
+    organization_id: UUID
+    organization_name: str
+    last_error_code: str | None
+    last_error_detail: str | None
+    last_error: str | None
+    updated_at: datetime
+
+
 class PlatformAgentRow(NamedTuple):
     """An Agent as the Platform Agents page reads it: identity, lifecycle and its size.
 

@@ -264,6 +264,30 @@ def test_a_changed_requests_ceiling_leaves_its_own_event_named_as_the_quota_name
         )
 
 
+def test_the_storage_and_pod_ceilings_are_saved_and_each_change_is_recorded():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-storage-pods@example.com")]) as context:
+        with when("the admin enters the requests.storage and pods quota lines"):
+            response = _put(context, {"requests_storage_bytes": 30 * _GiB, "pods": 60})
+
+        with then("both come back, and each leaves its own event"):
+            body = response.json()
+            assert_that(body["requests_storage_bytes"], equal_to(30 * _GiB))
+            assert_that(body["pods"], equal_to(60))
+            moves = [
+                (e.payload["setting"], e.payload["previous"], e.payload["current"]) for e in _limit_events(context)
+            ]
+            assert_that(
+                moves,
+                contains_inanyorder(("requests_storage_bytes", None, float(30 * _GiB)), ("pods", None, 60.0)),
+            )
+
+
+@pytest.mark.parametrize("body", [{"pods": 0}, {"pods": 1.5}, {"requests_storage_bytes": 2**61}])
+def test_a_storage_or_pod_ceiling_that_cannot_be_real_is_refused(body):
+    with given([*_BASE_GIVEN, *_platform_admin("admin-storage-bounds@example.com")]) as context:
+        assert_that(_put(context, body).status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
 def test_saving_the_same_values_again_records_nothing():
     with given([*_BASE_GIVEN, *_platform_admin("admin-same@example.com")]) as context:
         _put(context, {"limits_memory_bytes": 70 * _GiB, "limits_cpu_cores": 24})
