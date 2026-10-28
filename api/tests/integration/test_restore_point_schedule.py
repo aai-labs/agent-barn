@@ -2,13 +2,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_length
+from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, none
 from kubernetes.client import V1Job, V1JobStatus
 
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.scheduling import ScheduledSnapshotRunner
-from api.domains.restore_points.service import SCHEDULED_REPLACED_DETAIL, RestorePointService
+from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.kubernetes import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -93,7 +93,7 @@ def test_the_schedule_snapshots_a_due_running_agent_beside_its_pod():
         due = _agent(context, "Due", AgentStatus.RUNNING)
         _seed(context, due, RestorePointOrigin.SCHEDULED, age_minutes=400)
         k8s = context.injector.get(KubernetesClient)
-        k8s.has_pods_for_deployment.return_value = True
+        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
 
         with when("the schedule runs"):
             result = context.injector.get(ScheduledSnapshotRunner).run_once()
@@ -189,12 +189,11 @@ def test_a_manual_capture_replaces_a_scheduled_snapshot_in_progress():
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
 
-        with then("the scheduled snapshot is stopped and the user's capture starts"):
+        with then("the scheduled snapshot is stopped and removed, not failed, and the user's capture starts"):
             assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
             k8s.delete_job.assert_any_call("rp-cap-scheduled", "agent-farm")
-            replaced = context.injector.get(RestorePointRepository).get_by_id(scheduled.id)
-            assert_that(replaced.status, equal_to(RestorePointStatus.FAILED))
-            assert_that(replaced.failure_reason, equal_to(SCHEDULED_REPLACED_DETAIL))
+            k8s.delete_pvc.assert_any_call(scheduled.pvc_name, "agent-farm")
+            assert_that(context.injector.get(RestorePointRepository).get_by_id(scheduled.id), none())
             assert_that(
                 context.injector.get(RestorePointRepository).find_in_flight_scheduled(),
                 has_length(0),
@@ -229,14 +228,34 @@ def test_a_refused_capture_leaves_the_scheduled_snapshot_running():
             assert_that(kept.status, equal_to(RestorePointStatus.CAPTURING))
 
 
-def test_the_schedule_skips_a_running_agent_with_no_pod():
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+def test_an_agent_with_no_running_pod_is_skipped_without_holding_back_the_next():
+    with given(_GIVEN) as context:
+        stuck = _agent(context, "Stuck on quota", AgentStatus.RUNNING)
+        due = _agent(context, "Due", AgentStatus.RUNNING)
+        _seed(context, due, RestorePointOrigin.SCHEDULED, age_minutes=400)
         k8s = context.injector.get(KubernetesClient)
-        k8s.has_pods_for_deployment.return_value = False
+        k8s.get_pod_name_for_deployment.side_effect = lambda name, _namespace: (
+            None if name == f"agent-{stuck.id}" else "agent-pod"
+        )
 
-        with when("the schedule runs for an Agent whose pod was never created"):
+        with when("the schedule runs with one slot, the never-snapshotted Agent first in line"):
             result = context.injector.get(ScheduledSnapshotRunner).run_once()
 
-        with then("no capture is started, so no slot waits on a pod that does not exist"):
-            assert_that(result.started, equal_to(0))
-            k8s.create_job.assert_not_called()
+        with then("the Agent with no running pod is passed over and the next one gets the slot"):
+            assert_that(result.started, equal_to(1))
+            job = k8s.create_job.call_args.args[1]
+            assert_that(job.metadata.labels["agentbarn.io/agent-id"], equal_to(str(due.id)))
+
+
+def test_an_agent_over_the_limit_only_by_its_newest_backup_is_not_counted_as_trimmed():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        for _ in range(2):  # RESTORE_POINT_MAX_PER_AGENT
+            _seed(context, context.agent, RestorePointOrigin.MANUAL, age_minutes=900)
+        _seed(context, context.agent, RestorePointOrigin.PRE_UPGRADE, age_minutes=10)
+
+        with when("the schedule runs"):
+            result = context.injector.get(ScheduledSnapshotRunner).run_once()
+
+        with then("nothing may be removed, so nothing is reported as trimmed"):
+            assert_that(result.trimmed_agents, equal_to(0))
+            assert_that(_remaining_ids(context, context.agent), has_length(3))

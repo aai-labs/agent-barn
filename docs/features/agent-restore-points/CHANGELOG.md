@@ -34,7 +34,9 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   `RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES` (default 360; 0 turns it off). At most
   `RESTORE_POINT_SCHEDULE_MAX_CONCURRENT` (default 2) run at once across the namespace, because
   each capture Job's memory limit counts against the namespace quota. Stopped Agents are skipped:
-  their files do not change. A failed attempt waits a full interval before the next one.
+  their files do not change, and so are Agents with no running pod, since the capture is placed
+  beside it. A skipped Agent does not take a slot from the next one in line. A failed attempt
+  waits a full interval before the next one.
 - Delivered: the snapshot is captured live, beside the running Agent, on the Agent pod's node.
   Capture now skips files that vanish mid-walk and pads files that shrink, counting them as
   `skipped` and `changed`. See [`../../adr/2026-10-27-scheduled-snapshots-capture-live.md`](../../adr/2026-10-27-scheduled-snapshots-capture-live.md).
@@ -43,12 +45,13 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   its newest failed one. Backups taken before an update or a restore now share
   `RESTORE_POINT_MAX_PER_AGENT` with the user's own captures: past it the oldest of those backups
   is deleted, but never the newest and never one a user took. Only ready rows count, and nothing
-  is deleted while a managed update runs. A removal is `READY → DELETING`, then Job and volume,
+  is deleted while a managed update runs; the update applies retention when it ends. A removal is `READY → DELETING`, then Job and volume,
   then the row; a row left `DELETING` is finished by reconciliation.
 - Changed: the limit no longer refuses an update's own backup. A user's capture is still refused
   when their own captures reach the limit.
 - Changed: a scheduled snapshot in progress blocks nothing (`has_blocking_operation` ignores it).
-  A capture or a restore of the same Agent stops it first and marks it failed.
+  A capture or a restore of the same Agent stops it first and removes it, so it neither reads as
+  a schedule failure nor pushes the next snapshot a full interval out.
 - Changed: the restore points section lists scheduled snapshots apart, with how often they are
   taken and how many are kept. The list response adds `scheduled_cap` and `schedule_interval_minutes`.
 - Decision: reversed — `PRE_UPGRADE` backups are no longer kept forever; see retention above.

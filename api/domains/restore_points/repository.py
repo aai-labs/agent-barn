@@ -146,7 +146,7 @@ class RestorePointRepository:
             )
             return list(session.exec(query).all())
 
-    def find_agent_ids_due_a_snapshot(self, *, last_taken_before: datetime, limit: int) -> list[UUID]:
+    def find_agent_ids_due_a_snapshot(self, *, last_taken_before: datetime) -> list[UUID]:
         """Running Agents whose newest scheduled snapshot, in any status, is older than the cutoff.
 
         Any status, so a failed attempt waits a full interval before the next one. The
@@ -171,14 +171,14 @@ class RestorePointRepository:
                     or_(newest.c.taken_at.is_(None), newest.c.taken_at < last_taken_before),
                 )
                 .order_by(newest.c.taken_at.asc().nulls_first())
-                .limit(limit)
             )
             return list(session.exec(query).all())
 
     def find_agent_ids_over_retention(self, *, scheduled_cap: int, manual_cap: int) -> list[UUID]:
-        """Agents holding more scheduled or manual-group restore points than they keep,
-        or more than one failed scheduled snapshot."""
-        holding = col(AgentRestorePoint.status) != RestorePointStatus.FAILED
+        """Agents holding more ready scheduled or manual-group restore points than they keep,
+        or more than one failed scheduled snapshot. Counts what retention counts."""
+        ready = col(AgentRestorePoint.status) == RestorePointStatus.READY
+        failed = col(AgentRestorePoint.status) == RestorePointStatus.FAILED
         scheduled = col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED
         manual_group = col(AgentRestorePoint.origin).in_(MANUAL_GROUP_ORIGINS)
         with Session(self.delegate.engine) as session:
@@ -187,9 +187,9 @@ class RestorePointRepository:
                 .group_by(col(AgentRestorePoint.agent_id))
                 .having(
                     or_(
-                        func.count().filter(and_(scheduled, holding)) > scheduled_cap,
-                        func.count().filter(and_(manual_group, holding)) > manual_cap,
-                        func.count().filter(and_(scheduled, ~holding)) > 1,
+                        func.count().filter(and_(scheduled, ready)) > scheduled_cap,
+                        func.count().filter(and_(manual_group, ready)) > manual_cap,
+                        func.count().filter(and_(scheduled, failed)) > 1,
                     )
                 )
             )

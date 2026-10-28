@@ -382,8 +382,9 @@ export function AgentRestorePointsSettings({
             >
               {manualCount} of {cap} captures used.{" "}
               <span style={{ color: "var(--ink-4)" }}>
-                Backups taken before an update or a restore share this limit. When it is full, the
-                oldest of those backups is removed; your own captures never are.
+                Backups taken before an update or a restore do not count here. Once they and your
+                captures pass {cap}, the oldest backup is removed, but never the newest one. Your
+                own captures are never removed.
               </span>
             </p>
           </>

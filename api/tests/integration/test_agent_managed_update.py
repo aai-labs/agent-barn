@@ -467,6 +467,37 @@ def test_a_full_manual_limit_does_not_stop_the_updates_backup():
             )
 
 
+def test_an_update_removes_the_older_backup_its_own_pushed_past_the_limit_once_it_ends():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        _k8s(context).get_pod_readiness.return_value = _READY
+        repository = context.injector.get(RestorePointRepository)
+        for origin in (RestorePointOrigin.MANUAL, RestorePointOrigin.PRE_UPGRADE):
+            repository.save(
+                AgentRestorePoint(
+                    agent_id=context.agent.id,
+                    status=RestorePointStatus.READY,
+                    origin=origin,
+                    agent_type=context.agent.agent_type,
+                    pvc_name=f"restore-point-{uuid.uuid4()}",
+                    config_manifest={},
+                    created_at=datetime.now(UTC) - timedelta(days=1),
+                )
+            )
+
+        with when("an update takes a third backup with the limit at 2"):
+            _run(context)
+
+        with then("the older update backup goes, and the user's capture and the new backup stay"):
+            outcome = _read_agent(context)["last_managed_update"]
+            kept = {point["id"]: point["origin"] for point in _restore_points(context)}
+            assert_that(
+                sorted(kept.values()),
+                equal_to(sorted([RestorePointOrigin.MANUAL.value, RestorePointOrigin.PRE_UPGRADE.value])),
+            )
+            assert_that(list(kept), has_item(outcome["restore_point_id"]))
+
+
 def test_a_managed_update_rolls_back_when_the_start_itself_fails():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         _succeed_capture_job(context)

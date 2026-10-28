@@ -602,7 +602,7 @@ test.describe("Agent restore points", () => {
 
     const capacity = page.getByTestId("restore-point-capacity");
     await expect(capacity).toContainText("1 of 5 captures used");
-    await expect(capacity).toContainText("Backups taken before an update or a restore share this limit");
+    await expect(capacity).toContainText("Backups taken before an update or a restore do not count here");
     await expect(configurationPage.restorePointRows()).toHaveCount(2);
   });
 

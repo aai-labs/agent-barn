@@ -53,6 +53,7 @@ from api.domains.restore_points.constants import (
     RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS,
 )
 from api.domains.restore_points.models import (
+    ACTIVE_CAPTURE_STATUSES,
     AUTOMATIC_BACKUP_ORIGINS,
     MANUAL_GROUP_ORIGINS,
     NON_TERMINAL_STATUSES,
@@ -93,7 +94,6 @@ SCHEDULED_DID_NOT_RUN_DETAIL = (
     "The scheduled snapshot did not finish in time. The Agent may have stopped before it could run, "
     f"or its files need longer to archive: raise {CAPTURE_TIMEOUT_SETTING}."
 )
-SCHEDULED_REPLACED_DETAIL = "Stopped so another restore point operation on this Agent could run."
 SYSTEM_ACTOR_DISPLAY = "Agent Barn"
 
 
@@ -545,10 +545,10 @@ class RestorePointService:
                 return None
             if self.k8s.get_pvc(f"agent-{agent_id}", self.config.k8s_namespace) is None:
                 return None
-            # The capture is placed beside the Agent's pod. With no pod (an Agent stuck on
-            # quota still reads RUNNING) it could never be scheduled, and would hold a
-            # concurrency slot until its deadline.
-            if not self.k8s.has_pods_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace):
+            # The capture is placed beside the Agent's running pod. With none (an Agent stuck
+            # on quota, or whose pod is still Pending, reads RUNNING) it could never be
+            # scheduled, and would hold a concurrency slot until its deadline.
+            if self.k8s.get_pod_name_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace) is None:
                 return None
             try:
                 restore_point, delivery_ids = self._begin_backup(
@@ -630,7 +630,8 @@ class RestorePointService:
 
         One capture runs per Agent at a time, and a restore must not wipe the volume a snapshot
         is reading. A scheduled snapshot is the one operation that is cheaper to drop than to
-        wait for: the next is a few hours away.
+        wait for. It is removed rather than failed: being replaced says nothing about whether
+        the schedule works, and with no row left the next run takes a snapshot again.
         """
         for row in self.repository.find_non_terminal_for_agent(agent.id):
             if row.origin != RestorePointOrigin.SCHEDULED:
@@ -639,12 +640,12 @@ class RestorePointService:
             current = self.repository.get_by_id(row.id)
             if current is None or current.status not in NON_TERMINAL_STATUSES:
                 continue
-            if current.job_name:
-                self.k8s.delete_job(current.job_name, self.config.k8s_namespace)
-            self._fail_capture(current, SCHEDULED_REPLACED_DETAIL)
+            if self.repository.mark_deleting(current.id, from_statuses=ACTIVE_CAPTURE_STATUSES):
+                self._remove(agent, current)
 
-    def enforce_retention(self, agent_id: UUID) -> None:
-        """Remove the restore points an Agent keeps beyond its limits. Safe to run again.
+    def enforce_retention(self, agent_id: UUID) -> int:
+        """Remove the restore points an Agent keeps beyond its limits, and say how many went.
+        Safe to run again.
 
         Scheduled snapshots keep the newest `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, and only
         the newest failed attempt, which is what tells the user the schedule is failing.
@@ -653,18 +654,19 @@ class RestorePointService:
         newest one and never one a user took. Only READY rows count, so a capture in progress
         never pushes out the snapshot it may yet fail to replace.
 
-        Nothing is removed while a managed update runs: its own backup is its way back.
+        Nothing is removed while a managed update runs: its own backup is its way back. The
+        update runs this again when it ends.
         """
         agent = self.agent_repository.get_by_id(agent_id)
         if agent is None or managed_update_in_flight(agent):
-            return
-        self._prune_oldest(
+            return 0
+        removed = self._prune_oldest(
             agent,
             counted=(RestorePointOrigin.SCHEDULED,),
             removable=(RestorePointOrigin.SCHEDULED,),
             keep=self.config.restore_point_scheduled_max_per_agent,
         )
-        self._prune_oldest(
+        removed += self._prune_oldest(
             agent,
             counted=MANUAL_GROUP_ORIGINS,
             removable=AUTOMATIC_BACKUP_ORIGINS,
@@ -677,6 +679,8 @@ class RestorePointService:
         for row in failed[:-1]:
             if self.repository.mark_deleting(row.id, from_statuses=(RestorePointStatus.FAILED,)):
                 self._remove(agent, row)
+                removed += 1
+        return removed
 
     def _prune_oldest(
         self,
@@ -686,17 +690,20 @@ class RestorePointService:
         removable: tuple[RestorePointOrigin, ...],
         keep: int,
         spare_newest_removable: bool = False,
-    ) -> None:
+    ) -> int:
         ready = self.repository.find_for_agent_by_origin(agent.id, counted, (RestorePointStatus.READY,))
         excess = len(ready) - keep
         if excess <= 0:
-            return
+            return 0
         candidates = [row for row in ready if row.origin in removable and not row.reapply_configuration]
         if spare_newest_removable:
             candidates = candidates[:-1]
+        removed = 0
         for row in candidates[:excess]:
             if self.repository.mark_deleting(row.id, from_statuses=(RestorePointStatus.READY,)):
                 self._remove(agent, row)
+                removed += 1
+        return removed
 
     def _remove(self, agent: Agent, row: AgentRestorePoint) -> None:
         """Delete a DELETING restore point's Job and volume, then its row with its event."""
