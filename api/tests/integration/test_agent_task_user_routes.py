@@ -333,3 +333,44 @@ def test_the_organization_list_covers_only_visible_agents_and_filters_by_agent_a
             )
             assert_that(by_agent.json()["items"], equal_to([]))
             assert_that([task["title"] for task in done.json()["items"]], contains_exactly("Send reminders"))
+
+
+def _a_later_note(body: str):
+    def step(context):
+        _service(context).add_note(
+            context.organization.id, context.agent.id, context.task.id, AgentTaskNoteCreate(body=body)
+        )
+
+    return step
+
+
+def _a_bare_task(title: str):
+    def step(context):
+        _service(context).create_task(context.organization.id, context.agent.id, AgentTaskCreate(title=title))
+
+    return step
+
+
+def test_listed_tasks_say_how_many_files_and_notes_they_have_and_their_latest_note():
+    with given(
+        _api_setup(
+            there_is_an_agent(),
+            _a_task("Reconcile invoices"),
+            _a_later_note("Two invoices are still unpaid"),
+            _a_bare_task("Send reminders"),
+        )
+    ) as context:
+        with when("the Owner lists the Agent's Tasks and the Organization's Tasks"):
+            listings = [
+                context.client.get(_agent_tasks(context), headers=_auth(context)),
+                context.client.get(_ORG_TASKS, headers=_auth(context)),
+            ]
+
+        with then("each Task carries its File and Note counts and its latest Note"):
+            for listing in listings:
+                by_title = {task["title"]: task for task in listing.json()["items"]}
+                assert_that(
+                    by_title["Reconcile invoices"],
+                    has_entries(file_count=1, note_count=2, latest_note="Two invoices are still unpaid"),
+                )
+                assert_that(by_title["Send reminders"], has_entries(file_count=0, note_count=0, latest_note=None))

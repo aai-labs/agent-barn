@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from fastapi_injector import Injected
 
-from api.domains.agent_tasks.models import AgentTaskDetail, AgentTaskFilter, AgentTaskRead, AgentTaskStatus
+from api.domains.agent_tasks.models import AgentTaskDetail, AgentTaskFilter, AgentTaskStatus, AgentTaskSummary
 from api.domains.agent_tasks.service import AgentTaskService
 from api.domains.artifacts.models import ArtifactLinkRead
 from api.domains.auth.models import CurrentUserContext
@@ -17,7 +17,7 @@ agent_tasks_router = APIRouter(prefix="/organizations/{organization_id}/agents/{
 tasks_router = APIRouter(prefix="/organizations/{organization_id}/tasks", tags=["agent-tasks"])
 
 
-@agent_tasks_router.get("", response_model=PaginatedItems[AgentTaskRead])
+@agent_tasks_router.get("", response_model=PaginatedItems[AgentTaskSummary])
 def list_agent_tasks(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -53,7 +53,7 @@ def task_file_download_link(
     return service.file_link(agent_id, task_id, file_id, context)
 
 
-@tasks_router.get("", response_model=PaginatedItems[AgentTaskRead])
+@tasks_router.get("", response_model=PaginatedItems[AgentTaskSummary])
 def list_tasks(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],
