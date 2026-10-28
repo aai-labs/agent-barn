@@ -3112,17 +3112,6 @@ class AgentService:
             logger.exception("Managed update for agent %s stopped unexpectedly", agent_id)
         finally:
             self.repository.release_managed_update(agent_id)
-            self._trim_restore_points_held_back_by_update(agent_id)
-
-    def _trim_restore_points_held_back_by_update(self, agent_id: UUID) -> None:
-        """Retention waits while an update runs, so its backup is never removed under it.
-        Run it now, or the backup would pass the limit until the next capture finishes."""
-        try:
-            self.restore_points.enforce_retention(agent_id)
-        except Exception:
-            logger.warning(
-                "Could not apply restore point retention after the update of agent %s", agent_id, exc_info=True
-            )
 
     def _update_or_roll_back(self, agent_id: UUID, context: CurrentUserContext, skip_backup: bool = False) -> None:
         agent = self.repository.get_by_id(agent_id)

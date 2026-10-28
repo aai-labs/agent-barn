@@ -433,12 +433,11 @@ class RestorePointService:
 
     def _succeed(self, row: AgentRestorePoint) -> None:
         manifest = self._read_manifest(row)
-        if self.repository.mark_ready(
+        self.repository.mark_ready(
             row.id,
             archive_bytes=manifest.get("bytes"),
             file_count=manifest.get("file_count"),
-        ):
-            self.enforce_retention(row.agent_id)
+        )
 
     def _fail(self, row: AgentRestorePoint, reason: str) -> bool:
         return self.repository.mark_failed(row.id, reason[:_MAX_FAILURE_REASON])
@@ -643,6 +642,24 @@ class RestorePointService:
             if self.repository.mark_deleting(current.id, from_statuses=ACTIVE_CAPTURE_STATUSES):
                 self._remove(agent, current)
 
+    def trim_over_retention(self) -> int:
+        """Apply retention to every Agent past a limit, and say how many lost a restore point.
+
+        Runs from the reconciliation CronJob, which is on whether or not scheduled snapshots
+        are, and never from a request: removing restore points deletes Jobs and volumes.
+        """
+        agent_ids = self.repository.find_agent_ids_over_retention(
+            scheduled_cap=self.config.restore_point_scheduled_max_per_agent,
+            manual_cap=self.config.restore_point_max_per_agent,
+        )
+        trimmed = 0
+        for agent_id in agent_ids:
+            try:
+                trimmed += self.enforce_retention(agent_id) > 0
+            except Exception:
+                logger.warning("Could not apply restore point retention for agent %s", agent_id, exc_info=True)
+        return trimmed
+
     def enforce_retention(self, agent_id: UUID) -> int:
         """Remove the restore points an Agent keeps beyond its limits, and say how many went.
         Safe to run again.
@@ -655,7 +672,7 @@ class RestorePointService:
         never pushes out the snapshot it may yet fail to replace.
 
         Nothing is removed while a managed update runs: its own backup is its way back. The
-        update runs this again when it ends.
+        next reconciliation pass removes it once the update is over.
         """
         agent = self.agent_repository.get_by_id(agent_id)
         if agent is None or managed_update_in_flight(agent):

@@ -22,6 +22,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.events.catalog import AGENT_MANAGED_UPDATE_BACKUP_SKIPPED
 from api.domains.events.models import OutboxMessage
 from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.kubernetes import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -467,7 +468,7 @@ def test_a_full_manual_limit_does_not_stop_the_updates_backup():
             )
 
 
-def test_an_update_removes_the_older_backup_its_own_pushed_past_the_limit_once_it_ends():
+def test_once_an_update_ends_retention_removes_the_older_backup_its_own_pushed_past_the_limit():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         _succeed_capture_job(context)
         _k8s(context).get_pod_readiness.return_value = _READY
@@ -485,10 +486,12 @@ def test_an_update_removes_the_older_backup_its_own_pushed_past_the_limit_once_i
                 )
             )
 
-        with when("an update takes a third backup with the limit at 2"):
+        with when("an update takes a third backup with the limit at 2, then retention runs"):
             _run(context)
+            trimmed = context.injector.get(RestorePointService).trim_over_retention()
 
         with then("the older update backup goes, and the user's capture and the new backup stay"):
+            assert_that(trimmed, equal_to(1))
             outcome = _read_agent(context)["last_managed_update"]
             kept = {point["id"]: point["origin"] for point in _restore_points(context)}
             assert_that(

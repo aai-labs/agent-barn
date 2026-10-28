@@ -247,15 +247,19 @@ def test_an_agent_with_no_running_pod_is_skipped_without_holding_back_the_next()
             assert_that(job.metadata.labels["agentbarn.io/agent-id"], equal_to(str(due.id)))
 
 
-def test_an_agent_over_the_limit_only_by_its_newest_backup_is_not_counted_as_trimmed():
+def test_an_agent_over_the_limit_only_by_what_retention_keeps_is_not_picked_for_trimming():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         for _ in range(2):  # RESTORE_POINT_MAX_PER_AGENT
             _seed(context, context.agent, RestorePointOrigin.MANUAL, age_minutes=900)
         _seed(context, context.agent, RestorePointOrigin.PRE_UPGRADE, age_minutes=10)
 
-        with when("the schedule runs"):
-            result = context.injector.get(ScheduledSnapshotRunner).run_once()
+        with when("retention looks for Agents to trim"):
+            over = context.injector.get(RestorePointRepository).find_agent_ids_over_retention(
+                scheduled_cap=2, manual_cap=2
+            )
+            trimmed = context.injector.get(RestorePointService).trim_over_retention()
 
-        with then("nothing may be removed, so nothing is reported as trimmed"):
-            assert_that(result.trimmed_agents, equal_to(0))
+        with then("the Agent is not picked, since its user's captures and newest backup are kept"):
+            assert_that(over, equal_to([]))
+            assert_that(trimmed, equal_to(0))
             assert_that(_remaining_ids(context, context.agent), has_length(3))

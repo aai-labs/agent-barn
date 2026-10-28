@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command local dev stack: validates .env, brings up the k3d cluster +
 # LiteLLM, loads agent base images (skipping any already in the cluster),
-# runs migrations, then starts db/redis/api/worker/cost-sync/restore-point-scheduler/communications/memory/credential-gateway/ui
+# runs migrations, then starts db/redis/api/worker/cost-sync/restore-point-scheduler/restore-point-reconciler/communications/memory/credential-gateway/ui
 # in Docker with hot reload.
 #
 # Usage:
@@ -109,12 +109,12 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, cost-sync, budget-snapshots, restore-point-scheduler, communications, memory, credential-gateway, ui, artifact-purge"
+step "Building and starting api, worker, cost-sync, budget-snapshots, restore-point-scheduler, restore-point-reconciler, communications, memory, credential-gateway, ui, artifact-purge"
 if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   step "Starting local Hindsight database and backend"
   ${COMPOSE} up -d hindsight-db hindsight
 fi
-${COMPOSE} up -d --build api worker cost-sync budget-snapshots restore-point-scheduler communications memory credential-gateway ui artifact-purge
+${COMPOSE} up -d --build api worker cost-sync budget-snapshots restore-point-scheduler restore-point-reconciler communications memory credential-gateway ui artifact-purge
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any

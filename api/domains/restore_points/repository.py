@@ -14,6 +14,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.restore_points.models import (
     ACTIVE_CAPTURE_STATUSES,
+    AUTOMATIC_BACKUP_ORIGINS,
     MANUAL_GROUP_ORIGINS,
     NON_TERMINAL_STATUSES,
     AgentRestorePointRead,
@@ -175,20 +176,32 @@ class RestorePointRepository:
             return list(session.exec(query).all())
 
     def find_agent_ids_over_retention(self, *, scheduled_cap: int, manual_cap: int) -> list[UUID]:
-        """Agents holding more ready scheduled or manual-group restore points than they keep,
-        or more than one failed scheduled snapshot. Counts what retention counts."""
+        """Agents retention would remove a restore point from, by the rules of `enforce_retention`.
+
+        Over a limit is not enough: a user's captures, the newest automatic backup and a
+        restore point owing a replay are never removed, so an Agent over only because of
+        those is left out rather than returned on every run.
+        """
         ready = col(AgentRestorePoint.status) == RestorePointStatus.READY
         failed = col(AgentRestorePoint.status) == RestorePointStatus.FAILED
+        removable = and_(ready, col(AgentRestorePoint.reapply_configuration).is_(False))
         scheduled = col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED
         manual_group = col(AgentRestorePoint.origin).in_(MANUAL_GROUP_ORIGINS)
+        automatic = col(AgentRestorePoint.origin).in_(AUTOMATIC_BACKUP_ORIGINS)
         with Session(self.delegate.engine) as session:
             query = (
                 select(col(AgentRestorePoint.agent_id))
                 .group_by(col(AgentRestorePoint.agent_id))
                 .having(
                     or_(
-                        func.count().filter(and_(scheduled, ready)) > scheduled_cap,
-                        func.count().filter(and_(manual_group, ready)) > manual_cap,
+                        and_(
+                            func.count().filter(and_(scheduled, ready)) > scheduled_cap,
+                            func.count().filter(and_(scheduled, removable)) > 0,
+                        ),
+                        and_(
+                            func.count().filter(and_(manual_group, ready)) > manual_cap,
+                            func.count().filter(and_(automatic, removable)) > 1,
+                        ),
                         func.count().filter(and_(scheduled, failed)) > 1,
                     )
                 )

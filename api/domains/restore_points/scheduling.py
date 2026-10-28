@@ -1,8 +1,9 @@
 """Scheduled snapshots: a restore point of every running Agent, every few hours.
 
 Run on a schedule (the `restore-point-schedule` CronJob), or with `--watch` for local
-development. Each run settles the snapshots already in progress, trims what Agents keep
-past their limits, then starts snapshots for the Agents that are due, a few at a time.
+development. Each run settles the snapshots already in progress, then starts snapshots
+for the Agents that are due, a few at a time. Retention is the reconciler's job, so it
+also runs with the schedule off.
 """
 
 import argparse
@@ -26,7 +27,6 @@ WATCH_INTERVAL_SECONDS = 300
 @dataclass
 class ScheduledSnapshotResult:
     in_flight: int = 0
-    trimmed_agents: int = 0
     started: int = 0
     failed: int = 0
 
@@ -46,7 +46,6 @@ class ScheduledSnapshotRunner:
             return result
 
         result.in_flight = self._settle_in_flight()
-        result.trimmed_agents = self._trim(result)
 
         room = self.config.restore_point_schedule_max_concurrent - result.in_flight
         if room > 0:
@@ -65,9 +64,8 @@ class ScheduledSnapshotRunner:
                     logger.warning("Could not start a scheduled snapshot of agent %s", agent_id, exc_info=True)
 
         logger.info(
-            "Scheduled snapshot summary: in_flight=%s trimmed_agents=%s started=%s failed=%s",
+            "Scheduled snapshot summary: in_flight=%s started=%s failed=%s",
             result.in_flight,
-            result.trimmed_agents,
             result.started,
             result.failed,
         )
@@ -85,22 +83,6 @@ class ScheduledSnapshotRunner:
             except Exception:
                 logger.warning("Could not reconcile scheduled snapshot %s", row.id, exc_info=True)
         return sum(1 for row in self.repository.find_in_flight_scheduled() if row.status in ACTIVE_CAPTURE_STATUSES)
-
-    def _trim(self, result: ScheduledSnapshotResult) -> int:
-        """Apply retention to Agents over a limit, including those whose limit a managed update
-        held back when their backup became ready."""
-        agent_ids = self.repository.find_agent_ids_over_retention(
-            scheduled_cap=self.config.restore_point_scheduled_max_per_agent,
-            manual_cap=self.config.restore_point_max_per_agent,
-        )
-        trimmed = 0
-        for agent_id in agent_ids:
-            try:
-                trimmed += self.service.enforce_retention(agent_id) > 0
-            except Exception:
-                result.failed += 1
-                logger.warning("Could not apply restore point retention for agent %s", agent_id, exc_info=True)
-        return trimmed
 
 
 def build_runner() -> ScheduledSnapshotRunner:

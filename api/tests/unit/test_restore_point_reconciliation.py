@@ -60,9 +60,11 @@ class FakeRepository:
 
 
 class FakeService:
-    def __init__(self, *, reconcile_error_for=None, replay_error_for=None):
+    def __init__(self, *, reconcile_error_for=None, replay_error_for=None, trimmed=0, trim_error=False):
         self.reconcile_error_for = reconcile_error_for
         self.replay_error_for = replay_error_for
+        self.trimmed = trimmed
+        self.trim_error = trim_error
         self.reconciled: list[tuple[UUID, bool]] = []
         self.replayed: list[UUID] = []
 
@@ -75,6 +77,11 @@ class FakeService:
         if row.id == self.replay_error_for:
             raise RuntimeError("template gone")
         self.replayed.append(row.id)
+
+    def trim_over_retention(self):
+        if self.trim_error:
+            raise RuntimeError("database unavailable")
+        return self.trimmed
 
 
 class FakeCluster:
@@ -193,6 +200,21 @@ def test_a_failing_replay_on_a_live_row_does_not_lose_its_resolution():
     assert_that(result.resolved, equal_to(1))
     assert_that(result.replays_attempted, equal_to(0))
     assert_that(result.failed, equal_to(1))
+
+
+def test_every_run_applies_retention_and_reports_the_agents_trimmed():
+    result = _reconciler(service=FakeService(trimmed=2)).run_once()
+
+    assert_that(result.trimmed_agents, equal_to(2))
+
+
+def test_a_failed_retention_pass_is_counted_and_the_cluster_passes_still_run():
+    cluster = FakeCluster(pvcs=[_resource("restore-point-orphan")])
+
+    result = _reconciler(service=FakeService(trim_error=True), cluster=cluster).run_once()
+
+    assert_that(result.failed, equal_to(1))
+    assert_that(result.orphans_deleted, equal_to(1))
 
 
 def test_ready_rows_whose_volume_is_gone_are_failed():
