@@ -168,3 +168,17 @@ test("a board without Tasks says so once", async ({ page }) => {
   await expect(page.getByText("This Agent hasn't recorded any tasks yet.")).toBeVisible();
   await expect(tasksPage.column("Open")).toHaveCount(0);
 });
+
+test("Back after closing a Task leaves it closed", async ({ page }) => {
+  const { tasksPage } = await open(page);
+  const tabUrl = page.url();
+
+  await tasksPage.openCard("Reconcile March invoices");
+  await expect(tasksPage.detail()).toContainText("Two invoices had no payment");
+  await page.keyboard.press("Escape");
+  await expect(tasksPage.detail()).toHaveCount(0);
+
+  await page.goBack();
+  await expect(page).toHaveURL(tabUrl);
+  await expect(tasksPage.detail()).toHaveCount(0);
+});
