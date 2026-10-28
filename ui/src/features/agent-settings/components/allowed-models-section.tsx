@@ -3,6 +3,11 @@
 import { useMemo, useState } from "react";
 import { Loader2, Search } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SettingsErrorText } from "@/components/settings/settings-error-text";
 import { SettingsSectionHeading } from "@/components/settings/settings-section-heading";
@@ -178,42 +183,42 @@ export function AllowedModelsSection({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>{selected.length + orphaned.length} enabled</span>
                 {editing && canEdit && (
-                  <button type="button" className="af-btn af-btn-primary" onClick={() => { setToAdd([]); setCatalogSearch(""); setDialogOpen(true); }}>
+                  <Button type="button" onClick={() => { setToAdd([]); setCatalogSearch(""); setDialogOpen(true); }}>
                     Add models
-                  </button>
+                  </Button>
                 )}
               </div>
-              <div className="relative max-w-md">
-                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--ink-4)" }} aria-hidden />
-                <input className="af-input pl-9" placeholder="Search enabled models…" aria-label="Search enabled models" value={search} onChange={(event) => setSearch(event.target.value)} />
-              </div>
+              <InputGroup className="max-w-md">
+                <InputGroupAddon><Search aria-hidden /></InputGroupAddon>
+                <InputGroupInput placeholder="Search enabled models…" aria-label="Search enabled models" value={search} onChange={(event) => setSearch(event.target.value)} />
+              </InputGroup>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {visibleSelected.map((value) => {
                   const model = models.find((entry) => entry.value === value);
                   const details = modelDetails(model ?? { value });
                   const required = value === requiredModel;
                   return (
-                    <div key={value} className="flex flex-col gap-3 rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
+                    <Card key={value} className="gap-3 p-4" style={{ background: "var(--bg-soft)" }}>
                       <div className="flex items-start gap-3">
                         <ProviderIcon provider={details.provider} />
                         <div className="min-w-0 flex-1">
                           <div className="text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{model?.label ?? stripPrefix(value)}</div>
                           <div className="text-[0.75rem]" style={{ color: "var(--ink-3)" }}>{details.provider}</div>
                         </div>
-                        {required ? <span className="text-[0.72rem]">Default · required</span> : editing && canEdit && <button type="button" className="text-[0.75rem]" onClick={() => toggle(value)} aria-label={`Remove ${model?.label ?? stripPrefix(value)}`}>Remove</button>}
+                        {required ? <span className="text-[0.72rem]">Default · required</span> : editing && canEdit && <Button variant="ghost" size="sm" type="button" onClick={() => toggle(value)} aria-label={`Remove ${model?.label ?? stripPrefix(value)}`}>Remove</Button>}
                       </div>
                       {details.context && <div className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>{details.context} context</div>}
                       <div className="flex flex-wrap justify-between gap-2 border-t pt-3 text-[0.72rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>
                         <span>Input {details.input ?? "—"} / 1M tokens</span><span>Output {details.output ?? "—"} / 1M tokens</span>
                       </div>
-                    </div>
+                    </Card>
                   );
                 })}
                 {visibleOrphans.map((value) => (
-                  <div key={value} className="flex items-center justify-between gap-3 rounded-xl p-4 text-[0.8rem]" style={{ border: "1px solid var(--warn)", color: "var(--warn)" }}>
+                  <Card key={value} className="flex-row items-center justify-between gap-3 p-4 text-[0.8rem]" style={{ border: "1px solid var(--warn)", color: "var(--warn)" }}>
                     <span>{value} · not in catalog</span>
-                    {editing && canEdit && <button type="button" aria-label={`Remove ${value}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</button>}
-                  </div>
+                    {editing && canEdit && <Button variant="ghost" size="sm" type="button" aria-label={`Remove ${value}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</Button>}
+                  </Card>
                 ))}
               </div>
               {visibleSelected.length + visibleOrphans.length === 0 && <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>{search ? "No enabled models match." : "No models are allowed yet, so Agents cannot be created."}</p>}
@@ -222,7 +227,7 @@ export function AllowedModelsSection({
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent className="max-h-[85vh] sm:max-w-2xl">
                   <DialogHeader><DialogTitle>Add models</DialogTitle><DialogDescription>Search the OpenRouter catalog and select models to allow.</DialogDescription></DialogHeader>
-                  <input className="af-input" placeholder="Search by model or provider…" aria-label="Search catalog" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} />
+                  <Input placeholder="Search by model or provider…" aria-label="Search catalog" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} />
                   <div className="max-h-[50vh] overflow-y-auto">
                     {filteredCatalog.map((model) => {
                       const details = modelDetails(model);
@@ -230,12 +235,12 @@ export function AllowedModelsSection({
                       return <label key={model.value} className="flex items-center gap-3 border-b py-3" style={{ borderColor: "var(--line)" }}>
                         <ProviderIcon provider={details.provider} />
                         <span className="min-w-0 flex-1"><span className="block text-[0.84rem] font-medium">{model.label}</span><span className="block text-[0.72rem]" style={{ color: "var(--ink-3)" }}>{details.provider}{details.context && ` · ${details.context} context`}{details.input && ` · ${details.input} input / 1M`}{details.output && ` · ${details.output} output / 1M`}</span></span>
-                        {enabled ? <span className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>Already enabled</span> : <input type="checkbox" aria-label={model.label} checked={toAdd.includes(model.value)} onChange={() => setToAdd((current) => current.includes(model.value) ? current.filter((item) => item !== model.value) : [...current, model.value])} />}
+                        {enabled ? <span className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>Already enabled</span> : <Checkbox aria-label={model.label} checked={toAdd.includes(model.value)} onCheckedChange={() => setToAdd((current) => current.includes(model.value) ? current.filter((item) => item !== model.value) : [...current, model.value])} />}
                       </label>;
                     })}
                     {filteredCatalog.length === 0 && <p className="text-sm">No models match.</p>}
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>{toAdd.length} selected</span><div className="flex gap-2"><button type="button" className="af-btn" onClick={() => setDialogOpen(false)}>Cancel</button><button type="button" className="af-btn af-btn-primary" disabled={!toAdd.length} onClick={() => { setSelectedDraft([...new Set([...selected, ...toAdd])]); setDialogOpen(false); }}>Add {toAdd.length} {toAdd.length === 1 ? "model" : "models"}</button></div></div>
+                  <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>{toAdd.length} selected</span><div className="flex gap-2"><Button variant="outline" type="button" onClick={() => setDialogOpen(false)}>Cancel</Button><Button type="button" disabled={!toAdd.length} onClick={() => { setSelectedDraft([...new Set([...selected, ...toAdd])]); setDialogOpen(false); }}>Add {toAdd.length} {toAdd.length === 1 ? "model" : "models"}</Button></div></div>
                 </DialogContent>
               </Dialog>
             </>
