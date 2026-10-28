@@ -174,11 +174,11 @@ releases:
       name: agentbarn-api
     set:
       - name: artifacts.existingSecret
-        value: {{ env "ARTIFACT_STORAGE_SECRET" | default "" | quote }}
+        value: "garage-artifact-storage"
       - name: artifacts.purgeEnabled
-        value: {{ env "ARTIFACT_PURGE_ENABLED" | default (ternary "true" "false" (ne (env "ARTIFACT_STORAGE_SECRET") "")) }}
+        value: {{ env "ARTIFACT_PURGE_ENABLED" | default "true" }}
       - name: artifacts.provisionerSecret
-        value: {{ env "ARTIFACT_PROVISIONER_SECRET" | default "garage-artifact-provisioner" | quote }}
+        value: "garage-artifact-provisioner"
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
