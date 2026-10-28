@@ -29,6 +29,7 @@ from api.domains.agents.models import (
     ManagedUpdateOutcome,
     PlatformAgentIdentity,
     PlatformAgentRow,
+    PlatformFailedAgent,
     SecretProvider,
 )
 from api.domains.artifacts.models import ArtifactBucket
@@ -1765,6 +1766,31 @@ class AgentRepository:
         )
         with self.delegate.engine.connect() as connection:
             return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
+
+    def find_failed_for_platform(self) -> list[PlatformFailedAgent]:
+        """Every live Agent in ERROR on the platform, most recently changed first.
+
+        Platform-wide by design, for the environment health page behind
+        `require_platform_admin`. Only identity and the stored failure are read.
+        """
+        query = (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.organization_id),
+                col(Organization.name),
+                col(Agent.last_error_code),
+                col(Agent.last_error_detail),
+                col(Agent.last_error),
+                col(Agent.updated_at),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+            .where(col(Agent.status) == AgentStatus.ERROR)
+            .order_by(col(Agent.updated_at).desc())
+        )
+        with self.delegate.engine.connect() as connection:
+            return [PlatformFailedAgent(*row) for row in connection.execute(query).all()]
 
     def find_platform_agents(
         self,

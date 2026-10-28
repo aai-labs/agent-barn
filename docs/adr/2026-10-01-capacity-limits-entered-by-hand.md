@@ -27,6 +27,13 @@ Origin: AF-170, from what staging showed after the page shipped.
 - **A pod is charged the larger of its containers and its biggest init container.** The committed figure first read only the containers, and showed 34.06 GiB and 19.85 cores while the quota counted 42.56 GiB and 24.1 cores. The cause was an init container with no resources, which the namespace LimitRange filled with more than the agent itself had. The query now follows the rule (verified pod by pod against the quota on staging), and the agent's init container carries the agent's own resources, which frees about 8.5 GiB and 4.25 cores there.
 - The ceilings are still typed in. The way to read the quota's real values is a server-side dry run, not a grant, and it is a manual step, so the decision to enter them by hand stands.
 
+## Amendment, 2026-10-20: storage and pods, and the quota when it can be read
+
+Origin: AF-266.
+
+- **Two more ceilings.** A full `requests.storage` quota stopped a new Agent on staging, and the quota also caps the number of pods, so the same row holds `requests_storage_bytes` and `pods`, entered the same way and audited the same way. Their committed figures need no kube-state-metrics collector: the API lists the namespace's claims and pods itself to run Agents, so the [environment health](../features/environment-health.md) page adds them up.
+- **The quota takes over when it can be read.** The environment health page asks for the namespace's ResourceQuotas and, when the account may read them and there is one, shows its own figures in place of the entered ceilings. Today the read is refused, the page says so, and the entered ceilings stand. No code change is needed when the grant lands; the ceilings then become a fallback.
+
 ## Revisit when
 
 The platform owners let our account read the ResourceQuota. The page could then show the real quota, and the typed ceilings would become an override or be removed.
