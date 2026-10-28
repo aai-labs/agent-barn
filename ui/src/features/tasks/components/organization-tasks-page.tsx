@@ -2,7 +2,7 @@
 
 import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 
-import { useAgents } from "@/features/agents/hooks/use-agents";
+import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
 import { canAgent } from "@/features/agents/utils";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
@@ -29,7 +29,7 @@ export function OrganizationTasksPage() {
   );
   const [openTask, setOpenTask] = useOpenTask();
   const { selectedOrganization } = useOrganizationContext();
-  const { agents } = useAgents();
+  const { agents } = useAllAgents();
   const taskAgents = agents.filter((agent) => canAgent(agent, "task.read"));
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
   const scope = { kind: "organization", agentId: filters.agent } as const;

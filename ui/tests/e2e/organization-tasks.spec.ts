@@ -141,3 +141,26 @@ test("the Task dialog names the Agent and links to its Tasks", async ({ page }) 
     `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=tasks`,
   );
 });
+
+test("Agents past the first page of the Agents list are named and offered as a filter", async ({ page }) => {
+  const { tasksPage } = await open(page);
+  // Later routes win: serve the Agents one per page, so Rex is only on page 2.
+  await page.route("**/api/v1/organizations/*/agents?*", async (route) => {
+    const url = new URL(route.request().url());
+    const agents = [
+      { ...mockAgent, name: "Maya", allowed_actions: TASK_READER_ACTIONS },
+      { ...mockAgent, id: OTHER_AGENT_ID, name: "Rex", allowed_actions: TASK_READER_ACTIONS },
+    ];
+    const number = Number(url.searchParams.get("page") ?? "1");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ page: number, page_size: 1, total: agents.length, items: agents.slice(number - 1, number) }),
+    });
+  });
+  await page.reload();
+
+  await expect(tasksPage.column("In progress")).toContainText("Rex");
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await expect(page.getByRole("option", { name: "Rex" })).toBeVisible();
+});
