@@ -182,7 +182,8 @@ export class WorkflowRunDataSupport {
         });
       } else if (path.endsWith("/history")) {
         await route.fulfill({
-          json: page([
+          json: page(
+          [
             {
               id: "00000000-0000-4000-8000-0000000000a1",
               created_at: "2026-10-17T10:00:00Z",
@@ -204,11 +205,12 @@ export class WorkflowRunDataSupport {
                     created_at: "2026-10-17T10:02:18Z",
                     revision: 3,
                     kind: "STEP_COMPLETED",
-                    detail: "Final step completed",
+                    detail: "## Final step\n\n[Open the report](https://example.test)",
                   },
                 ]
               : []),
-          ]),
+          ].reverse(),
+          ),
         });
       } else if (path.endsWith("/re-run")) {
         this.reruns.push(route.request().postDataJSON());

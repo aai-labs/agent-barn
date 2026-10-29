@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Loader2, Search } from "lucide-react";
+import { CircleAlert, Loader2, Search } from "lucide-react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -198,7 +199,7 @@ export function AllowedModelsSection({
                   const details = modelDetails(model ?? { value });
                   const required = value === requiredModel;
                   return (
-                    <Card key={value} className="gap-3 p-4" style={{ background: "var(--bg-soft)" }}>
+                    <Card key={value} className="gap-3 p-4 ring-0" style={{ background: "var(--bg-elev)", border: "1px solid var(--line)" }}>
                       <div className="flex items-start gap-3">
                         <ProviderIcon provider={details.provider} />
                         <div className="min-w-0 flex-1">
@@ -215,20 +216,35 @@ export function AllowedModelsSection({
                   );
                 })}
                 {visibleOrphans.map((value) => (
-                  <Card key={value} className="flex-row items-center justify-between gap-3 p-4 text-[0.8rem]" style={{ border: "1px solid var(--warn)", color: "var(--warn)" }}>
-                    <span>{value} · not in catalog</span>
-                    {editing && canEdit && <Button variant="ghost" size="sm" type="button" aria-label={`Remove ${value}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</Button>}
+                  <Card key={value} className="gap-3 p-4 ring-0" style={{ background: "var(--bg-elev)", border: "1px solid var(--line)" }}>
+                    <div className="flex items-start gap-3">
+                      <ProviderIcon provider={stripPrefix(value).split("/")[0]} />
+                      <div className="min-w-0 flex-1">
+                        <div className="break-all text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{value}</div>
+                        <div className="mt-1 text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Not in the OpenRouter catalog</div>
+                      </div>
+                      {editing && canEdit && <Button variant="ghost" size="sm" type="button" aria-label={`Remove ${value}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</Button>}
+                    </div>
+                    <div className="border-t pt-3 text-[0.72rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>Kept in the allowed list until removed.</div>
                   </Card>
                 ))}
               </div>
               {visibleSelected.length + visibleOrphans.length === 0 && <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>{search ? "No enabled models match." : "No models are allowed yet, so Agents cannot be created."}</p>}
               {editing && canEdit && <p className="m-0 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>An organization-owned default must stay in this list. Point any Agent pinned to a model at something else before removing it.</p>}
-              {updateOrg.error && <SettingsErrorText>{updateOrg.error instanceof Error ? updateOrg.error.message : "Save failed"}</SettingsErrorText>}
+              {updateOrg.error && (
+                <Alert variant="destructive" className="rounded-xl px-4 py-3" style={{ background: "var(--err-soft)", borderColor: "color-mix(in srgb, var(--err) 30%, transparent)", color: "var(--err)" }}>
+                  <CircleAlert aria-hidden="true" className="size-4" />
+                  <AlertTitle className="text-[0.8125rem]">Could not save allowed models</AlertTitle>
+                  <AlertDescription className="text-[0.8125rem] leading-relaxed" style={{ color: "var(--err)" }}>
+                    <SettingsErrorText>{updateOrg.error instanceof Error ? updateOrg.error.message : "Save failed"}</SettingsErrorText>
+                  </AlertDescription>
+                </Alert>
+              )}
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent className="max-h-[85vh] sm:max-w-2xl">
                   <DialogHeader><DialogTitle>Add models</DialogTitle><DialogDescription>Search the OpenRouter catalog and select models to allow.</DialogDescription></DialogHeader>
                   <Input placeholder="Search by model or provider…" aria-label="Search catalog" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} />
-                  <div className="max-h-[50vh] overflow-y-auto">
+                  <div className="max-h-[50vh] overflow-y-auto pr-4">
                     {filteredCatalog.map((model) => {
                       const details = modelDetails(model);
                       const enabled = selected.includes(model.value);

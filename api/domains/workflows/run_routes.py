@@ -54,5 +54,13 @@ def cancel_run(agent_id: UUID, run_id: UUID, payload: WorkflowRunCancel, context
 
 
 @router.get("/workflow-runs/{run_id}/history", response_model=PaginatedItems[WorkflowHistoryRead])
-def history(agent_id: UUID, run_id: UUID, context: Context, service: Service, page: Page = 1, page_size: Size = 20):
-    return service.history(agent_id, run_id, context, page, page_size)
+def history(
+    agent_id: UUID,
+    run_id: UUID,
+    context: Context,
+    service: Service,
+    page: Page = 1,
+    page_size: Size = 20,
+    newest_first: bool = False,
+):
+    return service.history(agent_id, run_id, context, page, page_size, newest_first)

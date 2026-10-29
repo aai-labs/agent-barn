@@ -135,13 +135,8 @@ class WorkflowRunService:
         found = self.repository.get(run_id, agent_id, self._scope(agent_id, context))
         if not found:
             raise HTTPException(404, "Workflow run not found")
-        return self._read(
-            *found,
-            agent_id,
-            context,
-            step_records=self.repository.step_records(found[0].id),
-            attempt=self.repository.current_attempt(found[0]),
-        )
+        step_records, attempt = self.repository.progress(found[0])
+        return self._read(*found, agent_id, context, step_records=step_records, attempt=attempt)
 
     def list_runs(
         self, agent_id: UUID, context: CurrentUserContext, page: int, size: int, workflow_id: UUID | None
@@ -245,10 +240,18 @@ class WorkflowRunService:
         return self.get(agent_id, run_id, context)
 
     def history(
-        self, agent_id: UUID, run_id: UUID, context: CurrentUserContext, page: int, size: int
+        self,
+        agent_id: UUID,
+        run_id: UUID,
+        context: CurrentUserContext,
+        page: int,
+        size: int,
+        newest_first: bool = False,
     ) -> PaginatedItems[WorkflowHistoryRead]:
         self.get(agent_id, run_id, context)
-        rows, total = self.repository.history(run_id, agent_id, self._scope(agent_id, context), page, size)
+        rows, total = self.repository.history(
+            run_id, agent_id, self._scope(agent_id, context), page, size, newest_first
+        )
         return PaginatedItems(
             page, size, total, [WorkflowHistoryRead.model_validate(row, from_attributes=True) for row in rows]
         )

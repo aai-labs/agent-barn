@@ -44,6 +44,7 @@ export const WorkflowRunSchema = z.object({
       limit: z.number(),
       startedAt: z.string(),
       expiresAt: z.string(),
+      serverTime: z.string(),
       agentUnresponsive: z.boolean(),
     })
     .nullable()
