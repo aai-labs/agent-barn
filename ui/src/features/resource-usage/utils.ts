@@ -23,6 +23,12 @@ export const OVERVIEW_PERIODS = [
 export type OverviewPeriod = (typeof OVERVIEW_PERIODS)[number]["value"];
 export const DEFAULT_OVERVIEW_PERIOD: OverviewPeriod = "THIRTY_DAYS";
 
+/** The usage range an overview period is read over. Prometheus keeps 15 days, so the
+ *  longer periods stop at 14 and the panel's labels say so. */
+export function usageRangeForPeriod(period: OverviewPeriod): ResourceUsageRange {
+  return period === "SEVEN_DAYS" ? "7d" : "14d";
+}
+
 /** Both figures move slowly; a minute matches how often Prometheus is worth asking. */
 export const RESOURCE_USAGE_REFETCH_MS = 60_000;
 
@@ -90,5 +96,6 @@ export const resourceUsageKey = {
   /** Every Platform usage query, whatever its range or filter. */
   platformAll: ["platform", "resource-usage"] as const,
   /** One opened Heaviest agents row. */
-  platformAgent: (agentId: string) => ["platform", "resource-usage", "agent", agentId] as const,
+  platformAgent: (agentId: string, range: ResourceUsageRange) =>
+    ["platform", "resource-usage", "agent", agentId, range] as const,
 };

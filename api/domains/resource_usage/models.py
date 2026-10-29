@@ -297,7 +297,7 @@ class PlatformAgentUsagePoint(PydanticBaseModel):
 
 
 class PlatformAgentResourceUsageRead(PydanticBaseModel):
-    """One Agent's usage over the last day, as the Platform page shows it.
+    """One Agent's usage over a range, as the Platform page shows it.
 
     Mirrors the figures the Organization overview's panel shows, field for field, without
     reusing its DTO. `availability` is about the source, `state` about the Agent.

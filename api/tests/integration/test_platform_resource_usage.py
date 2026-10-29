@@ -633,8 +633,8 @@ _SECRET_LOG = "SECRET LOG LINE from the agent's own container"
 _SECRET_REASON = "SECRET free-text reason from the agent's healthz"
 
 
-def _details(context, agent_id: UUID):
-    return context.client.get(_DETAILS.format(agent_id=agent_id), headers=_auth(context.access_token))
+def _details(context, agent_id: UUID, query: str = ""):
+    return context.client.get(_DETAILS.format(agent_id=agent_id) + query, headers=_auth(context.access_token))
 
 
 def _cluster_says(
@@ -758,6 +758,26 @@ def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
             assert_that(usage["memory_working_set_bytes"], equal_to(1 * _GiB))
             assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
             assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_an_opened_row_covers_the_range_the_page_asks_for():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-range-a@example.com", "owner-det-range-b@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-range@example.com"),
+        ]
+    ) as context:
+        with when("the admin opens an agent with the page set to the last 14 days"):
+            response = _details(context, context.cy.id, "?range=14d")
+
+        with then("its usage covers 14 days, one point an hour"):
+            usage = response.json()["resource_usage"]
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(usage["range"], equal_to("14d"))
+            assert_that(usage["step_seconds"], equal_to(3600))
 
 
 def test_an_opened_row_carries_the_agents_request_beside_its_limit():

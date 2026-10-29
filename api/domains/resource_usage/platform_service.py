@@ -343,7 +343,7 @@ class PlatformResourceUsageService:
             logger.warning("Platform Agent requests are unavailable", exc_info=True)
             return {}
 
-    def get_agent_details(self, agent_id: UUID) -> PlatformAgentDetailsRead:
+    def get_agent_details(self, agent_id: UUID, usage_range: ResourceUsageRange) -> PlatformAgentDetailsRead:
         """Status and usage for one live Agent, for a Heaviest agents row that is opened.
 
         The same facts the Organization overview's panels show, from the same sources, but
@@ -357,7 +357,7 @@ class PlatformResourceUsageService:
         has_container = agent.status != AgentStatus.STOPPED
         health = self._health_or_none(agent) if has_container else None
         diagnostics = self.agent_service.runtime_restarts(agent) if has_container else None
-        usage = self.resource_usage_service.usage_for(agent, ResourceUsageRange.ONE_DAY) if has_container else None
+        usage = self.resource_usage_service.usage_for(agent, usage_range) if has_container else None
         organization_id = agent.organization_id
         return PlatformAgentDetailsRead(
             agent_id=agent.id,

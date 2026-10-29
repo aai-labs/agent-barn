@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { formatPercent } from "@/features/costs/format";
 
 import { formatBytes, formatCores } from "../format";
-import type { PlatformAgentUsage } from "../schemas";
+import type { PlatformAgentUsage, ResourceUsageRange } from "../schemas";
 import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
 import { LimitLabel } from "./limit-label";
 import { PlatformAgentDetails } from "./platform-agent-details";
@@ -40,10 +40,13 @@ function amount(agent: PlatformAgentUsage, key: SortKey): number {
 export function PlatformAgentsUsageTable({
   agents,
   needUpdate,
+  range,
 }: {
   agents: PlatformAgentUsage[];
   /** Agents that cannot report until they are updated, for the empty state to say so. */
   needUpdate: number;
+  /** The page's range, which an opened row's peak, throttling and chart cover. */
+  range: ResourceUsageRange;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("memory");
   const [showAll, setShowAll] = useState(false);
@@ -127,6 +130,7 @@ export function PlatformAgentsUsageTable({
             <AgentRow
               key={agent.agentId}
               agent={agent}
+              range={range}
               expanded={expanded.has(agent.agentId)}
               onToggle={() => toggleExpanded(agent.agentId)}
             />
@@ -151,10 +155,12 @@ export function PlatformAgentsUsageTable({
 
 function AgentRow({
   agent,
+  range,
   expanded,
   onToggle,
 }: {
   agent: PlatformAgentUsage;
+  range: ResourceUsageRange;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -289,7 +295,7 @@ function AgentRow({
           <td colSpan={COLUMN_COUNT}>
             {/* Held at the left edge while the table scrolls, so it is read without scrolling. */}
             <div className="sticky left-0 w-[100cqw]">
-              <PlatformAgentDetails agentId={agent.agentId} />
+              <PlatformAgentDetails agentId={agent.agentId} range={range} />
             </div>
           </td>
         </tr>

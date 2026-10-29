@@ -172,6 +172,7 @@ export function PlatformResourceUsagePage({ agentsOnly = false }: { agentsOnly?:
                     <PlatformAgentsUsageTable
                       agents={usage.agents}
                       needUpdate={usage.totals.agentsRestartRequired ?? 0}
+                      range={range}
                     />
                     <p className="m-0 mt-3 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
                       Readings are current, refreshed every minute.

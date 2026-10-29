@@ -408,15 +408,18 @@ export class ResourceUsageDataSupport {
     const asked: string[] = [];
     await this.page.route("**/api/v1/platform/resource-usage/agents/*", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
-      const agentId = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+      const url = new URL(route.request().url());
+      const agentId = url.pathname.split("/").pop() ?? "";
       asked.push(agentId);
+      const defaults = mockPlatformAgentDetails({ agent_id: agentId });
+      const range = url.searchParams.get("range") ?? "24h";
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
           status >= 400
             ? { detail: "Unable to load this agent" }
-            : (body?.(agentId) ?? mockPlatformAgentDetails({ agent_id: agentId })),
+            : (body?.(agentId) ?? { ...defaults, resource_usage: { ...defaults.resource_usage, range } }),
         ),
       });
     });

@@ -793,6 +793,18 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
     await expect(usage.getByRole("img", { name: "Memory over time" })).toBeVisible();
   });
 
+  test("an opened row covers the range the page is set to", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.gotoAgentResourceUsage();
+    await usagePage.chooseRange("Last 7 days");
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    const usage = usagePage.agentDetails().getByTestId("platform-agent-usage");
+    await expect(usage).toContainText("Peak memory, 7d");
+    await expect(usage).toContainText("CPU throttled, 7d");
+  });
+
   test("has no Cost panel and no links, since an organization's agent pages are not an admin's to open", async () => {
     await data.resourceUsage.interceptPlatformAgentDetails();
     await usagePage.gotoAgentResourceUsage();

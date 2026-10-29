@@ -11,7 +11,7 @@ import { formatCallSpend, formatSpend } from "@/features/costs/format";
 
 import { useAgentResourceUsage } from "../hooks/use-agent-resource-usage";
 import type { AgentOverviewItem } from "../schemas";
-import type { OverviewPeriod } from "../utils";
+import { usageRangeForPeriod, type OverviewPeriod } from "../utils";
 import { Fact, Muted, PANEL_GRID_STYLE, Panel, PanelSkeleton, StatusFacts, UsageFacts } from "./agent-detail-panels";
 
 interface AgentOverviewDetailsProps {
@@ -53,7 +53,7 @@ export function AgentOverviewDetails({ item, health, period, agentHref }: AgentO
         linkLabel="See resource usage"
         testId="agent-overview-usage"
       >
-        <UsagePanel item={item} />
+        <UsagePanel item={item} period={period} />
       </Panel>
     </div>
   );
@@ -104,12 +104,16 @@ function CostPanel({ item, period }: { item: AgentOverviewItem; period: Overview
   );
 }
 
-function UsagePanel({ item }: { item: AgentOverviewItem }) {
+function UsagePanel({ item, period }: { item: AgentOverviewItem; period: OverviewPeriod }) {
   const canRead = canAgent(item, "activity.read");
   const stopped = item.status === "STOPPED";
   // Only asked for what can be answered: a stopped Agent has no container, and a reader
   // without activity.read would be refused.
-  const { usage, isLoadingUsage, error } = useAgentResourceUsage(item.id, "24h", canRead && !stopped);
+  const { usage, isLoadingUsage, error } = useAgentResourceUsage(
+    item.id,
+    usageRangeForPeriod(period),
+    canRead && !stopped,
+  );
 
   return <UsageFacts canRead={canRead} stopped={stopped} isLoading={isLoadingUsage} failed={!!error} usage={usage} />;
 }

@@ -223,9 +223,9 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
         testId="usage-panel-cpu-request"
       />
       <div>
-        <Fact label="Peak memory, 24h" value={usage.memoryPeakBytes !== null ? formatBytes(usage.memoryPeakBytes) : "—"} />
+        <Fact label={`Peak memory, ${usage.range}`} value={usage.memoryPeakBytes !== null ? formatBytes(usage.memoryPeakBytes) : "—"} />
         <Fact
-          label="CPU throttled, 24h"
+          label={`CPU throttled, ${usage.range}`}
           value={
             <span style={{ color: throttled !== null && throttled >= THROTTLING_WARN_RATIO ? "var(--warn)" : undefined }}>
               {throttled !== null ? formatPercent(throttled) : "—"}

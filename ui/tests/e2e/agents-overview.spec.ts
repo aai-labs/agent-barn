@@ -308,7 +308,7 @@ test.describe("Agents overview", () => {
       await expect(cost).toContainText("8");
       const usage = page.getByTestId("agent-overview-usage");
       await expect(usage).toContainText("342 MiB of 1 GiB");
-      await expect(usage).toContainText("Peak memory, 24h");
+      await expect(usage).toContainText("Peak memory, 14d");
 
       await expect(status.getByRole("link", { name: /Open agent/ })).toHaveAttribute(
         "href",
@@ -376,6 +376,22 @@ test.describe("Agents overview", () => {
 
       await expect(page.getByTestId("agent-overview-cost")).toContainText("don't have access to this agent's cost");
       await expect(page.getByTestId("agent-overview-usage")).toContainText("342 MiB of 1 GiB");
+    });
+
+    test("covers the spend period in usage, up to the 14 days Prometheus keeps", async ({ page }) => {
+      const requests = await dataSupportPage.resourceUsage.interceptAgentResourceUsage(MOCK_AGENT_ID);
+      await overview.goto();
+      await overview.toggleFor("Maya").click();
+      const usage = page.getByTestId("agent-overview-usage");
+
+      await expect(usage).toContainText("Peak memory, 14d");
+      expect(requests.map((request) => request.get("range"))).toEqual(["14d"]);
+
+      await overview.choosePeriod("Last 7 days");
+      await overview.toggleFor("Maya").click();
+
+      await expect(usage).toContainText("Peak memory, 7d");
+      await expect(usage).toContainText("CPU throttled, 7d");
     });
 
     test("does not ask for resource usage of a stopped agent", async ({ page }) => {

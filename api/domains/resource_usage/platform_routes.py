@@ -35,6 +35,7 @@ def get_platform_agent_details(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[PlatformResourceUsageService, Injected(PlatformResourceUsageService)],
+    usage_range: Annotated[ResourceUsageRange, Query(alias="range")] = ResourceUsageRange.ONE_DAY,
 ):
-    """Status and last-day usage for one Agent: what a Heaviest agents row shows when opened."""
-    return service.get_agent_details(agent_id)
+    """Status and usage over a range for one Agent: what a Heaviest agents row shows when opened."""
+    return service.get_agent_details(agent_id, usage_range)
