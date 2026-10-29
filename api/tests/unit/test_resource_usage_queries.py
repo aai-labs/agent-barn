@@ -71,7 +71,7 @@ def test_the_instant_query_reads_every_field_in_one_request():
 
     for field in fields:
         assert f'"usage_field", "{field}", "", ""' in query
-    assert query.count(" or ") == len(fields) - 1
+    assert query.count("label_replace(") == len(fields)
 
 
 def test_gauges_take_the_max_and_counters_are_summed_as_rates():
@@ -92,6 +92,19 @@ def test_limits_and_throttling_use_their_own_windows():
     assert f"increase(agent_cpu_periods_total{_SEL}[3600s])" in query
     # An agent with no scheduling periods yet must read as zero, not divide by zero.
     assert "clamp_min(" in query
+
+
+def test_a_live_pods_limit_wins_over_an_older_pods_within_the_window():
+    query = instant_query(_SEL, 14 * 86400, 3600)
+
+    assert (
+        f"max by (app) (agent_memory_limit_bytes{_SEL})"
+        f" or max by (app) (last_over_time(agent_memory_limit_bytes{_SEL}[1209600s]))"
+    ) in query
+    assert (
+        f"max by (app) (agent_cpu_limit_cores{_SEL})"
+        f" or max by (app) (last_over_time(agent_cpu_limit_cores{_SEL}[1209600s]))"
+    ) in query
 
 
 def test_the_range_query_takes_the_peak_memory_and_the_rate_of_cpu():

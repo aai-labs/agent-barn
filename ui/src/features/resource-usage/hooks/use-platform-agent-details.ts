@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
@@ -12,6 +12,8 @@ import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey } from "../utils";
  *
  * Platform Administrators only. It is mounted with the opened row and unmounts with it, so
  * a closed row costs no request, and an open one refreshes on the same minute as the page.
+ * Status rides on the same request, so a range change keeps the last answer on screen
+ * instead of blanking both panels while the new range loads.
  */
 export function usePlatformAgentDetails(agentId: string, range: ResourceUsageRange) {
   const query = useQuery({
@@ -24,6 +26,7 @@ export function usePlatformAgentDetails(agentId: string, range: ResourceUsageRan
       return response.data;
     },
     refetchInterval: RESOURCE_USAGE_REFETCH_MS,
+    placeholderData: keepPreviousData,
   });
 
   return {

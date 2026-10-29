@@ -23,10 +23,16 @@ export const OVERVIEW_PERIODS = [
 export type OverviewPeriod = (typeof OVERVIEW_PERIODS)[number]["value"];
 export const DEFAULT_OVERVIEW_PERIOD: OverviewPeriod = "THIRTY_DAYS";
 
-/** The usage range an overview period is read over. Prometheus keeps 15 days, so the
- *  longer periods stop at 14 and the panel's labels say so. */
+/** Prometheus keeps 15 days, so the longer periods stop at 14 and the panel's labels say so. */
+const USAGE_RANGE_FOR_PERIOD: Record<OverviewPeriod, ResourceUsageRange> = {
+  SEVEN_DAYS: "7d",
+  THIRTY_DAYS: "14d",
+  NINETY_DAYS: "14d",
+};
+
+/** The usage range an overview period is read over. */
 export function usageRangeForPeriod(period: OverviewPeriod): ResourceUsageRange {
-  return period === "SEVEN_DAYS" ? "7d" : "14d";
+  return USAGE_RANGE_FOR_PERIOD[period];
 }
 
 /** Both figures move slowly; a minute matches how often Prometheus is worth asking. */
