@@ -27,7 +27,7 @@ Hard aggregate deletion cascades to the authoring records.
 
 Creation explicitly saves immutable v1. A version is the complete schema-v1
 snapshot: name, outcome description, ordered step identities/names/goals,
-completion criteria, required inputs, optional per-step and final artifact
+required inputs, optional per-step artifact
 descriptions, capability requirements and review destination. Step order is array
 order. Step UUIDs and input keys must be unique. Canonical UUID-shaped step identities
 use the same GUID validation in the UI and API; the manual builder assigns fresh
@@ -44,14 +44,17 @@ to fit. Blank labels remain invalid. Normalization collisions are reported on th
 later input label, naming the first matching input; suffixes reduce collisions
 but uniqueness is still validated rather than assumed. Keys stay hidden in both
 editing and saved inspection. Existing saved keys remain unchanged until their
-label is edited. Names and descriptions cannot be blank and have bounded lengths.
+label is edited. Names cannot be blank. The workflow description is optional;
+descriptions have bounded lengths.
 Unknown fields and unsupported input/capability/destination codes are rejected.
 Artifact descriptions describe what the user wants to receive. The Agent uses the
-step and final output descriptions to choose a useful format and publishes any
+step output descriptions to choose a useful format and publishes any
 generated files as downloadable artifacts. Authors do not configure file-format
 switches. Descriptions do not validate semantic content or promise format support;
 the Agent must honestly report unmet criteria or publication failure. Authoring
 does not compile or admit execution capabilities.
+Step instructions can include success criteria. Older saved completion criteria
+remain visible and are passed to the Agent; new steps do not require them.
 The descriptive capability vocabulary is reasoning/business_action/native_command.
 It is descriptive only: it neither enables nor restricts what a step may do when run.
 
@@ -226,7 +229,7 @@ exactly what the Agent can do in chat, under the same rules, including acting
 unattended wherever the Agent may act unattended in chat. [Agent artifacts](agent-artifacts.md)
 adds optional shared chat/workflow files with private Garage/S3 bytes, scoped
 publication, immutable ID/checksum handoff, attachments and retention. The saved
-`artifact_description` and `final_artifact_description` fields guide the requested
+step `artifact_description` fields guide the requested
 output; text-only results remain supported without storage. Every completed step
 reports its actual result in its summary, bounded to 4,000 characters, including
 facts later steps need. The last step's summary also serves as the final result.
@@ -408,7 +411,7 @@ gate. Earlier files are available as inputs; they are not silently promoted to
 final outputs. The service verifies published bytes, not whether a file's content
 satisfies free-text criteria. `steps[].artifacts` exposes accepted checkpoint outputs;
 `final_artifacts` contains only the successful last checkpoint's files and
-`final_output_description` preserves the requested deliverable. Failed/unfinished
+`final_output_description` reflects the last step's output description. Failed/unfinished
 attempt publications remain visible separately as attachments, never as accepted
 or final results.
 

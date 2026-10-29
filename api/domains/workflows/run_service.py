@@ -110,7 +110,7 @@ class WorkflowRunService:
             final_summary=(step_records or {}).get(len(version.snapshot["steps"]) - 1, {}).get("summary")
             if run.state == "SUCCEEDED"
             else None,
-            final_output_description=version.snapshot.get("final_artifact_description"),
+            final_output_description=version.snapshot["steps"][-1].get("artifact_description"),
             final_artifacts=(step_records or {}).get(len(version.snapshot["steps"]) - 1, {}).get("artifacts", [])
             if run.state == "SUCCEEDED"
             else [],

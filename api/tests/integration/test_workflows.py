@@ -65,6 +65,16 @@ def test_create_saves_v1_without_starting_execution_and_lists_it() -> None:
         assert_that(response.json()["items"][0]["id"], equal_to(saved["id"]))
 
 
+def test_workflow_description_is_optional() -> None:
+    with given(_GIVEN) as context:
+        body = draft()
+        del body["description"]
+        response = context.client.post(base(context) + "/workflows", headers=auth(context), json=body)
+        assert_that(response.status_code, equal_to(201))
+        saved = context.client.get(base(context) + f"/workflows/{response.json()['id']}", headers=auth(context))
+        assert_that(saved.json()["version"]["draft"]["description"], equal_to(""))
+
+
 def test_hyphenated_input_keys_are_saved_and_returned() -> None:
     with given(_GIVEN) as context:
         body = draft()

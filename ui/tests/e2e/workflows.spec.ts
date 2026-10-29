@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
-import { WORKFLOW_ID } from "../fixtures/workflows";
+import { WORKFLOW_ID, workflowDraft } from "../fixtures/workflows";
 import { WorkflowsPage } from "../pages/workflows-page.po";
 import {
   MOCK_AGENT_ID,
@@ -55,19 +55,18 @@ test.describe("WF01 workflow authoring", () => {
     await workflows.useFileInput();
     await workflows.selectStep(1);
     await expect(page.getByRole("checkbox", { name: /Require a downloadable/ })).toHaveCount(0);
-    await workflows.selectSection("Outputs & review");
+    await workflows.selectSection("Review destination");
     await expect(page.getByRole("checkbox", { name: /Require a downloadable/ })).toHaveCount(0);
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
     expect(support.saveRequests[0]).toMatchObject({
       inputs: [{ type: "file" }],
       steps: [{ artifact_description: "Source data" }, {}],
-      final_artifact_description: "Weekly Markdown summary",
     });
     await workflows.selectStep(1);
     await expect(page.getByText("Source data", { exact: true })).toBeVisible();
-    await workflows.selectSection("Outputs & review");
-    await expect(page.getByText("Weekly Markdown summary", { exact: true })).toBeVisible();
+    await workflows.selectSection("Review destination");
+    await expect(page.getByText("Web review", { exact: true })).toBeVisible();
   });
   test("create, edit, reorder, remove, undo and save an immutable plan", async ({
     page,
@@ -95,7 +94,7 @@ test.describe("WF01 workflow authoring", () => {
       .click();
     await page.getByRole("button", { name: "Undo removal" }).click();
     await expect(
-      workflows.step(2).getByLabel("Describe the output"),
+      workflows.step(2).getByLabel("Output from this step (optional)"),
     ).toHaveValue("Source data");
     await page.getByRole("button", { name: "Add a step" }).click();
     await workflows
@@ -106,10 +105,7 @@ test.describe("WF01 workflow authoring", () => {
       .step(3)
       .getByLabel("What should the Agent do?")
       .fill("Review the report for clarity");
-    await workflows
-      .step(3)
-      .getByLabel("When is this step complete?")
-      .fill("The report is ready to read");
+    await expect(workflows.step(3).getByText("Include any specific criteria for success in the instructions.")).toBeVisible();
     await workflows.save();
     await expect(
       page.getByText("Saved v1", { exact: false }).first(),
@@ -133,12 +129,12 @@ test.describe("WF01 workflow authoring", () => {
     await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     await page.getByRole("button", { name: "+ Create workflow" }).click();
     await expect(page.getByLabel("Workflow name")).toBeVisible();
-    await expect(page.getByLabel("Your outcome")).toHaveCount(1);
+    await expect(page.getByLabel("Description (optional)")).toHaveCount(1);
     await page.getByLabel("Workflow name").fill("My workflow");
-    await page.getByLabel("Your outcome").fill("My original outcome");
+    await page.getByLabel("Description (optional)").fill("My original outcome");
     await workflows.selectStep(1);
     await workflows.selectSection("Workflow details");
-    await expect(page.getByLabel("Your outcome")).toHaveValue(
+    await expect(page.getByLabel("Description (optional)")).toHaveValue(
       "My original outcome",
     );
     await expect(
@@ -281,7 +277,7 @@ test.describe("WF01 workflow authoring", () => {
     await page.keyboard.press("Tab");
     await expect(name).toHaveAttribute("aria-invalid", "true");
     await expect(name).toHaveAccessibleDescription("Enter a name");
-    await expect(page.getByLabel("Your outcome")).not.toHaveAttribute(
+    await expect(page.getByLabel("Description (optional)")).not.toHaveAttribute(
       "aria-invalid",
       "true",
     );
@@ -612,14 +608,14 @@ test.describe("WF01 workflow authoring", () => {
     await workflows.switchOrganization("Globex");
     // An Agent's page names the old Organization's Agent, so the switch lands on the team.
     await expect(page).toHaveURL(new RegExp(`/dashboard/${otherId}$`));
-    await expect(page.getByLabel("Your outcome")).toHaveCount(0);
+    await expect(page.getByLabel("Description (optional)")).toHaveCount(0);
     // Back to the same Agent in the other Organization, in-app so the query cache stays.
     await page.getByRole("link", { name: "View Maya", exact: true }).click();
     await section(page, "Workflows").click();
     await expect(
       page.getByRole("heading", { name: "No workflows yet" }),
     ).toBeVisible();
-    await expect(page.getByLabel("Your outcome")).toHaveCount(0);
+    await expect(page.getByLabel("Description (optional)")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Open Weekly pipeline report" }),
     ).toHaveCount(0);
@@ -732,10 +728,8 @@ test.describe("WF01 workflow authoring", () => {
       .fill("Collect this week's pipeline changes");
     await workflows.selectSection("Required inputs");
     await page.getByLabel("Input 1 label").fill("Week to report");
-    await workflows.selectSection("Outputs & review");
-    await page
-      .getByLabel("Describe the final output")
-      .fill("A reviewed weekly summary");
+    await workflows.selectStep(1);
+    await workflows.step(1).getByLabel("Output from this step (optional)").fill("A reviewed weekly summary");
     await workflows.selectStep(1);
     await expect(
       workflows.step(1).getByLabel("What should the Agent do?"),
@@ -759,14 +753,14 @@ test.describe("WF01 workflow authoring", () => {
     await expect(
       page.getByRole("heading", { name: "Week to report" }),
     ).toBeVisible();
-    await workflows.selectSection("Outputs & review");
+    await workflows.selectStep(2);
     await expect(
       page.getByText("A reviewed weekly summary", { exact: true }),
     ).toBeVisible();
     expect(support.saveRequests.at(-1)).toMatchObject({
       draft: {
         inputs: [{ label: "Week to report" }],
-        final_artifact_description: "A reviewed weekly summary",
+        steps: [{}, { artifact_description: "A reviewed weekly summary" }],
       },
     });
   });
@@ -786,7 +780,6 @@ test.describe("WF01 workflow authoring", () => {
     await workflows.save();
     const error = page.getByRole("alert", { name: "Workflow error" });
     await expect(error).toContainText("Step 3 · What should the Agent do?");
-    await expect(error).toContainText("Step 3 · When is this step complete?");
     await expect(
       workflows.step(3).getByLabel("Step 3", { exact: true }),
     ).toHaveValue("Review the summary");
@@ -801,10 +794,6 @@ test.describe("WF01 workflow authoring", () => {
       .step(3)
       .getByLabel("What should the Agent do?")
       .fill("Review changes for clarity");
-    await workflows
-      .step(3)
-      .getByLabel("When is this step complete?")
-      .fill("The summary is clear");
     await workflows.save();
     expect(support.saveRequests).toHaveLength(1);
   });
@@ -818,8 +807,6 @@ test.describe("WF01 workflow authoring", () => {
     await workflows.selectSection("Required inputs");
     await page.getByRole("button", { name: "+ Add an input" }).click();
     await page.getByLabel("Input 2 description").fill("The report owner");
-    await workflows.selectSection("Outputs & review");
-    await page.getByLabel("Describe the final output").fill("");
     await workflows.selectSection("Workflow details");
     await workflows.save();
     const error = page.getByRole("alert", { name: "Workflow error" });
@@ -829,17 +816,9 @@ test.describe("WF01 workflow authoring", () => {
       "aria-invalid",
       "true",
     );
-    await error
-      .getByRole("button", { name: /^Describe the final output:/ })
-      .click();
-    await expect(page.getByLabel("Describe the final output")).toHaveValue("");
     await error.getByRole("button", { name: /^Input 2 · Label:/ }).click();
     expect(support.saveRequests).toHaveLength(0);
     await page.getByLabel("Input 2 label").fill("Owner");
-    await workflows.selectSection("Outputs & review");
-    await page
-      .getByLabel("Describe the final output")
-      .fill("A reviewed report");
     await workflows.save();
     expect(support.saveRequests).toHaveLength(1);
   });
@@ -852,28 +831,37 @@ test.describe("WF01 workflow authoring", () => {
     await page.getByRole("button", { name: "Edit workflow" }).click();
     support.validationSaveErrors = [
       {
-        loc: ["body", "draft", "steps", 1, "completion_criteria"],
-        msg: "Clarify the completion criteria",
+        loc: ["body", "draft", "steps", 1, "goal"],
+        msg: "Clarify the goal",
       },
     ];
     await workflows.save();
     await expect(
       page.getByRole("alert", { name: "Workflow error" }),
     ).toContainText(
-      "Step 2 · When is this step complete?: Clarify the completion criteria",
+      "Step 2 · What should the Agent do?: Clarify the goal",
     );
     await expect(
-      workflows.step(2).getByLabel("When is this step complete?"),
-    ).toHaveValue("Changes and risks are covered");
+      workflows.step(2).getByLabel("What should the Agent do?"),
+    ).toHaveValue(workflowDraft.steps[1].goal);
     await workflows
       .step(2)
-      .getByLabel("When is this step complete?")
+      .getByLabel("What should the Agent do?")
       .fill("All changes and risks are clearly summarized");
     await workflows.save();
     expect(support.saveRequests).toHaveLength(2);
     expect(support.saveRequests[1]).toMatchObject({
       draft: { inputs: [{ key: "period", label: "Reporting period" }] },
     });
+  });
+  test("an old blank completion criterion does not block editing and saving", async ({ page }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true, emptyCriteria: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID, WORKFLOW_ID);
+    await page.getByRole("button", { name: "Edit workflow" }).click();
+    await workflows.save();
+    expect(support.saveRequests).toHaveLength(1);
+    await expect(page.getByRole("alert", { name: "Workflow error" })).toHaveCount(0);
   });
   test("loss of save authority disables edits while retaining draft section navigation", async ({
     page,

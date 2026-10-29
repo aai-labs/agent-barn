@@ -481,7 +481,7 @@ _Avoid_: webhook
 
 **Workflow**:
 An Agent-owned repeatable plan, explicitly saved before execution. Its ordered
-steps describe goals, required inputs, completion criteria and preserved outputs.
+steps describe goals, required inputs and preserved outputs.
 See [Agent workflows](docs/features/agent-workflows.md).
 _Avoid_: Agent Skill, native scheduled job
 

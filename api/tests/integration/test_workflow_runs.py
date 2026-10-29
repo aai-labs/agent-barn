@@ -21,6 +21,21 @@ from api.tests.integration.test_workflows import _GIVEN, auth, base, create, swi
 _RUN_GIVEN = _GIVEN
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_final_output_description_follows_last_step(reverse: bool) -> None:
+    from api.tests.helpers.workflows import draft
+
+    with given(_RUN_GIVEN) as context:
+        body = draft()
+        body["steps"].append({**body["steps"][0], "id": str(uuid4()), "artifact_description": "Second output"})
+        if reverse:
+            body["steps"].reverse()
+        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        response, _, _ = start(context, saved)
+        assert response.status_code == 202, response.text
+        assert response.json()["final_output_description"] == body["steps"][-1]["artifact_description"]
+
+
 def start(context, saved=None, **changes):
     context.agent.status = AgentStatus.RUNNING
     context.injector.get(AgentRepository).save(context.agent)

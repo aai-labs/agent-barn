@@ -36,7 +36,7 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
                 ? "Workflow details"
                 : selected === "inputs"
                   ? "Required inputs"
-                  : "Outputs & review")}
+                  : "Review destination")}
           </h2>
         </header>
         <div className="space-y-6 p-6">
@@ -50,12 +50,14 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
                   {step.goal}
                 </p>
               </div>
-              <div className="rounded-xl bg-[var(--bg-soft)] p-4">
-                <h3 className="mb-2 text-sm font-semibold">Complete when</h3>
-                <p className="whitespace-pre-wrap text-sm leading-6">
-                  {step.completionCriteria}
-                </p>
-              </div>
+              {step.completionCriteria && (
+                <div className="rounded-xl bg-[var(--bg-soft)] p-4">
+                  <h3 className="mb-2 text-sm font-semibold">Complete when</h3>
+                  <p className="whitespace-pre-wrap text-sm leading-6">
+                    {step.completionCriteria}
+                  </p>
+                </div>
+              )}
               <div>
                 <h3 className="mb-2 text-sm font-semibold">Preserved output</h3>
                 <p className="whitespace-pre-wrap text-sm leading-6">
@@ -97,13 +99,6 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
             )
           ) : (
             <>
-              <div>
-                <h3 className="mb-2 font-semibold">Final output</h3>
-                <p className="whitespace-pre-wrap text-sm">
-                  {draft.finalArtifactDescription ??
-                    "No final output is planned."}
-                </p>
-              </div>
               <div>
                 <h3 className="mb-2 font-semibold">Review destination</h3>
                 <p className="text-sm">Web review</p>

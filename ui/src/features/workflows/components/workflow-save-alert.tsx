@@ -1,5 +1,9 @@
 "use client";
 
+import { AlertCircle, ArrowRight } from "lucide-react";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
 import { type WorkflowProblem } from "../validation";
 
 /** Save or archive failure: links each problem to its section and offers conflict recovery. */
@@ -16,22 +20,25 @@ export function WorkflowSaveAlert({
   onLoadCurrent?: () => void;
 }) {
   return (
-    <div
-      role="alert"
+    <Alert
+      variant="destructive"
       aria-label="Workflow error"
-      className="af-card p-5 mb-5 whitespace-pre-wrap"
-      style={{ color: "var(--err)" }}
+      className="mb-5 border-destructive/30 bg-destructive/5 p-4"
     >
+      <AlertCircle className="size-5" aria-hidden="true" />
+      <AlertTitle>{problems.length ? "Check these fields" : "Something went wrong"}</AlertTitle>
+      <AlertDescription className="mt-1 whitespace-pre-wrap">
       {message}
       {problems.length > 0 && (
         <ul className="mt-3 space-y-2">
           {problems.map((problem, index) => (
             <li key={index}>
               <button
-                className="text-left underline underline-offset-4"
+                className="inline-flex items-center gap-2 rounded-md text-left font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2"
                 onClick={() => onSelect(problem.section)}
               >
-                {problem.label}: {problem.message}
+                <ArrowRight className="size-4 shrink-0" aria-hidden="true" />
+                <span>{problem.label}: {problem.message}</span>
               </button>
             </li>
           ))}
@@ -42,6 +49,7 @@ export function WorkflowSaveAlert({
           Load current revision and keep my edits
         </button>
       )}
-    </div>
+      </AlertDescription>
+    </Alert>
   );
 }

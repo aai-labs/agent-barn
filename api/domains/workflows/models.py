@@ -4,7 +4,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as DTO
-from pydantic import ConfigDict, Field, StringConstraints, field_validator
+from pydantic import ConfigDict, Field, StringConstraints, field_validator, model_validator
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field as SqlField
 
@@ -38,7 +38,8 @@ class WorkflowStep(StrictDTO):
     id: UUID
     name: Name
     goal: Text
-    completion_criteria: Text
+    # Retain criteria on historical snapshots; new steps need only a goal.
+    completion_criteria: Text | None = None
     artifact_description: Text | None = None
     required_capabilities: list[Literal["reasoning", "business_action", "native_command"]] = Field(
         default_factory=default_capabilities, min_length=1, max_length=3
@@ -48,12 +49,18 @@ class WorkflowStep(StrictDTO):
 class WorkflowDraft(StrictDTO):
     schema_version: Literal[1] = 1
     name: Name
-    description: Text
+    description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=4000)] = ""
     steps: list[WorkflowStep] = Field(min_length=1, max_length=50)
     inputs: list[WorkflowInput] = Field(default_factory=list, max_length=30)
-    final_artifact_description: Text | None = None
     # Other destinations require notification capability, delivered in a later slice.
     review_destination: Literal["web"] = "web"
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_final_description(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: item for key, item in value.items() if key != "final_artifact_description"}
+        return value
 
     @field_validator("steps")
     @classmethod

@@ -23,7 +23,6 @@ def draft(name: str = "Weekly report") -> dict:
                 "required": True,
             }
         ],
-        "final_artifact_description": "Weekly summary",
     }
 
 

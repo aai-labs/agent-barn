@@ -14,6 +14,12 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-29 — AF-387 — simplify step authoring
+
+- New steps no longer require separate completion criteria; the editor prompts authors to include success criteria in the step instructions. Existing saved criteria remain visible and are passed to the Agent.
+- The last step's output description is the workflow's final output description; authoring no longer asks for a separate final description. Reordering steps changes which output is final.
+- The workflow description is optional and labelled accordingly.
+
 ### 2026-10-29 — AF-387 — [PR #346](https://github.com/aai-labs/agent-barn/pull/346) — preparation and staging integration
 
 - Committed the integration and rebased without conflicts onto staging `57bbefd0f`.

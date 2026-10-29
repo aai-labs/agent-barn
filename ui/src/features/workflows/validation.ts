@@ -16,8 +16,8 @@ const fieldLabels: Record<string, string> = {
   goal: "What should the Agent do?",
   completionCriteria: "When is this step complete?",
   completion_criteria: "When is this step complete?",
-  artifactDescription: "Describe the output",
-  artifact_description: "Describe the output",
+  artifactDescription: "Output from this step (optional)",
+  artifact_description: "Output from this step (optional)",
   requiredCapabilities: "Required capabilities",
   required_capabilities: "Required capabilities",
   label: "Label",
@@ -61,20 +61,10 @@ function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
   }
   if (scope === "reviewDestination" || scope === "review_destination")
     return { section: "outputs", label: "Review destination", message };
-  if (
-    scope === "finalArtifactDescription" ||
-    scope === "final_artifact_description"
-  )
-    return {
-      section: "outputs",
-      label: "Describe the final output",
-      message,
-      field: "finalArtifactDescription",
-    };
   if (scope === "name" || scope === "description")
     return {
       section: "details",
-      label: scope === "name" ? "Workflow name" : "Your outcome",
+      label: scope === "name" ? "Workflow name" : "Description (optional)",
       message,
       field: scope,
     };

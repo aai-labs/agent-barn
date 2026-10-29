@@ -356,7 +356,7 @@ class WorkflowRunRepository:
                     **{
                         key: value
                         for key, value in version.snapshot["steps"][attempt.step_index].items()
-                        if key != "artifact_description"
+                        if key != "artifact_description" and not (key == "completion_criteria" and value is None)
                     },
                     "output_description": version.snapshot["steps"][attempt.step_index].get("artifact_description"),
                 },
@@ -370,7 +370,7 @@ class WorkflowRunRepository:
                         ]
                     }.values()
                 ),
-                "final_output_description": version.snapshot.get("final_artifact_description")
+                "final_output_description": version.snapshot["steps"][-1].get("artifact_description")
                 if attempt.step_index == len(version.snapshot["steps"]) - 1
                 else None,
             }
