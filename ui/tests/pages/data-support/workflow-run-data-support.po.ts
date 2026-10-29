@@ -162,7 +162,12 @@ export class WorkflowRunDataSupport {
         page: 1,
         page_size: 20,
       });
-      if (path.endsWith("/history") && path.includes(RERUN_ID)) {
+      if (path.endsWith("/history") && this.failHistory) {
+        await route.fulfill({
+          status: 500,
+          json: { detail: "History unavailable" },
+        });
+      } else if (path.endsWith("/history") && path.includes(RERUN_ID)) {
         await route.fulfill({
           json: page([
             {
