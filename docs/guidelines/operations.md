@@ -16,6 +16,10 @@ as in the README setup; native transport dependencies belong to the runtime imag
 
 ## Database migrations
 
+Revision `e700d800fb8a` joins staging's file-sync and workflow re-run histories
+(`63c0e8364607` and `c7d4e2a91b58`) into one head. It has no schema or data
+operations, and preserves both parent histories on upgrade and downgrade.
+
 Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
 left behind by Zoho provider retirement. It runs automatically on upgrade and
 does nothing on installations without that lineage (including new installs).

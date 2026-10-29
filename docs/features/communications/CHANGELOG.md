@@ -32,7 +32,8 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Operations: deploy the API and restart affected Agents. Existing Slack apps
   must also enable Messages Tab and untick read-only under Slack app settings →
   App Home, or re-paste the updated manifest. Restarting does not update the
-  installed Slack app. No migration or base-image change is required.
+  installed Slack app. Apply the current migration head before deploying; no
+  base-image change is required.
 
 ### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
 
