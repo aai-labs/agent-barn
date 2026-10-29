@@ -21,6 +21,7 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 - Changed:
   - Runtime: every OpenClaw config sets `messages.groupChat.unmentionedInbound` explicitly (`room_event` with Slack, Discord, or Telegram, otherwise `user_request`). Each Slack listen-in room gets `requireMention: false` and the shared `LISTEN_IN_SYSTEM_PROMPT`. The runtime configuration digest changes, so running OpenClaw Agents report an update.
   - API: `SlackSettings.listen_in_channel_ids`. Hermes ignores it.
+  - UI: the Slack Connection form browses channels for Listen-in channels.
   - Docs: [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating), [Agents](../agents.md), [business value](../business-value.md) (listen-in messages are Requests), `CONTEXT.md` (Listen-in channel), [communications](../communications/CHANGELOG.md).
 - Follow-up: PR 4 (Discord) and PR 5 (Telegram) reuse the same room shape.
 

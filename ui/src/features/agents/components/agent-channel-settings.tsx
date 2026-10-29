@@ -767,6 +767,7 @@ export function AgentChannelSettings({
       return {
         channelIds: previewSource("channels", "channels", undefined, disabledReason),
         dmUserIds: previewSource("people", "users", undefined, disabledReason),
+        listenInChannelIds: previewSource("channels", "channels", undefined, disabledReason),
       };
     }
     if (platform.key === "discord") {
@@ -791,6 +792,7 @@ export function AgentChannelSettings({
       return {
         channelIds: queryBrowse("channels", slackChannels),
         dmUserIds: queryBrowse("people", slackUsers),
+        listenInChannelIds: queryBrowse("channels", slackChannels),
       };
     }
     if (platformKey === "discord") {

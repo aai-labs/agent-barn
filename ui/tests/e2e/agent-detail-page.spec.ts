@@ -1201,6 +1201,18 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
   });
 
+  test("browses Slack channels for listen-in channels", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await agentDetailPage.browseDirectoryButton("Listen-in channels").click();
+
+    await agentDetailPage.directoryPickerOption(/#general/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
+  });
+
   test("shows an actionable directory error without exposing server details", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await page.route("**/directory/channels*", async (route) => {

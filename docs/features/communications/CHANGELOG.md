@@ -17,7 +17,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ### 2026-10-29 — MDP-118 — Slack listen-in channels — PR pending
 
-- Added: Slack Connections offer **Listen-in channels**, a list of channel IDs that must also be Allowed channels under an allowlist. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; Hermes ignores the list.
+- Added: Slack Connections offer **Listen-in channels**, a list of channel IDs that must also be Allowed channels under an allowlist. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; Hermes ignores the list. The Connection form browses Slack channels for it, as it does for Allowed channels.
 - Changed: every OpenClaw Agent's config sets `messages.groupChat.unmentionedInbound` explicitly: `room_event` with native Slack, Discord, or Telegram, otherwise `user_request`. The runtime configuration digest changes, so running OpenClaw Agents report an update. See [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating).
 
 ### 2026-10-28 — MDP-118 — Retire Discord's Require @mention setting — PR pending
