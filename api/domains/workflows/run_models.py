@@ -24,6 +24,12 @@ class WorkflowRunCreate(StrictDTO):
     inputs: dict[str, InputValue] = Field(default_factory=dict, max_length=30)
 
 
+class WorkflowRunRerun(StrictDTO):
+    """A re-run takes its version and inputs from the original run, never from the caller."""
+
+    client_request_id: UUID
+
+
 class WorkflowRunCancel(StrictDTO):
     expected_revision: int = Field(ge=1)
 
@@ -55,6 +61,10 @@ class WorkflowRun(BaseModel, table=True):
     reason: str | None = None
     settled_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
     content_expired: bool = False
+    # Set when this run repeats another run's version and inputs.
+    rerun_of_run_id: UUID | None = SqlField(
+        default=None, foreign_key="workflow_run.id", ondelete="SET NULL", index=True
+    )
 
 
 class WorkflowAttempt(BaseModel, table=True):
@@ -103,6 +113,8 @@ class AttemptFailure(StrictDTO):
     reason: str = Field(min_length=1, max_length=2000)
     # The Agent stopped for something only a person can resolve, such as a command approval.
     needs_attention: bool = False
+    # False when retrying cannot help, such as unmet step criteria; the run fails immediately.
+    retryable: bool = True
 
 
 class WorkflowHistoryRead(DTO):
@@ -111,6 +123,17 @@ class WorkflowHistoryRead(DTO):
     revision: int
     kind: str
     detail: str
+
+
+class AttemptRead(DTO):
+    number: int
+    limit: int
+    started_at: datetime
+    expires_at: datetime
+    # The API's clock, so a browser with a skewed clock can still show elapsed and remaining time.
+    server_time: datetime
+    # The Agent has not accepted this attempt's step after the grace period.
+    agent_unresponsive: bool
 
 
 class WorkflowRunRead(DTO):
@@ -131,4 +154,7 @@ class WorkflowRunRead(DTO):
     final_summary: str | None = None
     created_at: datetime
     settled_at: datetime | None
-    allowed_actions: list[Literal["cancel"]]
+    rerun_of_run_id: UUID | None = None
+    allowed_actions: list[Literal["cancel", "rerun"]]
+    # The running step's current attempt; only present on the single-run read.
+    attempt: AttemptRead | None = None
