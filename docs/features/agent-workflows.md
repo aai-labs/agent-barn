@@ -385,15 +385,17 @@ is needed: existing immutable JSON snapshots/inputs and artifact references carr
 the additive fields; schema-v1 text definitions keep their behavior.
 
 Each handoff contains a deduplicated manifest of run inputs and accepted earlier
-checkpoint outputs. The trigger retrieves actual bytes into a fresh temporary
-workspace directory using UUID filenames, checks each pinned checksum, and supplies
-verified local paths to the step. Retrieval requests carry the attempt ID and must
+checkpoint outputs. The trigger retrieves actual bytes into a fresh hidden
+workspace directory (`.workflow-files-*`) using UUID filenames, checks each pinned
+checksum, and supplies verified local paths to the step. Retrieval requests carry the attempt ID and must
 find an active pin for that run; current initiator, Agent, generation and deadline
 are checked before each new link and again after downloads before runtime start.
 Download, integrity or admission failure prevents starting the session and parks
 the run rather than silently substituting summaries. The final assembled prompt
 must fit 64,000 UTF-8 bytes. Temporary inputs are removed when the trigger finishes;
 the owning Agent remains a shared filesystem/trust boundary, not a session sandbox.
+Hidden temporary inputs follow the [file-sync exclusion rules](sync-provider/README.md#what-syncs):
+the sync helper does not mirror them or offer provider edits to that transient path.
 Already issued bearer URLs and bytes already read retain the existing artifact
 revocation limitations.
 

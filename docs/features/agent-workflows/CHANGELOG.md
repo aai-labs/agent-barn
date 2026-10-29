@@ -6,13 +6,19 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Current state
 
-- Delivered base: this worktree starts at local staging `a9e42ebe9`, including AF-389 and AF-415 (PRs [#326](https://github.com/aai-labs/agent-barn/pull/326) and [#328](https://github.com/aai-labs/agent-barn/pull/328)). Existing publication, checkpoint references and run/step attachments are retained.
+- Delivered base: this worktree started at local staging `a9e42ebe9`, including AF-389 and AF-415 (PRs [#326](https://github.com/aai-labs/agent-barn/pull/326) and [#328](https://github.com/aai-labs/agent-barn/pull/328)), and is rebased onto staging `57bbefd0f`, including AF-384 file sync. Existing publication, checkpoint references and run/step attachments are retained.
 - Local integration: typed file inputs pin existing/uploaded Agent files; handoff retrieves verified bytes; Agent-chosen deliverables follow output descriptions. Step/final files use uniform cards, and a separate All artifacts view collects publications across the run. Failed/expired attempts block; durable trigger receipts prevent same-attempt replay after restart.
 - Verification: the current presentation/format revision passed 87 affected API tests, 74 fixture browser cases and both runtime-image byte pipelines. API/UI quality and migration checks passed. [Artifact evidence](../agent-artifacts/EVIDENCE.md#workflow-file-presentation-revision--2026-10-29-local-uncommitted) records this revision and earlier broader verification, distinguishing storage/image contracts from live acceptance.
 - Next: live Agent-session acceptance and review of this local slice, then AF-390 approval integration. Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
 - Blockers: live model/session execution on both runtimes, truthful OpenClaw stop/quiescence and run-read-policy acceptance remain open. Deployment/provisioning is separate operational work. Explicit recovery/reconciliation is not exposed by this slice.
 
 ## Changes
+
+### 2026-10-29 — AF-387 — PR preparation and staging integration
+
+- Committed the integration and rebased without conflicts onto staging `57bbefd0f`.
+- AF-384 interaction: temporary pinned inputs now use a hidden workspace directory, following the existing sync exclusions. A regression runs the real sync scanner while each runtime reads materialized input bytes; it failed with the original visible directory and passed for both runtimes after correction. All 60 trigger/sync-helper cases passed.
+- Delivery evidence: refreshed fixture screenshots on updated staging are retained under the artifact evidence directory and embedded with commit-pinned image links in the PR description. Full-suite/CI outcomes are recorded in artifact verification evidence; live model/session and OpenClaw quiescence acceptance remain open.
 
 ### 2026-10-29 — AF-387 — workflow file presentation refinement (local, uncommitted)
 

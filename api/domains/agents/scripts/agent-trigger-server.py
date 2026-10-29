@@ -416,7 +416,7 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
             workspace = os.environ.get("ARTIFACT_UPLOAD_ROOTS", "").split(":")[0]
             if not workspace:
                 raise RuntimeError("Workflow file workspace is unavailable")
-            directory = tempfile.mkdtemp(prefix="workflow-files-", dir=workspace)
+            directory = tempfile.mkdtemp(prefix=".workflow-files-", dir=workspace)
             files = _retrieve_workflow_files(handoff["files"], directory, attempt_id)
             _post_json(f"{callback_url}/handoff", token, None, method="GET")
             prompt += "\nVerified input files (read these actual bytes): " + json.dumps(files)

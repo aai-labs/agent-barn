@@ -411,3 +411,55 @@ def test_file_handoff_failure_never_starts_runtime(monkeypatch, trigger_server, 
     assert sessions == []
     assert len(reports) == (0 if failure == "cancelled" else 1)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_verified_workflow_inputs_are_readable_but_not_offered_to_file_sync(
+    monkeypatch, trigger_server, tmp_path, runtime
+):
+    import json
+
+    from api.domains.file_sync.rules import rules_manifest
+
+    spec = importlib.util.spec_from_file_location("workflow_file_sync_probe", _SCRIPT.with_name("file-sync.py"))
+    assert spec is not None and spec.loader is not None
+    sync = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sync)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ordinary = workspace / "ordinary.csv"
+    ordinary.write_bytes(b"normal shared work\n")
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(workspace))
+    trigger_server.RUNTIME_KIND = runtime
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    files = [{"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e", "checksum": "a" * 64}]
+    seen, outcomes = {}, []
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            return {"session_id": "s", "prompt": "Read the input", "files": files}
+        outcomes.append(url)
+
+    def retrieve(files, directory, attempt_id):
+        destination = Path(directory) / files[0]["artifact_id"]
+        destination.write_bytes(b"private pinned input\n")
+        return [{**files[0], "path": str(destination)}]
+
+    def step(*arguments):
+        prompt = arguments[-1]
+        manifest = json.loads(prompt.split("Verified input files (read these actual bytes): ")[1])
+        seen["bytes"] = Path(manifest[0]["path"]).read_bytes()
+        entries, complete, _ = sync.scan({**rules_manifest(runtime), "root": str(tmp_path)}, {}, settle_seconds=0)
+        seen["paths"] = [entry["path"] for entry in entries]
+        seen["complete"] = complete
+        return '{"summary":"Read the verified input", "criteria_met":true}'
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_retrieve_workflow_files", retrieve)
+    monkeypatch.setattr(trigger_server, "_hermes_step" if runtime == "hermes" else "_openclaw_step", step)
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert seen["bytes"] == b"private pinned input\n"
+    assert seen["complete"] is True
+    assert seen["paths"] == ["workspace/ordinary.csv"]
+    assert outcomes == ["http://api/attempts/a/result"]
+    assert list(workspace.iterdir()) == [ordinary]
