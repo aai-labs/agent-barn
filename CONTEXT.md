@@ -81,7 +81,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, namespace health, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
@@ -349,8 +349,23 @@ A storage service an Organization can connect so Agent Barn keeps an "Agent Barn
 _Avoid_: storage integration, Platform
 
 **Sync Provider Connection**:
-An Organization's connection to one Sync Provider: for OneDrive, one SharePoint site through the platform Microsoft app. An Organization has at most one open (pending or active) connection across all providers. It is not an Integration: no Agent is given access to it.
+An Organization's connection to one Sync Provider: for OneDrive, one SharePoint site through the platform Microsoft app. An Organization has at most one open (pending or active) connection across all providers. It is not an Integration: no Agent is ever given the provider's credentials.
 _Avoid_: OneDrive integration, SharePoint integration, OneDrive Sync Connection
+
+**Agent Folder**:
+An Agent's own folder inside the Organization's "Agent Barn" folder at its Sync Provider. It is named after the Agent and kept in step with the Agent's files by File Sync. Retiring (deleting) the Agent deletes its folder at the provider; stopping the Agent leaves it in place. Disconnecting the Sync Provider deletes every Agent Folder.
+_Avoid_: OneDrive folder, agent drive, agent share
+
+**File Sync**:
+The two-way copying between an Agent's volume and its Agent Folder. The Agent's version always wins, and nothing done at the provider ever deletes a file on the volume. See the [ADR](docs/adr/2026-10-21-agent-file-sync-through-sync-provider.md).
+_Avoid_: sync (unqualified), backup, mirror
+
+**Sync Category**:
+How File Sync treats one path on an Agent's volume.
+- `work` and `memory` files sync both ways.
+- `config` files (rebuilt from the Template at every start) and `skills` are read-only at the provider: a user's edit is undone.
+- `never` paths (credentials and runtime machinery) are never copied.
+_Avoid_: sync rule, file type
 
 **Conversation Message**:
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
@@ -474,3 +489,9 @@ _Avoid_: Agent Skill, native scheduled job
 An immutable saved snapshot of a Workflow. Editing and saving appends a new
 version; a future run pins the version it starts with.
 _Avoid_: mutable draft, runtime session
+
+**Agent Artifact**:
+An immutable published file owned by one Organization and Agent, with PostgreSQL
+metadata and private Garage/S3 bytes. Workflow provenance is optional. Consumers
+pin its exact artifact ID and SHA-256; signed download links are temporary bearer
+access, not file identity. See [Agent artifacts](docs/features/agent-artifacts.md).

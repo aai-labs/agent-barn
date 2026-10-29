@@ -243,7 +243,7 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). Individual Communication Connection retirement remains an independent Communications workflow.
+Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). When the Organization syncs files, the Sync Engine's next pass deletes the Agent's [folder at the provider](sync-provider/README.md#agent-folders), and the retire dialog says so. Individual Communication Connection retirement remains an independent Communications workflow.
 
 ### Managed update
 
@@ -340,3 +340,10 @@ How much CPU and memory the container is using, against its limits, is a separat
 read behind the same `activity.read`: the Resource usage tab. See
 [`resource-usage.md`](resource-usage.md). Its out-of-memory callout reads
 `termination_reason` from these diagnostics.
+
+When artifact storage is configured, Agent creation queues a durable storage
+request in its creation transaction and returns without waiting for Garage.
+Storage failures leave the Agent available for text. Existing Agents can request
+storage from Files; progress and retry follow the
+[artifact lifecycle](agent-artifacts.md#per-agent-storage-authority).
+Deliberately disabled storage creates no provisioning request.

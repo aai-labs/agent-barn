@@ -16,7 +16,12 @@ export function connectionDraft(connection?: CustomApiConnection): ConnectionDra
       name: connection?.name ?? "",
       baseUrl: connection?.baseUrl ?? "",
       isolated: connection?.isolated ?? false,
-      auth: { type: connection?.authType ?? "none", ...(connection?.authHeaderName ? { headerName: connection.authHeaderName } : {}) },
+      auth: {
+        type: connection?.authType ?? "none",
+        ...(connection?.authHeaderName ? { headerName: connection.authHeaderName } : {}),
+        ...(connection?.authTokenUrl ? { tokenUrl: connection.authTokenUrl } : {}),
+        ...(connection?.authScope ? { scope: connection.authScope } : {}),
+      },
       headers: connection?.headers.map((header) => ({ ...header, value: header.value ?? "" })) ?? [],
     },
   };

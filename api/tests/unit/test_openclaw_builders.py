@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from uuid import UUID
 
 from api.domains.agent_sizes.models import (
@@ -29,6 +31,7 @@ from api.domains.agents.builders.openclaw import (
 )
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
+from api.domains.file_sync.rules import rules_manifest
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -435,3 +438,64 @@ def test_gateway_config_allows_native_message_tool() -> None:
     config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert "message" not in config["tools"].get("deny", [])
+
+
+def test_config_map_ships_the_file_sync_helper_and_the_openclaw_rules() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay={},
+    )
+
+    helper = Path(__file__).parents[2] / "domains/agents/scripts/file-sync.py"
+    assert config_map.data["file-sync.py"] == helper.read_text()
+    assert json.loads(config_map.data["file-sync-rules.json"]) == rules_manifest("openclaw")
+
+
+def test_startup_syncs_files_once_after_setup_then_keeps_syncing() -> None:
+    once = START_SH.index("python3 /app/config/file-sync.py --once || true")
+    loop = START_SH.index("python3 /app/config/file-sync.py &")
+
+    assert START_SH.index("node /app/config/init-openclaw.js") < once
+    assert START_SH.index("sh /app/config/gog-setup.sh") < once
+    assert START_SH.index("python3 /app/config/memory-gateway-ready.py") < once < loop
+    assert loop < START_SH.index('touch "$AGENT_RUNTIME_SETUP_READY_FILE"')
+
+
+def test_artifact_command_and_instructions_are_available_without_memory() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        artifacts_enabled=True,
+    )
+    assert "agentbarn_artifacts.py" in config_map.data
+    assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
+    assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
+    assert "Do not wait for the user to mention artifacts, storage or the CLI" in config_map.data["AGENTS.md"]
+    assert "Do not publish scratch/intermediate files" in config_map.data["AGENTS.md"]
+    assert "Give the user a concise Markdown download link" in config_map.data["AGENTS.md"]
+
+
+def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
+    config_map = build_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
+    )
+    assert "Files and download links" not in config_map.data["AGENTS.md"]

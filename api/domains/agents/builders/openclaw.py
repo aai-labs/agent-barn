@@ -4,13 +4,22 @@ from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.agents.restore_point_job import RUNTIME_OPENCLAW
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import (
     RUNTIME_WEBHOOK_PATH,
     RUNTIME_WEBHOOK_PORT,
     AgentBarnTelegramRuntime,
 )
+from api.domains.file_sync.rules import rules_manifest
 
+from .artifacts import (
+    ARTIFACT_COMMAND,
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_TOOL,
+    artifact_command_mount,
+    artifact_command_volume,
+)
 from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
@@ -53,6 +62,7 @@ OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
 def _openclaw_config_core(
@@ -361,15 +371,20 @@ def build_config_map(
     gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    artifacts_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn_artifacts.py": ARTIFACT_TOOL,
+        "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md
+        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -391,6 +406,8 @@ def build_config_map(
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["retire-messaging.py"] = RETIRE_MESSAGING_PY
+        data["file-sync.py"] = FILE_SYNC_PY
+        data["file-sync-rules.json"] = json.dumps(rules_manifest(RUNTIME_OPENCLAW))
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -514,6 +531,7 @@ def build_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -527,6 +545,7 @@ def build_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        artifact_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),
