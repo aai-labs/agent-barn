@@ -4,7 +4,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { AppErrorState } from "@/components/app-error-state";
 import { useWorkflowRunHistory } from "../hooks/use-workflow-runs";
-import { isRunProgressing, type WorkflowRun } from "../run-schemas";
+import type { WorkflowRun } from "../run-schemas";
 
 function clock(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
@@ -76,12 +76,7 @@ export function WorkflowRunActivity({
   agentId: string;
   run: WorkflowRun;
 }) {
-  const history = useWorkflowRunHistory(
-    agentId,
-    run.id,
-    run.revision,
-    isRunProgressing(run.state),
-  );
+  const history = useWorkflowRunHistory(agentId, run.id, run.revision);
   if (history.error)
     return (
       <AppErrorState
@@ -108,7 +103,10 @@ export function WorkflowRunActivity({
             >
               {new Date(item.createdAt).toLocaleTimeString()}
             </time>
-            <span className="min-w-0">{item.detail}</span>
+            <span className="min-w-0">
+              {/* The detail is the full Markdown summary, which belongs to the step. */}
+              {item.kind === "STEP_COMPLETED" ? "Step completed" : item.detail}
+            </span>
           </li>
         ))}
       </ul>

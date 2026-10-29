@@ -82,7 +82,6 @@ export function useWorkflowRunHistory(
   agentId: string,
   runId: string,
   revision: number,
-  progressing: boolean,
 ) {
   const scope = useRunScope(agentId);
   const read = async (page: number) =>
@@ -93,12 +92,10 @@ export function useWorkflowRunHistory(
       )
     ).data;
   return useQuery({
-    // The revision in the key refetches on every transition, including the final one.
+    // Every history event bumps the run revision, so the key refetches exactly when it changes.
     queryKey: [...scope.key, runId, "history", revision],
     enabled: scope.enabled && Boolean(runId),
     placeholderData: keepPreviousData,
-    refetchInterval: (query) =>
-      !query.state.error && progressing ? 3000 : false,
     queryFn: async () => {
       const first = await read(1);
       if (first.total <= HISTORY_PAGE) return first;

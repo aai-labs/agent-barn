@@ -209,12 +209,13 @@ test.describe("WF02 run progress and text results", () => {
     await page.clock.install();
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
     const activity = page.getByLabel("Run activity");
-    await expect(activity).not.toContainText("Final step completed");
+    await expect(activity).not.toContainText("Step completed");
     support.state = "SUCCEEDED";
     await page.clock.runFor(3_100);
-    await expect(activity.locator("li").first()).toContainText(
-      "Final step completed",
+    await expect(activity.locator("li").first()).toHaveText(
+      /Step completed$/,
     );
+    await expect(activity).not.toContainText("## Final step");
   });
 
   test("an activity load failure is shown inline and can be retried", async ({

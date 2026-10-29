@@ -510,6 +510,7 @@ class WorkflowRunRepository:
                 and attempt.state in {"REASONING", "STOPPING"}
                 and (attempt.expires_at <= datetime.now(UTC) or lost or attempt.state == "STOPPING")
             )
+            reported = cause is not None
             if run.state in {"CANCELLING", "PAUSED"} or expired:
                 if attempt and attempt.state in {"REASONING", "STOPPING"}:
                     attempt.state = "STOPPED" if stopped else "STOPPING"
@@ -543,7 +544,9 @@ class WorkflowRunRepository:
                     if run.state == "FAILED":
                         self._settle(session, run)
                 run.revision += 1
-                delivery_ids = self._event(session, run, "FENCED", run.reason or "Attempt stopped")
+                # fail() already recorded a reported cause, so the fence row says only what happened next.
+                fenced = "Fresh attempt queued" if reported and run.state == "QUEUED" else run.reason
+                delivery_ids = self._event(session, run, "FENCED", fenced or "Attempt stopped")
                 session.commit()
                 return None, delivery_ids
             if run.state != "QUEUED":

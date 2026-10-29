@@ -770,3 +770,48 @@ def test_timeouts_keep_the_reported_failure_and_name_an_agent_that_never_accepte
                 "(last attempt: The Agent did not accept the step)"
             ),
         )
+
+
+def test_agent_that_keeps_rejecting_the_step_fails_the_run_after_the_grace_period() -> None:
+    from api.domains.workflows.controller import WorkflowController
+    from api.domains.workflows.run_models import WorkflowAttempt
+
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        k8s = _agent_reachable(context)
+        k8s.proxy_to_agent.return_value = (404, b"{}", {})
+        controller = context.injector.get(WorkflowController)
+        repository = context.injector.get(WorkflowRunRepository)
+        run_id = UUID(response.json()["id"])
+        controller.wake(run_id)
+        run, row = repository.inspect(run_id)
+        assert_that((run.state, row.state), equal_to(("RUNNING", "REASONING")))
+        with Session(context.postgres_delegate.engine) as session:
+            stored = session.get_one(WorkflowAttempt, row.id)
+            stored.created_at = datetime.now(UTC) - timedelta(minutes=2)
+            session.add(stored)
+            session.commit()
+        controller.wake(run_id)
+        run, _ = repository.inspect(run_id)
+        assert_that((run.state, run.reason), equal_to(("FAILED", "The Agent did not accept the step (HTTP 404)")))
+
+
+def test_a_retry_records_the_reported_reason_once() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        repository = context.injector.get(WorkflowRunRepository)
+        run_id = UUID(response.json()["id"])
+        row, _ = repository.advance(run_id)
+        context.client.post(
+            f"/workflow-runtime/v1/attempts/{row.id}/failure",
+            headers={"Authorization": f"Bearer {repository.token(row.id)}"},
+            json={"reason": "Pipedrive is not connected"},
+        )
+        details = [
+            event["detail"]
+            for event in context.client.get(
+                base(context) + f"/workflow-runs/{run_id}/history?page_size=50", headers=auth(context)
+            ).json()["items"]
+        ]
+        assert_that(details.count("Pipedrive is not connected"), equal_to(1))
+        assert_that(details[-1], equal_to("Fresh attempt queued"))

@@ -255,7 +255,8 @@ needed. Unfinished steps show their status, and missing timestamps are unavailab
 rather than zero. Total run time spans run creation through settlement and includes
 queueing and retries. Selecting a completed step also shows its duration. The
 run screen also lists the run's history newest first as Activity, so a failed attempt's
-reason stays visible while the run retries or after it ends. While a step runs, the
+reason stays visible while the run retries or after it ends; a completed step shows only
+"Step completed" there, since its summary belongs to the step. While a step runs, the
 single-run read includes `attempt` (number, the three-attempt limit, start, deadline and
 `agent_unresponsive`, true when the Agent has not accepted the step after 60 seconds). The
 rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
@@ -299,7 +300,9 @@ with a fresh attempt, showing the reason as the run's note while it retries; at 
 three attempts per unfinished step are admitted, the last failure's reason ends the
 run, and an attempt that exceeds its 15-minute deadline counts as lost. A lost attempt
 adds why (the Agent never accepted the step, or timed out) to the reason and keeps the
-failure an earlier attempt reported. When the Agent asks
+failure an earlier attempt reported. An Agent that still refuses a step with a client
+error (other than 408, 409, 425 or 429) a minute after the attempt began fails the run
+at once with the HTTP status. When the Agent asks
 for a command approval, the session is stopped and the run becomes BLOCKED with the
 reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
 approval handling arrives with WF03. Agent stop or lost initiator authority pauses

@@ -167,7 +167,7 @@ export class WorkflowRunDataSupport {
                     created_at: "2026-10-17T10:02:18Z",
                     revision: 3,
                     kind: "STEP_COMPLETED",
-                    detail: "Final step completed",
+                    detail: "## Final step\n\n[Open the report](https://example.test)",
                   },
                 ]
               : []),
