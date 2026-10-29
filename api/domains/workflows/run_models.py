@@ -120,6 +120,8 @@ class AttemptRead(DTO):
     limit: int
     started_at: datetime
     expires_at: datetime
+    # The API's clock, so a browser with a skewed clock can still show elapsed and remaining time.
+    server_time: datetime
     # The Agent has not accepted this attempt's step after the grace period.
     agent_unresponsive: bool
 

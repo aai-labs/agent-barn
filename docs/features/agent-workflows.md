@@ -254,11 +254,14 @@ including dispatch waiting and retries. The API exposes nullable `started_at` an
 needed. Unfinished steps show their status, and missing timestamps are unavailable
 rather than zero. Total run time spans run creation through settlement and includes
 queueing and retries. Selecting a completed step also shows its duration. The
-run screen also lists the run's history newest first as Activity, so a failed attempt's
+run screen also lists the run's history newest first as Activity (one `history?newest_first=true` read,
+refreshed when the run's revision changes), so a failed attempt's
 reason stays visible while the run retries or after it ends; a completed step shows only
 "Step completed" there, since its summary belongs to the step. While a step runs, the
 single-run read includes `attempt` (number, the three-attempt limit, start, deadline and
-`agent_unresponsive`, true when the Agent has not accepted the step after 60 seconds). The
+`server_time` (the API's clock, which the screen uses for elapsed and remaining time so a
+skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
+not accepted the step after 60 seconds). The
 rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
 shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
 Runs control clears only the selected run and selects the owning workflow’s Runs

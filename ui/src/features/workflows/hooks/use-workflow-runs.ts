@@ -84,26 +84,18 @@ export function useWorkflowRunHistory(
   revision: number,
 ) {
   const scope = useRunScope(agentId);
-  const read = async (page: number) =>
-    (
-      await api.get<WorkflowRunHistory>(
-        `${scope.base}/workflow-runs/${runId}/history?page_size=${HISTORY_PAGE}&page=${page}`,
-        { schema: WorkflowRunHistorySchema },
-      )
-    ).data;
   return useQuery({
     // Every history event bumps the run revision, so the key refetches exactly when it changes.
     queryKey: [...scope.key, runId, "history", revision],
     enabled: scope.enabled && Boolean(runId),
     placeholderData: keepPreviousData,
-    queryFn: async () => {
-      const first = await read(1);
-      if (first.total <= HISTORY_PAGE) return first;
-      // The API pages oldest first, so the newest events are on the last pages.
-      const last = Math.ceil(first.total / HISTORY_PAGE);
-      const pages = await Promise.all([read(last - 1), read(last)]);
-      return { ...first, items: pages.flatMap((page) => page.items) };
-    },
+    queryFn: async () =>
+      (
+        await api.get<WorkflowRunHistory>(
+          `${scope.base}/workflow-runs/${runId}/history?page_size=${HISTORY_PAGE}&newest_first=true`,
+          { schema: WorkflowRunHistorySchema },
+        )
+      ).data,
   });
 }
 

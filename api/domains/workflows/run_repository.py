@@ -39,18 +39,12 @@ from api.domains.workflows.run_models import (
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 RETRY_PREFIX = "Step failed, retrying: "
-TIMEOUT_NOTE = " (last attempt: "
-TIMEOUT_CAUSES = {"The Agent did not accept the step", "The attempt timed out"}
 
 
-def _timeout_cause(accepted: bool, previous_reason: str | None) -> str:
+def _timeout_cause(accepted: bool, earlier: str | None) -> str:
     """Why an attempt expired unreported, keeping the failure an earlier attempt reported."""
     timeout = "The attempt timed out" if accepted else "The Agent did not accept the step"
-    reason = previous_reason or ""
-    earlier = reason.removeprefix(RETRY_PREFIX).split(TIMEOUT_NOTE, 1)[0] if reason.startswith(RETRY_PREFIX) else ""
-    if not earlier or earlier in TIMEOUT_CAUSES:
-        return timeout
-    return f"{earlier}{TIMEOUT_NOTE}{timeout})"
+    return f"{earlier} (last attempt: {timeout})" if earlier else timeout
 
 
 def digest(value: object) -> str:
@@ -104,44 +98,39 @@ class WorkflowRunRepository:
             version = session.get(WorkflowVersion, run.version_id) if run else None
             return (run, version) if run and version else None
 
-    def step_records(self, run_id: UUID) -> dict[int, dict[str, Any]]:
-        """Results and wall-clock timing. Callers must already have authorized the run."""
+    def progress(self, run: WorkflowRun) -> tuple[dict[int, dict[str, Any]], AttemptRead | None]:
+        """Step results and wall-clock timing plus the running step's live attempt.
+
+        Callers must already have authorized the run."""
         with Session(self.delegate.engine) as session:
-            records: dict[int, dict[str, Any]] = {}
-            attempts = session.exec(
-                select(WorkflowAttempt)
-                .where(col(WorkflowAttempt.run_id) == run_id)
-                .order_by(col(WorkflowAttempt.created_at))
+            attempts = list(
+                session.exec(
+                    select(WorkflowAttempt)
+                    .where(col(WorkflowAttempt.run_id) == run.id)
+                    .order_by(col(WorkflowAttempt.created_at))
+                )
             )
+            checkpoints = session.exec(select(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run.id))
+            records: dict[int, dict[str, Any]] = {}
             for attempt in attempts:
                 records.setdefault(attempt.step_index, {"started_at": attempt.created_at})
-            checkpoints = session.exec(select(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run_id))
             for checkpoint in checkpoints:
                 records.setdefault(checkpoint.step_index, {}).update(
                     summary=checkpoint.result.get("summary"), completed_at=checkpoint.created_at
                 )
-            return records
-
-    def current_attempt(self, run: WorkflowRun) -> AttemptRead | None:
-        """The running step's live attempt. Callers must already have authorized the run."""
-        if run.state != "RUNNING":
-            return None
-        with Session(self.delegate.engine) as session:
-            attempts = session.exec(
-                select(WorkflowAttempt)
-                .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
-                .order_by(col(WorkflowAttempt.generation))
-            ).all()
-        if not attempts or attempts[-1].state != "REASONING":
-            return None
-        current = attempts[-1]
+        step_attempts = [attempt for attempt in attempts if attempt.step_index == run.next_step]
+        if run.state != "RUNNING" or not step_attempts or step_attempts[-1].state != "REASONING":
+            return records, None
+        current = step_attempts[-1]
+        now = datetime.now(UTC)
         grace = timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
-        return AttemptRead(
-            number=len(attempts),
+        return records, AttemptRead(
+            number=len(step_attempts),
             limit=workflow_config.MAX_ATTEMPTS,
             started_at=current.created_at,
             expires_at=current.expires_at,
-            agent_unresponsive=current.dispatched_at is None and datetime.now(UTC) - current.created_at > grace,
+            server_time=now,
+            agent_unresponsive=current.dispatched_at is None and now - current.created_at > grace,
         )
 
     def list_runs(
@@ -163,7 +152,7 @@ class WorkflowRunRepository:
             return [(run, version) for run, version in rows], total
 
     def history(
-        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, page: int, size: int
+        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, newest_first: bool = False
     ) -> tuple[list[WorkflowHistory], int]:
         with Session(self.delegate.engine) as session:
             query = select(WorkflowHistory).where(
@@ -171,13 +160,10 @@ class WorkflowRunRepository:
                 col(WorkflowHistory.run_id) == run_id,
             )
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
-            return list(
-                session.exec(
-                    query.order_by(col(WorkflowHistory.created_at), col(WorkflowHistory.id))
-                    .offset((page - 1) * size)
-                    .limit(size)
-                )
-            ), total
+            order = (col(WorkflowHistory.created_at), col(WorkflowHistory.id))
+            if newest_first:
+                order = tuple(column.desc() for column in order)
+            return list(session.exec(query.order_by(*order).offset((page - 1) * size).limit(size))), total
 
     def _event(self, session: Session, run: WorkflowRun, kind: str, detail: str) -> list[UUID]:
         now = datetime.now(UTC)
@@ -447,6 +433,19 @@ class WorkflowRunRepository:
             delivery_ids.extend(recovery_ids)
         return delivery_ids
 
+    def _reported_failure(self, session: Session, run: WorkflowRun) -> str | None:
+        """The Agent's reason from this step's latest failed attempt, if one was reported."""
+        latest = session.exec(
+            select(WorkflowHistory)
+            .where(
+                col(WorkflowHistory.run_id) == run.id,
+                col(WorkflowHistory.kind).in_(("ATTEMPT_FAILED", "STEP_COMPLETED")),
+            )
+            .order_by(col(WorkflowHistory.revision).desc())
+            .limit(1)
+        ).first()
+        return latest.detail if latest is not None and latest.kind == "ATTEMPT_FAILED" else None
+
     def mark_dispatched(self, attempt_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
             attempt = session.get(WorkflowAttempt, attempt_id)
@@ -532,7 +531,10 @@ class WorkflowRunRepository:
                     # A reported cause stays visible through the retry and into the final failure.
                     # A timeout reports nothing, so it names why and keeps any earlier reported cause.
                     if cause is None:
-                        cause = _timeout_cause(attempt is not None and attempt.dispatched_at is not None, run.reason)
+                        cause = _timeout_cause(
+                            attempt is not None and attempt.dispatched_at is not None,
+                            self._reported_failure(session, run),
+                        )
                     run.state, run.reason = (
                         ("QUEUED", f"{RETRY_PREFIX}{cause}")
                         if retries < workflow_config.MAX_ATTEMPTS

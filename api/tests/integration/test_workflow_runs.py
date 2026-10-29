@@ -754,19 +754,21 @@ def test_timeouts_keep_the_reported_failure_and_name_an_agent_that_never_accepte
         context.client.post(
             f"/workflow-runtime/v1/attempts/{row.id}/failure",
             headers={"Authorization": f"Bearer {repository.token(row.id)}"},
-            json={"reason": "Pipedrive is not configured"},
+            json={"reason": "Pipedrive is not configured (last attempt: odd)"},
         )
         row, _ = repository.advance(run_id)
         repository.mark_dispatched(row.id)
         assert_that(
             expire(row),
-            equal_to("Step failed, retrying: Pipedrive is not configured (last attempt: The attempt timed out)"),
+            equal_to(
+                "Step failed, retrying: Pipedrive is not configured (last attempt: odd) (last attempt: The attempt timed out)"
+            ),
         )
         row, _ = repository.advance(run_id)
         assert_that(
             expire(row),
             equal_to(
-                "Attempt recovery limit reached: Pipedrive is not configured "
+                "Attempt recovery limit reached: Pipedrive is not configured (last attempt: odd) "
                 "(last attempt: The Agent did not accept the step)"
             ),
         )
@@ -815,3 +817,23 @@ def test_a_retry_records_the_reported_reason_once() -> None:
         ]
         assert_that(details.count("Pipedrive is not connected"), equal_to(1))
         assert_that(details[-1], equal_to("Fresh attempt queued"))
+
+
+def test_history_can_be_read_newest_first_and_the_attempt_carries_server_time() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        run_id = response.json()["id"]
+        url = base(context) + f"/workflow-runs/{run_id}"
+        repository, row, _ = attempt(context, run_id)
+        context.client.post(
+            f"/workflow-runtime/v1/attempts/{row.id}/failure",
+            headers={"Authorization": f"Bearer {repository.token(row.id)}"},
+            json={"reason": "Pipedrive is not connected"},
+        )
+        oldest = context.client.get(url + "/history?page_size=50", headers=auth(context)).json()["items"]
+        newest = context.client.get(url + "/history?page_size=50&newest_first=true", headers=auth(context)).json()
+        assert_that([item["id"] for item in newest["items"]], equal_to([item["id"] for item in reversed(oldest)]))
+        assert_that(newest["total"], equal_to(len(oldest)))
+        repository.advance(UUID(run_id))
+        live = context.client.get(url, headers=auth(context)).json()["attempt"]
+        assert_that(live["server_time"] is not None, is_(True))

@@ -190,6 +190,7 @@ test.describe("WF02 run progress and text results", () => {
       limit: 3,
       started_at: "2026-10-17T10:01:00Z",
       expires_at: "2026-10-17T10:16:00Z",
+      server_time: "2026-10-17T10:02:00Z",
       agent_unresponsive: false,
     };
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
@@ -241,12 +242,32 @@ test.describe("WF02 run progress and text results", () => {
       limit: 3,
       started_at: "2026-10-17T10:00:00Z",
       expires_at: "2026-10-17T10:15:00Z",
+      server_time: "2026-10-17T10:02:00Z",
       agent_unresponsive: true,
     };
+    support.runReason = "Step failed, retrying: Pipedrive is not connected";
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
-    await expect(
-      page.getByLabel("Run summary").getByRole("alert"),
-    ).toContainText("hasn’t accepted");
+    const summary = page.getByLabel("Run summary");
+    await expect(summary.getByRole("alert")).toContainText("hasn’t accepted");
+    // The unresponsive warning must not hide why the previous attempt failed.
+    await expect(summary).toContainText("Pipedrive is not connected");
+  });
+
+  test("attempt times follow the API's clock, not the browser's", async ({
+    page,
+  }) => {
+    support.attempt = {
+      number: 1,
+      limit: 3,
+      started_at: "2026-10-17T10:00:00Z",
+      expires_at: "2026-10-17T10:15:00Z",
+      server_time: "2026-10-17T10:05:00Z",
+      agent_unresponsive: false,
+    };
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run summary")).toContainText(
+      /running 5m \d+s · times out in (10m 0s|9m \d+s)/,
+    );
   });
 
   test("unfinished steps show their status instead of fabricated durations", async ({

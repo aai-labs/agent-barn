@@ -145,7 +145,8 @@ export class WorkflowRunDataSupport {
           return;
         }
         await route.fulfill({
-          json: page([
+          json: page(
+          [
             {
               id: "00000000-0000-4000-8000-0000000000a1",
               created_at: "2026-10-17T10:00:00Z",
@@ -171,7 +172,8 @@ export class WorkflowRunDataSupport {
                   },
                 ]
               : []),
-          ]),
+          ].reverse(),
+          ),
         });
       } else if (path.endsWith("/cancel")) {
         this.state = "CANCELLED";

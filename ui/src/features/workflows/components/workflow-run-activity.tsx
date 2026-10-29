@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { AppErrorState } from "@/components/app-error-state";
 import { useWorkflowRunHistory } from "../hooks/use-workflow-runs";
@@ -29,10 +29,18 @@ export function AttemptStatus({
 }) {
   const attempt = run.attempt;
   const live = Boolean(attempt);
-  const [now, setNow] = useState(() => Date.now());
+  const serverTime = attempt?.serverTime;
+  // The browser clock can be off, so times follow the API's clock as of the last read.
+  const skew = useRef(0);
+  const [now, setNow] = useState(() =>
+    serverTime ? Date.parse(serverTime) : Date.now(),
+  );
+  useEffect(() => {
+    if (serverTime) skew.current = Date.parse(serverTime) - Date.now();
+  }, [serverTime]);
   useEffect(() => {
     if (!live) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now() + skew.current), 1000);
     return () => clearInterval(timer);
   }, [live]);
   if (!attempt)
@@ -44,7 +52,7 @@ export function AttemptStatus({
         {clock(now - Date.parse(attempt.startedAt))} · times out in{" "}
         {clock(Date.parse(attempt.expiresAt) - now)}
       </p>
-      {attempt.agentUnresponsive ? (
+      {attempt.agentUnresponsive && (
         <p
           role="alert"
           className="rounded-xl px-5 py-4 text-sm"
@@ -57,12 +65,11 @@ export function AttemptStatus({
           </Link>
           , then start a new run.
         </p>
-      ) : (
-        run.reason && (
-          <p className="rounded-xl px-5 py-4 text-sm" style={noteStyle("warn")}>
-            {run.reason}
-          </p>
-        )
+      )}
+      {run.reason && (
+        <p className="rounded-xl px-5 py-4 text-sm" style={noteStyle("warn")}>
+          {run.reason}
+        </p>
       )}
     </div>
   );
@@ -86,7 +93,7 @@ export function WorkflowRunActivity({
         className="md:col-start-2"
       />
     );
-  const items = [...(history.data?.items ?? [])].reverse();
+  const items = history.data?.items ?? [];
   if (items.length === 0) return null;
   return (
     <section
