@@ -135,8 +135,15 @@ class AgentTaskRepository:
             session.commit()
             return stored
 
-    def remove_file(self, organization_id: UUID, agent_id: UUID, task_id: UUID, file_id: UUID) -> bool:
-        """Delete one of the Agent's own Files and its bytes, freeing the space."""
+    def remove_file(
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        task_id: UUID,
+        file_id: UUID,
+        release: Callable[[Session, UUID], None],
+    ) -> bool:
+        """Delete one of the Agent's own Files, releasing its Artifact pin in the same transaction."""
         with Session(self.delegate.engine) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return False
@@ -151,7 +158,7 @@ class AgentTaskRepository:
             ).first()
             if stored is None:
                 return False
-            self.file_storage.delete(session, stored.id)
+            release(session, stored.id)
             session.delete(stored)
             session.commit()
             return True

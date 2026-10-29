@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -12,12 +13,23 @@ from hamcrest import assert_that, contains_string, equal_to, has_entries
 SCRIPT = Path(__file__).parents[2] / "domains/agents/scripts/agentbarn_task.py"
 AGENT_ID = "0199f1d2-0000-7000-8000-000000000001"
 TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
+ARTIFACT_ID = "0199f1d2-0000-7000-8000-0000000000bb"
 
 
 class _IngestStub:
-    """Records each request and answers with a fixed status and JSON body, or one per method."""
+    """Records each request and answers with a fixed status and JSON body, or one per method.
 
-    def __init__(self, status: int = 200, body: object = None, by_method: dict[str, tuple[int, object]] | None = None):
+    It also serves the Artifact runtime routes under `/artifacts-runtime`, answering a
+    publish as a ready Artifact unless `artifacts` says otherwise.
+    """
+
+    def __init__(
+        self,
+        status: int = 200,
+        body: object = None,
+        by_method: dict[str, tuple[int, object]] | None = None,
+        artifacts: tuple[int, object] | None = None,
+    ):
         self.requests: list[dict] = []
         stub = self
 
@@ -33,7 +45,10 @@ class _IngestStub:
                         "body": self.rfile.read(length),
                     }
                 )
-                answer_status, answer = (by_method or {}).get(self.command, (status, body))
+                if self.path.startswith("/artifacts-runtime/"):
+                    answer_status, answer = artifacts or (200, {"id": ARTIFACT_ID, "state": "READY"})
+                else:
+                    answer_status, answer = (by_method or {}).get(self.command, (status, body))
                 payload = json.dumps(answer if answer is not None else {"id": TASK_ID}).encode()
                 self.send_response(answer_status)
                 self.send_header("Content-Type", "application/json")
@@ -41,7 +56,7 @@ class _IngestStub:
                 self.end_headers()
                 self.wfile.write(payload)
 
-            do_GET = do_POST = do_PATCH = do_DELETE = _handle
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _handle
 
             def log_message(self, format: str, *args: object) -> None:
                 pass
@@ -62,8 +77,14 @@ class _IngestStub:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server.server_port}/ingest/v1"
 
+    @property
+    def artifact_url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_port}/artifacts-runtime"
 
-def _run(stub: _IngestStub | None, *args: str, stdin: str = "", **env: str) -> subprocess.CompletedProcess:
+
+def _run(
+    stub: _IngestStub | None, *args: str, stdin: str = "", cwd: Path | None = None, **env: str
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         input=stdin,
@@ -71,12 +92,16 @@ def _run(stub: _IngestStub | None, *args: str, stdin: str = "", **env: str) -> s
         capture_output=True,
         check=False,
         timeout=20,
+        cwd=cwd,
         env={
             **os.environ,
             "AGENT_ID": AGENT_ID,
             "INGEST_URL": stub.url if stub else "http://127.0.0.1:9/ingest/v1",
             "INGEST_API_KEY": "ingest-key",
-            "TASK_FILE_MAX_BYTES": "1024",
+            "ARTIFACT_URL": stub.artifact_url if stub else "http://127.0.0.1:9/artifacts-runtime",
+            "ARTIFACT_API_KEY": "artifact-key",
+            "ARTIFACT_MAX_BYTES": "1024",
+            "ARTIFACT_UPLOAD_ROOTS": str(cwd or Path.cwd()),
             **env,
         },
     )
@@ -156,25 +181,43 @@ def test_show_reads_one_task():
     assert_that((stub.requests[0]["method"], stub.requests[0]["path"]), equal_to(("GET", _tasks_path(f"/{TASK_ID}"))))
 
 
-def test_attach_uploads_the_file_with_its_name_and_type(tmp_path: Path):
+def _attach_requests(stub: _IngestStub) -> list[tuple[str, str]]:
+    return [(request["method"], request["path"]) for request in stub.requests]
+
+
+def test_attach_publishes_the_file_then_attaches_its_artifact(tmp_path: Path):
     report = tmp_path / "October report.csv"
-    report.write_bytes(b"invoice,amount\n1,10\n")
+    content = b"invoice,amount\n1,10\n"
+    report.write_bytes(content)
 
     with _IngestStub(status=201, body={"filename": "October report.csv"}) as stub:
-        result = _run(stub, "attach", TASK_ID, str(report))
+        result = _run(stub, "attach", TASK_ID, str(report), cwd=tmp_path)
 
     assert_that(result.returncode, equal_to(0), result.stderr)
-    [request] = stub.requests
+    create, upload, attach = stub.requests
     assert_that(
-        (request["method"], request["path"], request["content_type"], request["body"]),
+        (create["method"], create["path"], create["authorization"], json.loads(create["body"])),
         equal_to(
             (
                 "POST",
-                _tasks_path(f"/{TASK_ID}/files?filename=October+report.csv"),
-                "text/csv",
-                b"invoice,amount\n1,10\n",
+                "/artifacts-runtime/artifacts",
+                "Bearer artifact-key",
+                {
+                    "filename": "October report.csv",
+                    "content_type": "text/csv",
+                    "size": len(content),
+                    "checksum": hashlib.sha256(content).hexdigest(),
+                },
             )
         ),
+    )
+    assert_that(
+        (upload["method"], upload["path"], upload["body"]),
+        equal_to(("PUT", f"/artifacts-runtime/artifacts/{ARTIFACT_ID}/content", content)),
+    )
+    assert_that(
+        (attach["method"], attach["path"], attach["authorization"], json.loads(attach["body"])),
+        equal_to(("POST", _tasks_path(f"/{TASK_ID}/files"), "Bearer ingest-key", {"artifact_id": ARTIFACT_ID})),
     )
 
 
@@ -184,13 +227,20 @@ def test_attach_takes_an_explicit_name_and_type(tmp_path: Path):
 
     with _IngestStub(status=201) as stub:
         result = _run(
-            stub, "attach", TASK_ID, str(output), "--name", "summary.pdf", "--content-type", "application/pdf"
+            stub,
+            "attach",
+            TASK_ID,
+            str(output),
+            "--name",
+            "summary.pdf",
+            "--content-type",
+            "application/pdf",
+            cwd=tmp_path,
         )
 
     assert_that(result.returncode, equal_to(0), result.stderr)
     assert_that(
-        (stub.requests[0]["path"], stub.requests[0]["content_type"]),
-        equal_to((_tasks_path(f"/{TASK_ID}/files?filename=summary.pdf"), "application/pdf")),
+        json.loads(stub.requests[0]["body"]), has_entries(filename="summary.pdf", content_type="application/pdf")
     )
 
 
@@ -199,9 +249,9 @@ def test_attach_falls_back_to_a_generic_type(tmp_path: Path):
     output.write_bytes(b"data")
 
     with _IngestStub(status=201) as stub:
-        _run(stub, "attach", TASK_ID, str(output))
+        _run(stub, "attach", TASK_ID, str(output), cwd=tmp_path)
 
-    assert_that(stub.requests[0]["content_type"], equal_to("application/octet-stream"))
+    assert_that(json.loads(stub.requests[0]["body"])["content_type"], equal_to("application/octet-stream"))
 
 
 def test_attach_refuses_a_file_over_the_limit_without_sending_it(tmp_path: Path):
@@ -209,7 +259,7 @@ def test_attach_refuses_a_file_over_the_limit_without_sending_it(tmp_path: Path)
     output.write_bytes(b"x" * 1025)
 
     with _IngestStub(status=201) as stub:
-        result = _run(stub, "attach", TASK_ID, str(output))
+        result = _run(stub, "attach", TASK_ID, str(output), cwd=tmp_path)
 
     assert_that((result.returncode, stub.requests), equal_to((1, [])))
     assert_that(result.stderr, contains_string("1024-byte limit"))
@@ -217,9 +267,66 @@ def test_attach_refuses_a_file_over_the_limit_without_sending_it(tmp_path: Path)
 
 def test_attach_refuses_a_missing_file(tmp_path: Path):
     with _IngestStub(status=201) as stub:
-        result = _run(stub, "attach", TASK_ID, str(tmp_path / "missing.csv"))
+        result = _run(stub, "attach", TASK_ID, str(tmp_path / "missing.csv"), cwd=tmp_path)
 
     assert_that((result.returncode, stub.requests), equal_to((1, [])))
+
+
+def test_attach_refuses_a_file_outside_the_workspace_without_sending_it(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "secrets.env"
+    outside.write_text("TOKEN=x")
+
+    with _IngestStub(status=201) as stub:
+        result = _run(stub, "attach", TASK_ID, str(outside), cwd=workspace)
+
+    assert_that((result.returncode, stub.requests), equal_to((1, [])))
+    assert_that(result.stderr, contains_string("inside your workspace"))
+
+
+def test_attach_refuses_a_link_out_of_the_workspace(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "secrets.env"
+    outside.write_text("TOKEN=x")
+    (workspace / "notes.txt").symlink_to(outside)
+
+    with _IngestStub(status=201) as stub:
+        result = _run(stub, "attach", TASK_ID, str(workspace / "notes.txt"), cwd=workspace)
+
+    assert_that((result.returncode, stub.requests), equal_to((1, [])))
+
+
+def test_attach_says_files_are_unavailable_without_file_storage(tmp_path: Path):
+    report = tmp_path / "report.csv"
+    report.write_bytes(b"a,b\n")
+
+    with _IngestStub(status=201) as stub:
+        result = _run(stub, "attach", TASK_ID, str(report), cwd=tmp_path, ARTIFACT_API_KEY="")
+
+    assert_that((result.returncode, stub.requests), equal_to((1, [])))
+    assert_that(result.stderr, contains_string("Files cannot be attached"))
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (503, "File storage for this Agent is not available right now"),
+        (413, "larger than this Agent's file limit"),
+        (401, "This Agent's file credential was refused. Restart this Agent."),
+    ],
+)
+def test_a_refused_publish_is_reported_and_nothing_is_attached(tmp_path: Path, status: int, expected: str):
+    report = tmp_path / "report.csv"
+    report.write_bytes(b"a,b\n")
+
+    with _IngestStub(status=201, artifacts=(status, {"detail": "internal detail"})) as stub:
+        result = _run(stub, "attach", TASK_ID, str(report), cwd=tmp_path)
+
+    assert_that(result.returncode, equal_to(1))
+    assert_that(result.stderr, contains_string(expected))
+    assert_that([path for _, path in _attach_requests(stub)], equal_to(["/artifacts-runtime/artifacts"]))
 
 
 @pytest.mark.parametrize(
@@ -325,15 +432,17 @@ def test_attach_replace_removes_earlier_files_of_the_same_name(tmp_path: Path):
     with _IngestStub(
         by_method={"GET": (200, task), "POST": (201, {"id": "file-new", "filename": "offsite.md"}), "DELETE": (204, "")}
     ) as stub:
-        result = _run(stub, "attach", TASK_ID, str(upload), "--replace")
+        result = _run(stub, "attach", TASK_ID, str(upload), "--replace", cwd=tmp_path)
 
     assert_that(result.returncode, equal_to(0), result.stderr)
     assert_that(
-        [(request["method"], request["path"]) for request in stub.requests],
+        _attach_requests(stub),
         equal_to(
             [
                 ("GET", _tasks_path(f"/{TASK_ID}")),
-                ("POST", _tasks_path(f"/{TASK_ID}/files?filename=offsite.md")),
+                ("POST", "/artifacts-runtime/artifacts"),
+                ("PUT", f"/artifacts-runtime/artifacts/{ARTIFACT_ID}/content"),
+                ("POST", _tasks_path(f"/{TASK_ID}/files")),
                 ("DELETE", _tasks_path(f"/{TASK_ID}/files/file-old")),
             ]
         ),
@@ -341,15 +450,15 @@ def test_attach_replace_removes_earlier_files_of_the_same_name(tmp_path: Path):
     assert_that(json.loads(result.stdout), has_entries(id="file-new"))
 
 
-def test_attach_replace_keeps_the_earlier_file_when_the_upload_is_refused(tmp_path: Path):
+def test_attach_replace_keeps_the_earlier_file_when_the_attach_is_refused(tmp_path: Path):
     upload = tmp_path / "offsite.md"
     upload.write_text("# Offsite")
     task = {"id": TASK_ID, "files": [{"id": "file-old", "filename": "offsite.md"}]}
-    with _IngestStub(by_method={"GET": (200, task), "POST": (400, {"detail": "Storage is full"})}) as stub:
-        result = _run(stub, "attach", TASK_ID, str(upload), "--replace")
+    with _IngestStub(by_method={"GET": (200, task), "POST": (400, {"detail": "Task is closed"})}) as stub:
+        result = _run(stub, "attach", TASK_ID, str(upload), "--replace", cwd=tmp_path)
 
-    assert_that((result.returncode, result.stderr.strip()), equal_to((1, "Storage is full")))
-    assert_that([request["method"] for request in stub.requests], equal_to(["GET", "POST"]))
+    assert_that((result.returncode, result.stderr.strip()), equal_to((1, "Task is closed")))
+    assert_that([method for method, _ in _attach_requests(stub)], equal_to(["GET", "POST", "PUT", "POST"]))
 
 
 def test_create_can_say_the_task_was_recorded_automatically():

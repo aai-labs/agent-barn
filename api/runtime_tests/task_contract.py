@@ -16,8 +16,12 @@ from api.runtime_tests.memory_helpers import AGENT_ID, ORG_ID, runtime_is_presen
 from api.tests.core.givenpy import LambdaWith, given, then, when
 
 TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
+ARTIFACT_ID = "0199f1d2-0000-7000-8000-0000000000bb"
 INGEST_KEY = "task-contract-ingest-key"
-REFUSAL = "The file is larger than the space left for this Organization's Task Files."
+ARTIFACT_KEY = "task-contract-artifact-key"
+REFUSAL = "The file is larger than this Agent's file limit."
+# Where each runtime's pod lets the Agent publish files from, as the Agent's secret sets it.
+UPLOAD_ROOTS = {"hermes": "/workspace", "openclaw": "/home/node/.openclaw/workspace"}
 FIXTURES = Path(__file__).parents[1] / "tests" / "fixtures" / "agent_tasks"
 HERMES_PLUGIN_HOOKS = ["on_session_end", "post_tool_call", "pre_llm_call", "pre_verify", "transform_tool_result"]
 # Turn hooks need allowConversationAccess; without it OpenClaw drops them with only a warning.
@@ -55,8 +59,12 @@ def _ingest_stub_is_ready():
                 self.wfile.write(encoded)
 
             def answer(self) -> tuple[int, object]:
-                if "filename=too-big.csv" in self.path:
-                    return 400, {"detail": REFUSAL}
+                if self.path.startswith("/artifact-runtime/"):
+                    if '"too-big.csv"' in context.requests[-1]["body"]:
+                        return 413, {"detail": "Artifact exceeds the configured file limit"}
+                    if self.command == "PUT":
+                        return 200, {"id": ARTIFACT_ID, "state": "READY"}
+                    return 201, {"id": ARTIFACT_ID}
                 if self.command == "GET" and self.path.split("?")[0].endswith("/tasks"):
                     return 200, {"items": [{"id": TASK_ID, "title": "Reconcile invoices"}], "total": 1}
                 if self.command == "GET":
@@ -65,7 +73,7 @@ def _ingest_stub_is_ready():
                     return 201, {"id": TASK_ID}
                 return 200, {"id": TASK_ID, "status": "in_progress"}
 
-            do_GET = do_POST = do_PATCH = respond
+            do_GET = do_POST = do_PUT = do_PATCH = respond
 
             def log_message(self, format: str, *args: object) -> None:
                 pass
@@ -73,6 +81,7 @@ def _ingest_stub_is_ready():
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         context.ingest_url = f"http://127.0.0.1:{server.server_port}/ingest/v1"
+        context.artifact_url = f"http://127.0.0.1:{server.server_port}/artifact-runtime"
 
         def cleanup():
             server.shutdown()
@@ -145,7 +154,13 @@ def _start(context) -> None:
         "-e",
         f"INGEST_API_KEY={INGEST_KEY}",
         "-e",
-        "TASK_FILE_MAX_BYTES=1048576",
+        f"ARTIFACT_URL={context.artifact_url}",
+        "-e",
+        f"ARTIFACT_API_KEY={ARTIFACT_KEY}",
+        "-e",
+        "ARTIFACT_MAX_BYTES=1048576",
+        "-e",
+        f"ARTIFACT_UPLOAD_ROOTS={UPLOAD_ROOTS[context.runtime]}",
     ]
     if context.runtime == "hermes":
         workspace = context.state_dir / "workspace"
@@ -186,8 +201,7 @@ def tasks_should_be_recorded_from_the_agents_shell(runtime: str, image: str, roo
                         ("POST", tasks),
                         ("PATCH", f"{tasks}/{TASK_ID}"),
                         ("POST", f"{tasks}/{TASK_ID}/notes"),
-                        ("POST", f"{tasks}/{TASK_ID}/files?filename=report.csv"),
-                        ("POST", f"{tasks}/{TASK_ID}/files?filename=too-big.csv"),
+                        ("POST", f"{tasks}/{TASK_ID}/files"),
                         ("GET", f"{tasks}?status=open"),
                         ("GET", f"{tasks}/{TASK_ID}"),
                         # The plugin's tool starts a Task in progress, in the create itself.
@@ -195,9 +209,25 @@ def tasks_should_be_recorded_from_the_agents_shell(runtime: str, image: str, roo
                     ]
                 ),
             )
-            note, upload = task_requests[2], task_requests[3]
+            note, attach = task_requests[2], task_requests[3]
             assert_that(json.loads(note["body"]), has_entries(body="Matched 40 of 42 invoices"))
-            assert_that((upload["content_type"], upload["body"]), equal_to(("text/csv", "invoice,amount\n1,10\n")))
+            assert_that(json.loads(attach["body"]), equal_to({"artifact_id": ARTIFACT_ID}))
+
+        with then("the file is published as an Artifact with the Agent's file credential before it is attached"):
+            published = [request for request in context.requests if request["path"].startswith("/artifact-runtime/")]
+            assert_that(
+                [(request["method"], request["path"]) for request in published],
+                equal_to(
+                    [
+                        ("POST", "/artifact-runtime/artifacts"),
+                        ("PUT", f"/artifact-runtime/artifacts/{ARTIFACT_ID}/content"),
+                        ("POST", "/artifact-runtime/artifacts"),
+                    ]
+                ),
+            )
+            assert_that({request["authorization"] for request in published}, equal_to({f"Bearer {ARTIFACT_KEY}"}))
+            assert_that(json.loads(published[0]["body"]), has_entries(filename="report.csv", content_type="text/csv"))
+            assert_that(published[1]["body"], equal_to("invoice,amount\n1,10\n"))
             assert_that(
                 json.loads(task_requests[-1]["body"]), equal_to({"title": "From the plugin", "status": "in_progress"})
             )

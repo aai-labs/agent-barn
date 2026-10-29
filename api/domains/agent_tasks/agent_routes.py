@@ -3,16 +3,11 @@
 The Agent and its Organization always come from the key, never from the request.
 """
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Annotated
 from uuid import UUID
 
-from anyio import from_thread
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
-from fastapi.concurrency import run_in_threadpool
-from fastapi.exceptions import RequestValidationError
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
-from pydantic import ValidationError
 
 from api.domains.agent_tasks.models import (
     AgentTaskCreate,
@@ -84,54 +79,17 @@ def add_note(
     return service.add_note(agent.organization_id, agent.id, task_id, data)
 
 
-def _file_metadata(filename: Annotated[str, Query()], content_type: Annotated[str, Header()]) -> AgentTaskFileCreate:
-    try:
-        return AgentTaskFileCreate(filename=filename, content_type=content_type)
-    except ValidationError as error:
-        raise RequestValidationError(error.errors()) from None
-
-
-def _blocking_pieces(body: AsyncIterator[bytes]) -> Iterator[bytes]:
-    """The request body as the worker thread's plain iterator, read one piece at a time."""
-    while (piece := from_thread.run(anext, body, None)) is not None:
-        if piece:
-            yield piece
-
-
-async def _drain(body: AsyncIterator[bytes], max_bytes: int) -> None:
-    """Read and drop what is left of a refused upload, so the client gets the refusal rather than a reset.
-
-    Bounded, so a client that keeps sending only gets its connection closed.
-    """
-    total = 0
-    async for piece in body:
-        total += len(piece)
-        if total > max_bytes:
-            return
-
-
 @agent_task_router.post(
     "/{agent_id}/tasks/{task_id}/files", response_model=AgentTaskFileRead, status_code=status.HTTP_201_CREATED
 )
-async def attach_file(
+def attach_file(
     agent: Annotated[Agent, Depends(authenticated_agent)],
     task_id: UUID,
-    metadata: Annotated[AgentTaskFileCreate, Depends(_file_metadata)],
-    request: Request,
+    data: AgentTaskFileCreate,
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],
 ):
-    """Store the raw request body as a Task File, streamed: it is never held whole."""
-    declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit():
-        service.refuse_oversized_file(int(declared))
-    body = request.stream()
-    try:
-        return await run_in_threadpool(
-            service.attach_file, agent.organization_id, agent.id, task_id, metadata, _blocking_pieces(body)
-        )
-    except HTTPException:
-        await _drain(body, service.file_max_bytes)
-        raise
+    """Attach an Artifact the Agent has published; the bytes went to Artifact storage, not here."""
+    return service.attach_file(agent.organization_id, agent.id, task_id, data)
 
 
 @agent_task_router.delete("/{agent_id}/tasks/{task_id}/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)

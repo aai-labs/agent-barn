@@ -300,7 +300,7 @@ async function attachAutomatically(state) {
   const unattached = [...state.written].filter(([name]) => !state.attached.has(name)).sort();
   if (state.taskIds.size !== 1) return unattached.map(([name]) => name);
   const [taskId] = state.taskIds;
-  const limit = Number(process.env.TASK_FILE_MAX_BYTES) || Infinity;
+  const limit = Number(process.env.ARTIFACT_MAX_BYTES) || Infinity;
   const failed = [];
   for (const [name, path] of unattached) {
     let size;

@@ -434,7 +434,7 @@ def _attach_automatically(turn: dict) -> list[str]:
     if len(turn["task_ids"]) != 1:
         return sorted(unattached)
     (task_id,) = turn["task_ids"]
-    limit = os.environ.get("TASK_FILE_MAX_BYTES", "")
+    limit = os.environ.get("ARTIFACT_MAX_BYTES", "")
     failed = []
     for name, path in sorted(unattached.items()):
         if not os.path.isfile(path):

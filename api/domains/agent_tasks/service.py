@@ -106,7 +106,14 @@ class AgentTaskService:
         return task
 
     def remove_file(self, organization_id: UUID, agent_id: UUID, task_id: UUID, file_id: UUID) -> None:
-        if not self.repository.remove_file(organization_id, agent_id, task_id, file_id):
+        released = self.repository.remove_file(
+            organization_id,
+            agent_id,
+            task_id,
+            file_id,
+            lambda session, owner_id: self.artifacts.release(session, _TASK_FILE_PIN, owner_id),
+        )
+        if not released:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File {file_id} not found")
 
     def file_link(self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext) -> ArtifactLinkRead:

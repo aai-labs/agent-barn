@@ -343,7 +343,7 @@ def test_general_access_lets_every_member_read_the_agents_tasks():
         assert_that([task.title for task in page.items], contains_exactly("Visible to all"))
 
 
-@pytest.mark.parametrize("write", ["status", "note", "file"])
+@pytest.mark.parametrize("write", ["status", "note", "file", "remove_file"])
 def test_an_agent_cannot_write_to_its_tasks_once_deleted(write: str):
     with given([*_GIVEN, there_is_an_agent()]) as context:
         task = _create(context, context.agent.id)
@@ -355,6 +355,7 @@ def test_an_agent_cannot_write_to_its_tasks_once_deleted(write: str):
             "status": lambda: service.update_status(org_id, agent_id, task.id, AgentTaskStatus.DONE),
             "note": lambda: service.add_note(org_id, agent_id, task.id, AgentTaskNoteCreate(body="Late")),
             "file": lambda: service.attach_file(org_id, agent_id, task.id, AgentTaskFileCreate(artifact_id=uuid7())),
+            "remove_file": lambda: service.remove_file(org_id, agent_id, task.id, uuid7()),
         }
 
         assert_that(_status_code(writes[write]), equal_to(status.HTTP_404_NOT_FOUND))
