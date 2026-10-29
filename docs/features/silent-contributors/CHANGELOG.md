@@ -8,12 +8,22 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
-- Next: PR 5, Telegram Listen-in channels. PR 2 (a telemetry fix) was dropped after the spike.
+- Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-10-29 — MDP-118 PR 5 — Telegram listen-in groups
+
+- Delivered: Telegram Connections list Listen-in groups, with the same behaviour as Slack and Discord. A listen-in ID outside an allowlist is rejected on save and never added by the builder.
+- Changed:
+  - Runtime: each listen-in group gets its own `groups` entry with `requireMention: false` and `LISTEN_IN_SYSTEM_PROMPT`, next to `"*"` or the allowed groups.
+  - API: `TelegramSettings.listen_in_chat_ids`. Hermes ignores it. The setup hint covers privacy mode for listen-in groups.
+  - UI: none. Telegram has no group directory, so IDs are typed as for Allowed groups.
+  - Docs: [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating), [Agents](../agents.md), [communications](../communications/CHANGELOG.md).
+- Follow-up: PR 6.
 
 ### 2026-10-29 — MDP-118 PR 4 — Discord listen-in channels
 

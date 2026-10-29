@@ -207,6 +207,16 @@ def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_menti
     }
 
 
+def test_native_telegram_ignores_listen_in_groups() -> None:
+    settings = {"allowed_chat_ids": ["-1001"]}
+    listening = {**settings, "listen_in_chat_ids": ["-1001"]}
+
+    assert native_telegram_env(listening, _TELEGRAM_TOKEN) == native_telegram_env(settings, _TELEGRAM_TOKEN)
+    assert build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings=listening
+    ) == build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", telegram_settings=settings)
+
+
 def test_native_telegram_env_opens_groups_and_dms() -> None:
     env = native_telegram_env({"group_policy": "open", "dm_policy": "open"}, _TELEGRAM_TOKEN)
 

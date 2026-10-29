@@ -15,6 +15,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-29 — MDP-118 — Telegram listen-in groups — PR pending
+
+- Added: Telegram Connections offer **Listen-in groups**, numeric group IDs that must also be Allowed groups under an allowlist. On OpenClaw each gets its own `groups` entry next to `"*"` or the allowed groups; Hermes ignores the list. Setup guidance says listen-in groups need privacy mode disabled or the bot made an administrator, so it sees every message.
+
 ### 2026-10-29 — MDP-118 — Discord listen-in channels — PR pending
 
 - Added: Discord Connections offer **Listen-in channels**, browsed per server like Allowed channels. When Allowed channels is set, they must be in it. On OpenClaw a listen-in channel gets its own entry next to the guild's `"*"` or allowed-channel entries, and threads inherit it; Hermes ignores the list.

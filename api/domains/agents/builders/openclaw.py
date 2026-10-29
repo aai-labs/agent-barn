@@ -309,7 +309,7 @@ def native_telegram_channel(settings: dict) -> dict:
     """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
 
     ``groups`` is the group allowlist and ``groupPolicy: "open"`` admits any member
-    of those groups. Groups always require a mention; DMs never do.
+    of those groups. Groups require a mention, except listen-in groups; DMs never do.
     """
     channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
     user_ids = _setting_ids(settings, "allowed_user_ids")
@@ -319,12 +319,15 @@ def native_telegram_channel(settings: dict) -> dict:
     elif dm_policy == "allowlist" and user_ids:
         # An empty allowlist drops every DM anyway and OpenClaw warns about it.
         channel.update(dmPolicy="allowlist", allowFrom=user_ids)
-    group_ids = (
-        ["*"] if settings.get("group_policy", "allowlist") == "open" else _setting_ids(settings, "allowed_chat_ids")
-    )
+    open_groups = settings.get("group_policy", "allowlist") == "open"
+    group_ids = ["*"] if open_groups else _setting_ids(settings, "allowed_chat_ids")
     if group_ids:
+        groups: dict[str, dict] = {group_id: {"requireMention": True} for group_id in group_ids}
+        for chat_id in _setting_ids(settings, "listen_in_chat_ids"):
+            if open_groups or chat_id in group_ids:
+                groups[chat_id] = dict(_LISTEN_IN_ROOM)
         channel["groupPolicy"] = "open"
-        channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
+        channel["groups"] = groups
     if home_channel_id := settings.get("home_channel_id"):
         channel["defaultTo"] = str(home_channel_id)
     else:

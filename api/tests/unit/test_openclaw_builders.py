@@ -386,6 +386,22 @@ def test_native_telegram_channel_confines_groups_to_the_allowlist_and_requires_m
     }
 
 
+def test_native_telegram_channel_listens_in_on_chosen_groups() -> None:
+    listen_in = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+
+    open_ = native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-1009"]})
+    assert open_["groups"] == {"*": {"requireMention": True}, "-1009": listen_in}
+
+    allowed = native_telegram_channel(
+        {"allowed_chat_ids": ["-1001", "-1002"], "listen_in_chat_ids": ["-1002", "-1003"]}
+    )
+    assert allowed["groups"] == {"-1001": {"requireMention": True}, "-1002": listen_in}
+
+    closed = native_telegram_channel({"listen_in_chat_ids": ["-1009"]})
+    assert closed["groupPolicy"] == "disabled"
+    assert "groups" not in closed
+
+
 def test_native_telegram_channel_opens_groups_and_dms() -> None:
     channel = native_telegram_channel({"group_policy": "open", "dm_policy": "open"})
 

@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from api.domains.communications.models import (
     CredentialUniquenessScope,
@@ -50,6 +50,23 @@ class TelegramSettings(PlatformSettings):
             "when the Agent runs Telegram natively."
         ),
     )
+    listen_in_chat_ids: list[str] = Field(
+        default_factory=list,
+        title="Listen-in groups",
+        description=(
+            "Group IDs where the Agent reads every message without an @mention and posts only when it has "
+            "something useful to add, such as a correction or missing context. Each message there costs one model "
+            "turn, even when the Agent stays silent. The bot must see every group message: disable privacy mode "
+            "or make it an administrator. Under Allowlist, these must also be Allowed groups. "
+            "OpenClaw only for now; Hermes Agents still answer only when mentioned."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_allowed_listen_in_groups(self) -> TelegramSettings:
+        if self.group_policy == "allowlist" and (outside := set(self.listen_in_chat_ids) - set(self.allowed_chat_ids)):
+            raise ValueError(f"Listen-in groups must also be Allowed groups: {', '.join(sorted(outside))}")
+        return self
 
 
 class TelegramCredentials(PlatformCredentials):
@@ -76,7 +93,8 @@ class TelegramPlatformPlugin(PlatformPlugin):
         "2. Add the bot to every group it should handle. Make it a group administrator, or use "
         "[@BotFather](https://t.me/BotFather) → `/setprivacy` → **Disable**, then remove and re-add the bot "
         "to the group. Privacy mode can prevent ordinary @mentions from reaching the bot. The native runtime "
-        "still answers groups only when mentioned or replied to, subject to Connection access. "
+        "still answers groups only when mentioned or replied to, subject to Connection access. Listen-in groups "
+        "need the bot to see every message, so disable privacy mode or make the bot an administrator there. "
         "See [Telegram privacy mode](https://core.telegram.org/bots/features#privacy-mode).\n"
         "3. For channels, make the bot an administrator so it can receive channel posts and send replies.\n\n"
         "## Set Connection access\n\n"

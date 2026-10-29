@@ -242,6 +242,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("/setprivacy"),
                     contains_string("remove and re-add"),
                     contains_string("only when mentioned or replied to"),
+                    contains_string("Listen-in groups"),
                     contains_string("webhook"),
                 ),
             )
