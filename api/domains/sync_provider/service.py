@@ -18,9 +18,11 @@ from api.domains.agents.microsoft_identity import pkce_pair
 from api.domains.agents.sharepoint_service import SharePointService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
+from api.domains.file_sync.service import FileSyncBusy, FileSyncFolderRemoval
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.sync_provider.models import (
+    FOLDER_NAME,
     SyncLocationRead,
     SyncProviderCapability,
     SyncProviderConnection,
@@ -48,7 +50,6 @@ from api.infrastructure.crypto import decrypt_token, encrypt_token
 logger = logging.getLogger(__name__)
 
 MESSAGE_TYPE = "sync-provider-oauth"
-FOLDER_NAME = "Agent Barn"
 
 _STATE_TYPE = "sync_provider_state"
 _STATE_TTL_SECONDS = 600
@@ -77,6 +78,7 @@ _SIGN_IN_INCOMPLETE = "The sign-in didn't complete. Please try again."
 _SIGN_IN_NOT_YOURS = "This sign-in has expired or was started by someone else. Please connect again."
 _SEARCH_TERM_NEEDED = "Type part of the location's name to search."
 _NO_LOCATION_PICKER = "This sync provider has no locations to choose from."
+_FILE_SYNC_BUSY = "File sync is busy with this connection. Try again in a moment."
 
 SyncProviderPurpose = Literal["connect", "disconnect"]
 
@@ -183,6 +185,7 @@ class SyncProviderService:
     permission_policy: PermissionPolicy
     plugins: SyncProviderPluginRegistry
     sharepoint: SharePointService
+    file_sync_folders: FileSyncFolderRemoval
     config: Config
 
     def providers(self, organization_id: UUID, context: CurrentUserContext) -> list[SyncProviderRead]:
@@ -295,8 +298,9 @@ class SyncProviderService:
     def disconnect(
         self, organization_id: UUID, provider_key: str, code: str, state_token: str, context: CurrentUserContext
     ) -> SyncProviderRead:
-        """Take back Agent Barn's access with the person's fresh sign-in, then close the connection.
-        The folder is left in place."""
+        """Take Agent Barn's access back with the person's fresh sign-in, close the connection, then delete the
+        Agent folders with that sign-in. A failed revoke changes nothing; a folder that fails to delete stays.
+        The root folder is left in place, and the Sync Engine is held off the connection throughout."""
         self._require_manage(organization_id, context)
         plugin = self._offered(provider_key)
         state = self._verified_state(state_token, provider_key, "disconnect", organization_id, context)
@@ -305,12 +309,19 @@ class SyncProviderService:
             raise HTTPException(status.HTTP_409_CONFLICT, f"{plugin.display_name} isn't connected.")
         signed_in = self._call(lambda: plugin.complete_sign_in(**self._redemption(code, state)))
         self._call(lambda: plugin.require_same_account(connection.account_id, signed_in))
-        self._call(
-            lambda: plugin.revoke(
-                signed_in.access_token, location_id=connection.location_id, provider_data=connection.provider_data
-            )
-        )
-        self.repository.mark_disconnected(connection.id)
+        try:
+            with self.file_sync_folders.holding(connection.id):
+                self._call(
+                    lambda: plugin.revoke(
+                        signed_in.access_token,
+                        location_id=connection.location_id,
+                        provider_data=connection.provider_data,
+                    )
+                )
+                self.repository.mark_disconnected(connection.id)
+                self.file_sync_folders.remove_agent_folders(connection, plugin, signed_in.access_token)
+        except FileSyncBusy as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, _FILE_SYNC_BUSY) from exc
         return self._read(organization_id, plugin)
 
     def abandon_pending(self, organization_id: UUID, provider_key: str, context: CurrentUserContext) -> None:

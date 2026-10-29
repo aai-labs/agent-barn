@@ -1,14 +1,17 @@
+import json
 from pathlib import Path
 from uuid import UUID
 
 import yaml
 from kubernetes import client
 
+from api.domains.agents.restore_point_job import RUNTIME_HERMES
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import (
     RUNTIME_WEBHOOK_PORT,
     AgentBarnTelegramRuntime,
 )
+from api.domains.file_sync.rules import rules_manifest
 
 from .artifacts import (
     ARTIFACT_COMMAND,
@@ -45,6 +48,7 @@ OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
@@ -441,6 +445,8 @@ def build_hermes_config_map(
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
+        "file-sync.py": FILE_SYNC_PY,
+        "file-sync-rules.json": json.dumps(rules_manifest(RUNTIME_HERMES)),
     }
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml

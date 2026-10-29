@@ -5,7 +5,7 @@ export const ORG_B_ID = "33333333-3333-4333-8333-333333333333";
 export const OWNER_ID = "44444444-4444-4444-8444-444444444444";
 export const MEMBER_ID = "55555555-5555-4555-8555-555555555555";
 
-function org(overrides: Record<string, unknown> = {}) {
+export function org(overrides: Record<string, unknown> = {}) {
   return {
     id: ORG_A_ID,
     created_at: "2024-01-01T00:00:00Z",
@@ -394,14 +394,14 @@ export class OrganizationDataSupport {
     });
   }
 
-  async interceptRenameOrganization({ status = 200 }: { status?: number } = {}) {
+  async interceptRenameOrganization({ status = 200, detail = "Unable to rename organization" }: { status?: number; detail?: string } = {}) {
     const state = { name: "AAI Labs", payload: undefined as unknown };
     await this.page.route(`**/api/v1/organizations/${ORG_A_ID}`, async (route) => {
       const method = route.request().method();
       if (method === "PATCH") {
         state.payload = route.request().postDataJSON();
         if (status < 400) state.name = (state.payload as { name: string }).name;
-        await route.fulfill({ status, json: status >= 400 ? { detail: "Unable to rename organization" } : org({ name: state.name }) });
+        await route.fulfill({ status, json: status >= 400 ? { detail } : org({ name: state.name }) });
       } else if (method === "GET") {
         await route.fulfill({ json: org({ name: state.name }) });
       } else {
