@@ -17,6 +17,7 @@ from api.domains.agent_tasks.models import (
     AgentTaskNoteRead,
     AgentTaskRead,
     AgentTaskStatus,
+    AgentTaskSummary,
 )
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
@@ -24,6 +25,9 @@ from api.domains.artifacts.models import ArtifactRead
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+# Lists show a failed Task's latest Note in two lines; the Task's own page has all of it.
+LATEST_NOTE_PREVIEW_CHARS = 300
 
 
 def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) -> bool:
@@ -262,3 +266,47 @@ class AgentTaskRepository:
             total=total,
             items=[AgentTaskRead.model_validate(row) for row in rows],
         )
+
+    def summarize(self, tasks: list[AgentTaskRead]) -> list[AgentTaskSummary]:
+        """Add each Task's File and Note counts and its latest Note, in two queries for the whole page."""
+        task_ids = [task.id for task in tasks]
+        if not task_ids:
+            return []
+        with Session(self.delegate.engine) as session:
+            file_counts = dict(
+                session.exec(
+                    select(AgentTaskFile.task_id, func.count())
+                    .where(col(AgentTaskFile.task_id).in_(task_ids))
+                    .group_by(col(AgentTaskFile.task_id))
+                ).all()
+            )
+            ranked = (
+                select(
+                    AgentTaskNote.task_id,
+                    func.left(col(AgentTaskNote.body), LATEST_NOTE_PREVIEW_CHARS).label("body"),
+                    func.count().over(partition_by=col(AgentTaskNote.task_id)).label("note_count"),
+                    func.row_number()
+                    .over(
+                        partition_by=col(AgentTaskNote.task_id),
+                        order_by=(col(AgentTaskNote.created_at).desc(), col(AgentTaskNote.id).desc()),
+                    )
+                    .label("rank"),
+                )
+                .where(col(AgentTaskNote.task_id).in_(task_ids))
+                .subquery()
+            )
+            notes = {
+                task_id: (note_count, body)
+                for task_id, body, note_count in session.exec(
+                    select(ranked.c.task_id, ranked.c.body, ranked.c.note_count).where(ranked.c.rank == 1)
+                ).all()
+            }
+        return [
+            AgentTaskSummary(
+                **task.model_dump(),
+                file_count=file_counts.get(task.id, 0),
+                note_count=notes.get(task.id, (0, None))[0],
+                latest_note=notes.get(task.id, (0, None))[1],
+            )
+            for task in tasks
+        ]

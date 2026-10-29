@@ -192,6 +192,13 @@ def test_the_instructions_keep_task_bookkeeping_out_of_replies():
     assert "Do not mention Tasks in your replies unless the user asks" in TASK_TOOL_INSTRUCTIONS
 
 
+def test_the_instructions_point_users_to_their_tasks_when_they_ask_where_the_work_is():
+    instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
+    assert "asks where your work or files are" in instructions
+    assert "the Tasks tab on your page in the dashboard" in instructions
+    assert "still share the result in the conversation" in instructions
+
+
 def test_the_instructions_leave_closing_and_attaching_to_the_plugin():
     instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
     assert "is marked `done` when your turn ends" in instructions
