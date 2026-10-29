@@ -219,10 +219,11 @@ WF02 runs each step as a new session in the owning Agent and persists text resul
 in PostgreSQL. A step is governed by whatever is configured on the Agent: its
 tools, connected Integrations, approval mode and spend limits. A step can do
 exactly what the Agent can do in chat, under the same rules, including acting
-unattended wherever the Agent may act unattended in chat. File artifacts, object
-storage, uploads, previews, downloads and file sharing are deferred to a separate
-slice. The saved `artifact_description` and `final_artifact_description` fields
-guide each step's text result rather than requiring a file. Every completed step
+unattended wherever the Agent may act unattended in chat. [Agent artifacts](agent-artifacts.md)
+adds optional shared chat/workflow files with private Garage/S3 bytes, scoped
+publication, immutable ID/checksum handoff, attachments and retention. The saved
+`artifact_description` and `final_artifact_description` fields guide the requested
+output; text-only results remain supported without storage. Every completed step
 reports its actual result in its summary, bounded to 4,000 characters, including
 facts later steps need. The last step's summary also serves as the final result.
 
@@ -326,15 +327,19 @@ deadline under the run lock. Unmet criteria reported by the Agent
 fail the run at once with the Agent's reason. Other reported failures retry the step
 with a fresh attempt, showing the reason as the run's note while it retries; at most
 three attempts per unfinished step are admitted, the last failure's reason ends the
-run, and an attempt that exceeds its 15-minute deadline counts as lost. When the Agent asks
+run, and an attempt that exceeds its 15-minute deadline counts as lost. A lost attempt
+adds why (the Agent never accepted the step, or timed out) to the reason and keeps the
+failure an earlier attempt reported. When the Agent asks
 for a command approval, the session is stopped and the run becomes BLOCKED with the
 reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
 approval handling arrives with WF03. Agent stop or lost initiator authority pauses
 progression; restarting the Agent does not resume it implicitly.
 
 The result envelope accepts only `summary` and `criteria_met: true`. It does not
-accept file payloads. A completed result commits the checkpoint, progression and
-Domain Event atomically. Exact duplicate results are acknowledged without
+accept file payloads. Files use the shared artifact publication protocol before
+completion; the checkpoint includes exact IDs/checksums of READY files from that
+attempt. A completed result commits the checkpoint, progression and Domain Event
+atomically. Exact duplicate results are acknowledged without
 replaying progression; changed or stale results are rejected.
 
 Cancellation records CANCELLING before stopping. New handoff/result admission fails
@@ -345,7 +350,8 @@ available. Soft deletion conceals the run tree and fences/stops attempts. Existi
 hard Agent/Organization deletion cascades workflow-owned records. Active runs
 retain their checkpoint summaries. Settled inputs, checkpoints and content-bearing
 history expire after the module-owned 90-day retention period, while run status
-and metadata remain. No external storage or object-purge machinery is required.
+and metadata remain. File retention and purge are independent and follow the
+[shared artifact lifecycle](agent-artifacts.md#retention-deletion-and-recovery).
 
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
 `workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
@@ -370,5 +376,19 @@ and section title remain mounted but hidden while a run or its start screen is o
 each completed step's `summary`, shown under “What each step did”, and a
 `final_summary` once succeeded, shown with the chat Markdown viewer on the
 completion card. The last step is excluded from the per-step card on success to
-avoid repeating its text. File cards and preview pages are deferred, along with
-approvals and messaging.
+avoid repeating its text. Run and selected-step file attachments are delivered
+through the shared [Agent artifact service](agent-artifacts.md) alongside summaries.
+Dedicated preview pages, approvals and messaging remain follow-ups.
+
+## AF-389 acceptance dependencies
+
+PR [#326](https://github.com/aai-labs/agent-barn/pull/326) is merged into
+staging. The current controller still automatically retries failed/expired
+unfinished attempts. Live planning supersedes the earlier reasoning-only
+assumption: uncertain external effects must block replay until safe non-execution,
+verified idempotency or audited reconciliation is established. That AF-389 gap,
+actual OpenClaw session execution and session-stop/quiescence acceptance remain
+unresolved by AF-415. Callback/storage fencing does not prove that tools stopped
+or that external writes are safe to repeat. Artifact reads follow the explicitly
+approved `agent.read` boundary; AF-389 retains its separate read-policy acceptance
+coordination.

@@ -1,14 +1,14 @@
 """Record which workflow run a re-run repeats.
 
 Revision ID: c7d4e2a91b58
-Revises: 8b2e4f61c9d3
+Revises: cd22e37ca5b8
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision = "c7d4e2a91b58"
-down_revision = "8b2e4f61c9d3"
+down_revision = "cd22e37ca5b8"
 branch_labels = None
 depends_on = None
 

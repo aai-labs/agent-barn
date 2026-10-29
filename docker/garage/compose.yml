@@ -1,0 +1,41 @@
+# Required by the main Compose stack through include; also used by storage-only
+# operator commands. All state survives container replacement.
+services:
+  garage:
+    image: dxflrs/garage:v2.4.1
+    restart: unless-stopped
+    command: ["/garage", "server", "--single-node"]
+    ports:
+      # Operator/native-development access only; browsers and Agents use the app.
+      - "127.0.0.1:${GARAGE_SAVED_S3_PORT:-3900}:3900"
+      # Native API/cleanup only; never expose management on a LAN interface.
+      - "127.0.0.1:${GARAGE_ADMIN_PORT:-0}:3903"
+    volumes:
+      - type: bind
+        source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/garage.toml
+        target: /etc/garage.toml
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/rpc-secret
+        target: /secrets/rpc-secret
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/admin-token
+        target: /secrets/admin-token
+        read_only: true
+        bind: {create_host_path: false}
+      - metadata:/var/lib/garage/meta
+      - data:/var/lib/garage/data
+    healthcheck:
+      test: ["CMD", "/garage", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 30s
+volumes:
+  metadata:
+    name: ${GARAGE_SAVED_VOLUME_PREFIX:-${COMPOSE_PROJECT_NAME}-garage-unconfigured}_metadata
+  data:
+    name: ${GARAGE_SAVED_VOLUME_PREFIX:-${COMPOSE_PROJECT_NAME}-garage-unconfigured}_data

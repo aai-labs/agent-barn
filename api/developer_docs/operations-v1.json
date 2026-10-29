@@ -16,6 +16,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
+    "delete_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}",
     "retire_communication_connection_organizations__organization_id__agents__agent_id__connections__connection_id__delete"
   ],
@@ -128,6 +133,11 @@
     "DELETE",
     "/platform/templates/{template_key}/draft",
     "discard_draft_platform_templates__template_key__draft_delete"
+  ],
+  [
+    "GET",
+    "/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}",
+    "download_artifact_agent_artifacts__organization_id___agent_id___artifact_id__get"
   ],
   [
     "GET",
@@ -278,6 +288,26 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/activity/wakes",
     "list_agent_wakes_organizations__organization_id__agents__agent_id__activity_wakes_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts",
+    "list_artifacts_organizations__organization_id__agents__agent_id__artifacts_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
+    "storage_status_organizations__organization_id__agents__agent_id__artifacts_storage_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
+    "get_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/download-link",
+    "artifact_download_link_organizations__organization_id__agents__agent_id__artifacts__artifact_id__download_link_get"
   ],
   [
     "GET",
@@ -761,6 +791,11 @@
   ],
   [
     "GET",
+    "/platform/environment-health",
+    "get_environment_health_platform_environment_health_get"
+  ],
+  [
+    "GET",
     "/platform/event-deliveries",
     "get_event_deliveries_platform_event_deliveries_get"
   ],
@@ -1083,6 +1118,16 @@
     "POST",
     "/organizations/{organization_id}/agents",
     "create_agent_organizations__organization_id__agents_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts",
+    "create_artifact_organizations__organization_id__agents__agent_id__artifacts_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
+    "provision_storage_organizations__organization_id__agents__agent_id__artifacts_storage_post"
   ],
   [
     "POST",
@@ -1443,6 +1488,11 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/agent-size",
     "set_agent_size_organizations__organization_id__agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/content",
+    "publish_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__content_put"
   ],
   [
     "PUT",

@@ -480,6 +480,7 @@ export function WorkflowsPage({
           agentId={agentId}
           agent={agent}
           agentHref={home}
+          canManageFiles={canAgent(agent, "agent.update")}
           runId={runId}
           canRunAgain={canRun}
           onOpenRun={(id) => {

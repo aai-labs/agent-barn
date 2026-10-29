@@ -1,5 +1,6 @@
 "use client";
 
+import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, FileCheck2, LayoutDashboard } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -92,6 +93,7 @@ export function WorkflowRunDetail({
   agentId,
   agent,
   agentHref,
+  canManageFiles,
   runId,
   canRunAgain,
   onOpenRun,
@@ -99,6 +101,7 @@ export function WorkflowRunDetail({
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
+  canManageFiles: boolean;
   runId: string;
   /** Whether this actor may start runs of the workflow; the server decides per run. */
   canRunAgain: boolean;
@@ -120,6 +123,7 @@ export function WorkflowRunDetail({
       agentId={agentId}
       agent={agent}
       agentHref={agentHref}
+      canManageFiles={canManageFiles}
       run={run.data}
       canRunAgain={canRunAgain}
       onOpenRun={onOpenRun}
@@ -270,6 +274,7 @@ function RunContents({
   agentId,
   agent,
   agentHref,
+  canManageFiles,
   run,
   canRunAgain,
   onOpenRun,
@@ -277,6 +282,7 @@ function RunContents({
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
+  canManageFiles: boolean;
   run: WorkflowRun;
   canRunAgain: boolean;
   onOpenRun: (id: string) => void;
@@ -400,6 +406,7 @@ function RunContents({
               />
             )}
           </div>
+          <AgentFiles canManageFiles={canManageFiles} key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
           <WorkflowRunTiming run={run} />
           <WorkflowRunActivity agentId={agentId} run={run} />
         </div>

@@ -15,6 +15,7 @@ from sqlmodel.sql.expression import SelectOfScalar
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.artifacts.references import attempt_files, release
 from api.domains.events.catalog import EVENT_REGISTRY, WORKFLOW_RUN_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
@@ -37,6 +38,20 @@ from api.domains.workflows.run_models import (
     WorkflowRunCreate,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+RETRY_PREFIX = "Step failed, retrying: "
+TIMEOUT_NOTE = " (last attempt: "
+TIMEOUT_CAUSES = {"The Agent did not accept the step", "The attempt timed out"}
+
+
+def _timeout_cause(accepted: bool, previous_reason: str | None) -> str:
+    """Why an attempt expired unreported, keeping the failure an earlier attempt reported."""
+    timeout = "The attempt timed out" if accepted else "The Agent did not accept the step"
+    reason = previous_reason or ""
+    earlier = reason.removeprefix(RETRY_PREFIX).split(TIMEOUT_NOTE, 1)[0] if reason.startswith(RETRY_PREFIX) else ""
+    if not earlier or earlier in TIMEOUT_CAUSES:
+        return timeout
+    return f"{earlier}{TIMEOUT_NOTE}{timeout})"
 
 
 def start_hash(payload: WorkflowRunCreate, user_id: UUID, rerun_of_run_id: UUID | None) -> str:
@@ -355,9 +370,28 @@ class WorkflowRunRepository:
             attempt.capability_hash, hashlib.sha256(token.encode()).hexdigest()
         ):
             raise WorkflowConflict("Invalid workflow attempt capability")
-        run = session.exec(select(WorkflowRun).where(col(WorkflowRun.id) == attempt.run_id).with_for_update()).one()
-        # Another request may have changed the attempt while this transaction
-        # waited for its run lock; never admit against the identity-map snapshot.
+        return self._fenced_attempt(session, attempt, lock=True)
+
+    def artifact_attempt(
+        self, session: Session, attempt_id: UUID, agent_id: UUID, *, lock: bool = True
+    ) -> tuple[WorkflowRun, WorkflowAttempt]:
+        """Publication authority comes from an authenticated owning Agent, never the completion bearer."""
+        attempt = session.get(WorkflowAttempt, attempt_id)
+        if attempt is None:
+            raise WorkflowConflict("Workflow attempt not found")
+        run = session.get_one(WorkflowRun, attempt.run_id)
+        workflow = session.get_one(Workflow, run.workflow_id)
+        if workflow.agent_id != agent_id:
+            raise WorkflowConflict("Workflow attempt belongs to another Agent")
+        return self._fenced_attempt(session, attempt, lock=lock)
+
+    def _fenced_attempt(
+        self, session: Session, attempt: WorkflowAttempt, *, lock: bool
+    ) -> tuple[WorkflowRun, WorkflowAttempt]:
+        query = select(WorkflowRun).where(col(WorkflowRun.id) == attempt.run_id)
+        if lock:
+            query = query.with_for_update()
+        run = session.exec(query.execution_options(populate_existing=True)).one()
         session.refresh(attempt)
         if (
             run.state != "RUNNING"
@@ -414,7 +448,11 @@ class WorkflowRunRepository:
             run, attempt = self._bound(session, attempt_id, token)
             version = session.get_one(WorkflowVersion, run.version_id)
             step = version.snapshot["steps"][attempt.step_index]
-            checkpoint = {"summary": result.summary, "step_id": step["id"]}
+            checkpoint = {
+                "summary": result.summary,
+                "step_id": step["id"],
+                "artifacts": attempt_files(session, attempt.id),
+            }
             session.add(
                 WorkflowCheckpoint(
                     run_id=run.id, attempt_id=attempt.id, step_index=attempt.step_index, result=checkpoint
@@ -467,6 +505,7 @@ class WorkflowRunRepository:
                 session.commit()
 
     def _settle(self, session: Session, run: WorkflowRun) -> None:
+        release(session, "run", run.id, self.config.artifact_retention_days)
         run.settled_at = datetime.now(UTC)
 
     def active_ids(self, limit: int = 100) -> list[UUID]:
@@ -539,12 +578,15 @@ class WorkflowRunRepository:
                         .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
                     ).one()
                     # A reported cause stays visible through the retry and into the final failure.
+                    # A timeout reports nothing, so it names why and keeps any earlier reported cause.
+                    if cause is None:
+                        cause = _timeout_cause(attempt is not None and attempt.dispatched_at is not None, run.reason)
                     run.state, run.reason = (
-                        ("QUEUED", f"Step failed, retrying: {cause}" if cause else "Fresh attempt after runtime loss")
+                        ("QUEUED", f"{RETRY_PREFIX}{cause}")
                         if retries < workflow_config.MAX_ATTEMPTS
                         else (
                             "FAILED",
-                            f"Attempt recovery limit reached: {cause}" if cause else "Attempt recovery limit reached",
+                            f"Attempt recovery limit reached: {cause}",
                         )
                     )
                     if run.state == "FAILED":
