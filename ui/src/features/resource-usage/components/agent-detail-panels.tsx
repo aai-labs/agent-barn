@@ -12,6 +12,7 @@ import { formatPercent } from "@/features/costs/format";
 import { formatBytes, formatCores } from "../format";
 import type { AgentResourceUsage } from "../schemas";
 import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
+import { LimitLabel } from "./limit-label";
 import { MemoryChart } from "./resource-usage-charts";
 import { noticeFor } from "./resource-usage-notice";
 import { UsageMeter } from "./usage-meter";
@@ -183,24 +184,43 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
       <MeterFact
         label="Memory"
         text={
-          usage.memoryWorkingSetBytes !== null
-            ? `${formatBytes(usage.memoryWorkingSetBytes)}${
-                usage.memoryLimitBytes !== null ? ` of ${formatBytes(usage.memoryLimitBytes)}` : ""
-              }`
-            : "—"
+          usage.memoryWorkingSetBytes !== null ? (
+            <>
+              {formatBytes(usage.memoryWorkingSetBytes)}
+              {usage.memoryLimitBytes !== null && (
+                <>
+                  {` of ${formatBytes(usage.memoryLimitBytes)}`}
+                  <LimitLabel />
+                </>
+              )}
+            </>
+          ) : (
+            "—"
+          )
         }
         ratio={memoryRatio}
+        markerRatio={usageRatio(usage.memoryRequestBytes, usage.memoryLimitBytes)}
+        requestText={usage.memoryRequestBytes !== null ? `requests ${formatBytes(usage.memoryRequestBytes)}` : null}
+        testId="usage-panel-memory-request"
       />
       <MeterFact
         label="CPU"
         text={
-          usage.cpuCores !== null
-            ? `${formatCores(usage.cpuCores)}${
+          usage.cpuCores !== null ? (
+            <>
+              {`${formatCores(usage.cpuCores)}${
                 usage.cpuLimitCores !== null ? ` of ${formatCores(usage.cpuLimitCores)}` : ""
-              } cores`
-            : "—"
+              } cores`}
+              {usage.cpuLimitCores !== null && <LimitLabel />}
+            </>
+          ) : (
+            "—"
+          )
         }
         ratio={cpuRatio}
+        markerRatio={usageRatio(usage.cpuRequestCores, usage.cpuLimitCores)}
+        requestText={usage.cpuRequestCores !== null ? `requests ${formatCores(usage.cpuRequestCores)} cores` : null}
+        testId="usage-panel-cpu-request"
       />
       <div>
         <Fact label="Peak memory, 24h" value={usage.memoryPeakBytes !== null ? formatBytes(usage.memoryPeakBytes) : "—"} />
@@ -213,19 +233,45 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
           }
         />
       </div>
-      <MemoryChart series={usage.series} range={usage.range} limitBytes={usage.memoryLimitBytes} compact />
+      <MemoryChart
+        series={usage.series}
+        range={usage.range}
+        limitBytes={usage.memoryLimitBytes}
+        requestBytes={usage.memoryRequestBytes}
+        compact
+      />
     </div>
   );
 }
 
-function MeterFact({ label, text, ratio }: { label: string; text: string; ratio: number | null }) {
+function MeterFact({
+  label,
+  text,
+  ratio,
+  markerRatio,
+  requestText,
+  testId,
+}: {
+  label: string;
+  text: ReactNode;
+  ratio: number | null;
+  /** Where the request sits on the same scale as the limit. */
+  markerRatio: number | null;
+  requestText: string | null;
+  testId: string;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3 text-[13px]">
         <span style={{ color: "var(--ink-4)" }}>{label}</span>
         <span style={{ color: "var(--ink-2)" }}>{text}</span>
       </div>
-      <UsageMeter ratio={ratio} label={`${label} use against its limit`} />
+      <UsageMeter ratio={ratio} markerRatio={markerRatio} label={`${label} use against its limit`} />
+      {requestText && (
+        <span className="text-right text-[12px]" style={{ color: "var(--ink-4)" }} data-testid={testId}>
+          {requestText}
+        </span>
+      )}
     </div>
   );
 }

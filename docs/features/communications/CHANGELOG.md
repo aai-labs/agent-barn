@@ -6,10 +6,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Current state
 
-- Delivered: Agent-subordinate Communication Connection persistence and scoped CRUD; explicit shipped Platform Plugin registry; Slack, Telegram, Discord, and Microsoft Teams plugins; the first webhook-ingress platform, authenticated by Bot Framework JWT verification at the `verify_webhook` seam; strict plugin-owned settings/credential schemas; encrypted credential envelopes; generic credential uniqueness; optimistic concurrency; platform catalogue; connection-scoped canonical Conversation Messages; durable inbound/outbound Communication Deliveries, including execution-bound interactive sends and durable scheduled-result delivery through Slack; gateway-supervised Slack Socket Mode, Telegram polling, and Discord Gateway ingress plus deployment-gated native Slack, Discord, Telegram, and Teams transport on Hermes and OpenClaw; database ingress leases; a separately served gateway; one versioned runtime-neutral protocol used by both runtimes; Slack channel/thread mention admission with durable Connection-scoped thread ownership; provider-neutral processing feedback with Slack reactions and assistant thread status, terminal failure notices across Discord, Telegram, and Teams, and safe terminal error projections in Web Chat; an outbound persistent runtime control stream with Redis Stream wakeups and durable PostgreSQL replay; optional, best-effort Platform Plugin name enrichment; and AF-273's content-free operational journal, typed admission dispositions, Agent-scoped diagnostics with richer aggregate health signals, filtered/chronological Journal reads including a per-Delivery lifecycle drill-down, reconnect/retry recovery controls, bounded retention, stable ordered outbound delivery, safe error projections, audit events, and low-cardinality Communications metrics.
+- Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime; OpenClaw also exposes its native message tool for explicit sends.
+- Delivered: Agent Barn Telegram ([PR #274](https://github.com/aai-labs/agent-barn/pull/274)), one Agent Barn-owned Telegram bot shared by every Organization beside bring-your-own `telegram`. Both runtimes run their native Telegram adapter behind two Agent Barn components in the Communications process: a relay that polls the bot and forwards each linked user's updates to their Agent's private webhook, and a Bot API proxy that holds the real token and lets each Agent act only on its own linked users, messages, and files. People link their own Telegram account to one Agent at a time through a one-time deep link. This is native execution with limited transport: private chats only, no command-menu changes, no incoming reactions or poll answers, and only allowlisted Bot API methods. Polling, rate limits, and the file download allow-list assume a single Communications replica.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
-- Next: after the webhook Platform retirement, add Agent Barn Chat as another adapter at the Platform Plugin seam, then evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; initiated delivery on Discord, Telegram, and Teams remains unsupported through the Communications Gateway until each plugin supplies and tests target resolution and policy enforcement; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
-- Blockers: none.
+- In transition: chat gateway transport is fenced out; retired physical schema fields and compatibility routes remain pending cleanup. Config and deployment allowlist inputs are removed; the chart retains a hard-coded Secret fence for older replicas during rollout; transport ownership remains fixed by Platform. All four chat gateway transports, senders, and provider approval codecs are removed. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
+- Next: tell a Telegram user when switching Agents drops messages still waiting for the previous Agent. Remove the hard-coded `COMMUNICATIONS_NATIVE_PLATFORMS` Secret fence after every application replica and background worker runs fixed ownership; obtain deployed-consumer cutoff evidence before physical schema contraction and remaining compatibility route removal. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
+- Blockers: deployed application, runtime, UI, and Worker consumer inventories and rollout cutoff evidence remain operator verification tasks.
 
 ## Changes
 
@@ -24,9 +26,115 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
   fetching. Native mention and thread controls continue to apply. See
   [runtime admission](../../architecture/runtime-and-deployment.md#mention-gating).
 - Verified: the real-image regression fails on the previous projection and
-  covers open, closed, populated, and empty allowlists through Slack message intake.
-- Operations: deploy the API and restart affected Agents. No migration or
-  base-image change is required.
+  covers open, closed, populated, and empty allowlists through Slack message intake,
+  and verifies thread-history trust tags against the channel policy.
+- Fixed: the generated Slack manifest enables a writable Messages tab again.
+- Operations: deploy the API and restart affected Agents. Existing Slack apps
+  must also enable Messages Tab and untick read-only under Slack app settings →
+  App Home, or re-paste the updated manifest. Restarting does not update the
+  installed Slack app. No migration or base-image change is required.
+
+### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
+
+- Fixed: a Teams app package's manifest `id` now derives from the organization's first Connection for the same Microsoft App ID, including retired ones, instead of from the current Connection. Re-creating a Connection for a bot previously produced a second Teams app for that bot. Once both reached the org catalogue, Teams reported "Invalid Bot" on the new one, even though the bot was healthy.
+- Fixed: the package `version` increases with every download (`1.0.<unix seconds>`). It was fixed at `1.0.1`, so Teams Admin Center could not accept a re-downloaded package as an update.
+- Changed: Teams stores the App ID as the Connection's external identity even when `SKIP_TEAMS_TOKEN_VALIDATION` skips the credential check, so packages key on the bot in every environment. The post-setup guidance explains that reconnecting an existing bot only needs its messaging endpoint updated, and that a new package should replace the installed app, not be added beside it.
+- Follow-up: the webhook URL still contains the Connection ID, so re-creating a Connection still requires updating the Azure Bot's messaging endpoint.
+
+### 2026-10-15 — Telegram link events for product analytics (AF-374)
+
+- Added: spending a link token stages `telegram.account.linked` in the same transaction as the link, and `telegram.account.unlinked` with `reason: "relinked"` for a link it replaces. Each event is in its link's own Organization, with the Membership that issued the link as actor. Payloads carry Organization, Agent, Connection and link ids only, never the Telegram user id or username. `AgentBarnTelegramService.consume_link_token` enqueues the deliveries after commit; the outbox reconciler picks up any it could not. See [Product analytics](../product-analytics.md).
+- Added: every other way a link ends also stages `telegram.account.unlinked` in the ending transaction, only when a link actually ended:
+  - `user_removed`: the web app's unlink, attributed to the clicking user
+  - `blocked_bot`: a `my_chat_member` "kicked" update, or Telegram refusing a proxied send because the user blocked the bot
+  - `access_lost`: the linking Member lost `agent.update`, seen by the poller, the forwarder, or the proxy
+
+  `end_active_link` and `end_link_for_connection` now take a `reason` and return the staged delivery ids. `unlink_in_scope` takes the actor and returns them, or `None` when no link was found.
+- Added: `agentbarn_telegram_link.first_message_at` (migration `a78bcde4b918`). Existing links are set to their `created_at`.
+  - `queue_update` takes `first_message_link_id` and returns staged delivery ids. When given an active link whose `first_message_at` is null, it sets the column and stages `telegram.first_message.received`.
+  - The processor passes it for a new message only, not for an edit or a button press.
+
+### 2026-10-09 — Spend-limit notice on native chat — [PR #284](https://github.com/aai-labs/agent-barn/pull/284)
+
+- Corrected: native Slack, Discord, Telegram, and Teams no longer show OpenClaw's "top up your API key" billing text when a model spend limit is reached. Both runtimes' in-pod LLM proxies answer a refused chat completion with the spend-limit notice as an ordinary assistant reply (JSON or SSE, matching the request), which the native gateway posts. Other refused endpoints keep the terminal `402`.
+- Preserved: Web Chat and Email still show the notice as a terminal `SPEND_LIMIT_REACHED` failure under the message. The runtime adapter treats a turn during which the proxy recorded the refusal as that failure even when the runtime ended it with the notice, and does not post the notice as an Agent reply.
+- Rollout: the proxies and adapter ship in the Agent ConfigMap, so restart Agents to apply; no runtime image change. See [Costs](../costs.md#runtime-limit-management).
+
+### 2026-10-09 — One silence marker for scheduled runs — [PR #283](https://github.com/aai-labs/agent-barn/pull/283)
+
+- Corrected: the appended Scheduled runs policy now requires exactly `NO_REPLY` for an empty scheduled run. It previously listed `[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, and `HEARTBEAT_OK` as interchangeable, but OpenClaw 2026.8 suppresses only `NO_REPLY` (and `HEARTBEAT_OK`) and posted `[SILENT]` verbatim, while Hermes suppresses `[SILENT]`/`SILENT`/`NO_REPLY`/`NO REPLY` but not `HEARTBEAT_OK`. The rule now overrides any marker a template names for scheduled runs.
+- Follow-up: the built-in templates still name `HEARTBEAT_OK` for cron work. The seeder only bootstraps missing lineages, so existing environments need Platform Administrators to publish new template versions; the policy override applies to every Agent on its next start.
+
+### 2026-10-06 — Add the Agent Barn Telegram Platform (AF-367) — [PR #274](https://github.com/aai-labs/agent-barn/pull/274)
+
+- Added: `agentbarn_telegram`, a Platform for Telegram through Agent Barn's own bot, shared by every Organization, beside bring-your-own `telegram`. A Connection needs no settings or credentials and reports the shared bot's `@username` as its external identity. The Platform declares no gateway capabilities, so the supervisor never polls it and no Communication Deliveries are created for it; the runtimes' own Telegram adapters carry its traffic.
+- Added: `AGENTBARN_TELEGRAM_BOT_TOKEN` and `AGENTBARN_TELEGRAM_BOT_USERNAME`. The Platform is offered in the catalogue, and accepted on create, only when both are set. It stays registered either way, so existing Connections remain readable after the bot is unconfigured. `PlatformPlugin.is_offered()` is the generic seam for this.
+- Added: `agentbarn_telegram_connection_secret` (migration `164fb0fb6c2c`): each Agent Barn Telegram Connection's random root secret, stored encrypted, from which its Agent's stand-in token and webhook secret are derived. It replaces the retired Connection driver key. The Agent's first start with the Connection creates it and later starts reuse it; the proxy and relay only read it, so a Connection whose Agent has not started with it is refused by the proxy and its queued updates wait as for a starting pod. Deleting the Connection deletes it.
+- Changed: an Agent may hold at most one active Telegram-type Connection, either `telegram` or `agentbarn_telegram`, enforced by `uq_communication_connection_active_telegram` (migration `d7aaf4231438`), because a runtime runs one Telegram adapter. A bring-your-own `telegram` Connection is refused when its token is for the deployment's shared bot (same bot id, even after a token revoke), since Telegram allows one consumer per bot.
+- Added: `agentbarn_telegram_link` and `agentbarn_telegram_link_token` (migration `e91e4d921140`). A link ties one Telegram user to one Agent's Connection and records the issuing Membership; removing that Member, the Connection, or the Agent removes it. A Telegram user holds at most one active link (`uq_agentbarn_telegram_link_active_user`); spending a token for another Agent ends the previous link. Tokens are single-use, expire, store only a SHA-256 hash, and are refused once their Connection is retired or disabled.
+- Added: Telegram account linking routes under `/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/`. `POST telegram-link-tokens` returns a `https://t.me/<bot>?start=<token>` deep link valid for ten minutes; the raw token appears only in that response. `GET telegram-link-tokens/{token_id}` reports `waiting`, `linked` (with the Telegram `@username`), or `expired` for the setup screen to poll. `GET telegram-links` lists active linked accounts and `DELETE telegram-links/{link_id}` unlinks one. Issuing, polling, and unlinking require `agent.update`; listing requires Agent visibility. Links are issued only for enabled Agent Barn Telegram Connections while the shared bot is configured. `AgentBarnTelegramService.consume_link_token` is the entry point the bot's `/start` handler will call.
+- Added: the Communications process polls the shared bot (`AgentBarnTelegramIngress`) whenever it is configured. A single-row lease (`agentbarn_telegram_ingress_lease`, migration `fcdc690dbf31`) keeps polling to one replica, as Telegram allows one consumer per bot. Each batch of private-chat messages, edits, button presses, and block/unblock events is stored in `agentbarn_telegram_update` before the next poll confirms it to Telegram, and `update_id` uniqueness makes re-delivered updates no-ops. Message content is held only until the update is settled, and settled rows are purged after seven days. Processing runs in chunks that each renew the lease first, so a long pass stops rather than overlap a replica that took over; a batch stored just as the lease was lost is processed by the new holder. Run a single Communications replica: the rate limits and the per-Connection file allow-list are kept per process, and a restart forgets the allow-list, so a runtime must call `getFile` again (downloads fail closed with 404).
+- Added: the polling replica forwards queued updates to each Agent's own Telegram webhook (`AgentBarnTelegramForwarder`) at `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (default `http://agent-{agent_id}.{namespace}.svc.cluster.local:8443/telegram`), unchanged, with an `X-Telegram-Bot-Api-Secret-Token` derived from the Connection's secret (`runtime_webhook_secret`). Each Telegram user's updates go out oldest first; a failed one holds back only that user's later updates. Users are delivered on parallel workers, one user per worker and at most ten updates per user per pass, and only while the replica still holds the lease, with a short connect timeout, so an Agent that hangs delays only its own users; due heads are chosen in the database, longest-waiting first. Before each delivery the sender's link and the linking Member's `agent.update` are checked again: messages held for someone since unlinked, switched, or no longer authorised are dropped rather than delivered. A running Agent that is unreachable or not yet serving (connection errors, 502/503/504) is retried with backoff, and after ten seconds the user is told once that it is waking up; an Agent that refuses an update is retried without that note, and after five refusals the update is dropped and the user told it was not delivered, so a message the Agent will never accept does not hold back their later ones for a day. Refusals are counted apart from unreachable attempts (`rejected_count`, migration `85f51aa260cb`). A stopped or failed Agent is not contacted and the user is told once that it is offline. Updates waiting over 24 hours are dropped with one note per user that says how many were not delivered, and updates whose Connection is no longer in use are dropped silently. Forwarded and dropped updates keep no content.
+- Added: the Telegram Bot API proxy Agents on Agent Barn Telegram call instead of Telegram (`AgentBarnTelegramProxy`), at `/communications/v1/telegram/{connection_id}/bot<token>/<method>` on the Communications service. The token is a per-Connection stand-in (`runtime_api_token`): the real bot's numeric id plus a secret derived from the Connection's secret; the real token never reaches an Agent. `getMe` returns the real bot (cached); `setWebhook`, `deleteWebhook`, `getWebhookInfo`, bot-wide command, name, description and menu changes, `logOut`, and `close` are answered locally as successes so no Agent can change the shared bot. Sends, edits, deletes, reactions, typing, copies, forwards, and pins reach Telegram only when every `chat_id` and `from_chat_id` is a user linked to that Connection by a Member who still holds `agent.update` on its Agent. That Member is checked again on every call, so scheduled sends stop as soon as they lose access, and losing it ends the link. Every message the call names (`message_id`, `message_ids`, a forwarding source, a reply or quote target, an unpin, which must name its message) and every file id it reuses must belong to the Connection, or the call is refused with 403 before Telegram is called; URLs and uploads are not checked. `getFile` is forwarded only for file ids the Connection owns, and `answerCallbackQuery` as it is; every other method, including `getUpdates`, is refused with 403. The stand-in token is checked before the request body is read, and a body is refused with 413 as soon as it passes 1 MB, or 51 MB for a multipart upload (Telegram accepts 50 MB files), whether or not it declares a Content-Length. Each call is read strictly, once: JSON, form, multipart, or query string, with exactly one value per parameter; duplicate keys, a parameter in both the query and the body, and unknown or missing content types are refused with 400. Telegram receives a request rebuilt from those checked values, never the bytes the Agent sent, so the check and the forwarded call cannot disagree. A `reply_parameters.chat_id` must also name a linked user, since a reply can quote another chat the shared bot is in; when sent as JSON text it is read with the same duplicate-key refusal as the body and forwarded re-serialised, and chat ids must be plain ASCII digits. `business_connection_id` is refused. Blocking work runs off the event loop, so one slow call does not stall other Agents or the poller. Telegram's "bot was blocked by the user" ends that user's link. The access log redacts stand-in tokens from request paths.
+- Added: `agentbarn_telegram_message` and `agentbarn_telegram_file` (migration `dfcfdf34eefa`) record which Connection owns each shared-bot message and file id. A user's chat with the shared bot outlives their link to any one Agent, so the chat being linked does not make every message in it the current Agent's. Inbound messages and the files they carry are recorded when they are queued for an Agent, and outbound ones when Telegram reports them sent through the proxy, so a send that completes after the user switched still belongs to the Agent that made it. Switching back to an earlier Agent restores that Agent's own messages and no others. Deleting the Connection deletes its rows.
+- Added: `/communications/v1/telegram/{connection_id}/file/bot<token>/<file_path>` downloads files users sent, from Telegram's file area with the real token, so runtimes configured with this root as their file base can read photos and documents. A Connection may download only a file path the proxy returned to that same Connection from `getFile` within the last hour, because every Organization shares the bot's file area; only plain `dir/name.ext` paths are fetched, so no path can reach the Bot API through it. Telegram's public file limit of 20 MB applies.
+- Added: rate limits on the proxy's chat calls, so Agents together stay under Telegram's per-bot limit and one Organization cannot use up the shared bot: `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` (default 25) across all Agents and `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (default 5) per Organization. A call over budget gets Telegram's own 429 shape with a short `retry_after`, which both runtimes' adapters honour; a typing indicator over budget is skipped and reported as sent. `getMe`, button answers, and file lookups are not limited. The bot's own messages (link confirmations, sign-up replies, delivery notices) draw on the same bot-wide budget, are tried once without sleeping retries, and courtesy replies are skipped while the budget is spent. The budgets are per process, which holds while one Communications replica polls and proxies.
+- Added: Agents with an enabled Agent Barn Telegram Connection run their runtime's own Telegram adapter against the proxy, on Hermes and OpenClaw alike, as a native Platform (`agentbarn_telegram` is `native` in `transport.py`). Hermes gets `platforms.telegram.extra.base_url`/`base_file_url` and `TELEGRAM_WEBHOOK_*`; OpenClaw gets `channels.telegram.apiRoot` and `webhookUrl`/`webhookHost`/`webhookPort`/`webhookPath`, with `webhookSecret` resolved from the Secret so it never sits in `openclaw.json`. Both receive only the stand-in token; DMs are open because linking already admitted the sender, and groups are closed. The Agent's Service exposes the private `tg-webhook` port 8443 only then, and AGENTS.md explains file attachments as for other native adapters. Agent reads list `agentbarn_telegram` among runtime-owned platforms, so the dashboard restarts a running Agent after its Agent Barn Telegram Connection changes. Native Telegram journal, health, and transcript events fall back to the Agent's Agent Barn Telegram Connection. Locally, `make forward-telegram AGENT=<id>` bridges the Communications process to an Agent's webhook in k3d.
+- Added: an Agent Barn Telegram Connection's card in the Agent's communication settings lists linked Telegram accounts and, for Members with `agent.update`, offers **Connect Telegram**: a one-time **Open in Telegram** link with a copy button, a waiting state that turns into "Linked as @username" when the person presses Start, a fresh link once one expires, and **Unlink** behind a confirmation. A turned-off Connection asks to be turned on first; viewers see the list only. A failed unlink or a list that cannot load is reported in place. The card appears for any platform declaring the new `account_linking` capability.
+- Fixed: the Communications deployment now sets `K8S_NAMESPACE` to its release namespace, like the API deployment. Agent webhook URLs it builds (Agent Barn Telegram forwarding, Teams runtime webhooks) name the Agents' namespace, and the `agent-farm` default sent a staging pod's deliveries to the prod namespace.
+- Fixed (found in live testing on k3d with a real bot, both runtimes): bot-token redaction now also matches the percent-encoded colon (`%3A`) runtimes send, and redacts inside log arguments instead of flattening them, which had broken uvicorn's access-log formatter. Cleared update content is stored as SQL `NULL` (`none_as_null`) rather than a JSON `null`.
+- Added: the polling replica processes stored updates in Telegram's order (`AgentBarnTelegramUpdateProcessor`). `/start <token>` from a deep link links the account and greets the user, or says they switched Agents, or asks for a fresh link when it expired or was already used. Those requests for a fresh link are courtesies, sent at most once a minute per user and skipped while the bot's budget is spent, so anyone sending made-up tokens cannot crowd out real link confirmations. A linked user's private messages, edits, and button presses are queued for their Agent while the Member who linked them still holds `agent.update` on it; otherwise the link ends. A button press on a message the current Agent does not own (one an earlier Agent sent) is answered "This button is no longer active." and not forwarded, an edit of such a message is dropped, and a reply to or pin of one reaches the Agent without the quoted message. Anyone else gets a reply pointing to sign-up and reaches no Agent. Blocking the bot ends the user's link. Group messages are ignored without a reply. Settled updates drop their content. Someone who is not linked hears how to sign up at most once every ten minutes. An update that fails processing is retried with backoff (2 seconds, doubling to at most 60), holding back that user's later updates so their order is kept, and is given up after five attempts. Each update records its sender when stored, and each batch skips senders who are backing off, so one user's failing backlog never holds up anyone else's updates within a pass. `AgentAuthorization.membership_has_permission` answers the access re-check outside a request, resolving the Membership exactly as a signed-in request does.
+- Security: Telegram bot tokens are redacted from `httpx` request logs for every Telegram poller, and a failed shared-bot poll is reported without its URL. The test suite forces the shared-bot variables empty so a developer's real bot in `.env` is never polled by tests.
+
+### 2026-10-07 — Reserve new runtime image versions — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Versioned: Hermes `0.2.7` and OpenClaw `0.7.4` give the cleanup builds fresh immutable image tags. Hermes removes the installed completion bridge patch; both runtime versions advance for the requested rollout.
+- Verified: the version files contain valid patch increments and runtime build/deployment workflows read them directly. Runtime source is unchanged from the tested staging merge; image publication remains a CI/release step.
+
+### 2026-10-07 — Merge staging memory and dashboard compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Preserved: staging `2329f77c` Agent Memory, resource-usage, KPI, and team-card behavior alongside fixed native transport ownership and bridge retirement. Runtime startup keeps memory readiness without restoring spool drains or completion capture.
+- Reconciled: CI selects both memory and retirement runtime contracts; public deployment preserves staged memory credential provisioning without the removed transport configuration input. Routed documentation retains both contracts.
+- Migration: no-op revision `fa6ffd5fe1f2` joins staging and retirement histories without changing schema or data.
+- Verified: API/UI static checks, a single Alembic head, chart lint/render, memory isolation, monitoring, 104 focused API tests, and all 652 browser tests pass. Both rebuilt runtime images pass their startup/native/retirement/metrics contracts and all six pinned-image runtime tests.
+- Full API run: 3,817 passed and one memory purge contract returned `401` after the cold backend download exceeded the login token lifetime. The unchanged contract passed on a cached-image rerun (25 seconds). The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
+
+### 2026-10-07 — Verify review follow-up slices — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Verified: all 3,335 API tests and 460 browser tests pass after the three review slices. API lint/format/type checks, a single Alembic head, OpenClaw startup and native scheduler/observer contracts, and both runtimes’ fresh/upgraded/restored retirement checks pass.
+- Preserved: the separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction. Runtime message checks use native dry runs; no live provider messages or deployment changes were performed.
+
+### 2026-10-07 — Clarify native setup and compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: Telegram group setup explains administrator access or disabling privacy and re-adding the bot; runtime mention/reply and Connection gates still apply.
+- Documented: read-only rollout preflight checks live API, Communications, and worker process allowlists before the pre-upgrade migration hook.
+- Compatibility: reconnect stays in the v1 operation inventory, marked deprecated with terminal `409` and Agent restart guidance. Authentication and tenant/permission handling remain intact.
+- Verified: all 70 Connection integration tests, both public API contract tests, API static checks, and the single migration head pass.
+
+### 2026-10-07 — Protect retained rollout columns — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: Alembic autogeneration cannot propose dropping the three unmapped legacy Connection columns before deployed-consumer cutoff. Explicit contraction remains a later migration.
+- Verified: real PostgreSQL metadata comparison reproduces the unguarded drop proposals, preserves those columns with the guard, and still detects unrelated additions, removals, and type changes. API static checks and the single migration head pass.
+
+### 2026-10-07 — Harden startup retirement audit — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: malformed jobs cannot abort startup or hide later repair warnings; managed files and symlinks are removed safely. Genuine required plugin-removal failures remain fatal.
+- Corrected: inactive jobs and OpenClaw main-session jobs without delivery are excluded. OpenClaw audits effective merged native defaults, avoiding both healthy-home warnings and stale saved-home acceptance. Jobs and historical spool remain untouched.
+- Verified: startup regression tests and fresh/upgraded/restored retirement checks in both pinned runtimes pass, including the actual OpenClaw cron delivery resolver.
+
+### 2026-10-06 — Restore OpenClaw native message-tool access — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: bridge retirement no longer denies OpenClaw's native `message` tool. Explicit native sends and replies to an Agent's own messages can use the runtime transport; the retired gateway message endpoint remains `410`.
+- Upgrade/restore: startup removes only the saved `message` deny entry, retaining unrelated tool restrictions and native message policy. The [runtime contract](../../architecture/runtime-and-deployment.md#runtime-neutral-communications) distinguishes native outbound controls from Connection admission allowlists.
+- Coverage: pinned-image regressions exercise actual tool availability, native dry-run sends to an existing message and another channel, and native context guards with fresh/upgraded/restored state. The regression fails before the fix; changing only the builder still fails on upgraded state. CI selects the OpenClaw runtime checks when the message-tool fixture changes.
+- Validation: all 447 focused API tests, API lint/format/type checks, OpenClaw startup and native-runtime contracts, and the shared Hermes retirement contract pass.
+- Rollout: deploy the API correction and restart affected OpenClaw Agents. No base-image or schema change is required.
+
+### 2026-10-06 — Merge supported-API staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Preserved: staging `f07f4c05` Personal API Key, discovery, and permission contracts alongside the retired gateway boundary. The API documentation conflict retains both contracts; the merge leaves runtime source unchanged.
+- Migration: revision `a309cd8a0ccc` merges the gateway-retirement and staging API-key histories without schema or data changes.
+- Verified after merge: all 3,314 API tests and 460 browser tests pass, along with API/UI static checks, a single Alembic head, CI YAML parsing, and selection of the OpenClaw workflow for message-tool fixture changes. The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
 
 ### 2026-10-04 — local Web Chat reload recovery
 
@@ -38,6 +146,154 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
   passes for both Compose and native launch commands with an open control stream.
   API lint, formatting, types, and Make command parsing pass. The running local
   gateway has been recreated with the new timeout.
+
+### 2026-10-03 — Merge staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Preserved: staging spend-limit configuration and terminal-error tracking alongside bridge-free Web Chat/Email runtime delivery; the retired initiated-send execution binding remains removed.
+- Reconciled: staging Scheduled runs and native file-attachment prompt policies remain, with native origin/home-target guidance retained. Runtime tool and transport boundaries stay code-owned.
+- Migration: revision `2519037fd3ea` merges the gateway-retirement/driver-default and self-service spend-limit branches without rewriting either history. Historical migration fixtures use reflected Organization/Agent tables instead of projecting new spend-limit columns into older schemas.
+- Verified after merge: 3,294 API tests, 452 browser tests, 15 focused migration tests, and 69 focused policy/adapter/spend-notice tests pass. API/UI static checks, one migration head, Helm lint/render, and deployment YAML checks pass. Both merged images were rebuilt locally; Hermes image contracts and Skill discovery, plus OpenClaw smoke/native/startup contracts, pass. The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
+
+### 2026-10-03 — Review verification: complete Docker-backed checks — PR pending
+
+- Verified: `make test-api` passes all 3,155 tests; `make test-ui` passes all 434 browser tests. API lint/format/types, UI lint/types, one migration head, and Helm lint/render pass.
+- Runtime evidence: Hermes smoke/PVC/native-access/observer/scheduler/retirement contracts pass against `native-gateway-hermes:slice2`; OpenClaw smoke/native-scheduler/observer/retirement/startup contracts pass against `openclaw-base:0.7.2`. Hermes pinned-image Skill discovery also passes. Both retirement fixtures cover fresh/upgraded/restored state using current generated configuration and mounted scripts.
+- Regression evidence: the new PostgreSQL Email-health test fails against the pre-fix `record_health` method and passes unchanged against the fix. The retirement permission test also has recorded red/green evidence.
+- Limit: the separate Kubernetes client mutation test is excluded from `make test-api` and remains unrun under the read-only infrastructure restriction. Deployment cutoff verification remains separate from these local tests.
+
+### 2026-10-03 — Re-review follow-up: preserve independent retirement warnings — PR pending
+
+- Corrected: failed advisory-report writes retain the job-store audit result and report a separate `report_write=failed` warning. Permission regressions cover both absent and unreadable stores and skip under root, which bypasses directory permissions.
+
+### 2026-10-03 — Review follow-up: remove unreachable reconnect UI — PR pending
+
+- Removed: unreachable reconnect mutation, confirmation, response DTO/schema, and recovery-action literal. The compatibility route retains authorization and tenant scoping but documents its terminal `409` instead of a successful `202`. Historical reconnect counts and journal identities remain readable.
+- Corrected: Discord browser fixtures use native ownership and no gateway recovery; the historical diagnostics test verifies Agent restart guidance instead of simulating successful reconnect. Four focused browser checks, UI lint/type checks, and API static checks pass.
+
+### 2026-10-03 — Review follow-up: remove redundant delivery exclusions — PR pending
+
+- Removed: native allowlist parameters and redundant exclusions from gateway Delivery claims, plus the unused general enabled-Connection scan. Claims retain the fixed Web Chat/Email inclusion filter.
+- Coverage: existing inbound/outbound claim integration tests continue proving native rows cannot be claimed; only the unused scan test is removed.
+
+### 2026-10-03 — Review follow-up: avoid unchanged Email health writes — PR pending
+
+- Corrected: revision-guarded Email configuration checks skip updates when status and safe error fields are unchanged, preserving `last_health_at` and avoiding row churn. Native observer health continues refreshing heartbeat timestamps.
+- Synchronized: runtime observer audit identity replaces the retired supervisor name; the RBAC brief lists the bounded background Email scan.
+- Verified: PostgreSQL regression coverage checks repeat maintenance cycles preserve the row version and timestamp. With Docker available, the regression fails at the timestamp assertion using the pre-fix method and passes using the current method.
+
+### 2026-10-03 — Review follow-up: tolerate an unwritable retirement report — PR pending
+
+- Corrected: failure to save the advisory retirement report logs `report_write=failed` without masking unreadable native stores instead of blocking Agent startup. Managed plugin removal still fails loudly; job stores and history remain untouched.
+- Verified: a real read-only state-directory regression fails with the old script and passes with the fix.
+
+### 2026-10-03 — Review follow-up: fence old replicas during cleanup rollout — PR pending
+
+- Corrected: the chart retains the hard-coded native allowlist Secret key while current code ignores it, preventing older replicas from restoring gateway fallback when restarted during the pre-upgrade hook.
+- Follow-up: remove the key only after every application replica and background worker uses fixed ownership. Config, chart value, Helmfile, and workflow inputs remain removed.
+
+### 2026-10-02 — Native gateway cleanup: retire unused capability declarations — PR pending
+
+- Removed: unadvertised initiated-delivery, processing-feedback, and supervised-ingress capability enum members and the unreachable provider-session reconnect mutation path. The existing reconnect endpoint retains its permission/scoping checks and terminal conflict response; historical reconnect journal/event identities and the exported metric remain supported. Gateway-owned Web Chat/Email still report Delivery retry; native Connections report no gateway recovery actions.
+- Corrected: Hermes health sidecar documentation now separates process liveness from native provider-session health.
+- Verified: the full API baseline (3,153 tests), 148 focused post-edit plugin, Connection, Delivery, and metrics tests; API static checks and a single migration head; both built-runtime native/legacy-state contracts; UI lint/type checks and focused native recovery browser tests. Physical columns and compatibility routes retain their documented deployed-consumer cutoffs.
+
+### 2026-10-02 — Native gateway cleanup: synchronize ownership documentation (slice 5c) — PR pending
+
+- Updated: the native gateway ADR is accepted with permanent code-owned Platform transport; the earlier gateway ADR is partially superseded. Existing decision rationale and historical change entries remain intact.
+- Synchronized: local setup, system map, Agent configuration/restart guidance, shared-protocol progress, reporting coverage, and approval cleanup status with the implemented native/Web Chat/Email boundaries.
+- Follow-up: physical legacy columns and compatibility routes remain until the [rollout runbook](../../guidelines/operations.md#native-runtime-gateway-rollout) cutoffs are demonstrated. Documentation synchronization establishes no deployed-consumer cutoff or live native-provider smoke evidence.
+
+### 2026-10-02 — Native gateway cleanup: retire provider-session error adapter (slice 5b) — PR pending
+
+- Removed: the retired WebSocket-session exception adapter and direct API `websockets` requirement. Web Chat/Email HTTP, network, runtime failure normalization and safe diagnostics remain; historical provider close-code details still render through their stored structured metadata.
+- Dependency boundary: FastAPI standard/Uvicorn still includes `websockets` transitively; supported server extras and native runtime packages remain intact. Regenerate the lockfile without unrelated dependency upgrades.
+- Follow-up: audit remaining documentation; physical schema contraction and compatibility routes still require deployed-consumer cutoff evidence.
+
+### 2026-10-02 — Native gateway cleanup: remove deployment allowlist wiring (slice 5a) — PR pending
+
+- Removed: the ignored Config input and compatibility projection, API chart value/Secret key, Helmfile forwarding, both deployment workflow inputs, and the deployment-spec entry. Native/gateway ownership stays code-owned; stale external environment entries do not affect startup or ownership. Test setup now uses fixed ownership without an allowlist.
+- Verified: chart lint and rendering tolerate stale legacy chart overrides without emitting the retired Secret key; a synthetic Helmfile build and workflow YAML checks retain their deployment structure. No deployment or externally managed variables were changed.
+- Rollout: all application replicas must already use fixed ownership before upgrading to the chart that removes the shared Secret key; an older flag-controlled replica could restart during the pre-rollout Secret hook. The [runbook](../../guidelines/operations.md#native-runtime-gateway-rollout) requires an intermediate fixed-ownership application rollout with the older chart.
+- Follow-up: `websockets` still has a caller in shared failure classification, so it remains for a separate review. Physical schema contraction and compatibility routes still require deployed-consumer cutoff evidence.
+
+### 2026-10-02 — Native gateway cleanup: remove retired Connection mappings (slice 4c) — PR pending
+
+- Removed: current driver-key and ingress-lease mappings, stale update exclusions, and legacy-field writes during Connection retirement and Agent deletion. New writers omit these columns and require the already-prepared driver database default.
+- Compatibility: physical columns and their historical values remain for older readers/writers. These values are inert and untouched by current code; provider credentials and fingerprint/scope identities still scrub on retirement/deletion. Prior migration tests use reflected historical schemas so they continue proving preservation independently of current mappings.
+- Preserved: Connection CRUD and native policy, Web Chat/Email deliveries and durable claim leases, historical transcripts/journals, and native home targets. Physical column removal and default downgrade retain their [deployment ordering requirements](../../guidelines/operations.md#native-runtime-gateway-rollout).
+- Follow-up: ignored deployment-configuration and dependency cleanup; physical schema contraction and compatibility-route removal require deployed-consumer cutoff evidence.
+
+### 2026-10-02 — Native gateway cleanup: stop driver credential minting (slice 4b) — PR pending
+
+- Changed: Connection creation and lazy Web Chat creation stop minting retired gateway driver credentials. The application and database default the retained non-null driver column to an empty string, preparing future writers to omit it without breaking older mapped readers/writers.
+- Preserved: existing driver values, encrypted provider credentials, native Connection policy, historical data and ingress-lease columns. Connection retirement and Agent deletion still scrub credentials and clear legacy leases. Downgrade removes the database default without modifying rows; see the [writer ordering requirement](../../guidelines/operations.md#native-runtime-gateway-rollout).
+- Follow-up: remove driver/ingress-lease mappings and remaining consumers in the next code slice; defer physical column removal until deployed mapped readers/writers exit. Durable Web Chat/Email claim leases and native home targets remain supported.
+
+### 2026-10-01 — Native gateway cleanup: retire stranded native work (slice 4a) — PR pending
+
+- Delivered: an idempotent data-only migration cancels pending/processing native chat gateway Deliveries, clears claims/leases/awaiting-input, and records one content-free retirement journal per changed row. It preserves Web Chat/Email work, all terminal history, Connections/credentials, transcripts and prior journals.
+- Compatibility: cancellation uses existing `CANCELLED` and `policy_rejected` values; no columns or enum values are added/dropped. The journal records transport-policy rejection, not successful handling. Downgrade leaves cancellations/history in place and never replays work. The [rollout runbook](../../guidelines/operations.md#native-runtime-gateway-rollout) requires older applications to fence native transport before this migration.
+- Changed: live queue diagnostics and queue gauges exclude native Platforms before migration; historical pending/cancelled counts remain visible. The fixed retirement reason is allowed through diagnostic redaction. Existing cancellation exclusion from handled-rate/response-time metrics remains.
+- Follow-up: driver-credential defaults/minting and ingress-lease mapped-field preparation, followed by physical schema contraction only after old application readers/writers exit. Native home targets and useful historical initiated identity stay intact.
+
+### 2026-10-01 — Native gateway cleanup: narrow durable delivery interfaces (slice 3f) — PR pending
+
+- Removed: no-op provider feedback lifecycle hooks/contexts/stages, terminal-feedback orchestration, feedback-only status queries, and the outbound processor's gateway-service dependency.
+- Changed: `GatewayDeliveryPlugin` owns Web Chat/Email reply sending, runtime prompt framing, and progress policy. Registry resolution requires both gateway ownership and that interface; native definitions retain configuration/setup, home-target and Teams relay behavior without gateway sending methods. Historical initiated outbound origins are rejected before provider send; envelope/schema history remains.
+- Preserved: durable runtime claim/reply/completion, renewal, cancellation, approvals, safe error/status wakeups, native ownership fences, and reply idempotency/recipient binding. Provider failures continue through durable normalized retry/terminal state rather than a feedback callback.
+- Follow-up: stranded queue/lease data and schema cleanup, with rollout evidence required before removing the authenticated initiated-message `410` or Email compatibility URL. Shared websockets error classification still has a surviving caller, so dependency removal is deferred.
+
+### 2026-10-01 — Native gateway cleanup: remove retired ingress interfaces (slice 3e) — PR pending
+
+- Removed: the gateway driver event route and per-Connection provider webhook, their service entrypoints, provider-session/admission-context/enrichment hooks, and the unused durable thread-ownership lookup. Retired gateway ingress returns `404` without creating work.
+- Preserved: the authenticated Teams public API relay, JWT and canonical admission, and all Web Chat/Email runtime delivery behavior. Email normalizes policy directly and its address resolves only to an enabled active Email Connection.
+- Compatibility: the mailbox-addressed Email route remains in Communications with the same authentication, payload and idempotency as the product API. Remove it after deployed Worker destinations are confirmed to use API ingress; repository routing alone does not establish that cutoff. The authenticated initiated-message `410` handler also retains its existing rollout cutoff.
+- Follow-up: remove no-op feedback and narrow the durable delivery interface, then proceed to stranded-state/schema cleanup.
+
+### 2026-10-01 — Native gateway cleanup: bounded Communications maintenance (slice 3d) — PR pending
+
+- Removed: provider ingress supervisor, per-Connection parked tasks, retry/session loops, and ingress lease claim/release operations. Historical lease columns remain for the separate schema cleanup.
+- Delivered: bounded Email configuration-health scans, revision-guarded serialized health writes, and retrying journal retention batches across all Platforms. Web Chat and native Connections receive no configuration-health writes. Email readiness checks include the environment configuration gate and never run a provider session or send mail.
+- Preserved: Web Chat/Email durable deliveries, runtime claim leases, reply/approval/cancellation behavior, native observer health and historical journals. Details and batch limits belong to the [runtime contract](../../architecture/runtime-and-deployment.md#connection-failure-recovery).
+- Follow-up: narrow shared Platform interfaces and compatibility ingress; remove stranded queue/lease schema only in the data-cleanup slice.
+
+### 2026-10-01 — Native gateway cleanup: remove Slack/Teams transports (slice 3c) — PR pending
+
+- Removed: Slack Socket Mode, gateway normalization/admission/enrichment, senders, reactions/status feedback, and approval rendering/value handling; Teams gateway senders and enrichment; unused provider client methods and failure-notice helpers. Native chat catalogue entries no longer advertise retired gateway transport/send/component capabilities.
+- Preserved: Slack policy-checked native home-target resolution and provider validation/directories; Teams token validation, Bot Framework JWT verification, app packages, canonical public-relay message/invoke admission and raw response passthrough. Native runtime configuration and observers, Web Chat/Email replies, and shared `APPROVAL_METADATA_KEY` remain.
+- Changed: native scheduled home-target settings use the internal `NativeHomeDeliverySettings` mixin; the stored `default_delivery_target` schema and recipient policy remain the same and do not authorize initiated sends.
+- Follow-up: replace ingress lease maintenance and narrow shared gateway interfaces/compatibility ingress. Websockets remains referenced by shared error classification until that cleanup; remove dependencies only after their surviving callers are gone. Historical delivery formats and schema contraction remain separate.
+
+### 2026-10-01 — Native gateway cleanup: remove Discord/Telegram transports (slice 3b) — PR pending
+
+- Removed: Discord Gateway sessions, interaction acknowledgements, senders and approval components; Telegram polling and senders; both providers' gateway normalization/enrichment and processing feedback, with their retired capability declarations. Provider clients no longer expose message-send or transport-only lookup methods.
+- Preserved: settings, credential validation/fingerprinting, setup hints, Discord directories and install links, native runtime configuration, observers and health, and shared approval metadata/value handling used by Web Chat and the remaining Slack transport. Telegram setup guidance now describes native mention/reply admission consistently.
+- Verified: native-only boundary tests fail against the old send implementations and pass after removal; retained validation and credential-scoped directory tests pass.
+- Follow-up: remove Slack/Teams transport while retaining Slack home-target resolution and Teams public authentication/admission/relay, then replace ingress lease maintenance. Keep the legacy message handler until its documented rollout cutoff.
+
+### 2026-10-01 — Native gateway cleanup: remove initiated-message backend (slice 3a) — PR pending
+
+- Removed: the initiated-message service/repository, destination and context DTOs, execution-token signing/verification/issuance, and their unused Connection queries. Runtime claims keep delivery/attempt identity; Web Chat/Email replies and approvals retain their existing protocol.
+- Changed: the legacy message path is a small authenticated `410` handler, absent from OpenAPI and independent of the retired request body. It creates no delivery, transcript, or journal entry. Its removal requires the [deployed-client cutoff](../../guidelines/operations.md#native-runtime-gateway-rollout).
+- Follow-up: remove fenced chat provider sessions/senders and replace lease-based maintenance in the next slices. Keep historical envelope formats, submission columns, and restore compatibility for the later data-retirement work.
+
+### 2026-10-01 — Native gateway cleanup: retire the runtime messaging bridge — PR pending
+
+- Removed: both runtime messaging plugins, the message CLI wrapper, scheduled capture/spool drain, execution binding, and the Hermes completion-capture image patch. The shared Web Chat/Email adapter and Hermes history patch remain.
+- Changed: each boot removes managed retired-plugin artifacts and prevents persisted config from re-enabling them. Content-free job audit reports gateway-era destinations needing repair; it preserves schedules and history, leaves old spools unread, and never guesses a recipient. Runtime policy uses native replies and scheduled delivery; separate initiated sends remain unsupported, and OpenClaw denies its broader `message` tool.
+- Follow-up: remove the fenced provider transport implementations and the `410` compatibility message API/service in the next slice. Older running pods still need restart; see [rollout guidance](../../guidelines/operations.md#native-runtime-gateway-rollout).
+
+### 2026-10-01 — Native gateway cleanup: permanent transport ownership — PR pending
+
+- Delivered: Slack, Discord, Telegram, and Teams always use native transport on Hermes and OpenClaw. Claims, expired-lease recovery, supervision, recovery reads, runtime configuration, and Agent Webhook eligibility follow one fixed Platform declaration, independent of deployment allowlists.
+- Changed: native gateway ingress/replies and stale runtime completion/renewal are fenced; authenticated legacy initiated sends return terminal `410` without queuing. Teams' public route always authenticates, applies policy, and relays to the runtime with response passthrough. Platform catalogue metadata drives the dashboard's apply-and-restart flow, with compatibility for older API metadata.
+- Follow-up: remove the runtime bridge in the next reviewed slice. Old PVC/job routing and restore sanitation still require their own evidence; no schema contraction or stranded-state replay is included here. See the [ownership contract](../../architecture/runtime-and-deployment.md#platform-plugin-boundary) and [rollout guidance](../../guidelines/operations.md#native-runtime-gateway-rollout).
+
+### 2026-10-01 — Native gateway cleanup: recovery controls — PR pending
+
+- Delivered: native Connections reject gateway reconnect and historical Delivery retry without changing their health or durable history. Gateway Connections without a supervised provider session reject reconnect; gateway Delivery retry remains available. Recovery retains the existing Agent update authorization and tenant concealment behavior.
+- Changed: Connection responses add effective transport and supported recovery actions. Dashboard diagnostics use those actions to gate controls, show native Agent restart guidance, and retain readable history. Older API responses remain accepted with recovery controls hidden. The [runtime recovery contract](../../architecture/runtime-and-deployment.md#connection-failure-recovery) owns these behaviors.
+- Follow-up: fix chat-platform ownership by Platform and remove the deployment switch and gateway fallback in subsequent reviewed slices; obsolete runtime plugin removal has not landed yet.
 ### 2026-10-02 — Drop the gateway messaging policy from AGENTS.md — PR pending
 
 - Changed: The "Message Delivery" section appended to every Agent's AGENTS.md (from [PR #188](https://github.com/aai-labs/agent-barn/pull/188)) is removed. It told Agents to send through the deprecated `agentbarn-message` client and never to call the message tool from a cron run. Since OpenClaw Slack and Discord run in OpenClaw's own gateway, native Agents read it as binding and refused sends their gateway supports: a Pipedrive Sales Analyst Agent refused to post its scheduled daily update as a header message with the update in its thread. A "Scheduled runs" section keeps the runtime-neutral rule that an empty scheduled run returns a silence marker.

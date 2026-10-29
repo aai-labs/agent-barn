@@ -28,7 +28,9 @@ Kubernetes cluster. No seat licence, no second workspace to check.
 
 Everything runs in your namespace: the control plane, the database, the model
 proxy, and one pod per running agent. Outbound traffic goes to OpenRouter through
-the LiteLLM proxy you operate, and to whichever tool APIs you connect.
+the LiteLLM proxy you operate, to whichever tool APIs you connect, and, for installs
+that keep it on, to Agent Barn's product analytics
+([usage analytics](#usage-analytics)).
 Credentials are encrypted at rest in your own PostgreSQL.
 
 ## Contents
@@ -37,7 +39,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes) — [connecting agent email](#connecting-agent-email-manual-step)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step), [connecting OneDrive](#connecting-onedrive-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -53,14 +55,16 @@ version with screenshots is at
 **Required software**
 
 - **Git** — used to clone the repository.
-- **Docker with Compose v2** — everything runs in containers, including the local Kubernetes cluster.
+- **Docker with Compose v2.24 or later** — everything runs in containers, including the local Kubernetes cluster.
 - **`bash`** — `run.sh` and `stop.sh` are shell scripts. On Windows, see [Windows](#windows).
 - **`kubectl`** — used to seed the cluster namespace and secret.
+- **[uv](https://docs.astral.sh/uv/)** — runs the host-side Garage bootstrap with Python 3.14; uv can download the managed interpreter.
 - **OpenSSL** — used below to generate local keys.
 - **curl** — used by the verification steps.
 
-Python and Node.js are **not** needed to run the app; they're only for the
-native `dev-*` targets, tests, and lint (see [Development](#development)).
+Containerized startup still needs uv/Python for storage bootstrap; installing uv
+lets it supply the managed Python interpreter. Node.js and pnpm are needed only
+for native UI development, tests and lint (see [Development](#development)).
 
 **Required credentials**
 
@@ -71,12 +75,14 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | Port    | Service                    |
 | ------- | -------------------------- |
 | `3000`  | UI                         |
+| `3900`  | Garage S3 (loopback only; configurable) |
 | `5432`  | PostgreSQL                 |
 | `7070`  | LiteLLM proxy              |
 | `8000`  | API                        |
 | `8001`  | Ingest (runtime telemetry) |
 | `8002`  | Communications gateway     |
 | `8003`  | Agent Memory gateway       |
+| `8004`  | Credential gateway         |
 | `16443` | k3d Kubernetes API         |
 
 Make sure these ports are free before starting the full stack. The configurable
@@ -135,9 +141,10 @@ the cluster is up.
 ./run.sh
 ```
 
-This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
-the agent base images, starts `db` and `redis`, runs database migrations, then
-starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and follows
+This validates `.env`, bootstraps persistent private Garage storage, brings up
+the k3d cluster and LiteLLM, builds and loads the agent base images, starts `db`
+and `redis`, runs database migrations, then starts `api`, `worker`, `sync-engine`,
+`communications`, `memory`, `artifact-purge`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
 
@@ -245,8 +252,8 @@ Each template has a guided setup at
 
 Skills are what agents can actually do:
 
-Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot · Jira ·
-OpenPanel · Pipedrive · PostHog · Zoho Mail
+Apollo · Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot ·
+Jira · Merkys · OpenPanel · Pipedrive · PostHog · Zoho Mail
 
 Each mounts documentation into the agent's workspace and is gated on the
 credential its provider needs, so an agent only gets a skill once the matching
@@ -277,14 +284,15 @@ builders that turn an agent record into Kubernetes resources.
 
 | Area                    | What's there                                                                                                                                                                                                                                 | Docs                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Agent artifacts | Private file publication from chat/workflows, short-lived app download links, per-Agent storage provisioning, infinite artifact lists and permission-gated deletion | [`features/agent-artifacts.md`](docs/features/agent-artifacts.md) |
 | Agent lifecycle         | Start, stop, monitor; per-agent model within the organisation's default and allowlist; per-agent channel allowlist and DM policy                                                                                                             | [`features/agents.md`](docs/features/agents.md)                                         |
 | Communication           | Slack, Microsoft Teams, Telegram, Discord. An agent may own several connections, including more than one on the same platform. Slack apps are created by hand from a generated manifest; Teams connections export an installable app package | [`features/communications/`](docs/features/communications/)                             |
 | Templates and skills    | Versioned templates and skills, seeded on startup, forkable per organisation, with per-agent overrides; agents pin the skill version they run                                                                                                | [`features/templates-and-skills.md`](docs/features/templates-and-skills.md)             |
 | Activity                | Conversation history and a tool-call audit log per agent, pushed from the runtime to the ingest API                                                                                                                                          | [`features/activity-and-ingest.md`](docs/features/activity-and-ingest.md)               |
 | Costs                   | Per-agent and per-organisation token and spend attribution                                                                                                                                                                                   | [`features/costs.md`](docs/features/costs.md)                                           |
-| Identity and access     | Sign-up, login, logout, access + refresh tokens in an httpOnly cookie, password change and reset; organisations with fixed permission-backed roles, plus separate per-agent access roles and assignments                                     | [`features/identity-and-organizations.md`](docs/features/identity-and-organizations.md) |
+| Identity and access     | Sign-up and sign-in with Google into a trial organization, login, logout, access + refresh tokens in an httpOnly cookie, password change and reset; organisations with fixed permission-backed roles, plus separate per-agent access roles and assignments                                     | [`features/identity-and-organizations.md`](docs/features/identity-and-organizations.md) |
 | Platform administration | User and organisation management, platform statistics, and the Event Delivery Monitor                                                                                                                                                        | [`features/platform-administration/`](docs/features/platform-administration/)           |
-| Integrations            | Per-agent provider credentials, organisation-scoped shared credentials, Google OAuth for Google Workspace (Gmail, Calendar, Drive, Sheets)                                                                                                   | [`features/integrations.md`](docs/features/integrations.md)                             |
+| Integrations            | Per-agent provider credentials, organisation-scoped shared credentials, Google OAuth for Google Workspace (Gmail, Calendar, Drive, Sheets), and Custom API connections to any public HTTPS API (API key, Bearer, Basic or OAuth2 client credentials) | [`features/integrations.md`](docs/features/integrations.md)                             |
 | Domain events           | Transactional outbox, a Dramatiq worker, event handlers, and a security-audit projection                                                                                                                                                     | [`features/domain-events.md`](docs/features/domain-events.md)                           |
 | Runtime and deployment  | Kubernetes agent resources, Helm + Helmfile, namespace-scoped Prometheus and Grafana                                                                                                                                                         | [`architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md) |
 
@@ -307,20 +315,29 @@ separate terminals, alongside `make db-up`:
 make setup         # uv sync + pnpm install; creates .env from .env.spec if absent
 make db-up         # Postgres only
 make migrate       # apply migrations
-make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003
+make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003, Credentials :8004
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
+make dev-sync-engine  # Sync Engine: Agent file sync, one pass every 30 s
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
+make dev-gateway   # Credential gateway only (normally started by dev-api)
 make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
+
+The db/redis targets and `./stop.sh` work before Garage has been configured.
+For native file uploads/downloads, run `make garage-up` before `make dev-api`;
+this generates private API management settings and a loopback endpoint as well.
+Agent creation queues storage without waiting; Artifacts shows progress and lets
+existing Agents provision or retry. No separate provisioner service is needed. See [Garage operations](docs/guidelines/garage.md). The full `./run.sh` path starts
+Garage and the purge worker automatically, without a profile.
 
 `make db-down` stops PostgreSQL; `make db-logs` and `make db-restart` manage it.
 The worker and reconciliation command also need a Redis server reachable at the
 `REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,
 so `make redis-up` alone cannot serve those host-run processes. This path uses
-host ports `3000`, `8000`, `8001`, `8002`, and `8003`, so don't run it alongside
+host ports `3000`, `8000`, `8001`, `8002`, `8003`, and `8004`, so don't run it alongside
 `./run.sh`'s containers.
 
 Two gotchas specific to this path:
@@ -343,6 +360,91 @@ Bring one up with `bash docker/k3d/k3d-up.sh` and
 export KUBECONFIG="$PWD/.k3d/kubeconfig-host.yaml"
 export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 ```
+
+### Agent artifacts in development
+
+Local artifacts use a private, single-node Garage container and persistent Docker
+volumes. **No AWS account, S3 credentials, GitHub Secrets, or manual Kubernetes
+bootstrap is needed locally.** Docker Compose 2.24+ and uv are required. The first
+startup generates local credentials in the ignored `.garage/` directory; later
+starts reuse them and the existing volumes.
+
+For the full-stack path, complete the `.env` setup above and start the stack:
+
+```bash
+./run.sh --detach
+```
+
+The launcher prepares Garage, applies the artifact migrations, and starts background
+maintenance automatically. After signing in, check storage with:
+
+```bash
+make garage-status
+# The application services and Garage should be running:
+docker compose ps garage api artifact-purge ui
+```
+
+Open an Agent's **Artifacts** tab. A new Agent queues private storage setup without
+waiting for Garage; the tab shows progress. On an existing Agent, click **Provision**
+if storage has not been prepared. Provisioning, retry and deletion require
+`agent.update`; users with current `agent.read` access can view and download.
+
+Start the Agent, or update/restart an Agent created before this feature so it gets
+the runtime file tool. Ask it to create a small CSV and provide the download link.
+The artifact should appear in **Artifacts**; downloading it requests a fresh link.
+The trash action opens a confirmation dialog, and files pinned by active runs or
+reviews remain protected. This is a developer smoke test; external messaging and
+model/tool selection still depend on the configured runtime and provider.
+
+For the native API/UI path, complete the native database/migration setup above,
+then prepare storage **before** starting the API:
+
+```bash
+make garage-up       # persistent storage + ignored API/native management settings
+make garage-status
+make dev-api         # terminal 1; loads generated storage settings
+# In terminal 2:
+make dev-ui
+# Recover pending requests / run one bounded cleanup pass when needed:
+make purge-artifacts
+```
+
+For an Agent running in k3d, `ARTIFACT_RUNTIME_BASE_URL` in `.env` must point to
+the native API address reachable from Agent containers. The default uses
+`host.docker.internal:8000`; if `API_DEV_PORT` differs, update that URL and restart
+the API and the Agent. The browser-facing download origin is `WEB_APP_URL`.
+
+Native post-response provisioning runs immediately, but unattended retry needs the
+maintenance worker; `make purge-artifacts` provides an explicit one-shot recovery
+pass. Restart the native API after re-running storage bootstrap. Garage management
+and per-Agent data credentials stay server-side. Generated private files live in
+ignored `.garage/`; keep that directory and the named data volumes intact. Backup,
+restore and cluster installation are documented in [Garage operations](docs/guidelines/garage.md).
+
+| Symptom | What to check |
+| --- | --- |
+| Storage unavailable / not configured | Confirm Docker is running, run `make garage-up`, then restart the API so it loads generated settings. Check `make garage-status`. |
+| Garage cannot start on port 3900 | Set `GARAGE_S3_PORT` in `.env` before the first `make garage-up`. Existing initialized stores keep their saved port; follow the operations guide to migrate or restore. |
+| Provisioning failed or stays pending | Check `docker compose logs --tail=100 api artifact-purge garage`; in native development run `make purge-artifacts` and retry from Artifacts. |
+| Download links use the wrong host/port | `WEB_APP_URL` must match the UI origin that download clients can reach. Adjust it for a second worktree and restart the API. |
+| A file uses the previous storage layout | This PR deliberately does not migrate old shared-bucket files. Re-upload or plan a verified migration; provisioning a new bucket does not move old bytes. |
+| Delete reports an active pin | The owning run or review must release its reference through its lifecycle before deletion. |
+
+Artifact checks use disposable PostgreSQL/Garage and never need installation
+storage credentials:
+
+```bash
+make check-api check-ui lint-ui check-migrations
+(cd api && uv run pytest tests/integration/test_artifacts.py tests/integration/test_artifact_review.py tests/integration/test_artifact_creation.py -q)
+(cd ui && pnpm exec playwright install chromium)
+(cd ui && pnpm exec playwright test tests/e2e/artifacts.spec.ts)
+```
+
+Helm chart checks and the opt-in real-image/storage/browser contracts have extra
+prerequisites. See [artifact test guidance](docs/guidelines/testing.md#agent-artifact-storage-and-runtime-contracts),
+[configuration and lifecycle](docs/features/agent-artifacts.md), and
+[verification evidence](docs/features/agent-artifacts/EVIDENCE.md) for exact limits,
+rollback, test boundaries and recorded results.
 
 ### Local Kubernetes (k3d)
 
@@ -419,12 +521,15 @@ firewall allows the k3d bridge network to reach port 8001.
 <details>
 <summary><b>Communication connections</b></summary>
 
-Slack, Microsoft Teams, Telegram, and Discord sessions run in the separately
-served Communications gateway on port `8002`. Agent pods claim and complete
-deliveries through `http://host.docker.internal:8002/communications/v1`, because
-the Compose service name isn't resolvable from k3d. `./run.sh` and `make dev-api`
-start the gateway automatically. Override `COMMUNICATIONS_PORT` when the host
-port is already in use.
+Slack, Microsoft Teams, Telegram, and Discord sessions run in each Agent's native
+Hermes or OpenClaw runtime. Web Chat and Email use the separately served
+Communications gateway on port `8002`. For those gateway-owned Connections, Agent
+pods claim and complete deliveries through
+`http://host.docker.internal:8002/communications/v1`, because the Compose service
+name isn't resolvable from k3d. `./run.sh` and `make dev-api` start the gateway
+automatically. Override `COMMUNICATIONS_PORT` when the host port is already in use.
+See the [transport contract](docs/architecture/runtime-and-deployment.md#platform-plugin-boundary)
+and [rollout runbook](docs/guidelines/operations.md#native-runtime-gateway-rollout).
 
 </details>
 
@@ -630,8 +735,11 @@ cp .env.deploy.spec .env.deploy
 ```
 
 Helmfile brings up PostgreSQL (one instance each for the app, LiteLLM, and
-Firecrawl), Redis, the LiteLLM proxy, Firecrawl, the API with its worker and
-communications gateway, the UI, and a namespace-scoped Prometheus and Grafana.
+Firecrawl, and Hindsight), Redis, the LiteLLM proxy, Firecrawl, Hindsight, the API
+with its worker, communications gateway, memory gateway, and credential gateway, the UI, and a
+namespace-scoped Prometheus and Grafana. Hindsight's Helm hook generates its
+LiteLLM key automatically, using the same pattern as the application key; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 Ordering, values, and secrets live in
 [`helmfile.yaml.gotmpl`](helmfile.yaml.gotmpl); the charts are in
 [`helm/`](helm/). Every option in `.env.deploy.spec` is commented.
@@ -647,6 +755,26 @@ reuses the explicitly tagged images already in the registry.
 Background:
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
 and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
+
+### Usage analytics
+
+Agent Barn installs send business events to Agent Barn's PostHog project (EU)
+by default (`ANALYTICS_ENABLED=true`). These are events such as an agent being
+created, started, or deleted, an organisation being created, updated, or deleted,
+a member joining an organisation,
+a user signing in or accepting an invite, and an hourly count of messages each
+agent received and sent. Each event carries random IDs (user, organisation, agent)
+and a name for your install, which defaults to your web app's host. It never
+carries agent or organisation names, prompts, message content, conversations,
+credentials, changed values, user email addresses, or full names. Users are
+identified by UUID, so the usage tracking is pseudonymous.
+
+To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
+Remote installs use the `WEB_APP_URL` hostname as their label; local installs use
+`local-<short UUID>`. The installation UUID remains stable when the URL changes. Local
+development stacks report too, as `installation_environment=local`; set
+`ANALYTICS_ENABLED=false` in your local `.env` to opt out. The full list of events and fields is in
+[`docs/features/product-analytics.md`](docs/features/product-analytics.md).
 
 ### Connecting agent email (manual step)
 
@@ -671,6 +799,36 @@ Do this once per environment, in this order:
 Full setup — the two separate Cloudflare onboardings, the environment variables
 and secrets, quota limits, and secret rotation — is in
 [`docs/guidelines/operations.md`](docs/guidelines/operations.md#per-agent-email-addresses).
+
+### Connecting OneDrive (manual step)
+
+Organizations can connect OneDrive from **Settings → Sync**, so Agent Barn keeps
+an "Agent Barn" folder in one of their SharePoint sites. It is optional and needs
+your own Microsoft app: until `ONEDRIVE_SYNC_CLIENT_ID` and
+`ONEDRIVE_SYNC_CLIENT_SECRET` are both set, Settings → Sync says "OneDrive is
+not configured for the platform." Do this once per install, in the Microsoft Entra
+admin center (needs the Application Administrator or Application Developer role):
+
+1. **App registrations → New registration.** Choose **Accounts in any
+   organizational directory (Multitenant)**. Single-tenant apps are refused,
+   because Agent Barn signs in through Microsoft's shared `organizations`
+   endpoint.
+2. **Redirect URI:** platform **Web**,
+   `<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback`.
+   Microsoft requires HTTPS unless the host is `localhost`.
+3. **API permissions → Microsoft Graph:** application `Sites.Selected`;
+   delegated `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`.
+4. **Certificates & secrets → New client secret.** Copy the value at once and
+   note its expiry; OneDrive connections stop working when it expires.
+5. Put the app's **Application (client) ID** and the secret in `.env.deploy` as
+   `ONEDRIVE_SYNC_CLIENT_ID` and `ONEDRIVE_SYNC_CLIENT_SECRET`, then redeploy.
+6. A Microsoft Global Administrator of each organization that connects approves
+   the app once (for your own organization: **API permissions → Grant admin
+   consent**). An Owner or Admin who is a SharePoint Administrator then clicks
+   **Connect** in Settings → Sync and picks a site.
+
+How connecting works, and its limits:
+[`docs/features/sync-provider/README.md`](docs/features/sync-provider/README.md).
 
 ## Repository layout
 

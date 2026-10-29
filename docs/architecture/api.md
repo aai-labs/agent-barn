@@ -6,7 +6,7 @@ Read before changing API composition, dependency injection, route/service/reposi
 
 ## Composition and layering
 
-The API image has four HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, the Agent Webhook ingress at `/agent-hooks/v1`, and the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral delivery protocol and gateway-owned provider-webhook fallback at `/communications/v1` on port 8002; its lifespan also runs provider ingress supervision and outbound delivery. `../../api/memory_app.py` serves Agent-authenticated memory requests at `/memory/v1` on port 8003. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
+The API image has four HTTP composition roots. `../../api/api_app.py` serves organization and platform product routes at `/api/v1` on port 8000, the Agent Webhook ingress at `/agent-hooks/v1`, and the stable public provider webhook paths at `/communications/v1/webhooks/email/inbound` and `/communications/v1/webhooks/{connection_id}`. `../../api/ingest_app.py` serves runtime telemetry at `/ingest/v1` on port 8001. `../../api/communications_app.py` serves the runtime-neutral Web Chat/Email delivery protocol and the compatibility Email inbound route at `/communications/v1` on port 8002; its lifespan maintains Email health, journal retention, and gateway-owned outbound delivery. `../../api/memory_app.py` serves Agent-authenticated memory requests at `/memory/v1` on port 8003. Each root attaches the shared Injector, while authentication and exposed routes remain boundary-specific.
 
 The default dependency direction is:
 
@@ -26,7 +26,7 @@ Nearby domains are the implementation template. Costs and Ingest intentionally d
 
 Authentication builds `CurrentUserContext`; organization-scoped services derive the active organization from it. Organization-scoped routes carry the organization ID in the URL, generally as `/api/v1/organizations/{organization_id}/...`. Routes without an `organization_id` path parameter have no active Organization. Org-scoped access always requires a real persisted Membership — Platform Administrators receive no synthesized or implicit organization role, and an org-scoped request from a Platform Administrator without a Membership in that Organization is rejected the same as for any other user. Platform-only routes use the platform-admin dependency without resolving an active Organization. Platform administration routes live under `/api/v1/platform/...`.
 
-The active Membership's fixed Organization Role is resolved through an immutable code-owned Permission mapping on each request. Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Platform Administrators use platform routes and do not receive implicit Organization authority. Database-backed Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest, the runtime Communications protocol, driver callbacks, provider webhooks, and the Agent Memory gateway are separate non-user authentication boundaries. The memory gateway resolves one Agent and Organization from a per-start credential hash; its [feature contract](../features/agent-memory.md#use-the-memory-gateway) owns the visibility rules.
+The active Membership's fixed Organization Role is resolved through an immutable code-owned Permission mapping on each request. Organization Roles govern Organization, Membership, Template, Skill, and Organization-summary capabilities; protected Organization Owner recovery actions remain explicit governance invariants. Platform Administrators use platform routes and do not receive implicit Organization authority. Database-backed Agent Access Roles separately govern one Agent aggregate, while Organization Owner/Admin have implicit Agent Owner authority. Agent user-facing queries apply visibility in repositories before count and pagination, and Agent services use the shared authorization module for effective operations and action checks. Runtime Ingest, the runtime Communications protocol, public provider webhooks, and the Agent Memory gateway are separate non-user authentication boundaries. The memory gateway resolves one Agent and Organization from a per-start credential hash; its [feature contract](../features/agent-memory.md#use-the-memory-gateway) owns the visibility rules.
 
 Tenant-sensitive reads generally return 404 when a resource is absent, belongs to another Organization, or is outside the caller's Agent Access visibility. A visible resource with a missing action Permission returns 403. Organization administration retains its documented 403 behavior. The integration contract is exercised in `../../api/tests/integration/test_cross_org_isolation.py`, `../../api/tests/integration/test_tenant_resolution.py`, and `../../api/tests/integration/test_agent_rbac.py`.
 
@@ -43,6 +43,31 @@ Database records generally inherit UUID and timestamp fields from `../../api/inf
 The application lifespan ensures a bootstrap Platform Administrator, seeds built-in aai-cli skills, and seeds the global predefined template catalogue into the `platform_template` table. The system has no default Organization. Platform-owned resources are global resources, not Organization-owned rows: built-in skills use `organization_id = NULL` in the `skill` table, and predefined templates live in a dedicated `platform_template` table with no `organization_id` column. Agents pin a template via one of two mutually-exclusive FKs (`platform_template_id` or `agent_template_id`), enforced by a CHECK constraint. Platform-admin behavior must use the platform-admin seam rather than adding dependencies on an Organization. Changes to bootstrap entities can affect startup, tests, and predefined catalog behavior simultaneously.
 
 Product API startup deliberately does **not** reconcile [Organization LiteLLM budgets](../features/costs.md#organization-llm-budgets). That runs as its own CronJob alongside cost sync and event-delivery reconciliation, so the API's readiness never depends on the proxy being reachable.
+
+The artifact domain owns its three HTTP surfaces through the composed APIRouter
+in `domains/artifacts/routing.py`. App composition includes only
+`agent_artifacts_router` on the `/api/v1` product app; the domain includes management,
+download and runtime routers internally. Each child router retains its own
+explicit authentication dependencies; inclusion adds no shared user dependency.
+Agent artifact machine routes live at `/api/v1/agent-artifacts/runtime` on port 8000
+and derive one running Agent from a per-start capability. They remain excluded
+from the public user API schema despite sharing the product app. Product
+artifact routes reuse current `agent.read`/`agent.update` scopes. The shared
+[artifact contract](../features/agent-artifacts.md) owns immutable file lifecycle.
+The app-facing `/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+route is a capability-only byte proxy. The artifact service depends on the
+`ArtifactStorage` boundary; the selected S3 adapter issues opaque provider-signed
+authority and validates it by requesting the canonical private object without
+service-key authorization. The API neither issues a second token nor interprets
+provider signature/expiry fields. No storage endpoint is returned to clients.
+Permission-checked link issuance remains on the human/runtime routes above.
+Per-Agent data keys are encrypted in the durable bucket journal. The API adapter
+selects the exact artifact owner/bucket credential, without shared credentials or
+ambient identity fallback. The product API and artifact maintenance worker hold
+private Garage management authority for asynchronous provisioning and recovery;
+there is no separate provisioner workload. The
+[per-Agent authority contract](../features/agent-artifacts.md#per-agent-storage-authority)
+owns request lifecycle and credential boundaries.
 
 ## Testing
 
@@ -67,6 +92,7 @@ Product API startup deliberately does **not** reconcile [Organization LiteLLM bu
 | Permission and Agent authorization | `../../api/domains/rbac/catalog.py`, `../../api/domains/rbac/policy.py`, `../../api/domains/agents/authorization.py` |
 | Shared persistence delegate | `../../api/infrastructure/postgres/repository.py` |
 | Domain Event outbox persistence | `../../api/domains/events/`, `../features/domain-events.md` |
+| Product analytics, the Installation identity, and the PostHog client | `../../api/domains/analytics/`, `../../api/infrastructure/posthog/`, `../features/product-analytics.md` |
 | Communications diagnostics and recovery | `../../api/domains/communications/operations.py`, `../../api/domains/communications/routes.py` |
 | Base database model | `../../api/infrastructure/postgres/models.py` |
 | Migrations | `../../api/migrations/versions/` |
@@ -74,9 +100,8 @@ Product API startup deliberately does **not** reconcile [Organization LiteLLM bu
 
 ## Change impact
 
-When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, public provider-webhook adapters belong to the API, the runtime communications protocol plus gateway-owned fallback routes belong to `../../api/communications_app.py`, and Agent-authenticated memory routes belong to `../../api/memory_app.py`. Memory model/credential provisioning uses `../../api/memory_runtime_app.py` on an internal listener with a separate service key, outside the public API routes. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
+When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, public provider-webhook adapters belong to the API, and the Web Chat/Email runtime communications protocol plus compatibility routes belong to `../../api/communications_app.py`. Agent-authenticated memory routes belong to `../../api/memory_app.py`; internal model/credential provisioning belongs to `../../api/memory_runtime_app.py` with a separate service key. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
 
 ## Supported external API
 
 The `/api/v1` product API accepts User session JWTs and User-owned Personal API Keys through the shared authentication dependencies. Keys resolve to the same `CurrentUserContext`; current Organization Membership, Agent Access, and Platform Administrator checks then apply. Read-only key mode is enforced before write handlers execute. Ingest, Communications, provider webhooks, the Agent Memory gateway (`memory_app.py`), and the internal memory settings listener (`memory_runtime_app.py`) retain their protocol-specific credentials. The public schema, discovery endpoint, and developer guides are described in [`../features/public-api.md`](../features/public-api.md).
-

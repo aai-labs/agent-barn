@@ -1,13 +1,23 @@
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# How many Agents an Organization that isn't a trial may run when nothing else says.
+DEFAULT_ORGANIZATION_AGENT_LIMIT = 10
 load_dotenv(ROOT_ENV_PATH, override=False)
+
+DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
+DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com"
+LOCAL_HOSTNAMES = frozenset({"localhost"})
+LOCAL_HOST_SUFFIXES = (".localhost",)
+URL_SCHEME_SEPARATOR = "://"
 
 
 class Config(BaseSettings):
@@ -40,11 +50,28 @@ class Config(BaseSettings):
     # to the cluster's default StorageClass.
     storage_class: str = ""
 
+    # Empty endpoint disables files only. Data keys live encrypted in per-Agent journals.
+    artifact_s3_endpoint_url: str = ""
+    # Private Garage management authority: API provisioning and operator cleanup only.
+    artifact_provisioner_url: str = ""
+    artifact_provisioner_token: str = Field(default="", repr=False)
+    artifact_runtime_base_url: str = "http://agentbarn-api:8000/api/v1/agent-artifacts/runtime"
+    artifact_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    artifact_link_max_seconds: int = Field(default=3600, ge=900, le=86400)
+    artifact_retention_days: int = Field(default=30, ge=1, le=3650)
+
     api_image: str = ""
     restore_point_size: str = "1Gi"
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
     restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    # How long a managed update waits for the new pod to report ready before it
+    # rolls back, counted from when the start returns. It has to cover pulling
+    # an image the node has never seen, init, the start script's installs, and
+    # the probe's 30s initial delay. The readiness probe sets no upper bound of
+    # its own: failures only mark the pod unready and probing goes on.
+    agent_update_ready_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    agent_update_ready_poll_seconds: int = Field(default=5, ge=0, le=60)
 
     openclaw_image: str = ""
     hermes_image: str = ""
@@ -54,6 +81,8 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
+    # Callback address Agent pods use to report workflow step outcomes.
+    workflow_runtime_base_url: str = "http://agentbarn-api:8000/workflow-runtime/v1"
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back
@@ -65,6 +94,15 @@ class Config(BaseSettings):
     # divides its own allowance among its Agents.
     organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    # Buying credit with Stripe. A Platform Administrator turns payments on in the billing
+    # settings, which needs both. The webhook is served whenever its secret is set, so
+    # payments made before payments were turned off, and their refunds and disputes, still land.
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    # How many Agents an Organization that is not a trial may run, unless a Platform
+    # Administrator sets its own limit, until a Platform Administrator saves a default
+    # on the platform settings page. Unset (or empty) is 10.
+    organization_default_agent_limit: int = Field(default=DEFAULT_ORGANIZATION_AGENT_LIMIT, ge=1)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -74,6 +112,9 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    # The credential gateway is a separate deployment because it sits on the request path
+    # of every agent tool call; agent workloads reach it by Service name in-namespace.
+    credential_gateway_base_url: str = "http://agentbarn-api-gateway:8003/gateway/v1"
     memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
     # Where the product API reaches the gateway's read-only viewer; Agents never use it.
     memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"
@@ -83,6 +124,8 @@ class Config(BaseSettings):
     memory_runtime_service_key: str = ""
 
     memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    # Used until a Platform Administrator chooses a Playbook Extraction model.
+    playbook_default_model: str = "openrouter/openai/gpt-4.1-mini"
     memory_litellm_active_key_hash: str = ""
 
     hindsight_base_url: str = ""
@@ -106,19 +149,23 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
-    # Content-free Communication journal history is pruned by the gateway
-    # supervisor after this many days.
+    # Content-free Communication journal history is pruned by Communications
+    # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
-    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
-    # Connections run inside the Agent runtime's own gateway instead of the
-    # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
-    # per-Connection transport once the spike is accepted.
-    communications_native_platforms: str = ""
-
-    @property
-    def native_platform_keys(self) -> frozenset[str]:
-        """Platforms whose Agent Connections run in the runtime's native gateway."""
-        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
+    # Agent Barn's own Telegram bot, shared by every Agent on the agentbarn_telegram
+    # Platform. The platform is offered only when both are set. The API reads only
+    # the bot's id from the token; the Communications process alone calls Telegram
+    # with it, and Agents get a per-Connection stand-in.
+    agentbarn_telegram_bot_token: str = ""
+    agentbarn_telegram_bot_username: str = ""
+    # Where the Communications process delivers a linked user's updates to their
+    # Agent's Telegram webhook. Local Docker/k3d cannot resolve cluster DNS.
+    agentbarn_telegram_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:8443/telegram"
+    # Calls per second Agents may make through the shared bot: in total, kept under
+    # Telegram's limit of about 30, and per Organization, so no one Organization can
+    # use up the bot for the others.
+    agentbarn_telegram_bot_rate_per_second: float = Field(default=25, gt=0)
+    agentbarn_telegram_organization_rate_per_second: float = Field(default=5, gt=0)
 
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
@@ -155,8 +202,50 @@ class Config(BaseSettings):
     google_cloud_client_id: str = ""
     google_cloud_client_secret: str = ""
 
+    onedrive_sync_client_id: str = ""
+    onedrive_sync_client_secret: str = ""
+
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    analytics_enabled: bool = True
+    analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
+    analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
+
+    @field_validator("analytics_enabled", mode="before")
+    @classmethod
+    def blank_switch_is_off(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+    @property
+    def is_analytics_enabled(self) -> bool:
+        return self.analytics_enabled and bool(self.analytics_posthog_project_token.strip())
+
+    @property
+    def web_app_host(self) -> str:
+        url = self.web_app_url.strip()
+        if URL_SCHEME_SEPARATOR not in url:
+            url = f"//{url}"
+        try:
+            host = urlparse(url).hostname or ""
+        except ValueError:
+            return ""
+        return host.rstrip(".").lower()
+
+    @property
+    def is_local_installation(self) -> bool:
+        host = self.web_app_host
+        if not host or host in LOCAL_HOSTNAMES or host.endswith(LOCAL_HOST_SUFFIXES):
+            return True
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return address.is_loopback or address.is_unspecified
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:
@@ -176,6 +265,28 @@ class Config(BaseSettings):
         if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
             raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
         return self
+
+    @model_validator(mode="after")
+    def webhook_secret_has_the_secret_key(self) -> Self:
+        """The webhook is served whenever its secret is set, payments on or off, and it
+        reads each refund's status from Stripe: without the key every refund would fail."""
+        if (self.stripe_webhook_secret or "").strip() and not (self.stripe_secret_key or "").strip():
+            raise ValueError("STRIPE_WEBHOOK_SECRET needs STRIPE_SECRET_KEY")
+        return self
+
+    @property
+    def payments_configured(self) -> bool:
+        """Whether this deployment has what payments need, so they may be turned on:
+        without both keys, every purchase or every payment it confirms would fail."""
+        return bool((self.stripe_secret_key or "").strip() and (self.stripe_webhook_secret or "").strip())
+
+    @field_validator("organization_default_agent_limit", mode="before")
+    @classmethod
+    def empty_agent_limit_is_the_default(cls, value: object) -> object:
+        """Deployments pass the variable through even when it is not set."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return DEFAULT_ORGANIZATION_AGENT_LIMIT
+        return value
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod
@@ -222,6 +333,10 @@ class Config(BaseSettings):
             and self.agent_email_mailbox.strip()
             and self.email_inbound_secret.strip()
         )
+
+    @property
+    def is_onedrive_sync_enabled(self) -> bool:
+        return bool(self.onedrive_sync_client_id.strip() and self.onedrive_sync_client_secret.strip())
 
 
 @lru_cache

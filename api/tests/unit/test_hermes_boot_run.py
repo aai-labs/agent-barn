@@ -13,14 +13,12 @@ from pathlib import Path
 import pytest
 from hamcrest import assert_that, contains_string, equal_to, has_length
 
-_MESSAGING = Path(__file__).parents[2] / "domains/agents/scripts/messaging"
 _BOOT_RUN = Path(__file__).parents[2] / "domains/agents/scripts/hermes/boot-run.py"
 
 
 def _load(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNTIME_API_URL", "http://runtime:8080")
     monkeypatch.setenv("RUNTIME_API_KEY", "runtime-key")
-    monkeypatch.syspath_prepend(str(_MESSAGING))
     spec = importlib.util.spec_from_file_location("hermes_boot_run_test", _BOOT_RUN)
     if spec is None or spec.loader is None:
         raise AssertionError("Could not load the Hermes boot runner")
@@ -99,13 +97,6 @@ def test_the_checklist_waits_for_a_gateway_that_is_not_listening_yet(monkeypatch
     assert_that(posted, has_length(1))
 
 
-def test_the_boot_session_is_the_one_communications_routes_to_the_default(monkeypatch, tmp_path):
-    """Both halves must agree, or boot-created jobs are refused as unmappable origins."""
+def test_boot_session_identity_survives_bridge_removal(monkeypatch, tmp_path):
     module = _load(monkeypatch, tmp_path)
-    import agentbarn_message  # ty: ignore[unresolved-import]
-
-    assert_that(
-        agentbarn_message.destination_for_origin({"platform": "api_server", "chat_id": module.BOOT_SESSION_ID}),
-        equal_to({"kind": "default"}),
-    )
     assert_that(json.dumps(module.BOOT_SESSION_ID), equal_to('"agentbarn-boot"'))

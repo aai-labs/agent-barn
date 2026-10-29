@@ -1,7 +1,8 @@
 from collections.abc import Iterable
 
 from api.domains.communications.models import PlatformDescriptorRead
-from api.domains.communications.plugins.base import PlatformPlugin
+from api.domains.communications.plugins.base import GatewayDeliveryPlugin, PlatformPlugin
+from api.domains.communications.transport import require_gateway_transport
 
 
 class PlatformPluginRegistry:
@@ -26,5 +27,14 @@ class PlatformPluginRegistry:
         except KeyError as exc:
             raise KeyError(f"Unsupported communication platform: {key}") from exc
 
+    def require_delivery(self, key: str) -> GatewayDeliveryPlugin:
+        """Resolve only a gateway-owned platform with a durable reply implementation."""
+        require_gateway_transport(key)
+        plugin = self.require(key)
+        if not isinstance(plugin, GatewayDeliveryPlugin):
+            raise TypeError(f"{key} does not implement gateway delivery")
+        return plugin
+
     def descriptors(self) -> list[PlatformDescriptorRead]:
-        return [self._plugins[key].descriptor for key in sorted(self._plugins)]
+        """Catalogue of platforms on which new Connections may be created."""
+        return [self._plugins[key].descriptor for key in sorted(self._plugins) if self._plugins[key].is_offered()]

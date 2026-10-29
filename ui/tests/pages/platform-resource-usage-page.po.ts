@@ -7,6 +7,14 @@ export class PlatformResourceUsagePage {
     await this.page.goto(`/dashboard/platform/resource-usage${query}`);
   }
 
+  async gotoAgentResourceUsage(query = "") {
+    await this.page.goto(`/dashboard/platform/agents/resource-usage${query}`);
+  }
+
+  agentResourceUsageHeading(): Locator {
+    return this.page.getByRole("heading", { level: 1, name: "Agent Resource Usage" });
+  }
+
   heading(): Locator {
     return this.page.getByRole("heading", { level: 1, name: "Platform Resource Usage" });
   }
@@ -37,11 +45,17 @@ export class PlatformResourceUsagePage {
     await this.page.getByRole("option", { name: label }).click();
   }
 
+  /** A destination on the navigation rail. */
   navLink(name: string): Locator {
-    return this.page.locator("header nav").getByRole("link", { name, exact: true });
+    return this.page.getByRole("navigation", { name: "Main" }).getByRole("link", { name, exact: true });
   }
 
-  capacityCard(kind: "memory" | "cpu"): Locator {
+  /** A page in the navigation panel of the selected Platform area. */
+  panelLink(name: string): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
+  }
+
+  capacityCard(kind: "limits-memory" | "limits-cpu" | "requests-memory" | "requests-cpu"): Locator {
     return this.page.getByTestId(`capacity-${kind}`);
   }
 
@@ -57,12 +71,21 @@ export class PlatformResourceUsagePage {
     return this.page.getByTestId("capacity-limits-dialog");
   }
 
-  memoryInput(): Locator {
-    return this.page.getByLabel("Memory (GiB)");
+  /** A quota line's text box, named as `kubectl describe quota` names the line. */
+  limitsMemoryInput(): Locator {
+    return this.page.getByLabel("limits.memory (GiB)");
   }
 
-  cpuInput(): Locator {
-    return this.page.getByLabel("CPU (cores)");
+  limitsCpuInput(): Locator {
+    return this.page.getByLabel("limits.cpu (cores)");
+  }
+
+  requestsMemoryInput(): Locator {
+    return this.page.getByLabel("requests.memory (GiB)");
+  }
+
+  requestsCpuInput(): Locator {
+    return this.page.getByLabel("requests.cpu (cores)");
   }
 
   saveButton(): Locator {

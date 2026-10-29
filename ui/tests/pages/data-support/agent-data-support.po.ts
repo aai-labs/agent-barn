@@ -112,6 +112,9 @@ export const mockAgent = {
   skills: [],
   configured_platform_keys: ["slack", "discord"],
   allowed_actions: mockAgentAllowedActions,
+  creator: { id: MOCK_MEMBER_USER_ID, full_name: "Tommy", email: "tommy@example.com" },
+  last_message_at: "2026-05-14T09:14:00Z",
+  last_activity_at: "2026-05-14T09:14:00Z",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };
@@ -532,6 +535,17 @@ export function mockVersionsForKey(templateKey: string) {
 }
 
 export class AgentDataSupport {
+  trackHiringRequests() {
+    const creations: Record<string, unknown>[] = [];
+    const starts: string[] = [];
+    this.page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const path = new URL(request.url()).pathname;
+      if (/\/organizations\/[^/]+\/agents$/.test(path)) creations.push(request.postDataJSON());
+      if (/\/organizations\/[^/]+\/agents\/[^/]+\/start$/.test(path)) starts.push(path);
+    });
+    return { creations, starts };
+  }
   constructor(private page: Page) {}
 
   async interceptWebChatApprovalPrompt({
@@ -595,6 +609,10 @@ export class AgentDataSupport {
     });
   }
 
+  async interceptGetCustomApiConnectionsRequest(agentId = MOCK_AGENT_ID) {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/custom-api-connections`, (route) => route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.fallback());
+  }
+
   async interceptGetAgentRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
@@ -606,6 +624,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
+    await this.interceptGetCustomApiConnectionsRequest(agentId);
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -866,17 +885,20 @@ export class AgentDataSupport {
     status?: number;
     body?: unknown;
   } = {}) {
+    const requests = { count: 0 };
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      requests.count += 1;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(body ?? { status: "ok" }),
       });
     });
+    return requests;
   }
 
   async interceptGetConversationChannelsRequest({
@@ -915,7 +937,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
-    await this.page.route("**/api/v1/organizations/*/agents/models", async (route) => {
+    await this.page.route("**/api/v1/organizations/*/agents/models**", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
@@ -1243,10 +1265,12 @@ export class AgentDataSupport {
     status = 200,
     detail = "Unable to load templates",
     body,
+    catalog,
   }: {
     status?: number;
     detail?: string;
     body?: unknown;
+    catalog?: { template_key: string; template_name: string; template_source: string }[];
   } = {}) {
     await this.page.route("**/api/v1/organizations/*/templates*", async (route) => {
       if (route.request().method() !== "GET") {
@@ -1261,7 +1285,7 @@ export class AgentDataSupport {
       // Apply search/source params so specs can assert filtering behavior.
       const search = url.searchParams.get("search")?.toLowerCase();
       const source = url.searchParams.get("source");
-      let items = mockTemplates;
+      let items = catalog ?? mockTemplates;
       if (search) {
         items = items.filter(
           (t) =>
@@ -1272,6 +1296,8 @@ export class AgentDataSupport {
       if (source) {
         items = items.filter((t) => t.template_source === source);
       }
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const pageSize = Number(url.searchParams.get("page_size") ?? 50);
       await route.fulfill({
         status,
         contentType: "application/json",
@@ -1279,10 +1305,10 @@ export class AgentDataSupport {
           status >= 400
             ? { detail }
             : (body ?? {
-                page: 1,
-                page_size: 50,
+                page,
+                page_size: pageSize,
                 total: items.length,
-                items,
+                items: items.slice((page - 1) * pageSize, page * pageSize),
               }),
         ),
       });

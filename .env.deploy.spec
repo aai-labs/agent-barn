@@ -46,21 +46,18 @@ POSTGRES_LITELLM_USER=litellm
 POSTGRES_LITELLM_PASSWORD=
 POSTGRES_LITELLM_DB=litellm
 
-# Opt-in Hindsight release. Supply distinct database/auth secrets and a budgeted
-# LiteLLM virtual key for memory; the gateway alone receives the Hindsight API key.
-HINDSIGHT_ENABLED=false
+# Hindsight is always deployed. Supply distinct database/auth secrets and an
+# internal settings key for operator-run syncs; CI reads these from GitHub Secrets.
 HINDSIGHT_DB_PASSWORD=
 HINDSIGHT_API_KEY=
 # Internal model/key settings credential; generate separately from Hindsight API auth.
 MEMORY_RUNTIME_SERVICE_KEY=
-HINDSIGHT_LITELLM_API_KEY=
 # Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
 MEMORY_LITELLM_KEY_HASHES=
 # Optional initial model; shared by the API default and Hindsight startup.
 # MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
 # Active key SHA-256 hash when several attribution hashes are retained.
-# Compose infers it for one hash; enabled Helmfile derives it from the current key.
-# MEMORY_LITELLM_ACTIVE_KEY_HASH=
+# Compose infers it for one hash; deployment loads it from the hook-generated hash Secret.
 
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped
@@ -87,6 +84,14 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# ── Product analytics (PostHog) ──────────────────────────────────────────────
+# Sends business events (agent and membership changes) to Agent Barn's PostHog.
+# On by default for deployment installs.
+# Set false to opt out. See docs/features/product-analytics.md for what is sent.
+ANALYTICS_ENABLED=true
+# Privacy: user email and name are never sent.
+# The WEB_APP_URL hostname labels this install in PostHog.
+
 # ── Per-Agent email addresses ────────────────────────────────────────────────
 # Leave blank to keep the Email platform disabled; Agent Barn then refuses new Email
 # Communication Connections and nothing else changes. Both are required on top of the
@@ -104,12 +109,38 @@ API_HOST=api.agentbarn.local
 UI_HOST=agentbarn.local
 WEB_APP_URL=http://agentbarn.local
 
-# ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
-# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate
-# with Google" flow. Leave blank to disable. Register
-# "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
+# ── Google OAuth (AF-153, AF-368) ────────────────────────────────────────────
+# Shared Google OAuth 2.0 "Web application" client for "Sign in with Google" and
+# the Gmail "Authenticate with Google" flow. Leave blank to disable both. Register
+# both "<WEB_APP_URL>/api/v1/auth/google/callback" and
+# "<WEB_APP_URL>/api/v1/integrations/google/callback" as authorized redirect URIs.
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
+# How many Agents an Organization that is not a trial may run, unless a Platform
+# Administrator sets its own, until a Platform Administrator saves a default on the
+# platform settings page (which then wins). Empty is 10. The deploy workflows read
+# ORGANIZATION_DEFAULT_AGENT_LIMIT, STAGING_ORGANIZATION_DEFAULT_AGENT_LIMIT and
+# PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT (GitHub Variables) for their environments.
+ORGANIZATION_DEFAULT_AGENT_LIMIT=
+# Buying credit with Stripe. A Platform Administrator turns payments on in the platform
+# Billing settings, which needs both secrets; a webhook secret without the secret key
+# stops the API booting. The webhook is served whenever its secret is set, payments on
+# or off. The deploy workflows read the STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET GitHub
+# Secrets (prefixed STAGING_ or PUBLIC_ for those environments). The webhook endpoint is
+# <API host>/api/v1/billing/stripe/webhook, listening for checkout.session.completed,
+# checkout.session.async_payment_succeeded, refund.created, refund.updated, refund.failed,
+# charge.dispute.funds_withdrawn and charge.dispute.funds_reinstated.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# ── OneDrive sync ───────────────────────────────────────────────────
+# Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
+# disable. Register "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a
+# Web redirect URI (Microsoft requires HTTPS unless the host is localhost).
+# Permissions: application Sites.Selected; delegated Sites.FullControl.All,
+# Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
 
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager
@@ -139,6 +170,10 @@ FIRECRAWL_API_KEY=
 # Optional: random key protecting the BullMQ admin dashboard. Defaults to '@'.
 # Not needed for production since Firecrawl is on ClusterIP (internal only).
 # FIRECRAWL_BULL_AUTH_KEY=
+# Optional: memory limits for the Firecrawl API and its RabbitMQ queue. Empty keeps
+# the chart defaults (2Gi and 512Mi). Raise them if either container is OOMKilled.
+FIRECRAWL_API_MEMORY_LIMIT=
+FIRECRAWL_RABBITMQ_MEMORY_LIMIT=
 
 # ── Postgres (Firecrawl DB) ──────────────────────────────────────────────────
 POSTGRES_FIRECRAWL_USER=firecrawl
@@ -149,9 +184,11 @@ POSTGRES_FIRECRAWL_DB=firecrawl
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
-# Comma-separated Platform keys handled by native runtime gateways, e.g.
-# slack,discord. Empty keeps all Platforms on the Communications Gateway.
-COMMUNICATIONS_NATIVE_PLATFORMS=
+# Optional: Agent Barn's own Telegram bot for this environment. The token is a GitHub
+# secret (STAGING_/PUBLIC_ variants per environment), the username a variable. Unset
+# hides the Agent Barn Telegram platform. Never reuse one bot across environments.
+AGENTBARN_TELEGRAM_BOT_TOKEN=
+AGENTBARN_TELEGRAM_BOT_USERNAME=
 # Default model. Format: litellm/openrouter/<slug>
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=
@@ -161,3 +198,8 @@ AGENT_DEFAULT_MODEL=
 # $KUBECONFIG (deploy.sh derives it). Set only if the API pod must use a
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
+
+# Garage credentials for CI are GitHub Secrets; see docs/guidelines/garage.md.
+# For deploy.sh, prepare the fixed Kubernetes Secrets and Garage layout first.
+# Maintenance defaults to enabled.
+ARTIFACT_PURGE_ENABLED=

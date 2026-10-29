@@ -3,13 +3,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { environmentHealthKey } from "@/features/environment-health/utils";
 import { api } from "@/shared/api";
 
 import { ResourceLimitsSchema, type ResourceLimits, type ResourceLimitsUpdate } from "../schemas";
 import { resourceUsageKey } from "../utils";
 
 /**
- * Saves the capacity limits. The caller shows a failure inline, next to the field that
+ * Saves the namespace quota ceilings. The caller shows a failure inline, next to the field that
  * caused it, so there is no error toast here.
  */
 export function useUpdateResourceLimits() {
@@ -23,9 +24,11 @@ export function useUpdateResourceLimits() {
       return response.data;
     },
     onSuccess: () => {
-      // The limits arrive inside the usage response, whatever range or filter it is for.
+      // The ceilings arrive inside the usage response, whatever range or filter it is for.
       void queryClient.invalidateQueries({ queryKey: resourceUsageKey.platformAll });
-      toast.success("Capacity limits saved");
+      // The environment health page compares the same ceilings, storage and pods included.
+      void queryClient.invalidateQueries({ queryKey: environmentHealthKey.all });
+      toast.success("Namespace quota saved");
     },
   });
 }

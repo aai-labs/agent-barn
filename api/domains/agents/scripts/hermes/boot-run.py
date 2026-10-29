@@ -14,15 +14,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, "/app/config")
-
-from agentbarn_message import BOOT_SESSION_ID  # ty: ignore[unresolved-import]
+BOOT_SESSION_ID = "agentbarn-boot"
 
 BOOT_FILE = Path("/workspace/BOOT.md")
 READY_TIMEOUT_SECONDS = 300
@@ -63,6 +60,8 @@ def main() -> None:
                     "input": (
                         "Startup checklist. This runs on every gateway start, so repair or update what "
                         "already exists -- scheduled jobs in particular -- and never create a duplicate. "
+                        "This startup session has no chat origin. Scheduled delivery must use an "
+                        "explicit configured native home platform, never api_server or this session id. "
                         "Follow the BOOT.md instructions below exactly, then reply with the silent token "
                         f"NO_REPLY.\n\n{instructions}"
                     ),

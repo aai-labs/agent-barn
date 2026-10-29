@@ -45,7 +45,7 @@ const CHART_GRID_STYLE = { gridTemplateColumns: "repeat(auto-fit, minmax(min(420
  * and organizations from the database and carries no tenant content; see the ADR on
  * resource usage as Platform Oversight Data.
  */
-export function PlatformResourceUsagePage() {
+export function PlatformResourceUsagePage({ agentsOnly = false }: { agentsOnly?: boolean }) {
   const [range, setRange] = useQueryState(
     "range",
     parseAsStringEnum<ResourceUsageRange>(RANGE_VALUES)
@@ -65,11 +65,11 @@ export function PlatformResourceUsagePage() {
   };
 
   return (
-    <div className="af-page" data-testid="platform-resource-usage-page">
+    <div data-testid="platform-resource-usage-page">
       <div className="mb-7 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="m-0 mb-1 text-[28px] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
-            Platform Resource Usage
+            {agentsOnly ? "Agent Resource Usage" : "Platform Resource Usage"}
           </h1>
           <p className="m-0 text-[14px]" style={{ color: "var(--ink-3)" }}>
             CPU and memory of every agent&apos;s container, across all organizations.
@@ -134,39 +134,50 @@ export function PlatformResourceUsagePage() {
                 />
               </div>
             )}
-            <UsageStats usage={usage} />
+            {!agentsOnly && <UsageStats usage={usage} />}
             {/* Outside the availability check: the limits are in the database and stay editable. */}
-            <CapacitySection capacity={usage.capacity} />
+            {!agentsOnly && <CapacitySection capacity={usage.capacity} />}
             {usage.availability === "available" && (
               <>
-                <OrganizationsByUsage
-                  organizations={usage.organizations}
-                  activeOrganizationId={orgId}
-                  onSelect={selectOrganization}
-                />
-                <div className="mb-6 grid gap-3" style={CHART_GRID_STYLE}>
-                  <ChartCard
-                    title="Memory"
-                    subtitle="In use, excluding cache. Each agent's highest reading in a step, added up."
-                    testId="platform-usage-memory-chart"
-                  >
-                    <MemoryChart series={usage.series} range={usage.range} limitBytes={null} />
-                  </ChartCard>
-                  <ChartCard
-                    title="CPU"
-                    subtitle={`Cores in use, all agents together, ${rangeLabel}.`}
-                    testId="platform-usage-cpu-chart"
-                  >
-                    <CpuChart series={usage.series} range={usage.range} limitCores={null} />
-                  </ChartCard>
-                </div>
-                <h2 className="m-0 mb-3 text-[14px] font-semibold" style={{ color: "var(--ink)" }}>
-                  Heaviest agents
-                </h2>
-                <PlatformAgentsUsageTable agents={usage.agents} />
-                <p className="m-0 mt-3 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-                  Readings are current, refreshed every minute. Charts cover the {rangeLabel}.
-                </p>
+                {!agentsOnly && (
+                  <>
+                    <OrganizationsByUsage
+                      organizations={usage.organizations}
+                      activeOrganizationId={orgId}
+                      onSelect={selectOrganization}
+                    />
+                    <div className="mb-6 grid gap-3" style={CHART_GRID_STYLE}>
+                      <ChartCard
+                        title="Memory"
+                        subtitle="In use, excluding cache. Each agent's highest reading in a step, added up."
+                        testId="platform-usage-memory-chart"
+                      >
+                        <MemoryChart series={usage.series} range={usage.range} limitBytes={null} />
+                      </ChartCard>
+                      <ChartCard
+                        title="CPU"
+                        subtitle={`Cores in use, all agents together, ${rangeLabel}.`}
+                        testId="platform-usage-cpu-chart"
+                      >
+                        <CpuChart series={usage.series} range={usage.range} limitCores={null} />
+                      </ChartCard>
+                    </div>
+                  </>
+                )}
+                {agentsOnly && (
+                  <>
+                    <h2 className="m-0 mb-3 text-[14px] font-semibold" style={{ color: "var(--ink)" }}>
+                      Heaviest agents
+                    </h2>
+                    <PlatformAgentsUsageTable
+                      agents={usage.agents}
+                      needUpdate={usage.totals.agentsRestartRequired ?? 0}
+                    />
+                    <p className="m-0 mt-3 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
+                      Readings are current, refreshed every minute.
+                    </p>
+                  </>
+                )}
               </>
             )}
           </>
@@ -186,6 +197,7 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
     ? 0
     : (organizations.find((row) => row.organizationId === null)?.agentsReporting ?? 0);
   const reporting = measured && totals.agentsReporting !== null ? totals.agentsReporting - noLiveAgent : null;
+  const needUpdate = totals.agentsRestartRequired ?? 0;
 
   const nearMemoryLimit = agents.filter(
     (agent) => (usageRatio(agent.memoryWorkingSetBytes, agent.memoryLimitBytes) ?? 0) >= METER_CRITICAL_RATIO,
@@ -218,7 +230,9 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
       <UsageStatCard
         label="Agents reporting"
         value={reporting !== null ? String(reporting) : unknown}
-        hint={`of ${totals.agentsWithContainer} running or in error`}
+        hint={`of ${totals.agentsWithContainer} running or in error${
+          needUpdate > 0 ? ` · ${needUpdate} need an update` : ""
+        }`}
         tone={reporting !== null && reporting < totals.agentsWithContainer ? "warn" : "ok"}
         testId="platform-usage-reporting"
       />

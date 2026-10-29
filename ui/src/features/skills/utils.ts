@@ -24,11 +24,12 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   confluence: "Confluence",
   bitbucket: "Bitbucket",
   google_workspace: "Google Workspace",
+  gmail: "Gmail",
+  gmail_app_password: "Gmail (app password)",
   sharepoint: "SharePoint",
-  zoho_mail: "Zoho Mail",
-  zoho_calendar: "Zoho Calendar",
-  slack: "Slack",
   pipedrive: "Pipedrive",
+  apollo: "Apollo",
+  merkys: "Merkys",
 };
 
 export const ALL_PROVIDERS = Object.entries(SKILL_PROVIDER_LABELS).map(

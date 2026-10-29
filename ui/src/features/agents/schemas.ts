@@ -1,13 +1,30 @@
 import { z } from "zod";
 
+import { AgentSizeOptionSchema } from "@/features/agent-sizes/schemas";
 import { OrganizationRoleSchema } from "@/features/organizations/schemas";
 import { SkillScopeSchema } from "@/features/skills/schemas";
 
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  source: z.enum(["agent_secret", "shared_credential", "platform_default"]).optional(),
   sharedCredentialId: z.string().uuid().nullable().optional(),
   sharedCredentialName: z.string().nullable().optional(),
+  isolation: z
+    .object({
+      desired: z.boolean(),
+      supportedModes: z.array(z.enum(["direct", "isolated"])),
+      directDescription: z.string(),
+      isolatedDescription: z.string(),
+      switchAvailable: z.boolean(),
+      applied: z.boolean().nullable().optional(),
+      generation: z.string().uuid().nullable().optional(),
+      pending: z.boolean().optional(),
+      lastVerified: z.boolean().nullish(),
+      reconnectRequired: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({
@@ -58,6 +75,8 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.memory.manage",
   "activity.read",
   "cost.read",
+  // Held by Organization Owners and Admins through their role; no Agent Access Role grants it.
+  "agent.size.manage",
 ]);
 
 export const AgentAccessRoleReadSchema = z.object({
@@ -96,6 +115,12 @@ export const AgentProvisioningErrorSchema = z.object({
   detail: z.string().nullish(),
 });
 
+export const AgentManagedUpdateSchema = z.object({
+  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
+  restorePointId: z.string().uuid().nullish(),
+  failureReason: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -116,10 +141,26 @@ export const AgentSchema = z.object({
   runningModel: z.string().default(""),
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
+  /** The stored size choice; null follows the platform default. */
+  agentSizeId: z.string().uuid().nullable().default(null),
+  /** The size it would start on now: its chosen one, else the default. */
+  agentSize: AgentSizeOptionSchema.nullable().default(null),
+  /** True when a restart would change a running Agent's CPU and memory. */
+  pendingSize: z.boolean().default(false),
+  /** A Platform Administrator set the size; the Organization cannot change it. */
+  agentSizeSetByPlatform: z.boolean().default(false),
   /** True when a running Agent's pod was built from older platform code or images. */
   updateAvailable: z.boolean().default(false),
+  /** A managed update is running; lifecycle actions are refused until it ends. */
+  updateInProgress: z.boolean().default(false),
+  /** How the last managed update ended; cleared when the next one starts. */
+  lastManagedUpdate: AgentManagedUpdateSchema.nullish(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  /** The Agent's own Hermes turn limit; null follows the platform default. */
+  maxTurns: z.number().int().nullable().default(null),
+  /** The limit a run actually gets: the Agent's own, or the platform default. */
+  effectiveMaxTurns: z.number().int().default(0),
   memoryEnabled: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
@@ -128,6 +169,13 @@ export const AgentSchema = z.object({
   /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
   nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
+  creator: z.object({
+    id: z.string().uuid(),
+    fullName: z.string().nullable(),
+    email: z.string(),
+  }).nullable().optional().default(null),
+  lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
+  lastActivityAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -372,6 +420,7 @@ export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
+export type AgentManagedUpdate = z.infer<typeof AgentManagedUpdateSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
@@ -457,6 +506,8 @@ export const RestorePointConfigManifestSchema = z.object({
   effectiveModel: z.string().default(""),
   approvalMode: z.string().default(""),
   verboseMode: z.boolean().default(false),
+  /** Absent on manifests recorded before the turn limit existed; kept undefined so a diff can say so. */
+  maxTurns: z.number().int().nullable().optional(),
   skills: z.array(RestorePointSkillSchema).default([]),
 });
 

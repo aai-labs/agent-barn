@@ -16,8 +16,23 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
+    "delete_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}",
     "retire_communication_connection_organizations__organization_id__agents__agent_id__connections__connection_id__delete"
+  ],
+  [
+    "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-links/{link_id}",
+    "unlink_telegram_account_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_links__link_id__delete"
+  ],
+  [
+    "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}",
+    "delete_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__delete"
   ],
   [
     "DELETE",
@@ -81,6 +96,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection",
+    "abandon_sync_provider_connection_organizations__organization_id__sync_providers__provider_key__connection_delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/templates/{template_key}",
     "delete_template_organizations__organization_id__templates__template_key__delete"
   ],
@@ -88,6 +108,11 @@
     "DELETE",
     "/organizations/{organization_id}/templates/{template_key}/draft",
     "discard_org_draft_organizations__organization_id__templates__template_key__draft_delete"
+  ],
+  [
+    "DELETE",
+    "/platform/agent-sizes/{size_id}",
+    "delete_agent_size_platform_agent_sizes__size_id__delete"
   ],
   [
     "DELETE",
@@ -111,8 +136,23 @@
   ],
   [
     "GET",
+    "/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}",
+    "download_artifact_agent_artifacts__organization_id___agent_id___artifact_id__get"
+  ],
+  [
+    "GET",
     "/auth/context",
     "get_api_context_auth_context_get"
+  ],
+  [
+    "GET",
+    "/auth/google/callback",
+    "finish_google_sign_in_auth_google_callback_get"
+  ],
+  [
+    "GET",
+    "/auth/google/start",
+    "start_google_sign_in_auth_google_start_get"
   ],
   [
     "GET",
@@ -166,6 +206,11 @@
   ],
   [
     "GET",
+    "/integrations/sync-provider/{provider_key}/callback",
+    "sync_provider_callback_integrations_sync_provider__provider_key__callback_get"
+  ],
+  [
+    "GET",
     "/llms-full.txt",
     "llms_full_txt_llms_full_txt_get"
   ],
@@ -173,6 +218,11 @@
     "GET",
     "/llms.txt",
     "llms_txt_llms_txt_get"
+  ],
+  [
+    "GET",
+    "/onboarding",
+    "read_onboarding_onboarding_get"
   ],
   [
     "GET",
@@ -188,6 +238,11 @@
     "GET",
     "/organizations/{organization_id}/agent-settings",
     "get_agent_settings_organizations__organization_id__agent_settings_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agent-sizes",
+    "get_organization_agent_sizes_organizations__organization_id__agent_sizes_get"
   ],
   [
     "GET",
@@ -236,6 +291,26 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts",
+    "list_artifacts_organizations__organization_id__agents__agent_id__artifacts_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
+    "storage_status_organizations__organization_id__agents__agent_id__artifacts_storage_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
+    "get_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/download-link",
+    "artifact_download_link_organizations__organization_id__agents__agent_id__artifacts__artifact_id__download_link_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/configuration",
     "get_agent_configuration_organizations__organization_id__agents__agent_id__configuration_get"
   ],
@@ -271,6 +346,16 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens/{token_id}",
+    "get_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens__token_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-links",
+    "list_telegram_links_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_links_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/conversations/channels",
     "list_channels_organizations__organization_id__agents__agent_id__conversations_channels_get"
   ],
@@ -281,13 +366,33 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections",
+    "list_connections_organizations__organization_id__agents__agent_id__custom_api_connections_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/diagnostics",
     "get_runtime_diagnostics_organizations__organization_id__agents__agent_id__diagnostics_get"
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync",
+    "get_agent_file_sync_organizations__organization_id__agents__agent_id__file_sync_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync/activity",
+    "list_agent_file_sync_activity_organizations__organization_id__agents__agent_id__file_sync_activity_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/healthz",
     "get_agent_healthz_organizations__organization_id__agents__agent_id__healthz_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint",
+    "sharepoint_current_organizations__organization_id__agents__agent_id__integrations_sharepoint_get"
   ],
   [
     "GET",
@@ -323,6 +428,21 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/memory/items",
     "list_agent_memories_organizations__organization_id__agents__agent_id__memory_items_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
+    "list_agent_playbook_extractions_organizations__organization_id__agents__agent_id__playbook_extractions_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions/preview",
+    "preview_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions_preview_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions/{extraction_id}",
+    "get_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions__extraction_id__get"
   ],
   [
     "GET",
@@ -416,6 +536,46 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-capabilities",
+    "get_workflow_capabilities_organizations__organization_id__agents__agent_id__workflow_capabilities_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
+    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows",
+    "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}",
+    "get_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
+    "list_workflow_versions_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/billing",
+    "read_billing_organizations__organization_id__billing_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/communication-platforms",
     "list_communication_platforms_organizations__organization_id__communication_platforms_get"
   ],
@@ -491,6 +651,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/playbook-extractions",
+    "list_playbook_extractions_organizations__organization_id__playbook_extractions_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/shared-credentials",
     "list_shared_credentials_organizations__organization_id__shared_credentials_get"
   ],
@@ -536,6 +701,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/sync-providers",
+    "list_sync_providers_organizations__organization_id__sync_providers_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/authorize-url",
+    "sync_provider_authorize_url_organizations__organization_id__sync_providers__provider_key__connection_authorize_url_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/locations",
+    "search_sync_provider_locations_organizations__organization_id__sync_providers__provider_key__connection_locations_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/templates",
     "list_templates_organizations__organization_id__templates_get"
   ],
@@ -576,6 +756,21 @@
   ],
   [
     "GET",
+    "/platform/agent-sizes",
+    "list_agent_sizes_platform_agent_sizes_get"
+  ],
+  [
+    "GET",
+    "/platform/agents",
+    "list_platform_agents_platform_agents_get"
+  ],
+  [
+    "GET",
+    "/platform/billing/credit-history",
+    "read_credit_history_platform_billing_credit_history_get"
+  ],
+  [
+    "GET",
     "/platform/costs",
     "list_platform_costs_platform_costs_get"
   ],
@@ -603,6 +798,11 @@
     "GET",
     "/platform/costs/summary",
     "get_platform_cost_summary_platform_costs_summary_get"
+  ],
+  [
+    "GET",
+    "/platform/environment-health",
+    "get_environment_health_platform_environment_health_get"
   ],
   [
     "GET",
@@ -658,6 +858,36 @@
     "GET",
     "/platform/settings/agent-memory/models",
     "list_models_platform_settings_agent_memory_models_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/billing",
+    "read_billing_settings_platform_settings_billing_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/organizations",
+    "read_organization_settings_platform_settings_organizations_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/playbooks",
+    "read_settings_platform_settings_playbooks_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/playbooks/models",
+    "list_models_platform_settings_playbooks_models_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/trial",
+    "read_trial_settings_platform_settings_trial_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/workflows",
+    "read_settings_platform_settings_workflows_get"
   ],
   [
     "GET",
@@ -746,6 +976,11 @@
   ],
   [
     "PATCH",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}",
+    "update_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__patch"
+  ],
+  [
+    "PATCH",
     "/organizations/{organization_id}/agents/{agent_id}/skills/{skill_id}",
     "update_agent_skill_organizations__organization_id__agents__agent_id__skills__skill_id__patch"
   ],
@@ -788,6 +1023,11 @@
     "PATCH",
     "/organizations/{organization_id}/templates/{template_key}/draft",
     "update_org_draft_organizations__organization_id__templates__template_key__draft_patch"
+  ],
+  [
+    "PATCH",
+    "/platform/agent-sizes/{size_id}",
+    "update_agent_size_platform_agent_sizes__size_id__patch"
   ],
   [
     "PATCH",
@@ -861,8 +1101,23 @@
   ],
   [
     "POST",
+    "/billing/stripe/webhook",
+    "receive_stripe_event_billing_stripe_webhook_post"
+  ],
+  [
+    "POST",
     "/integrations/google/token",
     "google_token_exchange_integrations_google_token_post"
+  ],
+  [
+    "POST",
+    "/onboarding/agent",
+    "set_up_onboarding_agent_onboarding_agent_post"
+  ],
+  [
+    "POST",
+    "/onboarding/complete",
+    "complete_onboarding_onboarding_complete_post"
   ],
   [
     "POST",
@@ -873,6 +1128,16 @@
     "POST",
     "/organizations/{organization_id}/agents",
     "create_agent_organizations__organization_id__agents_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts",
+    "create_artifact_organizations__organization_id__agents__agent_id__artifacts_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
+    "provision_storage_organizations__organization_id__agents__agent_id__artifacts_storage_post"
   ],
   [
     "POST",
@@ -911,6 +1176,31 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens",
+    "create_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections",
+    "create_connection_organizations__organization_id__agents__agent_id__custom_api_connections_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/apply",
+    "apply_connections_organizations__organization_id__agents__agent_id__custom_api_connections_apply_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/preflight",
+    "preflight_connections_organizations__organization_id__agents__agent_id__custom_api_connections_preflight_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}/apply",
+    "apply_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__apply_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint/sign-in",
     "complete_sharepoint_sign_in_organizations__organization_id__agents__agent_id__integrations_sharepoint_sign_in_post"
   ],
@@ -918,6 +1208,21 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/validate",
     "validate_integration_organizations__organization_id__agents__agent_id__integrations__provider__validate_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/managed-update",
+    "managed_update_organizations__organization_id__agents__agent_id__managed_update_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
+    "create_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions/{extraction_id}/cancel",
+    "cancel_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions__extraction_id__cancel_post"
   ],
   [
     "POST",
@@ -996,6 +1301,41 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/re-run",
+    "rerun_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows",
+    "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
+    "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
+    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
+    "save_workflow_version_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/billing/checkout",
+    "create_checkout_organizations__organization_id__billing_checkout_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/members",
     "add_member_organizations__organization_id__members_post"
   ],
@@ -1046,6 +1386,21 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/disconnect",
+    "disconnect_sync_provider_organizations__organization_id__sync_providers__provider_key__connection_disconnect_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/location",
+    "choose_sync_provider_location_organizations__organization_id__sync_providers__provider_key__connection_location_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/sign-in",
+    "complete_sync_provider_sign_in_organizations__organization_id__sync_providers__provider_key__connection_sign_in_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/templates",
     "create_template_organizations__organization_id__templates_post"
   ],
@@ -1053,6 +1408,11 @@
     "POST",
     "/organizations/{organization_id}/templates/{template_key}/draft",
     "start_org_draft_organizations__organization_id__templates__template_key__draft_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/templates/{template_key}/draft/conventions",
+    "add_organization_conventions_organizations__organization_id__templates__template_key__draft_conventions_post"
   ],
   [
     "POST",
@@ -1068,6 +1428,21 @@
     "POST",
     "/organizations/{organization_id}/transfer-ownership",
     "transfer_ownership_organizations__organization_id__transfer_ownership_post"
+  ],
+  [
+    "POST",
+    "/platform/agent-sizes",
+    "create_agent_size_platform_agent_sizes_post"
+  ],
+  [
+    "POST",
+    "/platform/agents/{agent_id}/restart",
+    "restart_platform_agent_platform_agents__agent_id__restart_post"
+  ],
+  [
+    "POST",
+    "/platform/organizations/{organization_id}/end-trial",
+    "end_organization_trial_platform_organizations__organization_id__end_trial_post"
   ],
   [
     "POST",
@@ -1121,6 +1496,26 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/agent-size",
+    "set_agent_size_organizations__organization_id__agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/content",
+    "publish_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__content_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync",
+    "set_agent_file_sync_organizations__organization_id__agents__agent_id__file_sync_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation",
+    "apply_integration_isolation_organizations__organization_id__agents__agent_id__integrations__provider__isolation_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/llm-budget",
     "set_agent_llm_budget_organizations__organization_id__agents__agent_id__llm_budget_put"
   ],
@@ -1146,6 +1541,21 @@
   ],
   [
     "PUT",
+    "/platform/agents/{agent_id}/agent-size",
+    "set_platform_agent_size_platform_agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
+    "/platform/organizations/{organization_id}/agent-limit",
+    "set_organization_agent_limit_platform_organizations__organization_id__agent_limit_put"
+  ],
+  [
+    "PUT",
+    "/platform/organizations/{organization_id}/agent-sizes",
+    "set_organization_agent_sizes_platform_organizations__organization_id__agent_sizes_put"
+  ],
+  [
+    "PUT",
     "/platform/organizations/{organization_id}/llm-budget",
     "set_organization_llm_budget_platform_organizations__organization_id__llm_budget_put"
   ],
@@ -1158,5 +1568,30 @@
     "PUT",
     "/platform/settings/agent-memory",
     "update_settings_platform_settings_agent_memory_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/billing",
+    "update_billing_settings_platform_settings_billing_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/organizations",
+    "update_organization_settings_platform_settings_organizations_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/playbooks",
+    "update_settings_platform_settings_playbooks_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/trial",
+    "update_trial_settings_platform_settings_trial_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/workflows",
+    "update_settings_platform_settings_workflows_put"
   ]
 ]

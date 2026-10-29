@@ -40,6 +40,7 @@ import {
 } from "@/features/communication-connections/hooks/use-communication-connections";
 import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
+import { TelegramAccountLinking } from "@/features/communication-connections/components/telegram-account-linking";
 import { createSlackAppManifest } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
@@ -618,13 +619,19 @@ export function AgentChannelSettings({
   const platforms = useCommunicationPlatforms();
   const setupManifest = (platformKey: string) =>
     platformKey === "slack" ? createSlackAppManifest(agent.name, agentDescription) : null;
-  // Web Chat is lazily provisioned on first send and can't be added by hand.
+  // Web Chat is provisioned lazily; the shared Telegram bot belongs to ready-made setup.
   const addablePlatforms = useMemo(
     () => {
-      const connected = new Set(connections.data?.map((connection) => connection.platformKey));
+      if (!connections.data) return undefined;
+      const connected = new Set(connections.data.map((connection) => connection.platformKey));
+      // Both Telegram types occupy the runtime's single adapter, even when disabled.
+      const hasTelegram = connected.has("telegram") || connected.has("agentbarn_telegram");
       return platforms.data?.filter(
         (platform) =>
-          platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
+          platform.key !== WEB_PLATFORM_KEY &&
+          platform.key !== "agentbarn_telegram" &&
+          !connected.has(platform.key) &&
+          !(platform.key === "telegram" && hasTelegram),
       );
     },
     [connections.data, platforms.data],
@@ -811,7 +818,10 @@ export function AgentChannelSettings({
   /** The runtime runs this platform's Connections itself and reads them only at start,
    * so a change to one on a running Agent is applied by restarting it. */
   function restartsAgent(key: string | undefined) {
-    return agent.status === "RUNNING" && Boolean(key) && agent.nativePlatformKeys.includes(key!);
+    const transport = connections.data?.find((connection) => connection.platformKey === key)?.transport
+      ?? platforms.data?.find((platform) => platform.key === key)?.transport;
+    return agent.status === "RUNNING" && (transport === "native"
+      || (transport === undefined && Boolean(key) && agent.nativePlatformKeys.includes(key!)));
   }
 
   function applyChange(key: string, confirmLabel: string, change: () => Promise<void>) {
@@ -1126,6 +1136,16 @@ export function AgentChannelSettings({
                   )}
                   {installError && installBusyId === null && (
                     <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{installError}</div>
+                  )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("account_linking") && (
+                    <TelegramAccountLinking
+                      agentId={agent.id}
+                      connectionId={connection.id}
+                      enabled={connection.enabled}
+                      canManage={agent.allowedActions.includes("agent.update")}
+                    />
                   )}
                   <div className="mt-3">
                     <PlatformSetupHint

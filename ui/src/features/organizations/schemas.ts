@@ -11,6 +11,14 @@ export const OrganizationSchema = z.object({
   // Tolerate lightweight org views (e.g. the account/user-context memberships)
   // that don't carry the allowlist; the full org endpoint always sends it.
   allowedModels: z.array(z.string()).default([]),
+  isTrial: z.boolean().default(false),
+  // How many agents it may run, null for no limit; only the organization read carries it.
+  agentLimit: z.number().int().nullable().optional(),
+  // Whether it runs as many agents as that limit allows, counting ones a member can't see.
+  agentLimitReached: z.boolean().optional(),
+  // How many agents a trial may run; only the organization read carries it.
+  trialAgentLimit: z.number().int().nullable().optional(),
+  trialAgentLimitReached: z.boolean().optional(),
 });
 
 export const OrganizationCreateSchema = z.object({
@@ -37,11 +45,13 @@ export const OrganizationMembersSchema = z.array(OrganizationMemberSchema);
 
 export const MemberInviteResultSchema = z.object({
   member: OrganizationMemberSchema,
+  // Always null: the link goes only to the invitee's inbox.
   inviteLink: z.string().nullable(),
 });
 
 export const InviteLinkResultSchema = z.object({
-  inviteLink: z.string(),
+  // Always null: the link goes only to the invitee's inbox.
+  inviteLink: z.string().nullable().optional(),
 });
 
 export const AddMemberFormSchema = z.object({
@@ -65,12 +75,19 @@ export const PlatformOrganizationSchema = z.object({
   creatorUserId: z.string().uuid().nullable().optional(),
   creatorEmail: z.string().nullable().optional(),
   creatorName: z.string().nullable().optional(),
+  isTrial: z.boolean().default(false),
   // Platform-administered spend ceiling. Every organization has one; 0 is a real
   // zero allowance, so never coalesce it away.
   llmBudgetUsd: z.number().nullable().optional(),
   llmBudgetDuration: z.string().nullable().optional(),
   // The organization's own limit beneath the ceiling. Null follows the ceiling.
   llmOwnBudgetUsd: z.number().nullable().optional(),
+  // The Agent sizes it may choose beyond the default, which is never listed. Empty: it cannot choose.
+  agentSizeIds: z.array(z.string().uuid()).default([]),
+  // How many agents it may run: its own (null follows the default) and the one in
+  // force (null for no limit). Only the single organization read carries the latter.
+  agentLimit: z.number().int().nullable().optional(),
+  agentLimitInForce: z.number().int().nullable().optional(),
 });
 
 export const OrganizationLlmBudgetSchema = z.object({
@@ -156,3 +173,11 @@ export type RenameOrganizationFormData = z.infer<typeof RenameOrganizationFormSc
 export type AgentLlmCoverage = z.infer<typeof AgentLlmCoverageSchema>;
 export type OrganizationLlmCoverage = z.infer<typeof OrganizationLlmCoverageSchema>;
 export type OrganizationLlmBudget = z.infer<typeof OrganizationLlmBudgetSchema>;
+
+export const OrganizationSettingsSchema = z.object({
+  // How many agents an organization that isn't a trial may run, unless it has its own.
+  defaultAgentLimit: z.number().int(),
+  updatedAt: z.string().nullable().optional(),
+});
+
+export type OrganizationSettings = z.infer<typeof OrganizationSettingsSchema>;

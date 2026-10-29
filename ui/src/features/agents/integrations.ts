@@ -18,6 +18,9 @@ export interface IntegrationField {
   required: boolean;
   placeholder?: string;
   hint?: string;
+  // A value the user cannot change. The field renders read-only, the value is put into
+  // the draft for the request, and "required" counts it as filled. Only for "text" fields.
+  fixedValue?: string;
 }
 
 export interface IntegrationProvider {
@@ -34,12 +37,22 @@ export interface IntegrationProvider {
   authMethod?: "google_oauth" | "microsoft_sign_in";
   // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
+  // The credential can never be given to the agent, so credential isolation is always on.
+  // Mirrors the server, which refuses to turn it off. Its two descriptions replace the
+  // generic ones before the credential is first saved.
+  alwaysIsolated?: { isolatedDescription: string; directDescription: string };
+  // false keeps the provider out of every "add" list (integrations, and skills that need
+  // it) while credentials an Agent already has still show and can be removed.
+  offered?: boolean;
 }
 
 export interface IntegrationDraft {
   provider: string;
   content: Record<string, string | string[]>;
   sharedCredentialId?: string;
+  existing?: boolean;
+  platformDefault?: boolean;
+  isolated?: boolean;
 }
 
 const AUTO_CONFIGURED_PROVIDER_IDS = new Set<string>();
@@ -49,14 +62,6 @@ export function isAutoConfiguredProvider(providerId: string): boolean {
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
-  {
-    id: "slack",
-    label: "Slack tool access",
-    scopeNote: "A tool credential is separate from Communication Connection credentials and is exposed only to the Agent's Slack skill.",
-    fields: [
-      { key: "token", label: "Bot or user token", type: "secret", required: true, placeholder: "xoxb-… or xoxp-…" },
-    ],
-  },
   {
     id: "github",
     label: "GitHub",
@@ -118,10 +123,9 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
-  // gmail, google_sheets and google_calendar are retired: one google_workspace
-  // credential (below) now covers Gmail, Calendar, Drive and Sheets through gog under a
-  // single consent. The retired providers and their rows were deleted by migration;
-  // affected agents must reconnect, so they must not be offered here.
+  // google_sheets and google_calendar are retired: one google_workspace credential
+  // (below) covers Gmail, Calendar, Drive and Sheets through gog under a single consent.
+  // gmail is separate: read-only Gmail alone, connected with one Google sign-in.
   {
     id: "google_workspace",
     label: "Google Workspace",
@@ -157,11 +161,45 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
   {
+    id: "gmail",
+    label: "Gmail",
+    authMethod: "google_oauth",
+    // Not offered yet, but not dead code: one-click Gmail signs in on the deployment's
+    // shared Google app, which Google has not verified, so users would get Google's
+    // "unverified app" warning and the app's cap on how many people can sign in. Gmail
+    // with an app password is offered instead. Drop this line once the app is verified.
+    offered: false,
+    scopeNote: "Read-only access to one Gmail inbox. Sign in with Google; there's nothing else to set up.",
+    oauthConnectedNote: "Gmail connected",
+    fields: [],
+  },
+  {
+    id: "gmail_app_password",
+    label: "Gmail (app password)",
+    scopeNote:
+      "Read-only access to one Gmail inbox. The agent can read mail but never send, delete or change it, and the app password is never given to the agent.",
+    fields: [
+      { key: "email", label: "Gmail address", type: "text", required: true, placeholder: "you@gmail.com" },
+      {
+        key: "appPassword",
+        label: "App password",
+        type: "secret",
+        required: true,
+        placeholder: "abcd efgh ijkl mnop",
+        hint: "Create one at myaccount.google.com/apppasswords. Your Google account needs 2-Step Verification turned on.",
+      },
+    ],
+    alwaysIsolated: {
+      isolatedDescription: "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+      directDescription: "An app password cannot be limited to reading, so it is never given to this Agent.",
+    },
+  },
+  {
     id: "sharepoint",
     label: "SharePoint",
     authMethod: "microsoft_sign_in",
     scopeNote:
-      "Signs in with Microsoft on the agent's Microsoft Teams app. The agent can open the sites and files the signed-in account can open.",
+      "Connects through the agent's Microsoft Teams app. The agent reaches only the sites an administrator grants it, or, if you choose, everything the person who signs in can open.",
     fields: [
       {
         key: "readOnly",
@@ -174,18 +212,6 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
         ],
         hint: "Choose before signing in. To change it later, pick the new level and sign in again.",
       },
-    ],
-  },
-  {
-    id: "zoho_mail",
-    label: "Zoho Mail",
-    scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
-    fields: [
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
-      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
-      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
-      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
-      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
     ],
   },
   {
@@ -206,20 +232,33 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Subdomain only — the part before .pipedrive.com. Leave empty to use the default api.pipedrive.com endpoint." },
     ],
   },
-  // zoho_calendar disabled: not currently offered as an integration. Re-enable by
-  // uncommenting if needed again.
-  // {
-  //   id: "zoho_calendar",
-  //   label: "Zoho Calendar",
-  //   scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
-  //   fields: [
-  //     { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-  //     { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-  //     { key: "appPassword", label: "App password", type: "secret", required: true },
-  //     { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
-  //   ],
-  // },
+  {
+    id: "apollo",
+    label: "Apollo",
+    scopeNote: "A key only reaches the endpoints chosen when it was created, so use a master API key or give the key every endpoint the agent needs. People and organization search and enrichment also need a paid Apollo plan.",
+    fields: [
+      { key: "apiToken", label: "API key", type: "secret", required: true, hint: "Create one in Apollo under Settings → Integrations → API Keys." },
+    ],
+  },
+  {
+    id: "merkys",
+    label: "Merkys",
+    scopeNote: "The agent acts as the Merkys user who owns the API key and can read only what that user can. Use a dedicated user limited to the knowledge the agent needs, rather than a personal key.",
+    fields: [
+      { key: "baseUrl", label: "Merkys URL", type: "text", required: true, fixedValue: "https://slack-chatbot.k8s.aai-labs.com", hint: "Agent Barn's Merkys. This address is fixed." },
+      { key: "apiKey", label: "API key", type: "secret", required: true, hint: "Create one in Merkys under API keys. It starts with cb_." },
+    ],
+  },
 ];
+
+export function isOfferedProvider(providerId: string): boolean {
+  return getIntegrationProvider(providerId)?.offered !== false;
+}
+
+/** A skill can be added only when every credential it needs can be connected. */
+export function isOfferedSkill(skill: { requiredProviders: string[] }): boolean {
+  return skill.requiredProviders.every(isOfferedProvider);
+}
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
@@ -267,7 +306,7 @@ export function isSignInOnlyProvider(providerId: string): boolean {
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
-    if (isAutoConfiguredProvider(draft.provider)) return false;
+    if (draft.existing || isAutoConfiguredProvider(draft.provider)) return false;
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;
@@ -275,7 +314,7 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     // (google_workspace picks services before consent) — still have them filled in.
     if (provider.authMethod && !isOAuthConnected(draft)) return true;
     return provider.fields.some((f) => {
-      if (!f.required) return false;
+      if (!f.required || f.fixedValue !== undefined) return false;
 
       // If the field depends on another field, check if the condition is met
       if (f.dependsOn) {

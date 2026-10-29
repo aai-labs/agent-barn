@@ -9,6 +9,7 @@ dependencies = [
     "alembic>=1.18.5",
     "alembic-postgresql-enum>=1.10.0",
     "bcrypt>=5.0.0",
+    "boto3>=1.42.0",
     "cryptography>=49.0.0",
     "fastapi-injector>=0.9.0",
     "fastapi[standard]>=0.141.1",
@@ -31,7 +32,9 @@ dependencies = [
     "dramatiq[redis,watch]>=2.2.0",
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
-    "websockets>=17.0",
+    "pynacl>=1.6.2",
+    "stripe[async]>=15.6.1,<16",
+    "pytest-xdist>=3.8",
 ]
 
 [tool.pytest.ini_options]
@@ -53,13 +56,18 @@ line-length = 120
 # actually runs (see openclaw-base/Dockerfile's `uv python install 3.12` and
 # hermes-base's bundled 3.13.5).
 [tool.ruff.per-file-target-version]
+# Deployment provisioning runs with the runner's Python, without API dependencies.
+"scripts/provision_memory.py" = "py310"
+"k8s_runtime_tests/fixtures/**" = "py312"
 "domains/agents/scripts/openclaw/**" = "py312"
 "domains/agents/scripts/hermes/**" = "py313"
 "domains/agents/scripts/communications-runtime-adapter.py" = "py312"
 "domains/agents/scripts/agent-trigger-server.py" = "py312"
+"domains/agents/scripts/retire-messaging.py" = "py312"
 "domains/agents/scripts/memory-gateway-ready.py" = "py312"
 "domains/agents/scripts/agentbarn_memory.py" = "py312"
-"domains/agents/scripts/messaging/**" = "py312"
+"domains/agents/scripts/file-sync.py" = "py312"
+"domains/agents/scripts/agentbarn_artifacts.py" = "py312"
 
 [tool.ruff.lint]
 # B008   - FastAPI dependency injection relies on function calls in default

@@ -25,7 +25,7 @@ export class DashboardPage {
   }
 
   async chooseHireTemplate(name: string) {
-    await this.page.getByRole("combobox").nth(1).click();
+    await this.page.getByRole("combobox", { name: "Template", exact: true }).click();
     await this.page.getByRole("option", { name, exact: true }).click();
   }
 
@@ -35,6 +35,62 @@ export class DashboardPage {
 
   heading(): Locator {
     return this.page.getByRole("heading", { name: "Your team" });
+  }
+
+  agentCard(name: string): Locator {
+    return this.page.getByRole("link", { name: `View ${name}`, exact: true });
+  }
+
+  hireCard(): Locator {
+    return this.page.getByRole("button", { name: "Hire a teammate", exact: true });
+  }
+
+  async openHireCard(keyboard = false) {
+    await this.openHireChoices(keyboard);
+  }
+
+  async openHireChoices(keyboard = false) {
+    if (keyboard) {
+      await this.hireCard().focus();
+      await this.hireCard().press("Enter");
+    } else {
+      await this.hireCard().click();
+    }
+  }
+
+  async chooseCustomHiring() {
+    await this.page.getByRole("radio", { name: /Build your own/ }).click();
+    await this.page.getByRole("button", { name: "Continue", exact: true }).click();
+  }
+
+  async chooseReadyMadeHiring() {
+    await this.page.getByRole("radio", { name: /Ready-made assistant/ }).click();
+    await this.page.getByRole("button", { name: "Continue", exact: true }).click();
+  }
+
+  lastActivityTime(name: string): Locator {
+    return this.agentCard(name).locator("time");
+  }
+
+  async openAgent(name: string, keyboard = false) {
+    const card = this.agentCard(name);
+    if (keyboard) {
+      await card.focus();
+      await card.press("Enter");
+    } else {
+      await card.click();
+    }
+  }
+
+  async searchTeammates(value: string) {
+    await this.page.getByRole("searchbox", { name: "Search displayed teammates" }).fill(value);
+  }
+
+  async cardFooterBottomGap(name: string): Promise<number> {
+    return this.agentCard(name).evaluate((card) => {
+      const footer = card.lastElementChild!;
+      return card.getBoundingClientRect().bottom - footer.getBoundingClientRect().bottom;
+    });
   }
 
   async gotoUsers() {

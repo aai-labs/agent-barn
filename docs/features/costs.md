@@ -71,6 +71,10 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 
+## Playbook Extraction attribution
+
+A [Playbook Extraction](playbooks.md#model-and-billing) calls models with its source Agent's own LiteLLM key, so its spend is attributed to that Agent like the Agent's own calls, shows on its Costs tab, and counts against its Agent and Organization budgets. No separate key, marker, or bucket exists; the run also records its own token usage and LiteLLM-reported cost.
+
 ## Agent Memory attribution
 
 Hindsight's trace API has token counts but no billed amount or provider generation
@@ -132,7 +136,8 @@ a partial `(organization_id, occurred_at)` index restricted to memory charges.
 
 Before forwarding retain or reflect, the gateway also checks observed spend.
 A zero limit blocks immediately; positive limits need a runtime snapshot at most
-10 minutes old, a cost-sync heartbeat at most 20 minutes old, and a future renewal.
+10 minutes old, a cost-sync heartbeat at most 20 minutes old, and a future renewal
+(a one-off limit has none and needs none).
 Missing or invalid accounting returns 503, and observed exhaustion returns 429.
 Recall remains available. Migration `f2a8d41b9c63` adds the sync heartbeat, updated
 only after a complete paging pass, independently of OpenRouter healing.
@@ -183,6 +188,27 @@ matter when a budget was set. The team and every Agent key therefore renew at th
 same moment; any other `Nd` would renew N days after it was set and drift. `30d` is a
 calendar month, not a 30-day interval.
 
+**Limits on Credit.** An Organization on a one-off limit runs on Credit (see
+[Credit](credit.md)): any limit beneath its ceiling would be a lifetime cap that no
+top-up could lift, so its own limit, Agent limits and the default Agent limit are refused,
+any left from before is ignored and not shown, and every Agent key carries the
+Organization's limit.
+
+**One-off limits.** A Trial Organization's limit is its Trial Credit, granted once:
+its window is stored as `once`, which the LiteLLM client sends as no
+`budget_duration`, so the team and every Agent key accumulate spend for good and never
+renew (proven against the pinned image by
+`../../api/tests/integration/test_one_off_spend_limit_litellm_contract.py`). A key that
+never had a window is normally zeroed before its first cap; a one-off key is not, since
+its spend is the credit already used. The Agent Memory spend gate counts memory spend
+since the Organization was created. `once` is never offered as a window to choose: a
+Platform Administrator who changes only a trial's amount keeps it one-off, and choosing
+a renewing window moves the trial onto it. When the credit runs out the Agent stops,
+exactly as at any other limit. Moving onto a renewing window keeps the spend already used:
+the pinned LiteLLM cannot zero a team's spend, so a key that had a limit keeps its spend too
+(only a key that never had a limit or a window is zeroed before its first cap). Team and
+keys then reset together at their first renewal.
+
 When LiteLLM is configured, every Organization receives a LiteLLM team whose
 `team_id` is the Organization UUID. Creating an Organization, through either path that
 does, pushes its team with the limit already on it. A remote failure is logged
@@ -220,7 +246,10 @@ that Agent's configuration.
 Threshold alerts cover both levels. The Organization's go to its Owners and Admins, and
 to Platform Administrators when it is exhausted. An Agent's go to its creator and
 Owners — the same people told about its lifecycle — and never to Platform
-Administrators, since one Agent running out is its Organization's business.
+Administrators, since one Agent running out is its Organization's business. An
+Organization's exhausted alert (`organization.llm_budget.exhausted`) also goes to
+product analytics, attributed to the Organization's creator; see
+[`product-analytics.md`](product-analytics.md).
 
 LiteLLM enforces its own recorded spend, independently of `cost_record` and
 OpenRouter cost healing. That figure is known to sit slightly below the truth —
@@ -234,20 +263,27 @@ calls fail until the limit renews or is raised. Both runtimes' in-pod LLM proxy
 catches the rejection before the runtime sees it — matched on the error body, since
 the proxy has answered with `400`, `429`, and `422` on releases after the pinned one,
 and those statuses also carry malformed requests and ordinary rate limits that must
-keep their own errors. It answers the runtime with `402` and a clean message, because
-both runtimes retry a `429` as a rate limit indefinitely and the person chatting
-would never hear back.
+keep their own errors. It never passes the `429` on, because both runtimes retry a
+`429` as a rate limit indefinitely and the person chatting would never hear back.
 
-Neither runtime carries the reason out faithfully: OpenClaw replaces the proxy's
-message with its own billing text, and Hermes aborts the turn. So the proxy also
-records the refusal in the container (`/tmp/agentbarn-llm-terminal-error.json`), and
-the Communications adapter in the same container reports a turn that fails after it
-as `SPEND_LIMIT_REACHED`. Communications turns that code into a terminal,
-non-retried failure whose notice reads "A model spend limit has been reached, so this
-agent cannot reply right now…": shown under the message in web chat, and posted as the
-failure notice on Slack, Telegram, Discord and Teams. The wording deliberately does not
-say whose limit it was: the rejection is the same whether the Agent's or its
-Organization's ran out.
+Neither runtime carries an error reason out faithfully: OpenClaw replaces any `402`
+with its own "top up your API key" billing text, and Hermes aborts the turn. So a
+refused **chat completion** is answered as an ordinary assistant reply whose text is
+the notice "A model spend limit has been reached, so this agent cannot reply right
+now…", in the request's own format (JSON, or a server-sent event stream when
+`stream` is true). Native Slack, Telegram, Discord and Teams post it like any other
+reply, including from scheduled runs. Any other refused endpoint, or a request the
+proxy cannot read back, still gets a terminal `402` with the same message.
+
+The proxy also records the refusal in the container
+(`/tmp/agentbarn-llm-terminal-error.json`). The Communications adapter in the same
+container reports a Web Chat or Email turn during which the refusal was recorded as
+`SPEND_LIMIT_REACHED`, whether the runtime failed the turn or ended it with the
+notice, and does not post the notice as an Agent reply. Communications turns that code
+into a terminal, non-retried failure shown under the message in Web Chat. The wording
+deliberately does not say whose limit it was: the rejection is the same whether the
+Agent's or its Organization's ran out. The notice reply is kept in the runtime's
+session history like any other assistant message.
 
 ## Operational
 
@@ -302,6 +338,8 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 ## Change impact
 
 Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels. A new Agent-surface route must go through `_authorized_agent` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`.
+
+The KPIs page ([`business-value.md`](business-value.md#kpi-dashboard)) reuses `../../ui/src/features/costs/format.ts`, `StatCard` from `cost-summary-cards.tsx`, and `useCostUrlFilters`, and links to Costs with its own `from` and `to`. A change to those helpers, or to the Costs page's `from`/`to` query keys, must re-run `../../ui/tests/e2e/kpis.spec.ts` as well as `costs.spec.ts`.
 
 Platform Admins select the shared Hindsight processing model in
 [Platform Settings](agent-memory.md#platform-memory-processing-model). Changing

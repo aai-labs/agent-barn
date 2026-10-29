@@ -1,7 +1,7 @@
 from uuid import uuid4, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, close_to, contains_string, equal_to, has_length, is_, none
+from hamcrest import assert_that, close_to, contains_string, equal_to, has_length, is_, none, not_
 from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
@@ -30,9 +30,11 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.resource_usage import (
     MockPrometheusModule,
+    prometheus_fails_agent_requests,
     prometheus_is_down,
     prometheus_is_not_configured,
     prometheus_reports,
+    prometheus_reports_agent_requests,
     prometheus_reports_history,
 )
 from api.tests.steps.template import there_is_a_template
@@ -232,6 +234,53 @@ def test_reports_current_usage_limits_and_history():
             assert_that(body["cpu_average_cores"], close_to(0.2, 1e-9))
 
 
+def test_the_agents_requests_are_reported_beside_its_limits():
+    with given(
+        [
+            *_GIVEN,
+            prometheus_reports(_REPORTING),
+            prometheus_reports_agent_requests(lambda c: {c.agent.id: (805_306_368.0, 0.05)}),
+        ]
+    ) as context:
+        with when("I read the agent's usage"):
+            body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        with then("its memory and CPU requests come with its limits"):
+            assert_that(body["memory_request_bytes"], equal_to(805_306_368))
+            assert_that(body["memory_limit_bytes"], equal_to(1_073_741_824))
+            assert_that(body["cpu_request_cores"], close_to(0.05, 1e-9))
+            assert_that(body["cpu_limit_cores"], close_to(0.5, 1e-9))
+
+
+def test_a_request_that_could_not_be_read_is_unknown_and_the_rest_still_answers():
+    with given([*_GIVEN, prometheus_reports(_REPORTING), prometheus_fails_agent_requests()]) as context:
+        response = context.client.get(_url(context), headers=_auth(context))
+
+        body = response.json()
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        # The readings did not depend on it.
+        assert_that(body["availability"], equal_to("available"))
+        assert_that(body["state"], equal_to("reporting"))
+        assert_that(body["memory_limit_bytes"], equal_to(1_073_741_824))
+        # Unknown, not zero.
+        assert_that(body["memory_request_bytes"], none())
+        assert_that(body["cpu_request_cores"], none())
+
+
+def test_another_agents_request_in_the_answer_is_not_handed_over():
+    with given(
+        [
+            *_GIVEN,
+            prometheus_reports(_REPORTING),
+            prometheus_reports_agent_requests(lambda c: {uuid4(): (4.0 * 1024**3, 2.0)}),
+        ]
+    ) as context:
+        body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        assert_that(body["memory_request_bytes"], none())
+        assert_that(body["cpu_request_cores"], none())
+
+
 def test_a_longer_range_uses_a_coarser_step():
     with given([*_GIVEN, prometheus_reports(_REPORTING)]) as context:
         client: TestClient = context.client
@@ -250,10 +299,15 @@ def test_queries_are_scoped_to_this_agent_and_organization():
         with when("I read the agent's resource usage"):
             client.get(_url(context), headers=_auth(context))
         prometheus = context.injector.get(PrometheusClient)
+        queries = [call.args[0] for call in prometheus.query.call_args_list]
         with then("the instant query selects this agent in this organization only"):
-            instant = prometheus.query.call_args.args[0]
+            instant = next(q for q in queries if "org_id" in q)
             assert_that(instant, contains_string(f'org_id="{context.organization.id}"'))
             assert_that(instant, contains_string(f'app="agent-{context.agent.id}"'))
+        with then("the query for requests names this agent's pods and no other agent's"):
+            requests = next(q for q in queries if '"app", "$1", "pod"' in q)
+            assert_that(requests, contains_string(f'pod=~"agent-{context.agent.id}-.+"'))
+            assert_that(requests, not_(contains_string('pod=~"agent-[0-9a-f]')))
         with then("so does the range query"):
             history = prometheus.query_range.call_args.args[0]
             assert_that(history, contains_string(f'org_id="{context.organization.id}"'))

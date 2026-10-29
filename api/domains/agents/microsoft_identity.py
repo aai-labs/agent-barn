@@ -13,18 +13,22 @@ Microsoft refuses the redemption with AADSTS7000218.
 import base64
 import hashlib
 import secrets
+import threading
+import time
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
 import jwt
-from injector import singleton
+from injector import NoInject, inject, singleton
 from jwt.exceptions import InvalidTokenError
 
-from api.domains.agents.microsoft_graph_scopes import GRAPH_SCOPE_PREFIX, sharepoint_permission
+from api.domains.agents.microsoft_graph_scopes import APP_ONLY_SCOPE, GRAPH_SCOPE_PREFIX, sharepoint_permission
 
 _LOGIN_HOST = "https://login.microsoftonline.com"
 _TIMEOUT_SECONDS = 30
+_APP_TOKEN_REFRESH_MARGIN_SECONDS = 300
 
 
 def _tenant(tenant_id: str) -> str:
@@ -97,6 +101,20 @@ def build_admin_consent_url(*, tenant_id: str, client_id: str, redirect_uri: str
     return f"{_tenant(tenant_id)}/v2.0/adminconsent?{urllib.parse.urlencode(params)}"
 
 
+def build_app_permission_consent_url(
+    *, tenant_id: str, client_id: str, redirect_uri: str, state: str | None = None
+) -> str:
+    """A link an administrator opens to approve the application permissions set on the app.
+
+    Selected-sites mode needs the application permission ``Sites.Selected``; ``.default``
+    approves whatever application permissions the app lists, so it is added there first.
+    """
+    params = {"client_id": client_id, "scope": APP_ONLY_SCOPE, "redirect_uri": redirect_uri}
+    if state is not None:
+        params["state"] = state
+    return f"{_tenant(tenant_id)}/v2.0/adminconsent?{urllib.parse.urlencode(params)}"
+
+
 def claims_from_id_token(id_token: str | None) -> dict:
     """Read the claims out of Microsoft's id_token, or {} if unavailable.
 
@@ -124,8 +142,10 @@ class MicrosoftIdentityClient:
         redirect_uri: str,
         code_verifier: str,
         scopes: tuple[str, ...],
+        client_secret: str | None = None,
     ) -> MicrosoftTokens:
-        """Redeem an authorization code as a public client: the PKCE verifier, no secret."""
+        """Redeem an authorization code with the PKCE verifier: as a public client by default,
+        or as a confidential (web) client when ``client_secret`` is given."""
         data = {
             "grant_type": "authorization_code",
             "client_id": client_id,
@@ -134,6 +154,28 @@ class MicrosoftIdentityClient:
             "code_verifier": code_verifier,
             "scope": " ".join(scopes),
         }
+        if client_secret is not None:
+            data["client_secret"] = client_secret
+        return self._token(tenant_id, data)
+
+    def client_credentials(self, *, tenant_id: str, client_id: str, client_secret: str) -> MicrosoftTokens:
+        """An app-only Graph token for the app itself, carrying its consented application permissions.
+
+        The secret is the Teams bot's identity. Native Teams also gives it to the agent's pod, for
+        the bot, so a token minted here grants nothing the pod couldn't get itself.
+        """
+        return self._token(
+            tenant_id,
+            {
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": APP_ONLY_SCOPE,
+            },
+        )
+
+    @staticmethod
+    def _token(tenant_id: str, data: dict[str, str]) -> MicrosoftTokens:
         try:
             response = httpx.post(f"{_tenant(tenant_id)}/oauth2/v2.0/token", data=data, timeout=_TIMEOUT_SECONDS)
         except httpx.HTTPError as exc:
@@ -152,6 +194,38 @@ class MicrosoftIdentityClient:
             access_token=str(payload["access_token"]),
             refresh_token=payload.get("refresh_token"),
             expires_in=int(payload.get("expires_in", 3600)),
-            scope=str(payload.get("scope", "")),
+            scope=str(payload.get("scope") or ""),
             id_token=payload.get("id_token"),
         )
+
+
+@singleton
+class MicrosoftAppTokens:
+    """App-only Graph tokens per tenant and app, reused until shortly before they expire.
+
+    Held in this process's memory only; a failed fetch is never remembered.
+    """
+
+    @inject
+    def __init__(self, identity: MicrosoftIdentityClient, clock: NoInject[Callable[[], float] | None] = None) -> None:
+        self._identity = identity
+        self._clock = clock or time.time
+        self._lock = threading.Lock()
+        self._tokens: dict[tuple[str, str], tuple[str, float]] = {}
+
+    def get(self, *, tenant_id: str, client_id: str, client_secret: str) -> str:
+        key = (tenant_id.lower(), client_id)
+        with self._lock:
+            cached = self._tokens.get(key)
+            if cached is not None and self._clock() < cached[1] - _APP_TOKEN_REFRESH_MARGIN_SECONDS:
+                return cached[0]
+        tokens = self._identity.client_credentials(
+            tenant_id=tenant_id, client_id=client_id, client_secret=client_secret
+        )
+        with self._lock:
+            self._tokens[key] = (tokens.access_token, self._clock() + tokens.expires_in)
+        return tokens.access_token
+
+    def evict(self, *, tenant_id: str, client_id: str) -> None:
+        with self._lock:
+            self._tokens.pop((tenant_id.lower(), client_id), None)

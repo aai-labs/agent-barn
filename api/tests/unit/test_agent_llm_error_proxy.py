@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, not_
+from hamcrest import assert_that, contains_string, equal_to, not_, starts_with
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "domains" / "agents" / "scripts"
 _HERMES = _SCRIPTS / "hermes" / "healthz-server.py"
@@ -56,6 +56,11 @@ KEY_BUDGET_BODY = {
 SPEND_LIMIT_MESSAGE = (
     "A model spend limit has been reached, so this agent cannot reply right now. "
     "Contact your administrator to raise it or wait for the limit to renew."
+)
+# On credit there is no limit beneath the balance, so the reply says what to do about it.
+CREDIT_MESSAGE = (
+    "This organization has used all its credit, so this agent cannot reply right now. "
+    "Ask the organization's owner to add more credit."
 )
 UNKNOWN_MODEL_BODY = {"error": {"message": "model 'nope' not found", "type": "invalid_request_error"}}
 
@@ -185,7 +190,7 @@ def _launch(command: list[str], env_for: Callable[[], tuple[dict[str, str], int]
 
 
 @contextmanager
-def _proxy(runtime: str, target: str):
+def _proxy(runtime: str, target: str, extra_env: dict[str, str] | None = None):
     if runtime == "hermes":
         command = [sys.executable, str(_HERMES)]
     else:
@@ -201,6 +206,7 @@ def _proxy(runtime: str, target: str):
             "HEALTHZ_PORT": str(_free_port()),
             "LITELLM_PROXY_TARGET": target,
             "LLM_PROXY_PORT": str(proxy_port),
+            **(extra_env or {}),
         }
         return env, proxy_port
 
@@ -208,15 +214,25 @@ def _proxy(runtime: str, target: str):
         yield f"http://127.0.0.1:{proxy_port}"
 
 
-def _post(base: str) -> tuple[int, dict]:
-    request = urllib.request.Request(
-        f"{base}/chat/completions", data=b"{}", headers={"Content-Type": "application/json"}
-    )
+def _post(base: str, path: str = "/chat/completions", payload: bytes = b"{}") -> tuple[int, dict]:
+    request = urllib.request.Request(f"{base}{path}", data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as error:
         return error.code, json.loads(error.read())
+
+
+def _post_stream(base: str) -> tuple[int, str, list[str]]:
+    request = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=json.dumps({"model": "litellm/m", "stream": True, "messages": []}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        text = response.read().decode()
+        events = [line.removeprefix("data: ") for line in text.splitlines() if line.startswith("data: ")]
+        return response.status, response.headers.get("Content-Type", ""), events
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
@@ -227,11 +243,13 @@ def test_a_budget_rejection_is_rewritten_for_the_user(runtime, upstream_status):
     leaking the team id again."""
     with _upstream(upstream_status, BUDGET_BODY) as target, _proxy(runtime, target) as proxy:
         status, body = _post(proxy)
-    # Always 402, whatever the proxy answered: both runtimes retry a 429 as a rate
-    # limit, indefinitely, so the person chatting would never hear back at all.
-    assert_that(status, equal_to(402))
-    message = body["error"]["message"]
+    # Answered as an ordinary completion, never the upstream 429 (which both runtimes
+    # retry as a rate limit, indefinitely) nor an error (which native chat replaces
+    # with the runtime's own billing text): the native channel posts the notice itself.
+    assert_that(status, equal_to(200))
+    message = body["choices"][0]["message"]["content"]
     assert_that(message, equal_to(SPEND_LIMIT_MESSAGE))
+    assert_that(body["choices"][0]["finish_reason"], equal_to("stop"))
     # The upstream text names the Organization's internal team id; it must not reach
     # whoever is talking to the Agent.
     assert_that(message, not_(contains_string("01a0a4cc")))
@@ -239,10 +257,60 @@ def test_a_budget_rejection_is_rewritten_for_the_user(runtime, upstream_status):
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_running_out_of_credit_says_to_add_more_and_is_recorded_as_such(runtime, tmp_path):
+    marker = tmp_path / "marker.json"
+    extra = {"AGENTBARN_SPEND_LIMIT_KIND": "credit", "AGENTBARN_LLM_ERROR_MARKER": str(marker)}
+    with _upstream(400, BUDGET_BODY) as target, _proxy(runtime, target, extra) as proxy:
+        status, body = _post(proxy)
+        recorded = json.loads(marker.read_text())
+    # The same ordinary reply as a spent limit, worded for credit.
+    assert_that(status, equal_to(200))
+    assert_that(body["choices"][0]["message"]["content"], equal_to(CREDIT_MESSAGE))
+    assert_that(recorded["code"], equal_to("CREDIT_EXHAUSTED"))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_a_spent_limit_is_recorded_as_such_off_credit(runtime, tmp_path):
+    marker = tmp_path / "marker.json"
+    with (
+        _upstream(400, BUDGET_BODY) as target,
+        _proxy(runtime, target, {"AGENTBARN_LLM_ERROR_MARKER": str(marker)}) as proxy,
+    ):
+        _post(proxy)
+        recorded = json.loads(marker.read_text())
+    assert_that(recorded["code"], equal_to("SPEND_LIMIT_REACHED"))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
 def test_an_agents_own_limit_running_out_is_rewritten_too(runtime):
     """The key-level rejection names the key's hash; it must not reach the user either."""
     with _upstream(429, KEY_BUDGET_BODY) as target, _proxy(runtime, target) as proxy:
         status, body = _post(proxy)
+    assert_that(status, equal_to(200))
+    assert_that(body["choices"][0]["message"]["content"], equal_to(SPEND_LIMIT_MESSAGE))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_a_streamed_completion_gets_the_notice_as_a_stream(runtime):
+    """Native runtimes stream their completions; the notice must arrive in that format."""
+    with _upstream(429, BUDGET_BODY) as target, _proxy(runtime, target) as proxy:
+        status, content_type, events = _post_stream(proxy)
+    assert_that(status, equal_to(200))
+    assert_that(content_type, starts_with("text/event-stream"))
+    assert_that(events[-1], equal_to("[DONE]"))
+    chunks = [json.loads(event) for event in events[:-1]]
+    text = "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in chunks)
+    assert_that(text, equal_to(SPEND_LIMIT_MESSAGE))
+    assert_that(chunks[-1]["choices"][0]["finish_reason"], equal_to("stop"))
+    assert_that(chunks[0]["model"], equal_to("litellm/m"))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_a_spent_limit_outside_chat_completions_stays_a_terminal_402(runtime):
+    """Only a chat completion can carry the notice as a reply; anything else keeps the
+    terminal 402 so the runtime does not retry it as a rate limit."""
+    with _upstream(429, BUDGET_BODY) as target, _proxy(runtime, target) as proxy:
+        status, body = _post(proxy, path="/embeddings")
     assert_that(status, equal_to(402))
     assert_that(body["error"]["message"], equal_to(SPEND_LIMIT_MESSAGE))
 

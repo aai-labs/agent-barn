@@ -6,7 +6,7 @@ Read before changing conversation history, Connection/channel/thread grouping, C
 
 ## Role in the system
 
-Conversation Messages and Tool Calls share the Agent Activity UI but have different write boundaries. The Communications Gateway persists canonical Conversation Messages from provider ingress and runtime replies. The separately served Ingest API persists authenticated runtime Tool Call telemetry and, in the same transaction, the Business Actions derived from completed shell Tool Calls (see [`business-value.md`](business-value.md)). Neither path writes Domain Events to the Domain Event outbox.
+Conversation Messages and Tool Calls share the Agent Activity UI but have different write boundaries. The Communications Gateway persists canonical Conversation Messages for Web Chat and Email ingress/replies. Native chat observers mirror runtime-owned conversation history through Ingest without creating claimable Communication Deliveries, following the [fixed ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). The separately served Ingest API persists authenticated runtime Tool Call telemetry and, in the same transaction, the Business Actions derived from completed shell Tool Calls (see [`business-value.md`](business-value.md)). Neither path writes Domain Events to the Domain Event outbox.
 
 ## Invariants
 
@@ -14,20 +14,41 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
 - Message identity is unique per `(connection_id, provider_message_id)`; the legacy `openclaw_msg_id` column stores that provider identity for all Platforms.
 - Conversation location identity is `(connection_id, channel_id)`. Read DTOs, repository filters, API paths, UI query keys, and URL selection preserve both values so same-platform Connections may safely reuse provider channel identifiers.
 - Conversation Messages record their source Connection, direction, channel/direct-message type, session, location, optional thread, names, content, and occurrence time. The Agent Conversations read API excludes the dashboard's built-in Web Chat Connection; its history is available through the dedicated Chat tab.
-- Runtime replies are bound to their source Communication Delivery, which supplies the originating Connection and location; the runtime cannot redirect a reply to another Connection.
+- Gateway runtime replies are bound to their source Communication Delivery, which supplies the originating Connection and location; the runtime cannot redirect a reply to another Connection.
 - Tool results are paired to their call by the runtime's per-invocation call id, so concurrent calls to one tool within a task stay distinct.
 - Tool calls are unique per `(agent_id, external_id)` and use `PENDING`, `SUCCESS`, or `ERROR` status.
 - Duplicate message and pending tool-call identities are handled idempotently. Tool results update any matching row regardless of its current status; a result arriving before its pending event is currently dropped.
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest Tool Call writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check. Runtime communication claims/replies use a separate versioned Communications protocol credential.
 - Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
-- Platform Plugins normalize provider-specific identities into the canonical envelope. Missing sender/location display names are resolved by an optional, best-effort `enrich_inbound` plugin seam that the Communications Gateway invokes centrally — for supervised ingress, driver events, and webhook events alike — after admission and before persistence. Enrichment lookups are cached, credential-scoped, and never delay or reject durable message acceptance on failure.
+- Ingest also serves [Agent file sync](sync-provider/README.md#agent-file-sync) to the Agent's pod: `POST /ingest/v1/agents/{agent_id}/file-sync/changes` takes the Agent's file list (`complete`, and `entries` of `path`, `size`, `sha256`; at most 10,000 entries, paths up to 1,024 characters). These are not Telemetry Events.
+  - **Answer:** 200 with `uploads`, a pre-authenticated upload URL and its expiry for each new or changed file. An upload already under way for the same content is not handed out again for 14 minutes; upload links last 15.
+  - **Empty files:** the server writes them itself, with no upload.
+  - **Skips:** a file over 100 MB, a name the provider refuses, a path over its 400-character limit, or a second path differing only in case is not uploaded, and is recorded once per path and content.
+  - **Deletes:** only when the report is `complete` and lists at least one file; an empty complete report is treated as incomplete. A synced file missing from it is deleted at the provider (its recycle bin), forgotten, and recorded as `deleted_by_agent`. A path still listed (even if skipped) is never deleted, nor is a path listed in another case. A first upload that never finished is forgotten without calling the provider.
+  - **`POST …/file-sync/uploads/complete {path}`:** when the pod finishes an upload, it sends this. The server reads the file at that path from the provider, never taking an item id from the pod, and records it as synced. When that upload put back the Agent's copy after a person's edit or delete, the owed `edit_undone` or `restored` is recorded then, so a stopped Agent's note carries the time of its next start. It doesn't compare sizes, because SharePoint rewrites Office files on upload: it requires a file Agent Barn wrote no earlier than two minutes before the upload started. With no upload under way, no file at the provider yet, or a file a person wrote or nobody wrote since, it answers 409.
+  - **`GET …/file-sync/operations`:** hands the pod its due jobs, each leased for 3 minutes (a little longer than the pod waits for an answer), so a job a crashed or timed-out pod never finished comes back soon. A job is due when it has no live lease and no `retry_at` in the future.
+    - A `download` (a person's edit to fetch) carries a download URL and the provider's content `version`. One whose file is gone at the provider is dropped.
+    - A `reupload` (the Agent's copy to put back) carries an upload URL and is finished with `uploads/complete`.
+  - **`POST …/file-sync/operations/result {path, outcome}`:** needs a job handed out for that path (otherwise 409).
+    - **`done`** (with `version`, `sha256` and `size`): the download is recorded as synced, unless the provider's version has moved on, in which case the download is queued again.
+    - **`skipped_no_space`:** recorded once per path and version, and retried in 5 minutes.
+    - **`failed`:** retried after 60 s, doubling per attempt up to 30 minutes.
+    - **`local_changed`:** the Agent wins. The download is dropped and `conflict_agent_won` is recorded. The same happens when a report brings new local content for a path with a download pending; the Agent's version is then uploaded, and the person's edit stays in the provider's version history.
+  - **Provider failures:** throttling is 503 with `Retry-After`, and other provider failures are 502. Jobs claimed in a call that fails this way are released. Every 502 is logged first, with the Agent and the provider's error. In a report, a provider failure on one file (a refused upload link, an outage, a failed delete) is logged and only that file waits for the next report; the rest of the report goes through.
+  - **Contact:** every authenticated call records the folder's `last_contact_at`.
+  - **Authentication:** a wrong or missing key (including one with characters outside ASCII), or an Agent that does not exist, is 401, before anything else is revealed. The lookup includes deleted Agents, so a deleted Agent presenting its last key is 404.
+  - **Target:** the folder comes only from the authenticated Agent's own Organization.
+  - **Not ready (409):** no active connection, a provider without `file_sync`, the Agent's File Sync switch off ("File sync is turned off for this Agent", whether or not it has a folder), sync turned off for the folder, a folder still being created at the provider, or one the Sync Engine has not made yet ("File sync is not ready for this Agent yet"). A refused call doesn't count as contact (`last_contact_at`).
+  - **Paths:** each must be in NFC form and allowed by the Agent's runtime's sync rules; otherwise the request is 400, naming the first refused path.
+- Email normalizes sender/location identities and applies policy directly before durable Communication Delivery acceptance; the shared provider enrichment and driver-ingress hooks are removed. Teams authenticates and applies admission policy at the product API relay, passing the raw activity to its native runtime without creating a gateway Delivery. Native runtime observers continue mirroring conversation identities and names through Ingest.
 
 ## Data flow
 
 ```text
-Platform provider → Platform Plugin → Communication Delivery/Conversation repository
+Email Worker → API Email normalization → Communication Delivery/Conversation repository
 Agent runtime ─────→ Communications protocol ────────┘
+Native chat observer → Ingest API → Conversation repository
 Agent runtime ─────→ Ingest API → Tool Call repository → Business Action repository
                                       ↓
                          Conversation and Tool Call APIs
@@ -39,7 +60,7 @@ Conversation reads list channels and return cursor-paginated messages or grouped
 
 ## Boundaries
 
-Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns durable message/reply orchestration. Ingest owns Tool Call telemetry authentication and writes, and calls the Business Value domain to record Business Actions for each completed Tool Call. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records; the Agent Activity tab reads Conversation Message direction and occurrence time to say whether a person triggered a piece of billed work, and never its content (see [`agent-activity.md`](agent-activity.md)). Business Value's Organization activity read counts inbound Conversation Messages by occurrence time and Tool Calls by occurrence time, alongside Communication Delivery outcomes and Webhook Invocations. It writes nothing here and never reads content (see [`business-value.md`](business-value.md#organization-activity)).
+Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns Web Chat/Email durable message/reply orchestration; native gateways own chat delivery and Ingest mirrors their transcripts. Ingest owns Tool Call telemetry authentication and writes, and calls the Business Value domain to record Business Actions for each completed Tool Call. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records; the Agent Activity tab reads Conversation Message direction and occurrence time to say whether a person triggered a piece of billed work, and never its content (see [`agent-activity.md`](agent-activity.md)). Business Value's Organization activity read counts inbound Conversation Messages by occurrence time and Tool Calls by occurrence time, alongside Communication Delivery outcomes and Webhook Invocations. It writes nothing here and never reads content (see [`business-value.md`](business-value.md#organization-activity)). A [Playbook Extraction](playbooks.md#what-a-run-reads) does read one Agent's Conversation Message and Tool Call content, through the same Agent visibility scope, and pairs the two by time because their session identifiers differ.
 
 ## Source map
 
@@ -47,6 +68,7 @@ Platform Plugins own translation from provider payloads into the normalized comm
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Ingest app and process entry                   | `../../api/ingest_app.py`, `../../api/ingest_main.py`, `../../api/start.sh`                                                                                                                                                                |
 | Ingest Tool Call authentication/write flow     | `../../api/domains/ingest/service.py`, `../../api/domains/ingest/routes.py`                                                                                                                          |
+| Ingest file sync routes                        | `../../api/domains/file_sync/ingest_routes.py`, `../../api/domains/file_sync/ingest_service.py`; tests in `../../api/tests/integration/test_file_sync_ingest_auth.py`                                                                     |
 | Communications app and delivery flow           | `../../api/communications_app.py`, `../../api/domains/communications/`                                                                                                                                |
 | Conversation persistence and read API          | `../../api/domains/conversations/`                                                                                                                                                                                             |
 | Provider normalization                         | `../../api/domains/communications/plugins/`                                                                                                                                                                                    |

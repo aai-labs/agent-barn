@@ -8,6 +8,8 @@ at the authorization seam shared by adapter intake and the gateway runner.
 from functools import wraps
 
 
+# The pinned-image hermes_slack_access_driver.py contract guards these private
+# Hermes APIs; run it whenever updating the Hermes image.
 def register(ctx):
     from gateway.authz_mixin import GatewayAuthorizationMixin, _auth_env  # ty: ignore[unresolved-import]
 
@@ -23,7 +25,7 @@ def register(ctx):
             policy = _auth_env("AGENTBARN_SLACK_DM_POLICY", "off")
             allowed = _auth_env("AGENTBARN_SLACK_DM_ALLOWED_USERS")
             identity = source.user_id
-        elif source.chat_type in {"group", "channel", "forum"}:
+        elif source.chat_type in {"group", "channel", "forum", "thread"}:
             policy = _auth_env("AGENTBARN_SLACK_GROUP_POLICY", "allowlist")
             allowed = _auth_env("SLACK_ALLOWED_CHANNELS")
             identity = source.chat_id

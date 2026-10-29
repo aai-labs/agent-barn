@@ -33,8 +33,8 @@ export function noticeFor(
   switch (state) {
     case "restart_required":
       return {
-        title: "Restart this agent to start reporting CPU and memory",
-        body: "It is running an older version of the helper that reports usage. Figures appear about a minute after it restarts.",
+        title: "Update this agent to start reporting CPU and memory",
+        body: "It is running an older version of the helper that reports usage. Figures appear about a minute after it is updated.",
       };
     case "unsupported":
       return {

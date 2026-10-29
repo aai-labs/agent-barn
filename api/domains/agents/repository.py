@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -12,18 +12,27 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
+from api.domains.agent_sizes.models import AgentSize, OrganizationAgentSize
+from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import (
+    MANAGED_UPDATE_STALE_SECONDS,
     Agent,
     AgentAccess,
+    AgentCreatorRead,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
     AgentSecret,
+    AgentSecretRead,
     AgentSkill,
     AgentStatus,
+    ManagedUpdateOutcome,
     PlatformAgentIdentity,
+    PlatformAgentRow,
+    PlatformFailedAgent,
     SecretProvider,
 )
+from api.domains.artifacts.models import ArtifactBucket
 from api.domains.communications.email_address_repository import release_agent_email_addresses
 from api.domains.communications.models import (
     AgentEmailAddress,
@@ -36,6 +45,7 @@ from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, 
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
+    AGENT_AGENT_SIZE_CHANGED,
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
@@ -46,6 +56,8 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.integrations.isolation import default_isolation, isolation_read
+from api.domains.integrations.models import AgentIntegrationIsolation, AgentIntegrationRuntime
 from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
@@ -69,6 +81,14 @@ from api.infrastructure.shared.models import Pagination
 class AgentLifecycleEventResult:
     agent: Agent
     delivery_ids: list[UUID]
+
+
+class AgentSizeUnavailable(Exception):
+    """The size being chosen was deleted, disabled or withdrawn after it was checked."""
+
+
+class AgentSizeSetByPlatform(Exception):
+    """The Organization tried to change a size a Platform Administrator set."""
 
 
 @dataclass(frozen=True)
@@ -258,6 +278,15 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
+
+    def find_membership_with_user(self, membership_id: UUID) -> tuple[OrganizationUser, User | None] | None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id), isouter=True)
+                .where(col(OrganizationUser.id) == membership_id)
+            ).first()
+            return (row[0], row[1]) if row is not None else None
 
     def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         with Session(self.delegate.engine) as session:
@@ -548,6 +577,24 @@ class AgentRepository:
             if pagination is not None:
                 query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
+
+    def get_creators_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, AgentCreatorRead]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, User.id, User.full_name, User.email)
+                .join(User, col(User.id) == col(Agent.created_by_user_id))
+                .where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+            ).all()
+        return {
+            agent_id: AgentCreatorRead(id=user_id, full_name=full_name, email=email)
+            for agent_id, user_id, full_name, email in rows
+        }
 
     def get_active_communication_platforms_for_agents(
         self,
@@ -852,6 +899,8 @@ class AgentRepository:
         secrets: list[AgentSecret] | None = None,
         skills: list[AgentSkill] | None = None,
         actor_display: str | None = None,
+        artifact_bucket: ArtifactBucket | None = None,
+        agent_limit: int | None = None,
     ) -> AgentLifecycleEventResult:
         """Create an Agent and its initial resources in one transaction.
 
@@ -859,8 +908,35 @@ class AgentRepository:
         Keeping the Agent, access row, initial secrets, skills, and their outbox
         deliveries in one transaction means a failure cannot leave a persisted
         Agent pointing at a key that create-agent compensation has deleted.
+
+        With `agent_limit`, the Organization's live Agents are counted under a lock
+        held to commit, so two concurrent creates cannot both fit under it.
+
+        A size chosen on hire is re-checked under its locks, as a later choice is, and
+        recorded as `agent.agent_size.changed` from the default. Raises AgentSizeUnavailable.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if agent_limit is not None:
+                session.scalar(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                    {"lock_key": f"agent-limit:{agent.organization_id}"},
+                )
+                live = session.scalar(
+                    select(func.count())
+                    .select_from(Agent)
+                    .where(col(Agent.organization_id) == agent.organization_id, col(Agent.deleted_at).is_(None))
+                )
+                if (live or 0) >= agent_limit:
+                    raise AgentLimitReached(agent_limit)
+            size = None
+            if agent.agent_size_id is not None:
+                size = self._lock_choosable_size(session, agent.organization_id, agent.agent_size_id, any_enabled=False)
+                if size.is_default:
+                    agent.agent_size_id, size = None, None
+            if artifact_bucket is not None:
+                if artifact_bucket.agent_id != agent.id or artifact_bucket.organization_id != agent.organization_id:
+                    raise ValueError("Agent storage request owner mismatch")
+                session.add(artifact_bucket)
             session.add(agent)
             session.flush()
             if membership_id is not None:
@@ -893,7 +969,23 @@ class AgentRepository:
                 },
             )
             self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            event_ids = [event.event_id]
+            if size is not None:
+                event_ids.append(
+                    self._stage_agent_size_changed(
+                        session,
+                        agent,
+                        size,
+                        None,
+                        by_platform=False,
+                        actor=actor,
+                        actor_display=actor_display,
+                        correlation_id=event.correlation_id,
+                    )
+                )
+            delivery_ids = list(
+                session.exec(select(EventDelivery.id).where(col(EventDelivery.event_id).in_(event_ids)))
+            )
 
             for secret in secrets or []:
                 delivery_ids.extend(
@@ -934,7 +1026,19 @@ class AgentRepository:
         their own writes have committed, or a losing request could still observe
         stale state once it acquires the lock.
         """
-        lock_key = f"agent-lifecycle:{agent_id}"
+        with self._try_advisory_lock(f"agent-lifecycle:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def sharepoint_sign_in_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize finishing SharePoint sign-ins for one Agent, so two administrators'
+        sign-ins can't each read the granted sites and overwrite the other's result. Same
+        non-blocking, session-scoped advisory lock as ``lifecycle_lock``."""
+        with self._try_advisory_lock(f"agent-sharepoint-sign-in:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def _try_advisory_lock(self, lock_key: str) -> Iterator[bool]:
         with Session(self.delegate.engine) as session:
             acquired = bool(
                 session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
@@ -944,6 +1048,72 @@ class AgentRepository:
             finally:
                 if acquired:
                     session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
+
+    def claim_managed_update(self, agent_id: UUID) -> bool:
+        """Mark a managed update as running, unless one already is.
+
+        One conditional UPDATE, so two requests racing for the same Agent cannot
+        both win. A heartbeat past MANAGED_UPDATE_STALE_SECONDS belongs to a
+        process that died, so it can be claimed again. The last update's outcome
+        is cleared in the same write: it no longer describes the Agent.
+        """
+        now = datetime.now(UTC)
+        stale_before = now - timedelta(seconds=MANAGED_UPDATE_STALE_SECONDS)
+        with Session(self.delegate.engine) as session:
+            result = session.exec(
+                sa.update(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    or_(
+                        col(Agent.managed_update_heartbeat_at).is_(None),
+                        col(Agent.managed_update_heartbeat_at) < stale_before,
+                    ),
+                )
+                .values(
+                    managed_update_heartbeat_at=now,
+                    managed_update_outcome=None,
+                    managed_update_restore_point_id=None,
+                    managed_update_failure_reason=None,
+                )
+            )
+            session.commit()
+            return result.rowcount == 1
+
+    # The writes below are targeted UPDATEs, not save(): the orchestrator holds no
+    # fresh copy of the row and must not write back columns other requests changed.
+
+    def beat_managed_update(self, agent_id: UUID) -> None:
+        """Refresh a running update's heartbeat. Never starts one: that is a claim."""
+        self._update_agent(
+            agent_id,
+            {"managed_update_heartbeat_at": datetime.now(UTC)},
+            col(Agent.managed_update_heartbeat_at).is_not(None),
+        )
+
+    def release_managed_update(self, agent_id: UUID) -> None:
+        self._update_agent(agent_id, {"managed_update_heartbeat_at": None})
+
+    def record_managed_update_outcome(
+        self,
+        agent_id: UUID,
+        outcome: ManagedUpdateOutcome,
+        *,
+        restore_point_id: UUID | None,
+        failure_reason: str | None = None,
+    ) -> None:
+        self._update_agent(
+            agent_id,
+            {
+                "managed_update_outcome": outcome,
+                "managed_update_restore_point_id": restore_point_id,
+                "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
+            },
+        )
+
+    def _update_agent(self, agent_id: UUID, values: dict[str, Any], *conditions: Any) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(sa.update(Agent).where(col(Agent.id) == agent_id, *conditions).values(**values))
+            session.commit()
 
     def save_with_lifecycle_event(
         self,
@@ -996,6 +1166,7 @@ class AgentRepository:
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
+            persisted.running_resources = agent.running_resources
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
@@ -1035,6 +1206,7 @@ class AgentRepository:
         "model",
         "approval_mode",
         "verbose_mode",
+        "max_turns",
         "agent_template_id",
         "platform_template_id",
     )
@@ -1101,6 +1273,144 @@ class AgentRepository:
             session.commit()
             return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
 
+    def set_agent_size_with_event(
+        self,
+        agent: Agent,
+        agent_size_id: UUID | None,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+        by_platform: bool = False,
+    ) -> AgentLifecycleEventResult | None:
+        """Set the size an Agent starts on next and stage `agent.agent_size.changed`.
+
+        Writes only the size columns on the locked row, so a concurrent edit is not
+        clobbered, and re-checks under share locks that the size can still be chosen, so
+        it cannot be deleted, disabled or withdrawn before this commits. No Event when
+        nothing changed. None when the Agent is gone.
+
+        `by_platform` is a Platform Administrator's override: a size locks it for the
+        Organization, None clears the override and puts the Agent back on the default.
+        Without it, a size the platform set is refused here, under the row lock, so an
+        override cannot slip in between the caller's check and this write.
+        Raises AgentSizeUnavailable and AgentSizeSetByPlatform.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent.id,
+                    col(Agent.organization_id) == agent.organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if persisted is None:
+                return None
+            if persisted.agent_size_set_by_platform and not by_platform:
+                raise AgentSizeSetByPlatform(persisted.id)
+            previous_id = persisted.agent_size_id
+            set_by_platform = by_platform and agent_size_id is not None
+            if previous_id == agent_size_id and persisted.agent_size_set_by_platform == set_by_platform:
+                return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
+            size = None
+            if agent_size_id is not None:
+                size = self._lock_choosable_size(
+                    session, persisted.organization_id, agent_size_id, any_enabled=by_platform
+                )
+                if size.is_default and not by_platform:
+                    # It became the default after the caller's check; the Agent follows it.
+                    agent_size_id, size = None, None
+                    if previous_id is None:
+                        return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
+            previous = session.get(AgentSize, previous_id) if previous_id is not None else None
+            persisted.agent_size_id = agent_size_id
+            persisted.agent_size_set_by_platform = set_by_platform
+            persisted.updated_at = datetime.now(UTC)
+            session.add(persisted)
+            session.flush()
+            event_id = self._stage_agent_size_changed(
+                session,
+                persisted,
+                size,
+                previous,
+                by_platform=by_platform,
+                actor=actor,
+                actor_display=actor_display,
+                correlation_id=uuid4(),
+            )
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    @staticmethod
+    def _lock_choosable_size(
+        session: Session, organization_id: UUID, agent_size_id: UUID, *, any_enabled: bool
+    ) -> AgentSize:
+        """Share-lock a size and check, under that lock, that it can still be chosen.
+
+        The size row's lock waits out a catalog edit that disables it, and the allowed-set
+        row's lock waits out a withdrawal, so the caller's earlier check cannot go stale
+        before this commits. `any_enabled` is the platform's override, which may name any
+        enabled size; otherwise it must be the default or an enabled size the Organization
+        is allowed. Raises AgentSizeUnavailable.
+        """
+        size = session.get(AgentSize, agent_size_id, with_for_update={"read": True})
+        if size is None or not size.enabled:
+            raise AgentSizeUnavailable(agent_size_id)
+        if any_enabled or size.is_default:
+            return size
+        allowed = session.exec(
+            select(OrganizationAgentSize.agent_size_id)
+            .where(
+                col(OrganizationAgentSize.organization_id) == organization_id,
+                col(OrganizationAgentSize.agent_size_id) == agent_size_id,
+            )
+            .with_for_update(read=True)
+        ).first()
+        if allowed is None:
+            raise AgentSizeUnavailable(agent_size_id)
+        return size
+
+    def _stage_agent_size_changed(
+        self,
+        session: Session,
+        agent: Agent,
+        size: AgentSize | None,
+        previous: AgentSize | None,
+        *,
+        by_platform: bool,
+        actor: ActorIdentity,
+        actor_display: str | None,
+        correlation_id: UUID,
+    ) -> UUID:
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_AGENT_SIZE_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=agent.organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=agent.id,
+                organization_id=agent.organization_id,
+            ),
+            correlation_id=correlation_id,
+            payload={
+                "organization_id": agent.organization_id,
+                "agent_id": agent.id,
+                "agent_size_id": size.id if size is not None else None,
+                "agent_size_name": size.name if size is not None else None,
+                "previous_agent_size_id": previous.id if previous is not None else None,
+                "previous_agent_size_name": previous.name if previous is not None else None,
+                "by_platform": by_platform,
+                "actor_display": actor_display,
+                "subject_display": agent.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return event.event_id
+
     def soft_delete_with_event(
         self,
         agent: Agent,
@@ -1134,11 +1444,8 @@ class AgentRepository:
                     enabled=False,
                     observed_status=None,
                     credentials_encrypted="",
-                    driver_key_encrypted="",
                     credential_fingerprint=None,
                     credential_scope_key=None,
-                    ingress_lease_owner=None,
-                    ingress_lease_expires_at=None,
                     retired_at=now,
                     updated_at=now,
                     revision=col(CommunicationConnection.revision) + 1,
@@ -1201,8 +1508,37 @@ class AgentRepository:
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
         """Stage one AgentSecret and its audit event in an existing transaction."""
+        if secret.provider == SecretProvider.SHAREPOINT:
+            # Reconnect clears its warning atomically. Preserve broker lock order:
+            # runtime first, then credential, so an in-flight handoff cannot deadlock.
+            runtime = session.exec(
+                select(AgentIntegrationRuntime)
+                .where(AgentIntegrationRuntime.agent_id == secret.agent_id)
+                .with_for_update()
+            ).first()
+            if runtime and runtime.bindings.get("sharepoint", {}).get("binding_id") == str(secret.id):
+                runtime.bindings = {
+                    **runtime.bindings,
+                    "sharepoint": {**runtime.bindings["sharepoint"], "reconnect_required": False},
+                }
+                session.add(runtime)
         session.add(secret)
         session.flush()
+        policy = session.exec(
+            select(AgentIntegrationIsolation).where(
+                col(AgentIntegrationIsolation.agent_id) == secret.agent_id,
+                col(AgentIntegrationIsolation.provider) == secret.provider,
+                col(AgentIntegrationIsolation.source) == "agent_secret",
+            )
+        ).first()
+        if policy is None:
+            session.add(
+                AgentIntegrationIsolation(
+                    agent_id=secret.agent_id,
+                    provider=SecretProvider(secret.provider),
+                    isolated=default_isolation(SecretProvider(secret.provider)),
+                )
+            )
         event = EVENT_REGISTRY.build_event(
             event_name=event_name,
             schema_version=1,
@@ -1283,6 +1619,13 @@ class AgentRepository:
                 return []
             record_id, label, shared_reference_id = secret.id, secret.secret_name, secret.shared_credential_id
             session.delete(secret)
+            session.exec(
+                sa.delete(AgentIntegrationIsolation).where(
+                    col(AgentIntegrationIsolation.agent_id) == agent_id,
+                    col(AgentIntegrationIsolation.provider) == provider,
+                    col(AgentIntegrationIsolation.source) == "agent_secret",
+                )
+            )
             session.flush()
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_SECRET_REMOVED,
@@ -1424,6 +1767,93 @@ class AgentRepository:
         with self.delegate.engine.connect() as connection:
             return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
 
+    def find_failed_for_platform(self) -> list[PlatformFailedAgent]:
+        """Every live Agent in ERROR on the platform, most recently changed first.
+
+        Platform-wide by design, for the environment health page behind
+        `require_platform_admin`. Only identity and the stored failure are read.
+        """
+        query = (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.organization_id),
+                col(Organization.name),
+                col(Agent.last_error_code),
+                col(Agent.last_error_detail),
+                col(Agent.last_error),
+                col(Agent.updated_at),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+            .where(col(Agent.status) == AgentStatus.ERROR)
+            .order_by(col(Agent.updated_at).desc())
+        )
+        with self.delegate.engine.connect() as connection:
+            return [PlatformFailedAgent(*row) for row in connection.execute(query).all()]
+
+    def find_platform_agents(
+        self,
+        *,
+        organization_id: UUID | None,
+        search: str | None,
+        pagination: Pagination,
+    ) -> tuple[list[PlatformAgentRow], int]:
+        """A page of live Agents across every Organization, and how many there are in all.
+
+        Platform-wide by design, for the Platform Agents page behind `require_platform_admin`.
+        Ordered by Organization name, then Agent name, so a page reads as consecutive
+        Organization groups. `search` matches the Agent's or the Organization's name.
+        """
+        query = self._platform_agent_rows()
+        if organization_id is not None:
+            query = query.where(col(Agent.organization_id) == organization_id)
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(or_(col(Agent.name).ilike(pattern), col(Organization.name).ilike(pattern)))
+        total_query = sa.select(func.count()).select_from(query.order_by(None).subquery())
+        page_query = (
+            query.order_by(
+                func.lower(col(Organization.name)),
+                col(Organization.id),
+                func.lower(col(Agent.name)),
+                col(Agent.id),
+            )
+            .offset((pagination.page - 1) * pagination.size)
+            .limit(pagination.size)
+        )
+        with self.delegate.engine.connect() as connection:
+            total = connection.execute(total_query).scalar_one()
+            rows = [PlatformAgentRow(*row) for row in connection.execute(page_query).all()]
+        return rows, total
+
+    def get_platform_agent(self, agent_id: UUID) -> PlatformAgentRow | None:
+        """One live Agent as the Platform Agents page reads it; None when absent or deleted."""
+        query = self._platform_agent_rows().where(col(Agent.id) == agent_id)
+        with self.delegate.engine.connect() as connection:
+            row = connection.execute(query).first()
+        return PlatformAgentRow(*row) if row is not None else None
+
+    @staticmethod
+    def _platform_agent_rows():
+        # The column list is the allowlist: see PlatformAgentRow.
+        return (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.agent_type),
+                col(Agent.created_at),
+                col(Agent.organization_id),
+                col(Organization.name),
+                col(Agent.agent_size_id),
+                col(Agent.agent_size_set_by_platform),
+                col(Agent.running_resources),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
+
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
@@ -1453,19 +1883,96 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def list_secrets_for_organization(self, organization_id: UUID, provider: SecretProvider) -> list[AgentSecret]:
+        """Every Agent Secret of ``provider`` in the Organization, soft-deleted Agents included:
+        deleting an Agent keeps its secrets, and a SharePoint grant recorded there is still live."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSecret)
+                .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .where(col(Agent.organization_id) == organization_id)
+                .where(col(AgentSecret.provider) == provider)
+            )
+            return list(session.exec(query).all())
+
     def get_secrets_for_agent(self, agent_id: UUID) -> list[AgentSecret]:
         with Session(self.delegate.engine) as session:
             query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)
             return list(session.exec(query).all())
 
-    def get_secrets_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[AgentSecret]]:
+    def get_secret_summaries_for_agents(
+        self, agent_ids: list[UUID], authorization_scope: AuthorizationScope
+    ) -> dict[UUID, list[AgentSecretRead]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentSecret).where(col(AgentSecret.agent_id).in_(agent_ids))
-            result: dict[UUID, list[AgentSecret]] = {}
-            for secret in session.exec(query).all():
-                result.setdefault(secret.agent_id, []).append(secret)
+            query = (
+                sa.select(
+                    col(AgentSecret.agent_id),
+                    col(AgentSecret.provider),
+                    col(AgentSecret.secret_name),
+                    col(AgentSecret.shared_credential_id),
+                    col(AgentIntegrationIsolation.isolated),
+                    col(AgentIntegrationRuntime.bindings),
+                    col(AgentIntegrationRuntime.previous_bindings),
+                    col(AgentIntegrationRuntime.generation),
+                    col(AgentIntegrationRuntime.state),
+                    col(Agent.status),
+                    col(AgentSecret.id),
+                )
+                .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .outerjoin(
+                    AgentIntegrationIsolation,
+                    (col(AgentIntegrationIsolation.agent_id) == col(AgentSecret.agent_id))
+                    & (col(AgentIntegrationIsolation.provider) == col(AgentSecret.provider))
+                    & (col(AgentIntegrationIsolation.source) == "agent_secret"),
+                )
+                .where(col(AgentSecret.agent_id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+                .outerjoin(AgentIntegrationRuntime, col(AgentIntegrationRuntime.agent_id) == col(Agent.id))
+            )
+            result: dict[UUID, list[AgentSecretRead]] = {}
+            for (
+                agent_id,
+                provider,
+                name,
+                credential_id,
+                isolated,
+                bindings,
+                previous_bindings,
+                generation,
+                state,
+                agent_status,
+                binding_id,
+            ) in session.connection().execute(query).all():
+                metadata = isolation_read(SecretProvider(provider), isolated)
+                verified = (previous_bindings or {}).get(provider, {})
+                if (
+                    verified.get("binding_id") == str(binding_id)
+                    and verified.get("source", "agent_secret") == "agent_secret"
+                ):
+                    metadata.last_verified = verified.get("isolated")
+                applied = (bindings or {}).get(provider)
+                if applied and applied.get("binding_id") == str(binding_id):
+                    metadata.reconnect_required = bool(applied.get("reconnect_required"))
+                    metadata.generation = generation
+                if (
+                    state == "ready"
+                    and agent_status == AgentStatus.RUNNING
+                    and applied
+                    and applied["binding_id"] == str(binding_id)
+                ):
+                    metadata.applied = applied["isolated"]
+                    metadata.generation = generation
+                    metadata.pending = metadata.desired != metadata.applied
+                result.setdefault(agent_id, []).append(
+                    AgentSecretRead(
+                        provider=SecretProvider(provider),
+                        secret_name=name,
+                        shared_credential_id=credential_id,
+                        isolation=metadata,
+                        source="shared_credential" if credential_id else "agent_secret",
+                    )
+                )
             return result
 
     # --- Skills ---

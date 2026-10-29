@@ -2,11 +2,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentSecret
+from api.domains.integrations.models import AgentIntegrationIsolation
 from api.domains.shared_credentials.exceptions import SharedCredentialNameConflictHTTPException
 from api.domains.shared_credentials.models import (
     SharedCredential,
@@ -122,10 +123,28 @@ class SharedCredentialRepository:
             )
             rows = list(session.exec(orphaned).all())
             for row in rows:
+                session.exec(
+                    delete(AgentIntegrationIsolation).where(
+                        col(AgentIntegrationIsolation.agent_id) == row.agent_id,
+                        col(AgentIntegrationIsolation.provider) == row.provider,
+                        col(AgentIntegrationIsolation.source) == "agent_secret",
+                    )
+                )
                 session.delete(row)
             if rows:
                 session.commit()
             return len(rows)
+
+    def get_names_by_ids_and_org(self, ids: list[UUID], org_id: UUID) -> dict[UUID, str]:
+        if not ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(SharedCredential.id, SharedCredential.name).where(
+                    col(SharedCredential.id).in_(ids), col(SharedCredential.organization_id) == org_id
+                )
+            ).all()
+            return dict(rows)
 
     def get_by_ids_and_org(self, ids: list[UUID], org_id: UUID) -> list[SharedCredential]:
         if not ids:

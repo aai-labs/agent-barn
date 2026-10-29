@@ -38,6 +38,7 @@ def there_are_cost_records(
     organization_name: str | None = None,
     unattributed: bool = False,
     without_agent: bool = False,
+    is_memory: bool = False,
     minutes_ago: int = 5,
     occurred_at: datetime | None = None,
     spacing_seconds: int = 1,
@@ -94,6 +95,7 @@ def there_are_cost_records(
                 organization_id=resolved_org_id,
                 agent_name=resolved_agent_name,
                 organization_name=resolved_org_name,
+                is_memory=is_memory,
                 source=source,
             )
             for index in range(count)

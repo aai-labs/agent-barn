@@ -8,7 +8,7 @@ export const SHARED_CREDENTIAL_PROVIDER_LABELS: Record<string, string> = {
   jira: "Jira",
   confluence: "Confluence",
   bitbucket: "Bitbucket",
-  zoho_mail: "Zoho Mail",
+  merkys: "Merkys",
 };
 
 export const SHARED_CREDENTIAL_PROVIDERS = Object.entries(

@@ -42,9 +42,9 @@ spec:
           image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # No --queues filter: this worker consumes every queue registered by
-          # the domain actor modules api.worker_app imports (currently just
-          # event delivery). Adding a domain there is enough; no flag to keep
-          # in sync across deployments.
+          # the domain actor modules api.worker_app imports (event delivery and
+          # Playbook Extractions). Adding a domain there is enough; no flag to
+          # keep in sync across deployments.
           command:
             - dramatiq
             - api.worker_app
@@ -52,6 +52,15 @@ spec:
             - "1"
             - --threads
             - "4"
+          env:
+            # Workflow dispatch uses the same operator credentials and namespace as the API.
+            - name: K8S_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: K8S_KUBECONFIG_PATH
+              value: /etc/kubeconfig/kubeconfig
+            # Playbook Extractions call models through the proxy with the source Agent's key.
+            - name: LITELLM_BASE_URL
+              value: "{{ .Values.litellmBaseUrl }}"
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
@@ -69,4 +78,12 @@ spec:
             failureThreshold: 6
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/kubeconfig
+              readOnly: true
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
 {{- end }}

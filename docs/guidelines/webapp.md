@@ -8,6 +8,16 @@
 
 Read `../architecture/ui.md` before changing authentication, organization scoping, provider composition, query-cache isolation, or SSE behavior.
 
+## Dashboard page frame
+
+The dashboard shell frames every `/dashboard/**` page: its `<main>` carries the canonical
+width and margins (`.af-page`). A page MUST NOT set its own width, horizontal margins or
+page padding (no `af-page`, `max-w-[...] mx-auto`, `px-10 pt-9 pb-24` wrappers); it renders
+its content and the frame does the rest. A page that needs a different frame on desktop
+(edge to edge, or grown to the window's height) is named in `usePageFrame`
+(`../../ui/src/features/navigation/hooks/use-page-frame.ts`), which is the one place frames
+are chosen.
+
 ## Feature structure
 
 Use this baseline when the feature earns each part:
@@ -32,6 +42,9 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 - Route ordinary app HTTP calls through `../../ui/src/shared/api`, reusing its
   snake_case/camelCase transformations; do not add ad hoc fetch wrappers or
   Axios instances.
+- A request body that uses enum codes as map keys, such as
+  `{ outcomeMinutes: { MESSAGE_SENT: 5 } }`, can pass them as-is: the request
+  transform leaves UPPER_SNAKE keys unchanged (see `../architecture/ui.md`).
 - Supply a Zod schema to the API client for important responses.
 - Keep the SSE log proxy as an explicit streaming exception; do not generalize it into the normal request pattern.
 

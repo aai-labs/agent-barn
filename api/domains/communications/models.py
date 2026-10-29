@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Column
+from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -29,13 +29,13 @@ class CommunicationPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
     TELEGRAM = "telegram"
+    AGENTBARN_TELEGRAM = "agentbarn_telegram"
     DISCORD = "discord"
     WEB = "web"
     EMAIL = "email"
 
 
 class PlatformCapability(str, enum.Enum):
-    AGENT_INITIATED_DELIVERY = "agent_initiated_delivery"
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
     INSTALL_LINK = "install_link"
@@ -44,16 +44,9 @@ class PlatformCapability(str, enum.Enum):
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
-    PROCESSING_FEEDBACK = "processing_feedback"
-    SUPERVISED_INGRESS = "supervised_ingress"
     INTERACTIVE_COMPONENTS = "interactive_components"
-
-
-class ProcessingFeedbackStage(str, enum.Enum):
-    ACCEPTED = "accepted"
-    CLAIMED = "claimed"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
+    # People link their own chat account to the Agent from the dashboard.
+    ACCOUNT_LINKING = "account_linking"
 
 
 class CredentialUniquenessScope(str, enum.Enum):
@@ -178,6 +171,14 @@ class CommunicationConnection(BaseModel, table=True):
             unique=True,
             postgresql_where=sa.text("retired_at IS NULL"),
         ),
+        # An Agent runs a single Telegram adapter, so it uses either its own bot or
+        # Agent Barn's shared one, never both.
+        sa.Index(
+            "uq_communication_connection_active_telegram",
+            "agent_id",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL AND platform_key IN ('telegram', 'agentbarn_telegram')"),
+        ),
         sa.Index(
             "uq_communication_connection_active_name",
             "agent_id",
@@ -210,7 +211,6 @@ class CommunicationConnection(BaseModel, table=True):
         sa_column=Column(sa.JSON(), nullable=False, server_default="{}"),
     )
     credentials_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
-    driver_key_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
     external_identity: str | None = SqlField(default=None, nullable=True, max_length=512)
     credential_fingerprint: str | None = SqlField(default=None, nullable=True, max_length=128)
     credential_scope_key: str | None = SqlField(default=None, nullable=True, max_length=128)
@@ -228,12 +228,6 @@ class CommunicationConnection(BaseModel, table=True):
     last_error_details: dict[str, Any] | None = SqlField(
         default=None,
         sa_column=Column(JSONB, nullable=True),
-    )
-    ingress_lease_owner: str | None = SqlField(default=None, nullable=True, max_length=64)
-    ingress_lease_expires_at: datetime | None = SqlField(
-        default=None,
-        nullable=True,
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     revision: int = SqlField(
         default=1,
@@ -274,6 +268,236 @@ class AgentEmailAddress(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+
+
+class AgentBarnTelegramLink(BaseModel, table=True):
+    """A Telegram user whose private chat with Agent Barn's shared bot reaches one Agent.
+
+    The link records the Membership that issued it, so removing that Member
+    removes their links. A Telegram user holds at most one active link at a time;
+    linking another Agent ends the previous one.
+    """
+
+    __tablename__: str = "agentbarn_telegram_link"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["connection_id", "organization_id"],
+            ["communication_connection.id", "communication_connection.organization_id"],
+            name="fk_agentbarn_telegram_link_connection_organization",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["linked_by_membership_id", "organization_id"],
+            ["user_organization.id", "user_organization.organization_id"],
+            name="fk_agentbarn_telegram_link_membership_organization",
+            ondelete="CASCADE",
+        ),
+        sa.Index(
+            "uq_agentbarn_telegram_link_active_user",
+            "telegram_user_id",
+            unique=True,
+            postgresql_where=sa.text("unlinked_at IS NULL"),
+        ),
+        sa.Index("ix_agentbarn_telegram_link_connection", "connection_id"),
+        sa.Index("ix_agentbarn_telegram_link_agent", "agent_id"),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(nullable=False)
+    linked_by_membership_id: UUID = SqlField(nullable=False)
+    telegram_user_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    telegram_username: str | None = SqlField(default=None, nullable=True, max_length=64)
+    unlinked_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    first_message_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
+class AgentBarnTelegramLinkToken(BaseModel, table=True):
+    """A one-time, short-lived token a Member opens in Telegram to link their account.
+
+    Only the token's SHA-256 hash is stored; the raw token lives in the deep link.
+    """
+
+    __tablename__: str = "agentbarn_telegram_link_token"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["connection_id", "organization_id"],
+            ["communication_connection.id", "communication_connection.organization_id"],
+            name="fk_agentbarn_telegram_link_token_connection_organization",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["requested_by_membership_id", "organization_id"],
+            ["user_organization.id", "user_organization.organization_id"],
+            name="fk_agentbarn_telegram_link_token_membership_organization",
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint("token_hash", name="uq_agentbarn_telegram_link_token_hash"),
+        sa.Index("ix_agentbarn_telegram_link_token_connection", "connection_id"),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(nullable=False)
+    requested_by_membership_id: UUID = SqlField(nullable=False)
+    token_hash: str = SqlField(nullable=False, max_length=64)
+    expires_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    consumed_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    link_id: UUID | None = SqlField(
+        default=None,
+        nullable=True,
+        foreign_key="agentbarn_telegram_link.id",
+        ondelete="SET NULL",
+    )
+
+
+class AgentBarnTelegramConnectionSecret(BaseModel, table=True):
+    """The random root secret of one Agent Barn Telegram Connection, stored encrypted.
+
+    The Agent's stand-in Bot API token and its webhook secret are both derived
+    from it, so each Connection's Agent authenticates only as that Connection.
+    Generated by Agent Barn when the Agent first starts with the Connection;
+    nobody supplies or sees it.
+    """
+
+    __tablename__: str = "agentbarn_telegram_connection_secret"
+    __table_args__ = (sa.UniqueConstraint("connection_id", name="uq_agentbarn_telegram_connection_secret_connection"),)
+
+    connection_id: UUID = SqlField(foreign_key="communication_connection.id", nullable=False, ondelete="CASCADE")
+    secret_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
+
+
+class AgentBarnTelegramIngressLease(SQLModel, table=True):
+    """Which Communications replica polls Agent Barn's shared bot.
+
+    Telegram allows one getUpdates consumer per bot, so a single row with a
+    fixed key is leased the way per-Connection ingress is.
+    """
+
+    __tablename__: str = "agentbarn_telegram_ingress_lease"
+
+    key: str = SqlField(primary_key=True, max_length=32)
+    owner: str = SqlField(nullable=False, max_length=64)
+    expires_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
+class AgentBarnTelegramUpdateStatus(str, enum.Enum):
+    # Stored before Telegram is told it was received; not yet processed.
+    RECEIVED = "RECEIVED"
+    # Waiting for its Agent's runtime to accept it.
+    QUEUED = "QUEUED"
+    # Handled by the bot itself (linking, sign-up prompt) or ignored.
+    HANDLED = "HANDLED"
+    FORWARDED = "FORWARDED"
+    # Undeliverable within the hold window.
+    DROPPED = "DROPPED"
+
+
+class AgentBarnTelegramUpdate(BaseModel, table=True):
+    """One update received by Agent Barn's shared bot.
+
+    Stored before Telegram's offset moves past it, so nothing is lost across a
+    restart; `update_id` makes a re-delivered update a no-op. The payload holds
+    message content only until the update is settled.
+    """
+
+    __tablename__: str = "agentbarn_telegram_update"
+    __table_args__ = (
+        sa.UniqueConstraint("update_id", name="uq_agentbarn_telegram_update_update_id"),
+        sa.Index("ix_agentbarn_telegram_update_status", "status", "update_id"),
+        sa.Index("ix_agentbarn_telegram_update_agent", "agent_id"),
+        sa.Index("ix_agentbarn_telegram_update_user_queue", "telegram_user_id", "update_id"),
+    )
+
+    update_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    status: AgentBarnTelegramUpdateStatus = SqlField(
+        default=AgentBarnTelegramUpdateStatus.RECEIVED,
+        sa_column=Column(sa.Enum(AgentBarnTelegramUpdateStatus), nullable=False),
+    )
+    # none_as_null: clearing the content must leave SQL NULL, not a JSON null value.
+    payload: dict[str, Any] | None = SqlField(default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True))
+    # The sender, recorded when the update is stored, so one sender's updates
+    # can be held back without holding back anyone else's.
+    telegram_user_id: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
+    agent_id: UUID | None = SqlField(default=None, nullable=True, foreign_key="agent.id", ondelete="CASCADE")
+    connection_id: UUID | None = SqlField(
+        default=None,
+        nullable=True,
+        foreign_key="communication_connection.id",
+        ondelete="CASCADE",
+    )
+    # Processing attempts while RECEIVED, then forwarding attempts while QUEUED.
+    attempt_count: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
+    # Forwarding attempts the Agent's webhook answered with a refusal, counted
+    # apart from a pod that is unreachable, so a message the Agent will never
+    # accept is dropped soon instead of holding back the sender for a day.
+    rejected_count: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
+    next_attempt_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    # When the user was told their Agent is waking up or offline, so they are told once.
+    notice_sent_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
+class AgentBarnTelegramMessage(BaseModel, table=True):
+    """Which Connection a message in a shared-bot chat belongs to.
+
+    A Telegram user keeps one chat with the shared bot when they switch Agents,
+    so being linked to the chat does not make its earlier messages the Agent's.
+    A message belongs to the Connection the user's message was queued for, or
+    whose Agent sent it; only that Connection may refer to it.
+    """
+
+    __tablename__: str = "agentbarn_telegram_message"
+    __table_args__ = (
+        sa.UniqueConstraint("chat_id", "message_id", name="uq_agentbarn_telegram_message_chat_message"),
+        sa.Index("ix_agentbarn_telegram_message_connection", "connection_id"),
+    )
+
+    chat_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    message_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    connection_id: UUID = SqlField(foreign_key="communication_connection.id", nullable=False, ondelete="CASCADE")
+
+
+class AgentBarnTelegramFile(BaseModel, table=True):
+    """A file id a Connection was shown or sent, so it may download or send that file.
+
+    File ids work for every chat of the bot that issued them, so with a shared bot
+    one Agent could otherwise fetch or re-send a file from another Organization's
+    conversation. A file a user sends to two Agents belongs to both.
+    """
+
+    __tablename__: str = "agentbarn_telegram_file"
+    __table_args__ = (
+        sa.UniqueConstraint("connection_id", "file_id", name="uq_agentbarn_telegram_file_connection_file"),
+    )
+
+    connection_id: UUID = SqlField(foreign_key="communication_connection.id", nullable=False, ondelete="CASCADE")
+    file_id: str = SqlField(nullable=False, sa_type=sa.Text)
 
 
 class CommunicationDelivery(BaseModel, table=True):
@@ -569,11 +793,6 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     window_end: datetime
 
 
-class CommunicationReconnectRead(PydanticBaseModel):
-    connection: CommunicationConnectionRead
-    requested_at: datetime
-
-
 class CommunicationRetryRead(PydanticBaseModel):
     delivery_id: UUID
     status: CommunicationDeliveryStatus
@@ -588,7 +807,6 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     attempt_count: int
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
-    execution_token: str | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -651,76 +869,6 @@ class OutboundTargetRequest(PydanticBaseModel):
     thread_id: str | None = Field(default=None, min_length=1, max_length=512, title="Thread (optional)")
 
 
-class DefaultMessageDestination(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["default"] = "default"
-
-
-class ExplicitMessageDestination(PydanticBaseModel):
-    """An Agent names where to send, never which Connection carries it.
-
-    Connection identity is infrastructure: it changes when an operator recreates a
-    Connection, so it must not live in a prompt. Communications resolves the route.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["explicit"] = "explicit"
-    target: OutboundTargetRequest
-
-
-class OriginMessageDestination(PydanticBaseModel):
-    """The conversation a scheduled job was created from, recorded by the trusted adapter.
-
-    Not model-chosen: the runtime derives this from the session key Communications
-    minted for an inbound delivery that already passed inbound admission. Every field
-    is still verified against the Agent's own Connections and history on arrival.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["origin"] = "origin"
-    connection_id: UUID
-    channel_id: str = Field(min_length=1, max_length=512)
-    thread_id: str | None = Field(default=None, min_length=1, max_length=512)
-
-
-class ScheduledMessageContext(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["scheduled"] = "scheduled"
-    run_id: str = Field(min_length=1, max_length=256)
-
-
-class InteractiveMessageContext(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["interactive"] = "interactive"
-    execution_token: str = Field(min_length=1, max_length=256)
-
-
-class AgentMessageCreate(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=100_000)
-    idempotency_key: str = Field(min_length=1, max_length=512)
-    destination: DefaultMessageDestination | ExplicitMessageDestination | OriginMessageDestination = Field(
-        discriminator="kind"
-    )
-    context: ScheduledMessageContext | InteractiveMessageContext = Field(discriminator="kind")
-
-    # A scheduled run may reach its configured default or the conversation that created
-    # it, never a destination the model named. An interactive run has a live execution
-    # that authorizes an explicit send on the inbound Connection only.
-    _ALLOWED_DESTINATIONS = {"scheduled": {"default", "origin"}, "interactive": {"explicit"}}
-
-    @model_validator(mode="after")
-    def validate_context(self) -> AgentMessageCreate:
-        if self.destination.kind not in self._ALLOWED_DESTINATIONS[self.context.kind]:
-            raise ValueError(f"A {self.context.kind} execution may not use a {self.destination.kind} destination")
-        return self
-
-
-class AgentMessageRead(PydanticBaseModel):
-    delivery_id: UUID
-    status: CommunicationDeliveryStatus
-
-
 class ResolvedOutboundTarget(PydanticBaseModel):
     location: ConversationLocation
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
@@ -728,6 +876,7 @@ class ResolvedOutboundTarget(PydanticBaseModel):
 
 class PlatformDescriptorRead(PydanticBaseModel):
     key: str
+    transport: Literal["gateway", "native"]
     display_name: str
     schema_version: int
     capabilities: list[PlatformCapability]
@@ -793,6 +942,8 @@ class CommunicationConnectionRead(PydanticBaseModel):
     platform_key: str
     display_name: str
     enabled: bool
+    transport: Literal["gateway", "native"] = "gateway"
+    recovery_actions: list[Literal["retry_delivery"]] = Field(default_factory=list)
     schema_version: int
     settings: dict[str, Any]
     external_identity: str | None
@@ -812,3 +963,32 @@ class CommunicationInstallLinkRead(PydanticBaseModel):
     """Provider-built install URL for a saved Connection's bot."""
 
     url: str
+
+
+class TelegramLinkTokenStatus(str, enum.Enum):
+    WAITING = "waiting"
+    LINKED = "linked"
+    EXPIRED = "expired"
+
+
+class TelegramLinkTokenRead(PydanticBaseModel):
+    """A one-time Agent Barn Telegram link and whether someone has used it yet."""
+
+    id: UUID
+    status: TelegramLinkTokenStatus
+    expires_at: datetime
+    telegram_username: str | None = None
+
+
+class TelegramLinkTokenCreated(TelegramLinkTokenRead):
+    # The deep link carries the raw token, so it is returned only when created.
+    url: str
+
+
+class TelegramLinkRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    telegram_username: str | None
+    linked_by_membership_id: UUID
+    created_at: datetime

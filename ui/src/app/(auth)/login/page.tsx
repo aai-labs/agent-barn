@@ -1,12 +1,6 @@
 import { LoginForm } from "@/auth/components/login-form";
 
-export default function LoginPage() {
-  return (
-    <div
-      className="flex min-h-svh flex-col items-center justify-center p-6"
-      style={{ background: "var(--bg)" }}
-    >
-      <LoginForm />
-    </div>
-  );
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error } = await searchParams;
+  return <LoginForm signInError={error} origin="login" />;
 }

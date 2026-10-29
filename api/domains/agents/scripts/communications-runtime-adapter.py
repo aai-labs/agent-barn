@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent / "messaging"))
 import json
 import os
 import re
@@ -13,8 +9,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-
-from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
@@ -233,6 +227,20 @@ def _terminal_llm_error(delivery_id: str) -> str | None:
     return code if isinstance(code, str) and code else None
 
 
+_SPENT_CODES = frozenset({"SPEND_LIMIT_REACHED", "CREDIT_EXHAUSTED"})
+
+
+def _spend_limit_reached(delivery_id: str) -> bool:
+    """The proxy answers a refused chat completion with the notice as an ordinary reply,
+    so native chat can post it. Web Chat keeps it as a terminal failure instead, shown
+    under the person's message rather than as something the Agent said. On credit the
+    proxy records CREDIT_EXHAUSTED instead."""
+    return _terminal_llm_error(delivery_id) in _SPENT_CODES
+
+
+_SPEND_LIMIT_ERROR = RuntimeError("Model spend limit reached")
+
+
 def _failure(delivery_id: str, error: Exception) -> dict:
     return {
         "succeeded": False,
@@ -308,7 +316,6 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     envelope = delivery["envelope"]
     session_key = session_key_for(delivery)
     IN_FLIGHT.begin(delivery_id, session_key)
-    bind_execution(session_key, delivery)
     _mark_turn_started(delivery_id)
     try:
         result = http_request(
@@ -329,6 +336,8 @@ def run_delivery_chat_completions(delivery: dict) -> None:
                 "error_code": "CANCELLED",
                 "error_message": "Cancelled by user",
             }
+        elif _spend_limit_reached(delivery_id):
+            completion = _failure(delivery_id, _SPEND_LIMIT_ERROR)
         else:
             reply = result["choices"][0]["message"]["content"]
             post_reply(delivery_id, reply)
@@ -345,7 +354,6 @@ def run_delivery_chat_completions(delivery: dict) -> None:
         )
     finally:
         IN_FLIGHT.clear(delivery_id)
-        unbind_execution(session_key)
 
 
 def iter_sse_events(response):
@@ -478,7 +486,6 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
         daemon=True,
     )
     heartbeat.start()
-    bind_execution(session_key, delivery)
     _mark_turn_started(delivery_id)
     try:
         started = http_request(
@@ -496,9 +503,15 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
     except Exception as exc:
         with _PENDING_APPROVALS_LOCK:
             _PENDING_APPROVALS.pop(session_key, None)
-        complete_delivery(delivery_id, succeeded=False, error=exc)
+        try:
+            complete_delivery(delivery_id, succeeded=False, error=exc)
+        except Exception as report_exc:
+            # The delivery's lease expired and it was reclaimed (then completed by a
+            # later attempt) while this run was still genuinely in progress -- the
+            # same race resolve_pending_approval already handles for approvals.
+            # Nothing left to report.
+            print(f"[communications-adapter] delivery {delivery_id} already resolved: {report_exc}", flush=True)
     finally:
-        unbind_execution(session_key)
         heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:
             active = _ACTIVE_RUNS.get(session_key)
@@ -619,9 +632,12 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                 continue
 
             if event == "run.completed":
-                post_reply(delivery_id, payload.get("text") or payload.get("output") or "", suffix=str(sequence))
                 with _PENDING_APPROVALS_LOCK:
                     _PENDING_APPROVALS.pop(session_key, None)
+                if _spend_limit_reached(delivery_id):
+                    complete_delivery(delivery_id, succeeded=False, error=_SPEND_LIMIT_ERROR)
+                    return
+                post_reply(delivery_id, payload.get("text") or payload.get("output") or "", suffix=str(sequence))
                 complete_delivery(delivery_id, succeeded=True)
                 return
 

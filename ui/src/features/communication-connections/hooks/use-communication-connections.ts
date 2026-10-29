@@ -15,7 +15,6 @@ import {
   CommunicationDirectoryPreviewSchema,
   CommunicationDiagnosticsSchema,
   PaginatedCommunicationJournalEntriesSchema,
-  CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
   CommunicationInstallLinkSchema,
@@ -29,7 +28,6 @@ import {
   type CommunicationJournalKind,
   type CommunicationJournalWindow,
   type PaginatedCommunicationJournalEntries,
-  type CommunicationReconnect,
   type CommunicationRetry,
   type CreateCommunicationConnection,
   type UpdateCommunicationConnection,
@@ -339,18 +337,6 @@ export function useCommunicationConnectionActions() {
     onSuccess: invalidate,
   });
 
-  const reconnectConnection = useMutation({
-    mutationFn: async ({ agentId, connectionId }: { agentId: string; connectionId: string }) => {
-      const response = await api.post<CommunicationReconnect>(
-        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/reconnect`,
-        undefined,
-        { schema: CommunicationReconnectSchema },
-      );
-      return response.data;
-    },
-    onSuccess: (data) => invalidateDiagnostics(data.connection.agentId),
-  });
-
   const retryDelivery = useMutation({
     mutationFn: async ({ agentId, connectionId, deliveryId }: { agentId: string; connectionId: string; deliveryId: string }) => {
       const response = await api.post<CommunicationRetry>(
@@ -368,7 +354,6 @@ export function useCommunicationConnectionActions() {
     createConnection,
     updateConnection,
     retireConnection,
-    reconnectConnection,
     retryDelivery,
   };
 }

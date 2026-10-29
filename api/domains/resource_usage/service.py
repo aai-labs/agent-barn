@@ -62,10 +62,28 @@ def build_snapshot(fields: Mapping[str, float], has_series: bool = False) -> Age
         state=usage_state(fields, has_series),
         memory_working_set_bytes=_whole(fields.get("memory_working_set_bytes")),
         memory_limit_bytes=_whole(fields.get("memory_limit_bytes")),
+        memory_request_bytes=_whole(fields.get("memory_request_bytes")),
         cpu_cores=fields.get("cpu_cores"),
         cpu_limit_cores=fields.get("cpu_limit_cores"),
+        cpu_request_cores=fields.get("cpu_request_cores"),
         cpu_throttled_ratio=fields.get("cpu_throttled_ratio"),
     )
+
+
+def agent_requests(
+    repository: ResourceUsageRepository, agent_ids: list[UUID], now: datetime
+) -> dict[UUID, dict[str, float]]:
+    """What these Agents' pods request, or nothing when the cluster's figures cannot be read.
+
+    `agent_ids` are Agents the caller has already been allowed to measure, and only they are
+    asked about. Everything else on the page stands without the requests, so a failure here
+    leaves them unknown instead of failing the answer.
+    """
+    try:
+        return repository.agent_requests(at=now, agent_ids=agent_ids)
+    except PrometheusError:
+        logger.warning("Agent requests are unavailable", exc_info=True)
+        return {}
 
 
 @inject
@@ -128,6 +146,7 @@ class ResourceUsageService:
         except PrometheusError:
             logger.warning("Resource usage is unavailable for agent %s", agent.id, exc_info=True)
             return respond(ResourceUsageAvailability.UNAVAILABLE)
+        current = {**current, **agent_requests(self.repository, [agent.id], now).get(agent.id, {})}
 
         memory = series.get("memory_working_set_bytes", {})
         cpu = series.get("cpu_cores", {})
@@ -150,9 +169,11 @@ class ResourceUsageService:
             state=snapshot.state,
             memory_working_set_bytes=snapshot.memory_working_set_bytes,
             memory_limit_bytes=snapshot.memory_limit_bytes,
+            memory_request_bytes=snapshot.memory_request_bytes,
             memory_peak_bytes=_whole(max(memory.values(), default=None)),
             cpu_cores=snapshot.cpu_cores,
             cpu_limit_cores=snapshot.cpu_limit_cores,
+            cpu_request_cores=snapshot.cpu_request_cores,
             cpu_average_cores=(sum(cpu.values()) / len(cpu)) if cpu else None,
             cpu_throttled_ratio=snapshot.cpu_throttled_ratio,
             series=points,
@@ -257,6 +278,8 @@ class AgentOverviewService:
             # Spend and status still render; only the usage columns go blank.
             logger.warning("Resource usage is unavailable for the agents overview", exc_info=True)
             return ResourceUsageAvailability.UNAVAILABLE, {}
+        requests = agent_requests(self.usage_repository, agent_ids, datetime.now(UTC))
         return ResourceUsageAvailability.AVAILABLE, {
-            agent_id: build_snapshot(fields.get(agent_id, {})) for agent_id in agent_ids
+            agent_id: build_snapshot({**fields.get(agent_id, {}), **requests.get(agent_id, {})})
+            for agent_id in agent_ids
         }

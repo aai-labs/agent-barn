@@ -6,10 +6,12 @@ from uuid import UUID
 
 from injector import inject
 
+from api.domains.events import EventDeliveryDispatcher
 from api.domains.events.catalog import (
     ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,
     ORGANIZATION_LLM_BUDGET_EXHAUSTED,
     ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
+    ORGANIZATION_TRIAL_EXPIRY_HANDLER,
 )
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -24,6 +26,7 @@ from api.infrastructure.email.exceptions import (
     TerminalEmailSendingException,
 )
 from api.infrastructure.email.service import EmailService
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,24 @@ def _format_usd(value: float, limit: float) -> str:
     # Matches the card: a sub-dollar limit must not render as "$0.00".
     digits = 4 if 0 < limit < 1 else 2
     return f"${value:,.{digits}f}"
+
+
+@inject
+@dataclass
+class OrganizationTrialExpiryHandler:
+    """A trial whose credit has run out expires, freeing its place under the cap on
+    active trials. Idempotent: a redelivered Event finds it already expired."""
+
+    repository: OrganizationRepository
+    event_delivery_dispatcher: EventDeliveryDispatcher
+
+    name: ClassVar[str] = ORGANIZATION_TRIAL_EXPIRY_HANDLER
+    supported_events: ClassVar[Sequence[SupportedEvent]] = (SupportedEvent(ORGANIZATION_LLM_BUDGET_EXHAUSTED, 1),)
+
+    def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
+        del context
+        delivery_ids = self.repository.expire_trial_with_event(UUID(str(event.payload["organization_id"])))
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
 
 @inject
@@ -51,7 +72,9 @@ class OrganizationBudgetEmailHandler:
             raise TerminalEventHandlerError("Budget event requires an Organization")
         organization_id = UUID(str(event.payload["organization_id"]))
         exhausted = event.event_name == ORGANIZATION_LLM_BUDGET_EXHAUSTED
-        headline, body = self._message(event.payload, exhausted=exhausted)
+        organization = self.repository.get(organization_id)
+        one_off = organization is not None and organization.llm_budget_duration == ONE_OFF_BUDGET_WINDOW
+        headline, body = self._message(event.payload, exhausted=exhausted, one_off=one_off)
         organization_name = str(event.payload["subject_display"])
 
         recipients = [
@@ -110,7 +133,7 @@ class OrganizationBudgetEmailHandler:
             raise TerminalEventHandlerError(f"{len(terminal)} budget notification(s) cannot be delivered")
 
     @staticmethod
-    def _message(payload: dict, *, exhausted: bool) -> tuple[str, str]:
+    def _message(payload: dict, *, exhausted: bool, one_off: bool = False) -> tuple[str, str]:
         limit = float(payload["limit_usd"])
         used = f"{_format_usd(float(payload['spend_usd']), limit)} of {_format_usd(limit, limit)}"
         renews = payload.get("renews_at")
@@ -118,13 +141,12 @@ class OrganizationBudgetEmailHandler:
         # cares what they can spend, not which system counted it.
         if exhausted:
             headline = "Model spend limit reached"
-            body = (
-                f"Your organization has used its entire model spend limit ({used}). "
-                "Agents can't make model calls until the limit resets or is raised."
-            )
+            # A one-off limit, such as trial credit, never resets: only raising it helps.
+            until = "until the limit is raised" if one_off else "until the limit resets or is raised"
+            body = f"Your organization has used its entire model spend limit ({used}). Agents can't make model calls {until}."
         else:
             headline = f"{payload['threshold_percent']}% of your model spend limit used"
             body = f"Your organization has used {used} of its model spend limit."
-        if renews:
+        if renews and not one_off:
             body = f"{body} It resets on {str(renews)[:10]}."
         return headline, body

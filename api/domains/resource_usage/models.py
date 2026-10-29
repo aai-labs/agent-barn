@@ -125,10 +125,15 @@ class AgentResourceUsageRead(PydanticBaseModel):
     observed_at: datetime
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    # What the pod asks for: the share the scheduler and the quota reserve for it. Read from
+    # the cluster, not the container, so it can be known when the rest is not, and the other
+    # way round. None when it could not be read, which is not a request of zero.
+    memory_request_bytes: int | None = None
     memory_peak_bytes: int | None = None
     # A 5-minute average, so a short spike is smoothed away.
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     cpu_average_cores: float | None = None
     # Share of scheduling periods in which the container hit its CPU limit.
     cpu_throttled_ratio: float | None = None
@@ -140,8 +145,11 @@ class AgentUsageSnapshotRead(PydanticBaseModel):
     state: ResourceUsageState
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    # As on AgentResourceUsageRead: None when it could not be read.
+    memory_request_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     # Over the last hour.
     cpu_throttled_ratio: float | None = None
 
@@ -188,12 +196,19 @@ class PlatformUsageTotalsRead(PydanticBaseModel):
     # The rest are None when the source could not be read.
     # Agents whose container reported CPU or memory.
     agents_reporting: int | None = None
+    # Agents the source scrapes that still run a healthz script from before it reported usage.
+    # Their owners report by updating them, which the Platform view says in so many words.
+    agents_restart_required: int | None = None
     # Sums over the reporting Agents. A limit is what a container may use, not what it
     # holds, so the limits add up to what the namespace quota counts, not to free room.
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    # What the pods ask for, added up over the same reporting Agents as the limits, so the two
+    # describe the same Agents. None when no Agent's request could be read.
+    memory_request_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
 
 
 class PlatformOrganizationUsageRead(PlatformUsageTotalsRead):
@@ -211,8 +226,10 @@ class PlatformAgentUsageRead(PydanticBaseModel):
     organization_name: str | None = None
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    memory_request_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     # Over the last hour.
     cpu_throttled_ratio: float | None = None
 
@@ -230,16 +247,23 @@ class PlatformCapacityRead(PydanticBaseModel):
 
     The ceilings are entered by a Platform Administrator, because the quota itself cannot
     be read; the committed figures come from kube-state-metrics. They are always for the
-    whole namespace, whatever Organization the page is narrowed to.
+    whole namespace, whatever Organization the page is narrowed to. A quota caps limits and
+    requests alike, and a new pod is refused when any of the four would go over, so all four
+    are here, named as the quota names them.
     """
 
-    memory_limit_bytes: int | None = None
-    cpu_limit_cores: float | None = None
+    limits_memory_bytes: int | None = None
+    limits_cpu_cores: float | None = None
+    requests_memory_bytes: int | None = None
+    requests_cpu_cores: float | None = None
     # None until the first save.
-    limits_updated_at: datetime | None = None
-    # What every Pending or Running pod commits in limits. None when it could not be read.
-    memory_committed_bytes: int | None = None
-    cpu_committed_cores: float | None = None
+    ceilings_updated_at: datetime | None = None
+    # What every Pending or Running pod commits, each charged the larger of its containers
+    # and its biggest init container, as the quota does. None when it could not be read.
+    committed_limits_memory_bytes: int | None = None
+    committed_limits_cpu_cores: float | None = None
+    committed_requests_memory_bytes: int | None = None
+    committed_requests_cpu_cores: float | None = None
 
 
 class PlatformResourceUsageRead(PydanticBaseModel):
@@ -288,9 +312,11 @@ class PlatformAgentResourceUsageRead(PydanticBaseModel):
     observed_at: datetime
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    memory_request_bytes: int | None = None
     memory_peak_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     cpu_average_cores: float | None = None
     cpu_throttled_ratio: float | None = None
     series: list[PlatformAgentUsagePoint] = []

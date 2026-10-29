@@ -8,6 +8,7 @@ from api.api_app import create_app
 from api.communications_app import create_communications_app
 from api.core.config import get_config
 from api.core.utils import create_modules
+from api.gateway_app import create_gateway_app
 from api.ingest_app import create_ingest_app
 
 
@@ -30,6 +31,14 @@ def prepare_api_server():
 def create_test_client():
     def step(context):
         context.client = TestClient(context.app)
+
+    return step
+
+
+def prepare_gateway_server():
+    def step(context):
+        context.gateway_app = create_gateway_app(injector=context.injector)
+        context.gateway_client = TestClient(context.gateway_app)
 
     return step
 

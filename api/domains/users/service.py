@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
@@ -12,7 +13,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.auth.service import AuthService
-from api.domains.events import EventDeliveryDispatcher
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
@@ -72,6 +73,7 @@ class UserService:
         user = User(
             **user_data.model_dump(),
             hashed_password=hash_text(password),
+            platform_provisioned_at=datetime.now(UTC),
         )
         return self.user_repository.save(user)
 
@@ -82,7 +84,7 @@ class UserService:
         identity = data.full_name or str(data.email).split("@", maxsplit=1)[0]
         return f"{identity}'s Organization"
 
-    def create_platform_user(self, data: PlatformUserCreate) -> PlatformUserCreateResult:
+    def create_platform_user(self, data: PlatformUserCreate, actor: CurrentUserContext) -> PlatformUserCreateResult:
         with Session(self.user_repository.delegate.engine, expire_on_commit=False) as session:
             if self.user_repository.get_by_email_with_session(str(data.email), session) is not None:
                 raise HTTPException(
@@ -95,6 +97,10 @@ class UserService:
                 email=str(data.email),
                 full_name=data.full_name,
             )
+            # Set up by a Platform Administrator: their own Organizations may run on the
+            # platform's renewing limit.
+            prepared.user.platform_provisioned_at = datetime.now(UTC)
+            self.user_repository.save_with_session(prepared.user, session)
             organization = self.organization_repository.save_with_session(
                 Organization(
                     name=self._initial_organization_name(data),
@@ -111,7 +117,11 @@ class UserService:
                 ),
                 session,
             )
+            delivery_ids = self.organization_repository.stage_organization_created(
+                session, organization, ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id)
+            )
             session.commit()
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         # With its limit already on it: a new Organization is capped from the start.
         # Best effort — creation is committed, and key generation provisions again.
@@ -241,6 +251,12 @@ class UserService:
             setattr(user, key, value)
         user = self.user_repository.save(user)
         return self.to_user_read(user)
+
+    def complete_onboarding(self, user_id: UUID, organization_id: UUID | None) -> None:
+        """Remember that the user finished onboarding. The first finish is the one kept."""
+        self.get_user(user_id)
+        delivery_ids = self.user_repository.complete_onboarding(user_id, organization_id)
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
     def verify_user_password(self, user_id: UUID, password: str) -> None:
         user = self.get_user(user_id)

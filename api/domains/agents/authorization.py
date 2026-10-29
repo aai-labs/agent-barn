@@ -14,6 +14,7 @@ from api.domains.rbac.catalog import (
     IMPLICIT_AGENT_OWNER_ROLES,
     SYSTEM_AGENT_ACCESS_ROLE_GRANTS,
     PermissionKey,
+    organization_role_allows,
 )
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 
@@ -27,6 +28,7 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_MEMORY_MANAGE,
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
+    PermissionKey.AGENT_SIZE_MANAGE,
 )
 
 
@@ -111,14 +113,43 @@ class AgentAuthorization:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
         return action_scope
 
+    def membership_has_permission(self, membership_id: UUID, agent_id: UUID, permission: PermissionKey) -> bool:
+        """Whether a Membership holds a Permission on an active Agent, outside any request.
+
+        For work that acts on a Member's earlier authority, such as a linked chat
+        account, so revoking their access also stops that work. Resolves the
+        Membership exactly as ``_scope`` resolves a signed-in Member.
+        """
+        scope = self.membership_scope(membership_id, permission)
+        return scope is not None and self.repository.get_active_in_scope(agent_id, scope) is not None
+
+    def membership_scope(self, membership_id: UUID, permission: PermissionKey) -> AuthorizationScope | None:
+        """The repository scope a Membership would have when signed in, or None if it no longer exists."""
+        found = self.repository.find_membership_with_user(membership_id)
+        if found is None:
+            return None
+        membership, user = found
+        if user is None:
+            return None
+        if membership.role in IMPLICIT_AGENT_OWNER_ROLES:
+            return AuthorizationScope(organization_id=membership.organization_id)
+        return AuthorizationScope(
+            organization_id=membership.organization_id,
+            membership_id=membership.id,
+            permission=permission,
+            include_general_access=user.email_verified_at is not None,
+        )
+
     def allowed_actions(self, context: CurrentUserContext, agents: list[Agent]) -> dict[UUID, list[PermissionKey]]:
         if not agents:
             return {}
         membership = context.require_current_user_organization()
         if membership.role in IMPLICIT_AGENT_OWNER_ROLES:
-            permissions_by_agent = {
-                agent.id: set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID]) for agent in agents
-            }
+            implicit = set(SYSTEM_AGENT_ACCESS_ROLE_GRANTS[AGENT_OWNER_ROLE_ID])
+            # Organization-scoped and held by role alone, so no Agent Access Role grants it.
+            if organization_role_allows(membership.role, PermissionKey.AGENT_SIZE_MANAGE):
+                implicit.add(PermissionKey.AGENT_SIZE_MANAGE)
+            permissions_by_agent = {agent.id: set(implicit) for agent in agents}
         else:
             permissions_by_agent = self.repository.find_agent_permissions(
                 membership.id,

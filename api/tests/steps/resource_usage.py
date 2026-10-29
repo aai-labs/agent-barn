@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
@@ -103,26 +103,76 @@ def prometheus_is_not_configured():
     return step
 
 
-def prometheus_reports_namespace_limits(*, memory: float | None = None, cpu: float | None = None):
-    """Answer the namespace-limits query with these totals, and leave the rest as they are.
+def _answer_when(client: Any, matches, rows: list[PrometheusSample] | Exception) -> None:
+    """Answer the instant queries `matches` picks with `rows` (or fail them), and every other as before.
 
-    The mock answers every instant query with one list, so this wraps whatever answer is
-    already set: the kube-state-metrics query gets its own rows, any other query gets the
-    Agent rows. Run it after the step that sets the Agent readings.
+    The mock answers every instant query with one list, so a step that has its own rows
+    wraps whatever answer is already set. Run it after the step that sets the Agent readings.
+    """
+    previous = client.query.side_effect
+    others = client.query.return_value
+
+    def answer(promql: str, at: datetime):
+        if matches(promql):
+            if isinstance(rows, Exception):
+                raise rows
+            return rows
+        return previous(promql, at) if previous else others
+
+    client.query.side_effect = answer
+
+
+def prometheus_reports_namespace_commitments(
+    *,
+    limits_memory: float | None = None,
+    limits_cpu: float | None = None,
+    requests_memory: float | None = None,
+    requests_cpu: float | None = None,
+):
+    """Answer the namespace-commitments query with these totals, and leave the rest as they are."""
+
+    def step(context):
+        rows = [
+            PrometheusSample(labels={"kind": kind, "resource": resource}, value=value)
+            for kind, resource, value in (
+                ("limits", "memory", limits_memory),
+                ("limits", "cpu", limits_cpu),
+                ("requests", "memory", requests_memory),
+                ("requests", "cpu", requests_cpu),
+            )
+            if value is not None
+        ]
+        _answer_when(_client(context), lambda promql: '"kind"' in promql, rows)
+
+    return step
+
+
+def prometheus_reports_agent_requests(requests: Callable[[Any], Mapping[UUID, tuple[float, float]]]):
+    """Answer the per-Agent requests query with (memory bytes, cpu cores) for each Agent.
+
+    `requests` is given the scenario, so a test can name Agents it has just created.
     """
 
     def step(context):
-        client = _client(context)
-        agent_rows = client.query.return_value
-        namespace_rows = [
-            PrometheusSample(labels={"resource": resource}, value=value)
+        rows = [
+            PrometheusSample(labels={"app": f"agent-{agent_id}", "resource": resource}, value=value)
+            for agent_id, (memory, cpu) in requests(context).items()
             for resource, value in (("memory", memory), ("cpu", cpu))
-            if value is not None
         ]
-
-        def answer(promql: str, at: datetime):
-            return namespace_rows if "kube_pod_container_resource_limits" in promql else agent_rows
-
-        client.query.side_effect = answer
+        _answer_when(_client(context), _is_agent_requests_query, rows)
 
     return step
+
+
+def prometheus_fails_agent_requests():
+    """Fail only the per-Agent requests query, so the rest of the page can be seen standing."""
+
+    def step(context):
+        _answer_when(_client(context), _is_agent_requests_query, PrometheusError("requests are unavailable"))
+
+    return step
+
+
+def _is_agent_requests_query(promql: str) -> bool:
+    # The only query that rewrites a pod's name into `app`.
+    return '"app", "$1", "pod"' in promql

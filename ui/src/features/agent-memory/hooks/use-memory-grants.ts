@@ -31,7 +31,7 @@ export function useMemoryGrants(enabled: boolean) {
   };
 }
 
-/** Agents a grant can name, as `{id, name}` pairs. */
+/** Agents a grant can name, as `{id, name, memoryEnabled}` triples. */
 export function useMemoryAgentOptions(enabled: boolean) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
@@ -47,7 +47,7 @@ export function useMemoryAgentOptions(enabled: boolean) {
   });
 
   return {
-    agents: (query.data?.items ?? []).map((agent) => ({ id: agent.id, name: agent.name })),
+    agents: (query.data?.items ?? []).map((agent) => ({ id: agent.id, name: agent.name, memoryEnabled: agent.memoryEnabled })),
     truncated: (query.data?.total ?? 0) > (query.data?.items.length ?? 0),
     isLoading: query.isPending && query.fetchStatus !== "idle",
     error: query.error,

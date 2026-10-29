@@ -39,7 +39,6 @@ _GIVEN = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.agentbarn.test",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -75,7 +74,6 @@ def _ensure_native_connection(context, platform: str = "slack", settings: dict |
             display_name=f"Native {platform.title()}",
             settings=_default_channel_settings(platform) if settings is None else settings,
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
     )
 

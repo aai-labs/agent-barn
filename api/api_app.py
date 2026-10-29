@@ -25,11 +25,24 @@ from api.domains.activity.routes import activity_router
 from api.domains.agent_memory.platform_routes import platform_memory_router
 from api.domains.agent_memory.routes import agent_memory_router, memory_grants_router, organization_memory_router
 from api.domains.agent_settings.routes import agent_settings_router
+from api.domains.agent_sizes.routes import (
+    organization_agent_sizes_router,
+    platform_agent_sizes_router,
+    platform_organization_agent_sizes_router,
+)
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
+from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.api_keys.routes import router as api_keys_router
+from api.domains.artifacts.routing import router as agent_artifacts_router
 from api.domains.auth.routes import auth_router
+from api.domains.billing.routes import (
+    billing_router,
+    platform_billing_router,
+    platform_billing_settings_router,
+    stripe_webhook_router,
+)
 from api.domains.business_value.routes import business_value_router
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
@@ -38,12 +51,18 @@ from api.domains.communications.runtime_webhook_routes import runtime_provider_w
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
+from api.domains.custom_api.routes import custom_api_router
 from api.domains.discovery.routes import router as discovery_router
+from api.domains.environment_health.routes import platform_environment_health_router
 from api.domains.events.routes import event_delivery_monitor_router
+from api.domains.file_sync.routes import agent_file_sync_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
-from api.domains.organizations.routes import org_router, platform_org_router
+from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
+from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
+from api.domains.playbooks.platform_routes import platform_playbooks_router
+from api.domains.playbooks.routes import agent_playbook_extractions_router, playbook_extractions_router
 from api.domains.rbac.seeder import RbacSeeder
 from api.domains.resource_limits.routes import platform_resource_limits_router
 from api.domains.resource_usage.platform_routes import platform_resource_usage_router
@@ -53,6 +72,7 @@ from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
+from api.domains.sync_provider.routes import sync_provider_callback_router, sync_provider_router
 from api.domains.templates.routes import platform_templates_router, templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
@@ -60,6 +80,10 @@ from api.domains.users.organization_users.routes import member_router, platform_
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.web_chat.routes import web_chat_router
+from api.domains.workflows.platform_routes import platform_workflow_router
+from api.domains.workflows.routes import router as workflows_router
+from api.domains.workflows.run_routes import router as workflow_runs_router
+from api.domains.workflows.runtime_routes import router as workflow_runtime_router
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -126,9 +150,26 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
+    subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
+    subapi.include_router(agent_artifacts_router)
+    subapi.include_router(workflows_router)
+    subapi.include_router(workflow_runs_router)
+    app_v1.include_router(workflow_runtime_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
+    subapi.include_router(platform_agent_sizes_router)
+    subapi.include_router(platform_organization_agent_sizes_router)
+    subapi.include_router(platform_agents_router)
+    subapi.include_router(organization_agent_sizes_router)
+    subapi.include_router(platform_trial_settings_router)
+    subapi.include_router(onboarding_router)
+    subapi.include_router(billing_router)
+    subapi.include_router(platform_billing_settings_router)
+    subapi.include_router(platform_organization_settings_router)
+    subapi.include_router(platform_billing_router)
+    subapi.include_router(stripe_webhook_router)
+    subapi.include_router(platform_workflow_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)
     subapi.include_router(organization_memory_router)
@@ -143,6 +184,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(discovery_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
+    subapi.include_router(platform_environment_health_router)
     subapi.include_router(org_router)
     subapi.include_router(platform_org_router)
     subapi.include_router(member_router)
@@ -151,9 +193,15 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(skills_router)
     subapi.include_router(agent_skills_router)
     subapi.include_router(platform_skills_router)
+    subapi.include_router(agent_playbook_extractions_router)
+    subapi.include_router(playbook_extractions_router)
+    subapi.include_router(platform_playbooks_router)
     subapi.include_router(integrations_router)
     subapi.include_router(sharepoint_sign_in_router)
     subapi.include_router(microsoft_callback_router)
+    subapi.include_router(sync_provider_router)
+    subapi.include_router(sync_provider_callback_router)
+    subapi.include_router(agent_file_sync_router)
     subapi.include_router(templates_router)
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)

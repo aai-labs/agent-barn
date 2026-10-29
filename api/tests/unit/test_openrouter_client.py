@@ -145,7 +145,10 @@ def _service(openrouter, allowlist=None, default_model=""):
     return AgentService(
         repository=MagicMock(),
         connection_repository=MagicMock(),
+        conversation_repository=MagicMock(),
+        activity_repository=MagicMock(),
         plugins=MagicMock(),
+        agentbarn_telegram_secrets=MagicMock(),
         override_repository=MagicMock(),
         authorization=MagicMock(),
         template_repository=MagicMock(),
@@ -157,10 +160,17 @@ def _service(openrouter, allowlist=None, default_model=""):
         shared_credential_repository=MagicMock(),
         event_delivery_dispatcher=MagicMock(),
         organization_lookup=org_lookup,
+        trial_settings=MagicMock(),
+        organization_settings=MagicMock(),
         agent_settings_lookup=agent_settings_lookup,
+        credential_gateway=MagicMock(),
+        integrations=MagicMock(),
+        custom_api=MagicMock(),
         agent_budgets=MagicMock(),
         restore_points=MagicMock(),
         selection=MagicMock(),
+        agent_sizes=MagicMock(),
+        artifact_buckets=MagicMock(),
     )
 
 

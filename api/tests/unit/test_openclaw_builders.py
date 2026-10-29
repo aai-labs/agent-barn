@@ -1,11 +1,22 @@
+import json
+from pathlib import Path
 from uuid import UUID
 
+from api.domains.agent_sizes.models import (
+    STANDARD_CPU_LIMIT_MILLICORES,
+    STANDARD_CPU_REQUEST_MILLICORES,
+    STANDARD_MEMORY_LIMIT_BYTES,
+    STANDARD_MEMORY_REQUEST_BYTES,
+)
 from api.domains.agents.builders import (
     START_SH,
+    agentbarn_telegram_channel,
+    agentbarn_telegram_channel_env,
     build_config_map,
     build_deployment,
     build_openclaw_gateway_config,
     build_secret_runtime,
+    container_resources,
     native_channel_env,
     native_discord_channel,
     native_slack_channel,
@@ -15,13 +26,24 @@ from api.domains.agents.builders import (
 from api.domains.agents.builders.openclaw import (
     LEGACY_WORKSPACE_MIGRATION_SH,
     OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_PLUGINS_SH,
     OPENCLAW_WORKSPACE_DIR,
 )
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
+from api.domains.file_sync.rules import rules_manifest
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
+
+# The Standard size, which every Agent ran on before sizes existed.
+STANDARD = container_resources(
+    cpu_request_millicores=STANDARD_CPU_REQUEST_MILLICORES,
+    cpu_limit_millicores=STANDARD_CPU_LIMIT_MILLICORES,
+    memory_request_bytes=STANDARD_MEMORY_REQUEST_BYTES,
+    memory_limit_bytes=STANDARD_MEMORY_LIMIT_BYTES,
+)
 
 
 def test_gateway_config_is_headless_and_exposes_chat_completions() -> None:
@@ -60,7 +82,8 @@ def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> N
     migration = START_SH.index("legacy-workspace-migration.sh")
 
     assert START_SH.index("init-openclaw.js") < migration
-    assert START_SH.index("$MESSAGE_PLUGIN_DIR/openclaw.plugin.json") < migration
+    assert START_SH.index("init-openclaw.js") < START_SH.index("retire-messaging.py") < migration
+    assert START_SH.index("$OBSERVER_DIR/openclaw.plugin.json") < migration
     assert migration < START_SH.index("OPENCLAW_VERSION=")
 
 
@@ -81,6 +104,14 @@ def test_config_map_ships_the_legacy_workspace_migration_script() -> None:
     )
 
     assert config_map.data["legacy-workspace-migration.sh"] == LEGACY_WORKSPACE_MIGRATION_SH
+    assert config_map.data["openclaw-plugins.sh"] == OPENCLAW_PLUGINS_SH
+
+
+def test_startup_sources_the_plugin_installer_before_installing_plugins() -> None:
+    """install_plugin, with its repair of half-installed plugins, lives in openclaw-plugins.sh."""
+    sourced = START_SH.index(". /app/config/openclaw-plugins.sh")
+
+    assert START_SH.index("OPENCLAW_VERSION=") < sourced < START_SH.index("install_plugin @openclaw/firecrawl-plugin")
 
 
 def test_gateway_config_has_no_command_approval_support() -> None:
@@ -130,7 +161,7 @@ def test_runtime_secret_contains_only_runtime_and_llm_credentials() -> None:
 
 
 def test_deployment_runs_one_headless_runtime_container() -> None:
-    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
 
     assert deployment.spec.replicas == 1
     assert deployment.spec.template.spec.containers[0].name == "agent"
@@ -164,7 +195,7 @@ def test_deployment_declares_explicit_resources_rather_than_inheriting_limitrang
     512Mi/2Gi. requests.memory (20Gi quota) is the binding axis, so the request is
     what governs how many agents fit; the 1Gi limit both halves limits.memory
     consumption and caps V8's heap, which Node sizes at ~51% of the cgroup limit."""
-    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
     resources = deployment.spec.template.spec.containers[0].resources
 
     assert resources is not None
@@ -172,15 +203,41 @@ def test_deployment_declares_explicit_resources_rather_than_inheriting_limitrang
     assert resources.limits == {"memory": "1Gi", "cpu": "500m"}
 
 
+def test_init_container_costs_no_more_quota_than_the_agent() -> None:
+    """A pod is charged the larger of its containers added up and its biggest init
+    container. Left without a block, the init container gets the LimitRange default,
+    which is above the agent's own and raises what every agent costs."""
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
+    pod = deployment.spec.template.spec
+    init = pod.init_containers[0]
+
+    assert init.resources == pod.containers[0].resources
+
+
+def test_a_larger_size_grows_the_agent_container_and_not_the_init_container() -> None:
+    """The init container only runs chown, so it keeps its fixed block whatever the size."""
+    large = container_resources(
+        cpu_request_millicores=500,
+        cpu_limit_millicores=2000,
+        memory_request_bytes=2 * 1024**3,
+        memory_limit_bytes=4 * 1024**3,
+    )
+    pod = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=large).spec.template.spec
+
+    assert pod.containers[0].resources.requests == {"memory": "2Gi", "cpu": "500m"}
+    assert pod.containers[0].resources.limits == {"memory": "4Gi", "cpu": "2000m"}
+    assert pod.init_containers[0].resources == STANDARD
+
+
 def test_deployment_recreates_rather_than_rolling_update() -> None:
     """replicas=1 on a ReadWriteOnce PVC: a RollingUpdate surge briefly wants two
     pods, doubling the agent's memory and deadlocking on the volume."""
-    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
     assert deployment.spec.strategy.type == "Recreate"
 
 
 def test_deployment_carries_the_openclaw_runtime_label() -> None:
-    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
     assert deployment.metadata.labels["agentbarn.io/runtime"] == "openclaw"
 
 
@@ -335,7 +392,6 @@ def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -
 
     assert env == {
         "AGENTBARN_NATIVE_CHANNELS": "slack,discord,telegram,msteams",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
         "SLACK_BOT_TOKEN": "xoxb",
         "SLACK_APP_TOKEN": "xapp",
         "DISCORD_BOT_TOKEN": "discord-token",
@@ -344,3 +400,102 @@ def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -
         "MSTEAMS_APP_PASSWORD": "secret",
         "MSTEAMS_TENANT_ID": "tenant-id",
     }
+
+
+_AGENTBARN_TELEGRAM = AgentBarnTelegramRuntime(
+    api_root="http://communications:8002/communications/v1/telegram/c0ffee",
+    api_token="424242:stand-in",
+    webhook_secret="derived-secret",
+    webhook_url="http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+)
+
+
+def test_agentbarn_telegram_channel_uses_the_proxy_and_a_private_webhook() -> None:
+    assert agentbarn_telegram_channel(_AGENTBARN_TELEGRAM) == {
+        "enabled": True,
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "disabled",
+        "apiRoot": "http://communications:8002/communications/v1/telegram/c0ffee",
+        "webhookUrl": "http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+        # Resolved from the Secret at startup, so the secret never sits in openclaw.json.
+        "webhookSecret": "${AGENTBARN_TELEGRAM_WEBHOOK_SECRET}",
+        "webhookHost": "0.0.0.0",
+        "webhookPort": 8443,
+        "webhookPath": "/telegram",
+        "defaultTo": "channel:__agentbarn_no_home_channel__",
+    }
+
+
+def test_agentbarn_telegram_secret_entries_carry_the_stand_in_token_and_webhook_secret() -> None:
+    assert agentbarn_telegram_channel_env(_AGENTBARN_TELEGRAM) == {
+        "TELEGRAM_BOT_TOKEN": "424242:stand-in",
+        "AGENTBARN_TELEGRAM_WEBHOOK_SECRET": "derived-secret",
+    }
+
+
+def test_gateway_config_allows_native_message_tool() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "message" not in config["tools"].get("deny", [])
+
+
+def test_config_map_ships_the_file_sync_helper_and_the_openclaw_rules() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay={},
+    )
+
+    helper = Path(__file__).parents[2] / "domains/agents/scripts/file-sync.py"
+    assert config_map.data["file-sync.py"] == helper.read_text()
+    assert json.loads(config_map.data["file-sync-rules.json"]) == rules_manifest("openclaw")
+
+
+def test_startup_syncs_files_once_after_setup_then_keeps_syncing() -> None:
+    once = START_SH.index("python3 /app/config/file-sync.py --once || true")
+    loop = START_SH.index("python3 /app/config/file-sync.py &")
+
+    assert START_SH.index("node /app/config/init-openclaw.js") < once
+    assert START_SH.index("sh /app/config/gog-setup.sh") < once
+    assert START_SH.index("python3 /app/config/memory-gateway-ready.py") < once < loop
+    assert loop < START_SH.index('touch "$AGENT_RUNTIME_SETUP_READY_FILE"')
+
+
+def test_artifact_command_and_instructions_are_available_without_memory() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        artifacts_enabled=True,
+    )
+    assert "agentbarn_artifacts.py" in config_map.data
+    assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
+    assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
+    assert "Do not wait for the user to mention artifacts, storage or the CLI" in config_map.data["AGENTS.md"]
+    assert "Do not publish scratch/intermediate files" in config_map.data["AGENTS.md"]
+    assert "Give the user a concise Markdown download link" in config_map.data["AGENTS.md"]
+
+
+def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
+    config_map = build_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
+    )
+    assert "Files and download links" not in config_map.data["AGENTS.md"]

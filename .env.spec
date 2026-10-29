@@ -43,6 +43,10 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# Product analytics (PostHog) defaults to on. Local stacks report as
+# installation_environment=local with a local-<id> name; set false to opt out.
+ANALYTICS_ENABLED=true
+
 # Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
 # Communication Connections; nothing else changes. Both are required on top of the three
 # values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email
@@ -52,11 +56,32 @@ SENDER_EMAIL=
 AGENT_EMAIL_DOMAIN=
 EMAIL_INBOUND_SECRET=
 
+# Optional: Agent Barn's own Telegram bot, shared by every Organization. Unset hides
+# the Agent Barn Telegram platform; bring-your-own Telegram is unaffected. Create the
+# bot with @BotFather and use a separate bot per environment. Both are required.
+AGENTBARN_TELEGRAM_BOT_TOKEN=
+AGENTBARN_TELEGRAM_BOT_USERNAME=
+# Optional. Where the Communications process delivers linked users' messages to an
+# Agent's Telegram webhook; defaults to the Agent's in-cluster Service on port 8443.
+AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=
+# Optional. Calls per second Agents may make through the shared bot, in total
+# (default 25, under Telegram's limit of about 30) and per Organization (default 5).
+AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND=
+AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND=
+
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register
 # "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
+
+# Optional: multi-tenant Microsoft Entra app for Organization OneDrive sync. If
+# unset, OneDrive sync is unavailable. Register
+# "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a Web redirect URI
+# (Microsoft requires HTTPS unless the host is localhost). Permissions: application
+# Sites.Selected; delegated Sites.FullControl.All, Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
 
 # Kubernetes client
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
@@ -87,6 +112,11 @@ RESTORE_POINT_MAX_PER_AGENT=5
 # an extraction, so it is given longer.
 RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
 RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+# Managed updates: how long the new pod has to report ready before the update
+# rolls back to the captured restore point, and how often it is checked. The
+# window includes pulling the new image. Defaults to 600 and 5 when unset.
+# AGENT_UPDATE_READY_TIMEOUT_SECONDS=600
+# AGENT_UPDATE_READY_POLL_SECONDS=5
 
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
@@ -114,8 +144,21 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 # Required. Model spend limit (USD) an Agent is held to until its Organization sets a
 # default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
 AGENT_DEFAULT_LLM_BUDGET_USD=
+# Administrator sets its own on the Organization's page, until a Platform
+# Administrator saves a default on the platform settings page. Empty is 10.
+ORGANIZATION_DEFAULT_AGENT_LIMIT=
+# Buying credit with Stripe, once a Platform Administrator turns payments on in the
+# platform Billing settings (they can't without both). Use a Stripe sandbox's secret key
+# (sk_test_…) locally; STRIPE_WEBHOOK_SECRET is the whsec_… that
+# `stripe listen --forward-to localhost:<api port>/api/v1/billing/stripe/webhook` prints.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# API callback address Agent pods use to report workflow step outcomes. Local compose
+# derives it from API_PORT; deployments default to the in-cluster API service.
+# WORKFLOW_RUNTIME_BASE_URL=
+
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=
@@ -157,6 +200,10 @@ INGEST_PORT=
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
 
+# Credential gateway. Integration Plugins decide how each provider is routed.
+# Agent pods in local k3d reach it through this distinct host-published port.
+GATEWAY_PORT=8004
+CREDENTIAL_GATEWAY_BASE_URL=http://host.docker.internal:8004/gateway/v1
 # Optional. Local Prometheus for the Resource usage views. `make dev-monitoring`
 # generates PROMETHEUS_PASSWORD here; once it is set the API in Docker looks for
 # Prometheus on the host at PROMETHEUS_PORT (default 9090), which is where
@@ -191,4 +238,27 @@ MEMORY_LITELLM_KEY_HASHES=
 # HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
 COMPOSE_PROFILES=
 HINDSIGHT_DB_PASSWORD=
-HINDSIGHT_LITELLM_API_KEY=
+
+# Private Agent artifacts; the server derives a fixed bucket name from each Agent UUID.
+# An empty endpoint retains text-only operation. Download links use the existing WEB_APP_URL.
+ARTIFACT_S3_ENDPOINT_URL=
+# No installation-wide data credentials or workload-identity fallback.
+# Per-Agent data secrets are encrypted with AGENT_TOKEN_ENCRYPTION_KEY in PostgreSQL.
+# ARTIFACT_PROVISIONER_URL/TOKEN belong only to API provisioning and artifact cleanup.
+# Generated in ignored .garage/provisioner*.env files; never put them in this shared file.
+ARTIFACT_RUNTIME_BASE_URL=http://host.docker.internal:8000/api/v1/agent-artifacts/runtime
+ARTIFACT_MAX_BYTES=26214400
+ARTIFACT_LINK_MAX_SECONDS=3600
+ARTIFACT_RETENTION_DAYS=30
+
+# Persistent Garage and artifact-purge run in Compose; API background work provisions requested Agent storage.
+# ./run.sh prepares private storage automatically; no profile is needed.
+# make garage-up works independently of k3d/model providers. Control-plane credentials
+# stay in ignored .garage/provisioner*.env; application.env contains no storage keys.
+# Bootstrap appends non-secret GARAGE_SAVED_* settings to .env; do not edit those.
+# Set these only on first initialization; otherwise stored values are reused.
+# Optional loopback operator/native port override (default 3900), not a download port.
+GARAGE_S3_PORT=
+# Legacy name: internal native/operator S3 endpoint, not a public browser URL.
+# Defaults to http://127.0.0.1:<saved port>; Compose uses garage:3900.
+GARAGE_PUBLIC_ENDPOINT=

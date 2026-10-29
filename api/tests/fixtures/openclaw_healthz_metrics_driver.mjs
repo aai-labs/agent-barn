@@ -45,7 +45,7 @@ try {
   const deadline = Date.now() + 15_000;
   for (;;) {
     try {
-      if ((await get('/ready')).status === 200) break;
+      if ((await get('/metrics')).status === 200) break;
     } catch {
       // not listening yet
     }

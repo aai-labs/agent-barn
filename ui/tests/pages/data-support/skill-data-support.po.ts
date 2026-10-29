@@ -85,6 +85,15 @@ export const mockGoogleWorkspaceSkill = {
   updatedAt: "2026-01-01T00:00:00Z",
 };
 
+export const mockGmailSkill = {
+  ...mockGoogleWorkspaceSkill,
+  id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  name: "Gmail",
+  slug: "aai-gmail",
+  rootDir: "aai-gmail",
+  requiredProviders: ["gmail"],
+};
+
 export const mockSharePointSkill = {
   ...mockGoogleWorkspaceSkill,
   id: MOCK_SHAREPOINT_SKILL_ID,

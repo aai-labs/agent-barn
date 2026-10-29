@@ -1,28 +1,48 @@
+import json
+from pathlib import Path
 from uuid import UUID
 
+from api.domains.agent_sizes.models import (
+    STANDARD_CPU_LIMIT_MILLICORES,
+    STANDARD_CPU_REQUEST_MILLICORES,
+    STANDARD_MEMORY_LIMIT_BYTES,
+    STANDARD_MEMORY_REQUEST_BYTES,
+)
 from api.domains.agents.builders import (
+    agentbarn_telegram_env,
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_secret_hermes_runtime,
+    container_resources,
     native_discord_env,
     native_slack_env,
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_START_SH
+from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
+from api.domains.file_sync.rules import rules_manifest
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
+
+# The Standard size, which every Agent ran on before sizes existed.
+STANDARD = container_resources(
+    cpu_request_millicores=STANDARD_CPU_REQUEST_MILLICORES,
+    cpu_limit_millicores=STANDARD_CPU_LIMIT_MILLICORES,
+    memory_request_bytes=STANDARD_MEMORY_REQUEST_BYTES,
+    memory_limit_bytes=STANDARD_MEMORY_LIMIT_BYTES,
+)
 
 
 def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["display"]["platforms"] == {}
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging"]
+    assert config["plugins"]["enabled"] == ["telemetry-push"]
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
@@ -31,12 +51,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
 def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
 
-    assert config["plugins"]["enabled"] == [
-        "telemetry-push",
-        "agentbarn-messaging",
-        "agentbarn-observer",
-        "agentbarn-slack-access",
-    ]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer", "agentbarn-slack-access"]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
     assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
     assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
@@ -81,7 +96,6 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert open_env["AGENTBARN_SLACK_GROUP_POLICY"] == "open"
     assert "SLACK_ALLOW_ALL_USERS" not in open_env
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
-    assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
     assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
     home = native_slack_env(
@@ -102,7 +116,7 @@ def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
         discord_require_mention=False,
     )
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
     assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
     assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
 
@@ -131,7 +145,6 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert env["DISCORD_ALLOWED_USERS"] == "user-1"
     assert env["DISCORD_ALLOWED_ROLES"] == "role-1"
     assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
-    assert env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
     assert "AGENTBARN_DISCORD_POLICY" not in env
 
 
@@ -149,7 +162,7 @@ def test_native_telegram_config_ignores_unknown_dms() -> None:
         "litellm/gpt-5", "http://litellm:4000", telegram_settings={"group_policy": "open"}
     )
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
     assert config["telegram"] == {"unauthorized_dm_behavior": "ignore"}
     assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
 
@@ -183,7 +196,6 @@ def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_menti
     assert env == {
         "TELEGRAM_BOT_TOKEN": "123:abc",
         "TELEGRAM_REQUIRE_MENTION": "true",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
         "TELEGRAM_ALLOWED_CHATS": "-1001",
         "TELEGRAM_GROUP_ALLOWED_CHATS": "-1001",
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
@@ -236,7 +248,6 @@ def test_runtime_teams_env_keeps_credentials_in_the_secret_and_sets_home() -> No
         "TEAMS_ALLOW_ALL_USERS": "true",
         "TEAMS_PORT": "3978",
         "TEAMS_HOME_CHANNEL": "19:home@thread.tacv2",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
 
 
@@ -246,13 +257,10 @@ def test_runtime_teams_env_uses_no_home_sentinel() -> None:
     assert env["TEAMS_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
 
-def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
-    guarded = HERMES_START_SH.split(
-        'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',
-        1,
-    )[1].split("\nfi", 1)[0]
-
-    assert "python3 /app/config/agentbarn_message.py drain &" in guarded
+def test_runtime_does_not_install_or_drain_the_retired_bridge() -> None:
+    assert "agentbarn_message.py" not in HERMES_START_SH
+    assert "AGENTBARN_SCHEDULED_DELIVERY" not in HERMES_START_SH
+    assert "retire-messaging.py hermes /opt/data" in HERMES_START_SH
 
 
 def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
@@ -283,6 +291,22 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     assert approvals("off") == {"mode": "off", **policy}
 
 
+def test_gateway_config_caps_turns_at_the_platform_default_unless_the_agent_sets_its_own() -> None:
+    """A run stops at `agent.max_turns`; an Agent reviewing large pull requests
+    needs more than the default, so its own limit replaces it rather than adding to it.
+    """
+    default = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert default["agent"]["max_turns"] == HERMES_DEFAULT_MAX_TURNS == 50
+
+    own = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", max_turns=150)
+    assert own["agent"]["max_turns"] == 150
+
+
+def test_gateway_config_delivers_scheduled_results_without_the_cron_header_and_footer() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert config["cron"] == {"wrap_response": False}
+
+
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
     """Auxiliary tasks left on the openrouter lane reach the proxy without the
     agent's key; smart approval then escalates every flagged command to the user.
@@ -292,6 +316,16 @@ def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -
     expected = {"provider": "custom", "base_url": "http://localhost:8090", "model": "gpt-5"}
     assert {"approval", "title_generation", "vision"} <= auxiliary.keys()
     assert all(task == expected for task in auxiliary.values())
+
+
+def test_gateway_config_leaves_the_forking_tasks_on_the_main_model() -> None:
+    """Pinned to "custom", these resolve a placeholder key and every call gets a 401.
+    ``runtime_tests/test_hermes_auxiliary_credentials.py`` proves which key each task
+    resolves; this only keeps them out of the pin list.
+    """
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
+
+    assert auxiliary.keys().isdisjoint({"curator", "background_review"})
 
 
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:
@@ -329,7 +363,8 @@ def test_config_map_contains_runtime_adapter_and_scoped_slack_access_plugin() ->
     assert "agent-trigger-server.py" in config_map.data
     # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
     assert "boot-run.py" in config_map.data
-    assert "agentbarn_message.py" in config_map.data
+    assert "agentbarn_message.py" not in config_map.data
+    assert "retire-messaging.py" in config_map.data
     assert "slack-access-plugin.yaml" in config_map.data
     assert "slack-access-init.py" in config_map.data
     # OpenClaw's plugin has no business in a Hermes ConfigMap.
@@ -386,10 +421,35 @@ def test_runtime_secret_tells_the_adapter_the_approval_mode() -> None:
 
 
 def test_deployment_runs_one_headless_runtime_container() -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
 
     assert deployment.spec.replicas == 1
     assert deployment.spec.template.spec.containers[0].name == "agent"
+
+
+def test_init_container_costs_no_more_quota_than_the_agent() -> None:
+    """Same rule as OpenClaw: the pod is charged for its biggest container, so the init
+    container must not default to the LimitRange's larger values."""
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
+    pod = deployment.spec.template.spec
+    init = pod.init_containers[0]
+
+    assert init.resources == pod.containers[0].resources
+
+
+def test_a_larger_size_grows_the_agent_container_and_not_the_init_container() -> None:
+    """The init container only runs chown, so it keeps its fixed block whatever the size."""
+    large = container_resources(
+        cpu_request_millicores=500,
+        cpu_limit_millicores=2000,
+        memory_request_bytes=2 * 1024**3,
+        memory_limit_bytes=4 * 1024**3,
+    )
+    pod = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=large).spec.template.spec
+
+    assert pod.containers[0].resources.requests == {"memory": "2Gi", "cpu": "500m"}
+    assert pod.containers[0].resources.limits == {"memory": "4Gi", "cpu": "2000m"}
+    assert pod.init_containers[0].resources == STANDARD
 
 
 def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
@@ -397,7 +457,7 @@ def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
     requests.memory (20Gi) -- a 2Gi Hermes limit would cap an all-Hermes fleet at
     50 agents instead of 64. Unlike OpenClaw's V8 heap, this is a hard cap on
     Hermes' real working set, not a GC trigger."""
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     resources = deployment.spec.template.spec.containers[0].resources
 
     assert resources is not None
@@ -406,10 +466,113 @@ def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
 
 
 def test_deployment_recreates_rather_than_rolling_update() -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     assert deployment.spec.strategy.type == "Recreate"
 
 
 def test_deployment_carries_the_hermes_runtime_label() -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     assert deployment.metadata.labels["agentbarn.io/runtime"] == "hermes"
+
+
+_AGENTBARN_TELEGRAM = AgentBarnTelegramRuntime(
+    api_root="http://communications:8002/communications/v1/telegram/c0ffee",
+    api_token="424242:stand-in",
+    webhook_secret="derived-secret",
+    webhook_url="http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+)
+
+
+def test_agentbarn_telegram_points_hermes_at_the_proxy_and_closes_groups() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", agentbarn_telegram=_AGENTBARN_TELEGRAM)
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["platforms"]["telegram"]["extra"] == {
+        "base_url": "http://communications:8002/communications/v1/telegram/c0ffee/bot",
+        "base_file_url": "http://communications:8002/communications/v1/telegram/c0ffee/file/bot",
+    }
+    # Linking already admitted the sender; groups are not part of Agent Barn Telegram.
+    assert config["telegram"] == {"unauthorized_dm_behavior": "ignore", "group_allow_from": []}
+    assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
+
+
+def test_agentbarn_telegram_keeps_other_hermes_platform_settings() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_slack=True, agentbarn_telegram=_AGENTBARN_TELEGRAM
+    )
+
+    assert config["platforms"]["slack"] == {"extra": {"markdown_blocks": True}}
+    assert "telegram" in config["platforms"]
+
+
+def test_agentbarn_telegram_env_runs_hermes_in_webhook_mode_with_the_stand_in_token() -> None:
+    assert agentbarn_telegram_env(_AGENTBARN_TELEGRAM) == {
+        "TELEGRAM_BOT_TOKEN": "424242:stand-in",
+        "TELEGRAM_ALLOW_ALL_USERS": "true",
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        "TELEGRAM_WEBHOOK_URL": "http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+        "TELEGRAM_WEBHOOK_PORT": "8443",
+        "TELEGRAM_WEBHOOK_HOST": "0.0.0.0",
+        "TELEGRAM_WEBHOOK_SECRET": "derived-secret",
+        "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+
+
+def test_config_map_ships_the_file_sync_helper_and_the_hermes_rules() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+
+    helper = Path(__file__).parents[2] / "domains/agents/scripts/file-sync.py"
+    assert config_map.data["file-sync.py"] == helper.read_text()
+    assert json.loads(config_map.data["file-sync-rules.json"]) == rules_manifest("hermes")
+
+
+def test_startup_syncs_files_once_after_template_files_and_skills_then_keeps_syncing() -> None:
+    once = HERMES_START_SH.index("python3 /app/config/file-sync.py --once || true")
+    loop = HERMES_START_SH.index("python3 /app/config/file-sync.py &")
+
+    assert HERMES_START_SH.index("cp /app/config/$f /workspace/$f") < once
+    assert HERMES_START_SH.index("Wrote {written} skill files") < once < loop
+    assert loop < HERMES_START_SH.index('touch "$AGENT_RUNTIME_SETUP_READY_FILE"')
+
+
+def test_artifact_command_and_instructions_are_available_without_memory() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        {},
+        artifacts_enabled=True,
+    )
+    assert "agentbarn_artifacts.py" in config_map.data
+    assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
+    assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
+    assert "Do not wait for the user to mention artifacts, storage or the CLI" in config_map.data["AGENTS.md"]
+    assert "Do not publish scratch/intermediate files" in config_map.data["AGENTS.md"]
+    assert "Give the user a concise Markdown download link" in config_map.data["AGENTS.md"]
+
+
+def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", {}
+    )
+    assert "Files and download links" not in config_map.data["AGENTS.md"]

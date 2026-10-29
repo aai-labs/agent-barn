@@ -3,7 +3,13 @@ from injector import Module, provider, singleton
 from api.core.config import Config, get_config
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
+from api.domains.agents.microsoft_graph_files import MicrosoftGraphFiles
+from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
+from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
 from api.domains.agents.repository import AgentRepository
+from api.domains.analytics.event_handlers import ProductAnalyticsHandler
+from api.domains.artifacts.storage import ArtifactStorage
+from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.email import EmailPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -20,10 +26,14 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
-from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
+from api.domains.sync_provider.plugins.providers import shipped_plugins
+from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.workflows.controller import WorkflowControllerHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -31,6 +41,7 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.s3.client import ArtifactStorage as S3ArtifactStorage
 
 
 class AppModule(Module):
@@ -43,6 +54,11 @@ class AppModule(Module):
     @singleton
     def provide_postgres_delegate(self, config: Config) -> PostgresRepositoryDelegate:
         return PostgresRepositoryDelegate(config)
+
+    @provider
+    @singleton
+    def provide_artifact_storage(self, storage: S3ArtifactStorage) -> ArtifactStorage:
+        return storage
 
     @provider
     @singleton
@@ -63,6 +79,7 @@ class AppModule(Module):
     ) -> PlatformPluginRegistry:
         return PlatformPluginRegistry(
             [
+                AgentBarnTelegramPlatformPlugin(config),
                 DiscordPlatformPlugin(config),
                 EmailPlatformPlugin(config, email_client),
                 SlackPlatformPlugin(config),
@@ -74,19 +91,37 @@ class AppModule(Module):
 
     @provider
     @singleton
+    def provide_sync_provider_plugin_registry(
+        self,
+        config: Config,
+        identity: MicrosoftIdentityClient,
+        graph_sites: MicrosoftGraphSites,
+        graph_files: MicrosoftGraphFiles,
+        app_tokens: MicrosoftAppTokens,
+    ) -> SyncProviderPluginRegistry:
+        return SyncProviderPluginRegistry(shipped_plugins(config, identity, graph_sites, graph_files, app_tokens))
+
+    @provider
+    @singleton
     def provide_event_handler_registry(
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
+        organization_trial_expiry_handler: OrganizationTrialExpiryHandler,
         agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
+        product_analytics_handler: ProductAnalyticsHandler,
+        workflow_controller_handler: WorkflowControllerHandler,
     ) -> EventHandlerRegistry:
         return EventHandlerRegistry(
             [
                 agent_lifecycle_email_handler,
                 organization_budget_email_handler,
+                organization_trial_expiry_handler,
                 agent_budget_email_handler,
                 security_audit_projection,
+                product_analytics_handler,
+                workflow_controller_handler,
             ]
         )
 
@@ -127,6 +162,7 @@ class AppModule(Module):
         litellm: LiteLLMClient,
         openrouter: OpenRouterClient,
         memory_keys: MemoryKeyRepository,
+        llm_budgets: OrganizationLlmBudgetService,
     ) -> CostSynchronizer:
         return CostSynchronizer(
             repository=repository,
@@ -136,6 +172,7 @@ class AppModule(Module):
             encryption_key=config.agent_token_encryption_key,
             memory_key_hashes=config.memory_cost_key_hashes,
             memory_key_source=memory_keys.hashes,
+            on_healed=llm_budgets.apply_healed_spend,
         )
 
     @provider

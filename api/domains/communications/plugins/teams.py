@@ -11,7 +11,6 @@ from api.domains.communications.models import (
     ConversationLocation,
     CredentialUniquenessScope,
     NormalizedCommunicationEnvelope,
-    OutboundCommunicationEnvelope,
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
@@ -19,16 +18,11 @@ from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
     PlatformSettings,
-    ProcessingFeedbackContext,
     WebhookRequest,
-    best_effort_failure_notice,
-    provider_idempotency_key,
 )
 from api.infrastructure.msteams.client import (
     TeamsAuthError,
     acquire_token,
-    list_team_channels,
-    send_activity,
     verify_inbound_jwt,
 )
 from api.infrastructure.msteams.manifest import build_app_package as build_teams_app_package
@@ -129,16 +123,18 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "every team and chat this Agent should serve.\n"
         "3. Files can be sent to the Agent in a one-to-one Teams chat. Teams does not support bot file uploads in channels "
         "or group chats.\n"
-        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
+        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams.\n\n"
+        "## Reconnecting an existing bot\n\n"
+        "If this bot's Teams app is already installed, only update the Azure Bot's messaging endpoint. The installed app "
+        "keeps working. A package downloaded for the same bot updates that app: in the Teams admin center open it under "
+        "**Teams apps → Manage apps** and upload the new file rather than adding a second app."
     )
     capabilities = frozenset(
         {
             PlatformCapability.APPLICATION_PROVISIONING,
-            PlatformCapability.SUPERVISED_INGRESS,
             PlatformCapability.WEBHOOK_INGRESS,
             PlatformCapability.MENTIONS,
             PlatformCapability.THREADS,
-            PlatformCapability.PROCESSING_FEEDBACK,
         }
     )
     settings_model = TeamsSettings
@@ -154,9 +150,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         assert isinstance(credentials, TeamsCredentials)
-        if self._skip_validation:
-            return "validation-skipped"
-        acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
+        # The App ID is the bot's identity even unverified; app packages key on it.
+        if not self._skip_validation:
+            acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
         return credentials.app_id
 
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:
@@ -193,129 +189,6 @@ class TeamsPlatformPlugin(PlatformPlugin):
             )
         except TeamsAuthError as exc:
             raise PermissionError(str(exc)) from exc
-
-    def send(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        envelope: OutboundCommunicationEnvelope,
-        *,
-        idempotency_key: str,
-    ) -> str:
-        assert isinstance(credentials, TeamsCredentials)
-        return self._send_activity(
-            credentials,
-            text=envelope.text,
-            location=envelope.location,
-            provider_metadata=envelope.provider_metadata,
-            reply_to_provider_message_id=envelope.reply_to_provider_message_id,
-            provider_idempotency_key_value=provider_idempotency_key(idempotency_key),
-        )
-
-    def processing_feedback(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        context: ProcessingFeedbackContext,
-    ) -> None:
-        del settings
-        assert isinstance(credentials, TeamsCredentials)
-        best_effort_failure_notice(
-            context,
-            lambda text, idempotency_key: self._send_activity(
-                credentials,
-                text=text,
-                location=context.location,
-                provider_metadata=context.provider_metadata,
-                reply_to_provider_message_id=context.provider_message_id,
-                provider_idempotency_key_value=idempotency_key,
-            ),
-            target=f"Teams conversation {context.location.id}",
-            logger=logger,
-        )
-
-    @staticmethod
-    def _send_activity(
-        credentials: TeamsCredentials,
-        *,
-        text: str,
-        location: ConversationLocation,
-        provider_metadata: dict[str, str | int | float | bool | None],
-        reply_to_provider_message_id: str | None,
-        provider_idempotency_key_value: str | None,
-    ) -> str:
-        metadata = provider_metadata
-        service_url = str(metadata.get("service_url") or "")
-        if not service_url:
-            raise ValueError("Teams reply is missing the serviceUrl captured from its inbound activity")
-
-        # The thread lives in the conversation id, so the stored raw value is
-        # sent whole rather than the stripped location id.
-        conversation_id = str(metadata.get("conversation_id") or location.id)
-        activity: dict[str, Any] = {
-            "type": "message",
-            "text": text,
-            "conversation": {"id": conversation_id},
-        }
-        if metadata.get("recipient_id"):
-            activity["from"] = {"id": str(metadata["recipient_id"])}
-        if metadata.get("from_id"):
-            activity["recipient"] = {"id": str(metadata["from_id"])}
-        if reply_to_provider_message_id:
-            activity["replyToId"] = reply_to_provider_message_id
-
-        token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
-        return send_activity(
-            service_url,
-            conversation_id,
-            activity,
-            token,
-            idempotency_key=provider_idempotency_key_value,
-        )
-
-    def enrich_inbound(
-        self,
-        settings: PlatformSettings,
-        credentials: PlatformCredentials,
-        envelopes: list[NormalizedCommunicationEnvelope],
-    ) -> list[NormalizedCommunicationEnvelope]:
-        del settings
-        assert isinstance(credentials, TeamsCredentials)
-        return [self._enrich_envelope(credentials, envelope) for envelope in envelopes]
-
-    def _enrich_envelope(
-        self,
-        credentials: TeamsCredentials,
-        envelope: NormalizedCommunicationEnvelope,
-    ) -> NormalizedCommunicationEnvelope:
-        location = envelope.location
-        if location.type != "CHANNEL" or location.display_name:
-            return envelope
-
-        service_url = str(envelope.provider_metadata.get("service_url") or "")
-        team_id = str(envelope.provider_metadata.get("team_id") or "")
-        if not service_url or not team_id:
-            return envelope
-
-        try:
-            token = acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
-            channels = list_team_channels(service_url, team_id, token)
-        except Exception as exc:
-            logger.warning(
-                "Teams inbound enrichment resolve channel name failed for message %s (%s)",
-                envelope.provider_message_id,
-                type(exc).__name__,
-            )
-            return envelope
-
-        if location.id not in channels:
-            return envelope
-        # Teams reports the default General channel with a null name so callers
-        # can localize it; its channel id always equals the team id.
-        name = channels[location.id] or ("General" if location.id == team_id else None)
-        if not name:
-            return envelope
-        return envelope.model_copy(update={"location": location.model_copy(update={"display_name": name})})
 
     def normalize_inbound(
         self,

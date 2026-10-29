@@ -1,4 +1,3 @@
-import json
 import logging
 import secrets
 from collections.abc import AsyncIterator
@@ -16,33 +15,26 @@ from api.domains.communications.addressing import extract_local_part
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
-from api.domains.communications.execution_context import issue_execution_token
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
     CommunicationConnection,
-    CommunicationDeliveryStatus,
-    CommunicationDirection,
     CommunicationJournalStage,
     CommunicationPolicyDisposition,
     ConversationLocation,
     NormalizedCommunicationEnvelope,
-    PlatformCapability,
-    ProcessingFeedbackStage,
     RuntimeDeliveryRead,
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.plugins.base import (
-    InboundAdmissionContext,
+    GatewayDeliveryPlugin,
     InboundAdmissionResult,
-    PlatformPlugin,
     PlatformSettings,
-    ProcessingFeedbackContext,
-    WebhookRequest,
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import require_gateway_transport
 from api.infrastructure.communication_signals import (
     CommunicationSignal,
     CommunicationSignalBus,
@@ -71,6 +63,10 @@ class CommunicationsGatewayService:
         connection_id: UUID,
         envelope: NormalizedCommunicationEnvelope,
     ) -> AcceptedCommunicationRead:
+        connection = self.connection_repository.get_active(connection_id)
+        if connection is None or not connection.enabled:
+            raise LookupError("Communication Connection is unavailable")
+        require_gateway_transport(connection.platform_key)
         accepted = self.delivery_repository.accept_inbound(
             connection_id=connection_id,
             envelope=envelope,
@@ -115,43 +111,15 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        native_platform_keys = self.config.native_platform_keys
-        expired = self.delivery_repository.reclaim_expired_inbound(
+        self.delivery_repository.reclaim_expired_inbound(
             agent_id=agent.id,
-            excluded_platform_keys=native_platform_keys,
         )
-        for stale in expired:
-            self.notify_processing_feedback(
-                ProcessingFeedbackContext(
-                    connection_id=stale.connection_id,
-                    stage=ProcessingFeedbackStage.FAILED,
-                    location=stale.envelope.location,
-                    provider_message_id=stale.envelope.provider_message_id,
-                    provider_metadata=stale.envelope.provider_metadata,
-                )
-            )
         delivery = self.delivery_repository.claim_next_inbound(
             agent_id=agent.id,
             reclaim_expired=False,
-            excluded_platform_keys=native_platform_keys,
         )
         if delivery is not None:
             delivery = self._for_runtime(delivery)
-            delivery.execution_token = issue_execution_token(
-                self.config.agent_token_encryption_key,
-                agent.id,
-                delivery.delivery_id,
-                delivery.attempt_count,
-            )
-            self.notify_processing_feedback(
-                ProcessingFeedbackContext(
-                    connection_id=delivery.connection_id,
-                    stage=ProcessingFeedbackStage.CLAIMED,
-                    location=delivery.envelope.location,
-                    provider_message_id=delivery.envelope.provider_message_id,
-                    provider_metadata=delivery.envelope.provider_metadata,
-                )
-            )
         return delivery
 
     def _for_runtime(self, delivery: RuntimeDeliveryRead) -> RuntimeDeliveryRead:
@@ -159,7 +127,7 @@ class CommunicationsGatewayService:
         if connection is None:
             raise RuntimeError(f"Connection {delivery.connection_id} is no longer active")
         try:
-            plugin = self.plugins.require(connection.platform_key)
+            plugin = self.plugins.require_delivery(connection.platform_key)
             prompt = plugin.runtime_prompt(delivery.envelope)
         except Exception as exc:
             raise RuntimeError(f"Could not prepare runtime delivery for Connection {delivery.connection_id}") from exc
@@ -239,12 +207,6 @@ class CommunicationsGatewayService:
                 agent.id,
                 CommunicationSignal(type=CommunicationSignalType.MESSAGE_CHANGED, delivery_id=delivery_id),
             )
-            if not result.succeeded:
-                self._notify_runtime_failure_feedback(
-                    agent.id,
-                    delivery_id,
-                    normalized_error.summary if normalized_error is not None else None,
-                )
         return completed
 
     def renew_runtime_delivery_lease(
@@ -261,40 +223,6 @@ class CommunicationsGatewayService:
             agent_id=agent.id,
             awaiting_input=awaiting_input,
         )
-
-    def _notify_runtime_failure_feedback(
-        self,
-        agent_id: UUID,
-        delivery_id: UUID,
-        error_summary: str | None = None,
-    ) -> None:
-        """Notify terminal runtime failure without coupling it to completion."""
-        try:
-            status = self.delivery_repository.delivery_status(
-                delivery_id,
-                direction=CommunicationDirection.INBOUND,
-            )
-            if status != CommunicationDeliveryStatus.DEAD_LETTERED:
-                return
-            delivery = self.delivery_repository.get_inbound_runtime_delivery(delivery_id, agent_id=agent_id)
-            if delivery is not None:
-                self.notify_processing_feedback(
-                    ProcessingFeedbackContext(
-                        connection_id=delivery.connection_id,
-                        stage=ProcessingFeedbackStage.FAILED,
-                        location=delivery.envelope.location,
-                        provider_message_id=delivery.envelope.provider_message_id,
-                        source_delivery_id=delivery_id,
-                        provider_metadata=delivery.envelope.provider_metadata,
-                        error_summary=error_summary,
-                    )
-                )
-        except Exception as exc:
-            logger.warning(
-                "Communication terminal-failure feedback context failed for Delivery %s (%s)",
-                delivery_id,
-                type(exc).__name__,
-            )
 
     def enqueue_runtime_reply(
         self,
@@ -316,42 +244,10 @@ class CommunicationsGatewayService:
         )
         return delivery_id
 
-    def accept_driver_event(
-        self,
-        connection_id: UUID,
-        provided_key: str,
-        payload: dict[str, Any],
-    ) -> list[AcceptedCommunicationRead]:
-        connection = self.connection_repository.get_active(connection_id)
-        if connection is None or not connection.enabled:
-            raise PermissionError("Communication Connection not found")
-        driver_key = decrypt_token(
-            connection.driver_key_encrypted,
-            self.config.agent_token_encryption_key,
-        )
-        if not secrets.compare_digest(driver_key, provided_key):
-            raise PermissionError("Invalid Platform Driver credential")
-        plugin = self.plugins.require(connection.platform_key)
-        settings = plugin.settings_model.model_validate(connection.settings)
-        return self._accept_admitted_payload(connection, plugin, settings, payload)
-
-    def accept_plugin_payload(
-        self,
-        connection_id: UUID,
-        payload: dict[str, Any],
-    ) -> list[AcceptedCommunicationRead]:
-        """Accept an event from a plugin task already bound to its Connection."""
-        connection = self.connection_repository.get_active(connection_id)
-        if connection is None or not connection.enabled:
-            return []
-        plugin = self.plugins.require(connection.platform_key)
-        settings = plugin.settings_model.model_validate(connection.settings)
-        return self._accept_admitted_payload(connection, plugin, settings, payload)
-
     def _accept_admitted_payload(
         self,
         connection: CommunicationConnection,
-        plugin: PlatformPlugin,
+        plugin: GatewayDeliveryPlugin,
         settings: PlatformSettings,
         payload: dict[str, Any],
     ) -> list[AcceptedCommunicationRead]:
@@ -374,120 +270,21 @@ class CommunicationsGatewayService:
         if admission.disposition != CommunicationPolicyDisposition.ACCEPTED:
             return []
         envelopes = list(admission)
-        if envelopes:
-            envelopes = self._enrich_inbound(connection, plugin, settings, envelopes)
         accepted: list[AcceptedCommunicationRead] = []
         for envelope in envelopes:
             result = self.accept_inbound(connection.id, envelope)
             accepted.append(result)
-            if not result.duplicate and result.status == CommunicationDeliveryStatus.PENDING:
-                self._notify_processing_feedback(connection, ProcessingFeedbackStage.ACCEPTED, envelope)
         return accepted
-
-    def _enrich_inbound(
-        self,
-        connection: CommunicationConnection,
-        plugin: PlatformPlugin,
-        settings: PlatformSettings,
-        envelopes: list[NormalizedCommunicationEnvelope],
-    ) -> list[NormalizedCommunicationEnvelope]:
-        """Resolve optional provider names before durable persistence.
-
-        Best-effort: any failure (decrypt, validation, or a plugin's own
-        provider lookups) falls back to the envelopes as normalized rather
-        than delaying or rejecting durable acceptance.
-        """
-        try:
-            credentials = plugin.credentials_model.model_validate(
-                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-            )
-            return plugin.enrich_inbound(settings, credentials, envelopes)
-        except Exception as exc:
-            # Validation errors can include input values. Credentials are
-            # decrypted only for this best-effort lookup and must never appear
-            # in logs, even when a stored payload is malformed.
-            logger.warning(
-                "Communication inbound enrichment failed for Connection %s (%s)",
-                connection.id,
-                type(exc).__name__,
-            )
-            return envelopes
-
-    def notify_processing_feedback(self, context: ProcessingFeedbackContext) -> None:
-        """Best-effort feedback hook for a provider-owned delivery lifecycle."""
-        try:
-            connection = self.connection_repository.get_active(context.connection_id)
-            if connection is not None:
-                self._notify_processing_feedback_context(connection, context)
-        except Exception as exc:
-            logger.warning(
-                "Communication processing feedback lookup failed for Connection %s (%s)",
-                context.connection_id,
-                type(exc).__name__,
-            )
-
-    def _notify_processing_feedback(
-        self,
-        connection: CommunicationConnection,
-        stage: ProcessingFeedbackStage,
-        envelope: NormalizedCommunicationEnvelope,
-    ) -> None:
-        self._notify_processing_feedback_context(
-            connection,
-            ProcessingFeedbackContext(
-                connection_id=connection.id,
-                stage=stage,
-                location=envelope.location,
-                provider_message_id=envelope.provider_message_id,
-                provider_metadata=envelope.provider_metadata,
-            ),
-        )
-
-    def _notify_processing_feedback_context(
-        self,
-        connection: CommunicationConnection,
-        context: ProcessingFeedbackContext,
-    ) -> None:
-        try:
-            plugin = self.plugins.require(connection.platform_key)
-            if PlatformCapability.PROCESSING_FEEDBACK not in plugin.capabilities:
-                return
-            settings = plugin.settings_model.model_validate(connection.settings)
-            credentials = plugin.credentials_model.model_validate(
-                json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-            )
-            plugin.processing_feedback(
-                settings,
-                credentials,
-                context,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Communication processing feedback %s failed for Connection %s (%s)",
-                context.stage.value,
-                connection.id,
-                type(exc).__name__,
-            )
 
     def _admit_plugin_payload(
         self,
         connection_id: UUID,
-        plugin: PlatformPlugin,
+        plugin: GatewayDeliveryPlugin,
         settings: PlatformSettings,
         payload: dict[str, Any],
     ) -> InboundAdmissionResult:
         try:
-            result = plugin.admit_inbound(
-                settings,
-                payload,
-                context=InboundAdmissionContext(
-                    connection_id=connection_id,
-                    thread_is_agent_owned=lambda location: self.delivery_repository.thread_has_agent_state(
-                        connection_id=connection_id,
-                        location=location,
-                    ),
-                ),
-            )
+            result = plugin.normalize_inbound(settings, payload)
         except Exception as exc:
             logger.warning(
                 "Communication payload admission failed for Connection %s (%s)",
@@ -562,19 +359,9 @@ class CommunicationsGatewayService:
         connection_id = self.email_addresses.resolve(local_part)
         if connection_id is None:
             return []
-        return self.accept_plugin_payload(connection_id, payload)
-
-    def accept_provider_webhook(
-        self,
-        connection_id: UUID,
-        request: WebhookRequest,
-    ) -> list[AcceptedCommunicationRead]:
         connection = self.connection_repository.get_active(connection_id)
-        if connection is None or not connection.enabled:
-            raise PermissionError("Communication Connection not found")
-        plugin = self.plugins.require(connection.platform_key)
-        credentials = plugin.credentials_model.model_validate(
-            json.loads(decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key))
-        )
-        plugin.verify_webhook(credentials, request)
-        return self.accept_plugin_payload(connection.id, request.payload)
+        if connection is None or not connection.enabled or connection.platform_key != "email":
+            return []
+        plugin = self.plugins.require_delivery("email")
+        settings = plugin.settings_model.model_validate(connection.settings)
+        return self._accept_admitted_payload(connection, plugin, settings, payload)

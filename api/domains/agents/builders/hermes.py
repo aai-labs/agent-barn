@@ -1,12 +1,26 @@
+import json
 from pathlib import Path
 from uuid import UUID
 
 import yaml
 from kubernetes import client
 
+from api.domains.agents.restore_point_job import RUNTIME_HERMES
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import (
+    RUNTIME_WEBHOOK_PORT,
+    AgentBarnTelegramRuntime,
+)
+from api.domains.file_sync.rules import rules_manifest
 
-from .common import _labels, _resource_name, _setting_ids
+from .artifacts import (
+    ARTIFACT_COMMAND,
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_TOOL,
+    artifact_command_mount,
+    artifact_command_volume,
+)
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_TOOL_INSTRUCTIONS,
@@ -14,20 +28,6 @@ from .memory import (
     hermes_memory_settings,
     memory_command_mount,
     memory_command_volume,
-)
-
-# Matches OpenClaw, so limits.memory (100Gi quota) never binds before
-# requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
-# is Node, and V8 derives its heap ceiling from the cgroup limit (measured
-# 259/524/1048 MiB at 512m/1g/2g), so a lower limit makes it collect sooner.
-# CPython collects promptly too, but its policy is allocation-count based and
-# never reads the cgroup, so here the limit is a hard cap on the real working
-# set rather than a GC trigger. No Hermes pod is known to exceed 1Gi -- the
-# runtime label added alongside this is what will confirm it -- so watch for
-# OOMKilled on Hermes after rollout.
-AGENT_RESOURCES = client.V1ResourceRequirements(
-    requests={"memory": "320Mi", "cpu": "50m"},
-    limits={"memory": "1Gi", "cpu": "500m"},
 )
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
@@ -49,10 +49,15 @@ OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
 SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+# Turns one Hermes run may take before the runtime stops it. An Agent's own
+# `max_turns` replaces it; a review of a large pull request needs more than this.
+HERMES_DEFAULT_MAX_TURNS = 50
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # Hermes shows a first-message onboarding notice whenever this variable is
@@ -75,12 +80,15 @@ _HERMES_AUXILIARY_TASKS = (
     "kanban_decomposer",
     "profile_describer",
     "goal_judge",
-    "curator",
     "monitor",
-    "background_review",
 )
 
-_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
+# Left unpinned on purpose. These fork the agent and resolve their key through Hermes's
+# runtime provider, which sends OPENAI_API_KEY only to OpenAI hosts, so pinned to
+# "custom" against the in-pod proxy they send a placeholder key and get a 401. Unpinned,
+# both use the main model's provider, which carries the key.
+_HERMES_RUNTIME_INHERITING_TASKS = ("curator", "background_review")
+
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 
@@ -93,6 +101,7 @@ def _hermes_config_core(
     litellm_base_url: str,
     enabled_plugins: list[str],
     approval_mode: str = "auto",
+    max_turns: int | None = None,
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -110,6 +119,14 @@ def _hermes_config_core(
             "backend": "local",
             "cwd": HERMES_WORKSPACE_DIR,
             "timeout": 120,
+            # Hermes snapshots a login shell, which resets the inherited PATH.
+            # Keep its usual user init files, then restore our runtime tools.
+            "shell_init_files": [
+                "~/.profile",
+                "~/.bash_profile",
+                "~/.bashrc",
+                "/app/config/terminal-env.sh",
+            ],
         },
         "memory": {
             "memory_enabled": True,
@@ -119,12 +136,15 @@ def _hermes_config_core(
             "enabled": False,
         },
         "agent": {
-            "max_turns": 50,
+            "max_turns": max_turns if max_turns is not None else HERMES_DEFAULT_MAX_TURNS,
         },
         "display": {
             "tool_progress": "all",
             "platforms": {},
         },
+        # Deliver scheduled results as the agent wrote them, without Hermes'
+        # "Cronjob Response" header and "stop reminder" footer.
+        "cron": {"wrap_response": False},
         "group_sessions_per_user": False,
         "plugins": {
             "enabled": enabled_plugins,
@@ -145,7 +165,8 @@ def _hermes_config_core(
         # rejects: smart approval escalated every flagged command, and title
         # generation and vision failed. "custom" reuses OPENAI_API_KEY from the
         # runtime secret against the same proxy. The main model stays on
-        # "openrouter" because "custom" there drops that key.
+        # "openrouter" because "custom" there drops that key. Two tasks resolve their
+        # key differently and stay unpinned: see _HERMES_RUNTIME_INHERITING_TASKS.
         "auxiliary": {
             task: {"provider": "custom", "base_url": litellm_base_url, "model": model_name}
             for task in _HERMES_AUXILIARY_TASKS
@@ -163,14 +184,18 @@ def build_hermes_gateway_config(
     telegram_settings: dict | None = None,
     runtime_teams: bool = False,
     verbose_mode: bool = False,
+    agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
+    max_turns: int | None = None,
 ) -> dict:
-    plugins = ["telemetry-push", "agentbarn-messaging"]
-    if native_slack or native_discord or telegram_settings is not None or runtime_teams:
+    plugins = ["telemetry-push"]
+    if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
     if native_slack:
         plugins.append("agentbarn-slack-access")
-    config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config = _hermes_config_core(
+        model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
+    )
     config["memory"]["provider"] = "hindsight" if memory_enabled else ""
     if memory_enabled:
         config["memory"]["hindsight"] = hermes_memory_settings()
@@ -219,6 +244,21 @@ def build_hermes_gateway_config(
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
         }
+    if agentbarn_telegram is not None:
+        # Linking already admitted every sender, and groups are not part of Agent
+        # Barn Telegram; an empty group sender allowlist is Hermes' only group off switch.
+        config["telegram"] = {"unauthorized_dm_behavior": "ignore", "group_allow_from": []}
+        config.setdefault("platforms", {})["telegram"] = {
+            "extra": {
+                "base_url": f"{agentbarn_telegram.api_root}/bot",
+                "base_file_url": f"{agentbarn_telegram.api_root}/file/bot",
+            }
+        }
+        config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
     if runtime_teams:
         config["display"]["platforms"]["teams"] = {
             "tool_progress": "all" if verbose_mode else "off",
@@ -250,11 +290,6 @@ def native_slack_env(
         "AGENTBARN_SLACK_DM_POLICY": settings.get("dm_policy", "off"),
         "AGENTBARN_SLACK_GROUP_POLICY": settings.get("group_policy", "allowlist"),
         "AGENTBARN_SLACK_DM_ALLOWED_USERS": ",".join(settings.get("dm_user_ids") or []),
-        # Hermes delivers scheduled results itself, to their origin or the home
-        # channel, instead of bridging them through the Communications gateway.
-        # ponytail: disables the bridge for every origin, so Web Chat cron jobs go
-        # undelivered on native agents; route per origin once transport is per Connection.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if settings.get("group_policy", "allowlist") == "allowlist":
         env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
@@ -277,8 +312,6 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
     env = {
         "DISCORD_BOT_TOKEN": credentials["bot_token"],
         "DISCORD_ALLOW_ALL_USERS": "true" if settings.get("allow_all_users") else "false",
-        # Native Hermes delivers scheduled results to their origin or home.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     for settings_key, env_key in (
         ("allowed_channel_ids", "DISCORD_ALLOWED_CHANNELS"),
@@ -294,6 +327,27 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
     return env
 
 
+def agentbarn_telegram_env(runtime: AgentBarnTelegramRuntime) -> dict[str, str]:
+    """Run the native Hermes Telegram adapter behind Agent Barn's shared bot.
+
+    Webhook mode receives the updates Agent Barn forwards; ``base_url`` in the
+    gateway config sends every Bot API call to Agent Barn's proxy with a
+    stand-in token. Groups are closed in the gateway config.
+    """
+    return {
+        "TELEGRAM_BOT_TOKEN": runtime.api_token,
+        "TELEGRAM_ALLOW_ALL_USERS": "true",
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        "TELEGRAM_WEBHOOK_URL": runtime.webhook_url,
+        "TELEGRAM_WEBHOOK_PORT": str(RUNTIME_WEBHOOK_PORT),
+        "TELEGRAM_WEBHOOK_HOST": "0.0.0.0",
+        "TELEGRAM_WEBHOOK_SECRET": runtime.webhook_secret,
+        "TELEGRAM_HOME_CHANNEL": _NO_HOME_CHANNEL,
+        # Native Hermes delivers scheduled results to their origin.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
+
+
 def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
     """Map a Telegram Connection onto the native Hermes Telegram adapter.
 
@@ -306,8 +360,6 @@ def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
     env = {
         "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
         "TELEGRAM_REQUIRE_MENTION": "true",
-        # Native Hermes delivers scheduled results to their origin.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if settings.get("group_policy", "allowlist") == "open":
         env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
@@ -339,7 +391,6 @@ def runtime_teams_env(settings: dict, credentials: dict) -> dict[str, str]:
         "TEAMS_TENANT_ID": credentials["tenant_id"],
         "TEAMS_ALLOW_ALL_USERS": "true",
         "TEAMS_PORT": "3978",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if home_channel_id := settings.get("home_channel_id"):
         env["TEAMS_HOME_CHANNEL"] = str(home_channel_id)
@@ -363,17 +414,23 @@ def build_hermes_config_map(
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
+    gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    artifacts_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn_artifacts.py": ARTIFACT_TOOL,
+        "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
-        "TOOLS.md": tools_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
-        "AGENTS.md": agents_md,
+        "TOOLS.md": tools_md,
+        "AGENTS.md": agents_md
+        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
         "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),
@@ -388,11 +445,13 @@ def build_hermes_config_map(
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
+        "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
-        "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),
-        "hermes-messaging.py": (_MESSAGE_SCRIPTS / "hermes-messaging.py").read_text(),
+        "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
+        "file-sync.py": FILE_SYNC_PY,
+        "file-sync-rules.json": json.dumps(rules_manifest(RUNTIME_HERMES)),
     }
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
@@ -400,6 +459,10 @@ def build_hermes_config_map(
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
     if gog_setup_sh is not None:
         data["gog-setup.sh"] = gog_setup_sh
+    if gog_shim_sh is not None:
+        # Installed onto PATH by gog-setup.sh; start.sh puts that directory ahead of
+        # /usr/local/bin so every agent command resolves the wrapper first.
+        data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(
@@ -459,7 +522,15 @@ def build_hermes_deployment(
     namespace: str,
     image: str,
     image_pull_secret: str = "",
+    *,
+    resources: client.V1ResourceRequirements,
 ) -> client.V1Deployment:
+    """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
+
+    Unlike OpenClaw's V8 heap, CPython never reads the cgroup limit: here the limit is a
+    hard cap on the real working set, so a Hermes Agent that outgrows its size is OOMKilled
+    rather than collecting sooner.
+    """
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id, runtime="hermes")
 
@@ -492,6 +563,8 @@ def build_hermes_deployment(
                                 "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
                             ],
                             security_context=client.V1SecurityContext(run_as_user=0),
+                            # Fixed, not the size: see INIT_CONTAINER_RESOURCES.
+                            resources=INIT_CONTAINER_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(name="data", mount_path="/opt/data"),
                             ],
@@ -502,7 +575,7 @@ def build_hermes_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
-                            resources=AGENT_RESOURCES,
+                            resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",
@@ -535,6 +608,7 @@ def build_hermes_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -559,6 +633,7 @@ def build_hermes_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        artifact_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

@@ -1,7 +1,7 @@
 import datetime
 import uuid as uuid_mod
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from cryptography.fernet import Fernet
@@ -10,6 +10,7 @@ from injector import Module, provider, singleton
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentSecret,
     AgentStatus,
     AgentType,
     CommandApprovalMode,
@@ -48,6 +49,14 @@ class MockK8sModule(Module):
         # Every attribute is truthy by default, which would read as "a pod is still
         # terminating" and block every restore point operation in the suite.
         mock.has_pods_for_deployment.return_value = False
+        mock.get_pod_readiness.return_value = ("ready", None)
+        mock.runtime_has_exited.return_value = False
+
+        # Same idea: "no pod to read" is the sane default, so a MagicMock never
+        # reaches the pinned_runtime_image column.
+        mock.get_pod_image.return_value = None
+        # A MagicMock cannot be compared with an int, and a fresh pod has not restarted.
+        mock.get_pod_restart_count.return_value = 0
         return mock
 
 
@@ -174,6 +183,40 @@ def use_org_for_auth():
         from api.tests.core.givenpy import LambdaWith
 
         return LambdaWith(lambda: None, cleanup)
+
+    return step
+
+
+def providers_accept_credentials():
+    """Every provider with a live validator accepts the credential being saved.
+
+    Creating or updating an Agent live-validates the credentials it sets. Tests about
+    something else save placeholder credentials, which must not reach real providers.
+    """
+
+    def step(context):
+        from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
+        from api.infrastructure.integration_validators.result import IntegrationValidationResult
+
+        return patch.dict(
+            "api.domains.agents.service.PROVIDER_VALIDATORS",
+            dict.fromkeys(PROVIDER_VALIDATORS, lambda _content: IntegrationValidationResult(valid=True)),
+        )
+
+    return step
+
+
+def shared_credential_is_attached_to_agent():
+    def step(context):
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=context.shared_credential.provider,
+                secret_name=context.shared_credential.name,
+                content=None,
+                shared_credential_id=context.shared_credential.id,
+            )
+        )
 
     return step
 

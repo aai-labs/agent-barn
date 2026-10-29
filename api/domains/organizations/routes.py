@@ -8,6 +8,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import (
+    OrganizationAgentLimitUpdate,
     OrganizationCreate,
     OrganizationFilter,
     OrganizationLlmBudgetRead,
@@ -15,15 +16,38 @@ from api.domains.organizations.models import (
     OrganizationLlmCoverageRead,
     OrganizationOwnLlmBudgetUpdate,
     OrganizationRead,
+    OrganizationSettingsRead,
+    OrganizationSettingsUpdate,
+    OrganizationTrialEnd,
     OrganizationUpdate,
     PlatformOrganizationRead,
     get_organization_filter,
 )
 from api.domains.organizations.service import OrganizationService
+from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.infrastructure.shared.models import PaginatedItems
 
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
 platform_org_router = APIRouter(prefix="/platform/organizations", tags=["platform-organizations"])
+platform_organization_settings_router = APIRouter(prefix="/platform/settings/organizations", tags=["platform-settings"])
+
+
+@platform_organization_settings_router.get("", response_model=OrganizationSettingsRead)
+def read_organization_settings(
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[OrganizationSettingsService, Injected(OrganizationSettingsService)],
+):
+    """Settings for every Organization, such as how many Agents one may run by default."""
+    return service.read(context)
+
+
+@platform_organization_settings_router.put("", response_model=OrganizationSettingsRead)
+def update_organization_settings(
+    data: OrganizationSettingsUpdate,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[OrganizationSettingsService, Injected(OrganizationSettingsService)],
+):
+    return service.update(data, context)
 
 
 @org_router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)
@@ -105,6 +129,28 @@ def set_organization_llm_budget(
     whole point of it as a cost control. It can only set a lower limit of its own.
     """
     return budget_service.set_llm_budget(organization_id, budget.budget_usd, budget.budget_duration, context)
+
+
+@platform_org_router.put("/{organization_id}/agent-limit", response_model=PlatformOrganizationRead)
+def set_organization_agent_limit(
+    organization_id: UUID,
+    data: OrganizationAgentLimitUpdate,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
+):
+    """Set how many Agents an Organization may run; null returns it to the default."""
+    return organization_service.set_agent_limit(organization_id, data.agent_limit, context)
+
+
+@platform_org_router.post("/{organization_id}/end-trial", response_model=PlatformOrganizationRead)
+def end_organization_trial(
+    organization_id: UUID,
+    data: OrganizationTrialEnd,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
+):
+    """Make a trial an ordinary Organization on the spend limit given here."""
+    return organization_service.end_trial(organization_id, data, context)
 
 
 @platform_org_router.get("/{organization_id}/llm-budget/coverage", response_model=OrganizationLlmCoverageRead)

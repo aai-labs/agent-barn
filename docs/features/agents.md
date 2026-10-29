@@ -1,12 +1,85 @@
 # Agents
 
+The Home page shows a single first-Agent panel when the user's visible team is empty,
+with example use cases and direct ready-made/custom hiring choices. Once
+Agents exist, Home shows the Agent grid, its hire tile and a **Hire agent** button
+beside the "Your team" heading. Home is the only place hiring starts; the navigation
+has no hire action of its own.
+
+## Hiring choices
+
+For active Trial Organizations, general **Hire agent** entry points offer
+**Ready-made assistant** and **Build your own**, including after onboarding is
+complete and when the Organization already has Agents. Neither option is preselected; **Continue** requires an explicit choice. The empty dashboard's two explicit buttons open their respective setup
+directly after the capacity check, without asking the user to choose again.
+Ready-made hiring is offered only while the Organization is on a trial. For ordinary
+Organizations, including after a trial ends, every hiring entry point opens
+**Build your own agent** directly, and the empty dashboard shows only that action.
+Existing ready-made Agents and their Telegram linking remain available after a trial ends.
+Opening or cancelling the chooser or ready-made confirmation creates nothing.
+Build your own opens the existing runtime/template/model/Skill form. Ready-made
+first explains the assistant's purpose, General Purpose Template, Hermes runtime,
+and Organization default model. Only **Hire assistant** creates and starts a new
+Agent with automatic command approval, even when the Organization already has
+Agents. Both paths use ordinary scoped Agent create/start APIs and retain their
+validation and Agent authorization. A failed start retries the newly created Agent
+within the same dialog.
+The hiring modal and onboarding share the same Hermes/OpenClaw segmented runtime
+control, including keyboard selection and disabled behavior during submission.
+Build your own also offers a **CPU & memory** choice, with the default preselected,
+to Owners and Admins of an Organization the platform lets choose an
+[Agent Size](agent-sizes.md#organization-choice); everyone else hires on the default
+without being asked.
+
+The ready-made path creates its Agent Barn Telegram Connection before startup,
+then reuses onboarding's Telegram preparation, QR code, link-status polling,
+expiry recovery, and completion screens inside a dashboard dialog. Retrying setup
+retains the created Agent and reads existing Connections before creating one, so a
+lost Connection response does not duplicate it. Setup reads the Agent's current
+status before starting and skips start when it is already running, including after
+a lost start response. Telegram is optional: users can
+skip linking and go directly to Web Chat. This path does not reopen or modify
+onboarding completion.
+
+The Agent detail page shows **Finish connecting Telegram** for an enabled Agent
+Barn Telegram Connection with no linked accounts, including after a refresh or a
+closed setup dialog. Members with `agent.update` can reopen the same QR/linking
+screen using **Connect Telegram**. This links the existing Connection and never
+creates or starts an Agent. A stopped Agent must first be started through its
+lifecycle controls; linked Connections do not show the reminder. Skipping returns
+to the detail page's Web Chat tab.
+
+Before setup begins, a Trial Organization's current read must succeed. Its
+`trial_agent_limit_reached` flag reports creation capacity across non-deleted Agents,
+including stopped Agents and ones hidden from this member; it exposes neither their
+identities nor an unfiltered Agent count. When full, both choices stay visible and
+disabled, with the limit explained and **View your agents** as the action. The notice
+states that deleting an Agent frees a slot and stopping one does not. A failed capacity
+check offers retry and keeps both choices disabled. Creation still enforces the quota
+under the existing database lock, including when capacity changes after the check.
+Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
+
+Any other Organization goes straight to the hiring form, unless its read's
+`agent_limit_reached` flag (counted the same way, against the Agent limit in force)
+says it already has all its Agents; then the dialog says so instead of showing the form.
+
+## Messaging connection choices
+
+The general Messaging picker offers users' own Telegram bots and other supported
+platforms. Agent Barn Telegram is reserved for ready-made setup and is excluded
+from this picker; existing shared-bot Connections can still be managed and linked.
+An Agent has one Telegram adapter, so either Telegram Connection type hides
+Telegram from the add picker, including when disabled. Deleting the existing
+Connection frees that choice. The API/database independently reject conflicting
+Telegram types; picker filtering does not replace that enforcement.
+
 ## Read when
 
 Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.
 
 ## Role in the system
 
-An Agent is the central execution aggregate. It connects organization tenancy, an exact active shared Template or Agent Template Override version, Skills, tool Integrations, one Runtime deployment, telemetry, and LiteLLM identity. External chat transport is a separate Agent-subordinate Communications aggregate.
+An Agent is the central execution aggregate. It connects organization tenancy, an exact active shared Template or Agent Template Override version, Skills, tool Integrations, one Runtime deployment, telemetry, and LiteLLM identity. Communication Connection configuration is a separate Agent-subordinate Communications aggregate; transport follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary).
 
 ## Invariants
 
@@ -19,19 +92,21 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Explicit Agent Access is granted only to accepted Organization Members in the same Organization. Pending invitees and cross-Organization users are ineligible; removing a Membership cascades its access rows.
 - Agent General Access is an Agent-level setting: Restricted or All Organization Members with one Agent Access Role. It applies only to accepted Memberships and is additive with explicit Agent Access; removing one source leaves the other source intact.
 - Agent read DTOs expose current effective Agent-related Permission keys. The UI uses those keys for lifecycle, configuration, secret, activity, cost, and deletion controls rather than deriving Agent authority from either role family; mutations independently reauthorize and validate current state. AF-150 does not expose access-management UI.
-- Runtime and Platform are independent. An Agent may own zero or many Communication Connections, with at most one active Connection per Platform. Gateway-owned Connections use the runtime-neutral Communications protocol; configured native Connections run inside the Agent's runtime (Hermes or OpenClaw) instead.
+- Runtime and Platform are independent. An Agent may own zero or many Communication Connections, with at most one active Connection per Platform. Transport ownership follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary); enabled runtime-owned Connections are projected at startup for both Hermes and OpenClaw.
 - Agent Webhooks are Agent-subordinate machine-ingress resources, separate from Platforms and Communication Connections. Their configuration follows Agent read/update/secret authority, while invocation content follows activity-read authority. See [`agent-webhooks.md`](agent-webhooks.md).
 - The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption. A Web Chat message that is a command-approval prompt exposes its `approval` (identity, command and offered choices), read from its outbound delivery, and renders one button per offered choice; clicking one sends that choice with the `approval_id` it answers. Answering requires the same Agent update permission as any send, and the buttons are not shown without it. A stored approval that no longer validates is omitted rather than failing the thread.
 - Command approval is currently Hermes-only: the persisted `approval_mode` field maps onto the Hermes runtime's approval policy. OpenClaw has no user-configurable command-approval control, so create/update reject an explicit non-default `approval_mode` for an OpenClaw Agent (HTTP 400) rather than silently ignoring it, and reads report the effective `AUTO` default for OpenClaw regardless of the stored value. OpenClaw command approval is deferred to a future task.
+- The turn limit is Hermes-only for the same reason. `max_turns` caps how many turns one run may take before the runtime stops it; null follows the platform default, `HERMES_DEFAULT_MAX_TURNS` in the Hermes builder, which reads expose as `effective_max_turns` next to the Agent's own `max_turns`. The value is bounded (1 to 500). Create, update, and template selection reject a value for an OpenClaw Agent (HTTP 400), and reads report null for OpenClaw regardless of the stored value. Sending `max_turns: null` on update returns the Agent to the default, as `model: null` does for the model. A change takes effect at the next start, like every other runtime setting.
 - Answering a Hermes approval prompt with `always` is permanent: the pattern is retained across Agent restarts and is not re-prompted. It covers the whole category of command, not the one command shown. Manual mode ignores these grants and asks for every flagged command, offering only `once` and `deny`; the grants return when the Agent leaves manual mode, and removing one is permanent. Scheduled and heartbeat runs have no one to prompt, so a dangerous command reached from cron or the heartbeat is denied rather than parked; a `BOOT.md` command is parked until it times out, so startup work should avoid flagged commands. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
-- A provisioning failure is normalized before it is persisted or returned. Every failed start is classified into one bounded category (quota exhaustion, cluster RBAC denial, rejected manifest, unreachable cluster, or an unclassified failure) whose user-facing copy is a property of that category, not of the cluster's text. That copy states what the reader can do: a failure only an administrator can clear says so, and one worth retrying says to try again. Image-pull and leftover-resource failures are deliberately absent: Kubernetes accepts a Deployment naming an image that cannot be pulled and fails it later on the pod, which the health surface reports, and every creation goes through a helper that resolves a 409 by reading the existing object. Raw Kubernetes text never reaches a client: the only variable part is a bounded `detail` rebuilt from allowlisted resource names and quantities in a complete quota format. Quota names and unfamiliar formats are omitted; stored details must match the same category-specific grammar, so credentials, Secret values, tokens, and kubeconfig content cannot be exposed. The full exception stays in the API logs.
+- A provisioning failure is normalized before it is persisted or returned. Every failed start is classified into one bounded category (quota exhaustion, cluster RBAC denial, rejected manifest, unreachable cluster, or an unclassified failure) whose user-facing copy is a property of that category, not of the cluster's text. That copy states what the reader can do: a failure only an administrator can clear says so, and one worth retrying says to try again. Image-pull and retryable container-configuration failures remain Kubernetes observations rather than persisted provisioning failures: Kubernetes accepts a Deployment naming an image that cannot be pulled and fails it later on the pod, which the health surface reports, while each resource creation resolves a leftover-object 409 by reading the existing object. For provisioned or ready integration generations, detail and health reads can reconcile an actual runtime exit (`CrashLoopBackOff` or a Failed pod with a terminated runtime container) into a durable startup failure under the lifecycle lock. Image-pull and container-configuration retries remain provisioned/unverified and keep their deployment. Agents without integration bindings retain their existing health-only reporting. See the [integration readiness and recovery contract](integrations.md#restart-and-recovery). Raw Kubernetes text never reaches a client: the only variable part is a bounded `detail` rebuilt from allowlisted resource names and quantities in a complete quota format. Quota names and unfamiliar formats are omitted; stored details must match the same category-specific grammar, so credentials, Secret values, tokens, and kubeconfig content cannot be exposed. The full exception stays in the API logs.
 - Agent read DTOs expose the normalized failure as `last_error` while the Agent is in `ERROR`, and a failed start or restart — including the start that follows hiring — returns the same shape as its error body, so a client never has to derive the cause from a status code. Both are rebuilt from the stored category at read time rather than trusted from storage, so a row written before this contract existed reports an unclassified failure instead of its unsanitized text. `last_error` is subject to the same Agent Access rules as the rest of the Agent read.
 - An Agent's model is either inherited or overridden. An empty `model` means the Agent follows its Organization's default runtime model, resolved at every start; a non-empty `model` is an explicit override that no default change touches. Agent read DTOs expose `model_source` and the resolved `effective_model` so no client re-derives this. Sending `model: null` on update clears an override and returns the Agent to the default. See [`agent-settings.md`](agent-settings.md).
-- A running Agent reports whether the platform has moved on beneath it. `running_config_digest` records the digest of the code and runtime images the Agent's pod was actually built from, and `update_available` is true when a running Agent's recorded digest differs from what the API would build now. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears when the Agent restarts. It covers platform-authored code and runtime images only, so the Agent's own configuration keeps its existing surfaces — `pending_model`, Template `source_update`, and the Skill-level `update_available` are unaffected. An Agent already running before its digest was first recorded reports an available update, because its pod genuinely predates the record. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
+- A running Agent reports whether the platform has moved on beneath it. `running_config_digest` records the digest of the code and runtime images the Agent's pod was actually built from, and `update_available` is true when a running Agent's recorded digest differs from what the API would build now. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears when the Agent restarts. It covers platform-authored code and runtime images only, so the Agent's own configuration keeps its existing surfaces — `pending_model`, `pending_size`, Template `source_update`, and the Skill-level `update_available` are unaffected.
+- An Agent's [Agent Size](agent-sizes.md) is read at every start. Choosing another one (`PUT .../agents/{id}/agent-size`, Owners and Admins only) is accepted while the Agent runs, never stops or restarts it, and takes effect at its next start; until then `pending_size` is true, because `running_resources` records what the running pod was given. Choosing the default stores no size, so the Agent follows the default wherever it moves. An Agent already running before its digest was first recorded reports an available update, because its pod genuinely predates the record. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - The start-time model allowlist re-check applies only to Agents carrying an explicit override. An inheriting Agent runs Organization policy: its Organization's own default is held inside the allowlist by invariant, and a platform default it may instead be following is outside any Organization's control.
-- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Native Telegram answers group messages only when the bot is mentioned or replied to, and answers DMs without a mention. Runtime-owned Teams keeps its Azure messaging endpoint on Agent Barn: the authenticated relay applies the Connection's DM/channel policy and forwards accepted activities to the private runtime listener. Discord bots must enable Message Content Intent; bots using role-based access must also enable Server Members Intent so gateway-owned and native admission can establish membership. Discord uses Hermes' native user, role, and channel gates: access is closed unless an allowlist matches or Allow all users is enabled. User allowlists apply in DMs and server messages; role and channel allowlists apply in server messages. It has no separate guild or DM policy switches.
-- Agents respond in shared channels and groups only to messages that explicitly mention them, on every supported platform. Slack additionally requires that mention on every message rather than inheriting it from earlier thread participation. Native Telegram also accepts a reply to the bot; gateway-owned Telegram and Teams expose no equivalent control. Direct messages are exempt. Gating is generated at start; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
+- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Agent Barn Telegram agents use Agent Barn's own shared bot and need no token; an Agent holds either Telegram type, never both. Native Telegram answers group messages only when the bot is mentioned or replied to, and answers DMs without a mention. Runtime-owned Teams keeps its Azure messaging endpoint on Agent Barn: the authenticated relay applies the Connection's DM/channel policy and forwards accepted activities to the private runtime listener. Discord bots must enable Message Content Intent; bots using role-based access must also enable Server Members Intent so native admission can establish membership. Discord uses Hermes' native user, role, and channel gates: access is closed unless an allowlist matches or Allow all users is enabled. User allowlists apply in DMs and server messages; role and channel allowlists apply in server messages. It has no separate guild or DM policy switches.
+- Agents apply their Connection policy in shared channels and groups. Slack exposes every-message and start-only thread mention policies; Telegram accepts a mention or reply to the bot in groups, with DMs exempt. Native admission configuration is generated at start, while Teams policy remains at the authenticated public relay; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - The generated Slack app manifest enables a writable Messages tab. The Connection's DM policy controls which incoming DMs the Agent accepts; it does not change Slack's App Home settings. Apps created from an older manifest with DMs disabled must enable Messages Tab and allow users to send messages under Slack app settings → App Home.
 - Each active Slack or Discord agent must use a distinct bot token within its platform (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
@@ -41,14 +116,76 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Per-Agent LiteLLM keys are encrypted at rest. Creation performs deterministic validation before allocating a key; if creation fails after allocation, the unowned key is deleted, and a failed deletion triggers a best-effort block as a safety fallback. Deleting an existing Agent soft-deletes it and blocks its key rather than deleting it, preserving the LiteLLM identity needed for historical spend attribution.
 - Communication Connection settings and credentials are validated by the selected shipped Platform Plugin, encrypted independently of Agent Secrets, and omitted from read responses. Global plugin credential-identity constraints prevent two active Connections from owning the same bot/application identity where required.
 - Communication health is independent of lifecycle: a provider session may be pending, connected, degraded, or errored while the Agent remains running. Retiring a Connection preserves its canonical Conversation Messages.
-- The API rejects direct Agent configuration updates while an Agent is running, but running Agent read DTOs still expose the caller's configuration and secret permissions so the canonical UI can offer section-specific apply actions. Runtime configuration changes use `Apply & Restart`; Template selection uses `Apply` while stopped or `Apply & Restart` while running, with the latter stopping the Agent, selecting the published version, and starting it again. A running Agent's native Communication Connection changes also use stop, mutate, start because Hermes reads those settings only at boot. For stopped Agents, `Apply` changes the active pin and leaves the Agent stopped until the user starts it from the Agent detail page.
+- The API rejects direct Agent configuration updates while an Agent is running, but running Agent read DTOs still expose the caller's configuration and secret permissions so the canonical UI can offer section-specific apply actions. Runtime configuration changes use `Apply & Restart`; Template selection uses `Apply` while stopped or `Apply & Restart` while running, with the latter stopping the Agent, selecting the published version, and starting it again. A running Agent's native Communication Connection changes also use stop, mutate, start because both runtimes read those settings only at boot. For stopped Agents, `Apply` changes the active pin and leaves the Agent stopped until the user starts it from the Agent detail page.
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
 - Each assigned skill is pinned to an exact version at apply time (mirroring template pins): `agent_skill.pinned_version`. Publishing a newer skill version never moves an existing pin, and an agent recovers from a bad version by re-pinning to an older one. Start mounts each assigned skill's pinned-version files; a version pinned by any agent is protected from skill version deletion.
-- Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. During Agent creation, the service live-validates the exact submitted manual and shared credentials before allocating a LiteLLM key or persisting the Agent; providers without a live validator still receive schema validation and remain eligible for on-demand validation. Later edits to skill metadata are not revalidated at Agent start.
+- Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. Live validation of the credentials a create or update sets is part of the Agent Secret validation invariant in [`integrations.md`](integrations.md#invariants). Later edits to skill metadata are not revalidated at Agent start.
 - Agents are soft-deleted; deletion also removes runtime resources, retires all owned Communication Connections (releasing their provider credential identities), and attempts to block the LiteLLM key.
 - Secret values are encrypted at rest and omitted from read DTOs. Google Workspace credentials are validated as one service-scoped OAuth payload and materialized through the gog CLI; retired per-service Google providers are not supported.
 - Agent Restore Points capture and restore only while the Agent is `STOPPED`, and only one capture or restore may be in flight per Agent — enforced by a database constraint, not only a service check. The per-Agent retention cap counts manual restore points that still hold a volume: Pre-Restore Restore Points and failed captures do not consume it, so an Agent at the cap can still roll back and a run of failures cannot lock it out of capturing.
 - A restore point archive never contains credential material or state the runtime regenerates on boot, so it is not a byte-exact image of the volume. It also never contains a member a restore could not extract: capture offers every member to the same safety filter the restore applies, and drops what that filter refuses — a link pointing outside the volume, for instance, which is unusable once the volume is mounted somewhere else. The count of dropped members is reported with the archive's size. Without this a single such link fails the entire restore rather than costing one link. Reads authorize on `activity.read`; capture, restore, and delete on `agent.lifecycle.manage`. No restore-point-specific Permission exists.
+
+Runtime startup retires the custom messaging bridge and audits old scheduled-job routing
+without changing destinations or history. See [runtime assembly and sanitation](../architecture/runtime-and-deployment.md#runtime-neutral-communications)
+before changing startup or restore behavior.
+
+## Agent list metadata
+
+Organization Agent reads expose `creator` (User ID, full name, and email),
+`last_message_at`, and `last_activity_at`. Creator identity is immutable provenance, displayed as
+“By <name>” on the team card, with email as the fallback when no name is set.
+Legacy or deleted-user provenance is null and displays “Creator not recorded”;
+the UI never guesses a creator from access assignments. The creation date is
+labeled separately.
+
+`last_message_at` is the greatest recorded Conversation Message occurrence time
+across inbound and outbound directions and all Connections, including Web Chat
+and retired Connections. It is independent of runtime health and billed calls.
+`last_activity_at` is the later of `last_message_at` and the occurrence time of
+the Agent's latest successful, non-memory billed model call (`cost_record`). It
+exists because an Agent that only works on schedules, heartbeats, or Agent
+Webhooks may write no messages while plainly working; message recency alone
+reads it as dormant. Cost rows arrive through the sync CronJob, so the call
+side can lag the runtime by a sync interval. Failed calls and memory calls do
+not count: a failing loop or post-conversation memory extraction is not the
+Agent doing its job. Only a timestamp is exposed, never call content, spend, or
+tokens.
+
+Reads use the Agent visibility query and require `activity.read` for that
+Agent for both fields; without it the timestamps are null and the card says
+“Not available”. (The Activity cost endpoints additionally require `cost.read`
+because they return spend; this single timestamp does not.) With permission, a
+null `last_activity_at` means “No activity yet”. No message content is returned.
+An older API response that omits the field also displays “Not available”.
+The card labels it “Last active” and shows relative recency; the exact timestamp
+in the reader's local time zone appears on hover or keyboard focus. A last
+activity 14 or more days old, or none yet, is highlighted as quiet, and the
+dashboard header counts quiet Agents on the loaded page from this field alone,
+without further queries. Late ingestion uses occurrence time rather than
+insertion time.
+
+Team cards are whole-card links with keyboard navigation and no separate Open
+button. A single “Hire a teammate” card follows the displayed teammates in the
+dashboard grid and opens the hiring dialog with a click or keyboard activation.
+It remains available when the team is empty or search has no matches. Teammate
+cards truncate long names to one line (the full name shows on hover), and their last-active footers stay at the bottom. Cards do not show a pending model; the Agent detail page does (see [Agent settings](agent-settings.md)). The
+dashboard search filters the currently loaded page, and identifies that limit
+when more Agents exist than are loaded.
+
+List reads batch shared credential labels for the visible page within the
+Organization; resolving each card must not issue a credential lookup per Agent.
+Response fields and credential-content exclusion match detail reads.
+Pin display queries load only IDs, keys, and versions, and credential list
+projections load only labels and references, excluding Markdown and encrypted
+payload columns. Home cards poll health every 30 seconds only for running
+Agents with `activity.read`; without that permission, a running Agent is labeled
+“Running” without claiming a known health state. Each card shows its state as a
+presence dot on the avatar and a labeled badge (Working, Initializing,
+Disconnected, Needs attention, Running). A stopped Agent shows a muted Idle status in
+the card footer in place of the labeled last-active time, and is not counted as
+quiet.
+
+Integration readiness reconciliation preserves retryable image/configuration diagnostics; it does not treat them as runtime exits.
 
 ## State model
 
@@ -69,7 +206,7 @@ Any failure during provisioning — not only Kubernetes resource creation — mo
 
 ### Create
 
-Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically.
+Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically. `file_sync_enabled` (default true) chooses whether [File Sync](sync-provider/README.md#agent-file-sync) keeps an Agent Folder for the new Agent; an Agent created with it false gets no folder.
 
 ### Suggested names
 
@@ -93,7 +230,7 @@ on failure, and has no shuffle control. Reopening fetches a fresh suggestion.
 
 ### Update
 
-Update is allowed only while not running. It can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. The configuration UI stops a running Agent before submitting these updates and starts it again after a successful or failed update so the lifecycle remains explicit. Repinning requires both template_key and version and revalidates required skills. Template selection is the second write path onto the same pins and is likewise stopped-only: it names the pin's scope explicitly — platform, organization, or Agent-owned override — and may carry the skill pins and runtime settings that must hold with the selected version. A template's required skill pins are validated against the assignments the Agent will end up with rather than the ones it has, so a template and its own skills can move together; requirement checking follows the group contract, so an "at least one of" group is satisfied by one member at the required version and a second member assigned at another version is not a violation; credentials are checked only for the Skills a request adds or re-pins, because a Skill lineage records the requirements of its *newest* version and judging every assignment by those would block an unrelated template switch on a Skill version the Agent does not use; everything the selection carries is validated before anything is written and committed in one transaction, so a rejected selection leaves the pin, the skills, and the settings exactly as they were. A selection advances the Agent's revision even when it moves only skill pins, which is what makes the optimistic-concurrency check reject a stale timestamp and what serializes two concurrent selections. Resolving a shared pin by key and version alone cannot express the scope, because an Organization fork shares its platform lineage's key and restarts its own version numbering.
+Update is allowed only while not running. The Agent Size is the exception: it has its own route, which a running Agent accepts and applies at its next start. Update can change runtime-relevant configuration, repin to an existing template version, add/remove allowed skills, and upsert/remove Agent Secrets. The configuration UI stops a running Agent before submitting these updates and starts it again after a successful or failed update so the lifecycle remains explicit. Repinning requires both template_key and version and revalidates required skills. Template selection is the second write path onto the same pins and is likewise stopped-only: it names the pin's scope explicitly — platform, organization, or Agent-owned override — and may carry the skill pins and runtime settings that must hold with the selected version. A template's required skill pins are validated against the assignments the Agent will end up with rather than the ones it has, so a template and its own skills can move together; requirement checking follows the group contract, so an "at least one of" group is satisfied by one member at the required version and a second member assigned at another version is not a violation; credentials are checked only for the Skills a request adds or re-pins, because a Skill lineage records the requirements of its *newest* version and judging every assignment by those would block an unrelated template switch on a Skill version the Agent does not use; everything the selection carries is validated before anything is written and committed in one transaction, so a rejected selection leaves the pin, the skills, and the settings exactly as they were. A selection advances the Agent's revision even when it moves only skill pins, which is what makes the optimistic-concurrency check reject a stale timestamp and what serializes two concurrent selections. Resolving a shared pin by key and version alone cannot express the scope, because an Organization fork shares its platform lineage's key and restarts its own version numbering.
 
 ### Tuning and configuration overrides
 
@@ -107,7 +244,23 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). Individual Communication Connection retirement remains an independent Communications workflow.
+Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). When the Organization syncs files, the Sync Engine's next pass deletes the Agent's [folder at the provider](sync-provider/README.md#agent-folders), and the retire dialog says so. Individual Communication Connection retirement remains an independent Communications workflow.
+
+### Managed update
+
+`POST /organizations/{organization_id}/agents/{agent_id}/managed-update` is the one-click path behind the update banner shown when `update_available` is true. It requires `agent.lifecycle.manage` and also `agent.update`, because the rollback replays the recorded configuration and restore authorizes that as an Agent update; checking both up front keeps a refusal from surfacing later as an Agent left in `ERROR`. The Agent must be `RUNNING` with no restore-point operation in flight. The call returns `202` having only scheduled the work.
+
+**While it runs.** The `202` marks the Agent as updating (`update_in_progress` on `AgentRead`), with one conditional write, so two requests cannot both start an update. Until the update ends, start, stop, delete, integration isolation apply, another managed update, the operator fleet rebuild, and restore point capture, restore, re-apply, and delete are all refused with `409`. The update's own capture and rollback restore are the only exceptions. The marker is a heartbeat the update refreshes on every poll. The update runs as a background task in one API process, so if that process dies the heartbeat goes stale after two minutes and the Agent is no longer blocked. The UI polls the Agent while `update_in_progress` is true. Detail/health reads defer crash teardown to the managed-update workflow while that marker is live. A ready pod succeeds only after its integration authentication handoff is complete; the update watcher promotes the verified integration generation without a second readiness probe.
+
+**Steps.** The update stops the Agent and records the image its pod was actually running. It waits up to two minutes for the pod to let go of the volume; capture's own wait is only the 30s default grace period, and a person can retry that but an update cannot. Then it captures a Restore Point labelled "Automatic backup before managed update" with the `PRE_UPGRADE` origin and waits for it. Next it starts the Agent on the current platform images and polls the newest pod's readiness for `agent_update_ready_timeout_seconds` (default 600). The window starts when the start returns, so it has to cover pulling an image the node has never seen, init, the start script's installs, and the probe's 30s initial delay. The readiness probe sets no upper bound of its own: failures only mark the pod unready. Image pull errors do not end the wait, because the kubelet retries them and one registry blip must not roll an update back. A crash loop ends it once the container has restarted twice, and so does a container that cannot be created.
+
+**Rollback.** If the new version is not ready in time, its start fails to provision, or any step after the backup raises, the update rolls back by itself. It stops the Agent if it is running, deletes the leftover Deployment, and waits for the volume. Then it restores the pre-update Restore Point with the recorded configuration replayed, and starts the Agent again on the image its pod ran before. The rollback's restore skips the Pre-Restore safety copy: the pre-update archive is newer than anything the failed update left on the volume. Without that copy, nothing runs before the restore Job wipes the volume. So a restore Job that dies with no output (OOM, deadline, eviction) counts as having touched the volume, and fails, rather than being read as "never started". When the rollback's restore fails, the pre-update Restore Point is made restorable again: a failed restore target keeps its volume, and the Job mounts that archive read-only. In that case, or when the restarted old version is not healthy either, the Agent is left in `ERROR` with its Deployment removed, so a manual restore is not refused for a pod still holding the volume. The restart is skipped after a failed restore, because a pod on a runtime the volume may no longer match is worse than none.
+
+**Outcome.** `AgentRead.last_managed_update` records how the last update ended, and the next update clears it. The outcomes are `SUCCEEDED`, `BACKUP_FAILED` (with the reason; the Agent was stopped but not changed, and its pin was not touched), `ROLLED_BACK`, and `ROLLBACK_FAILED`, each with the id of the backup when there is one. These are not provisioning failures, so they are not written to `last_error`; the Agent page shows a short note for each failure while the Agent is still in the state the update left it. Capture and restore are attributed to the user who asked for the update. The explicit Restart control stays a plain stop-and-start with no backup and no rollback.
+
+**Per-Agent runtime pin.** `pinned_runtime_image` is empty for almost every Agent, meaning "follow the platform-wide pin". Only a rollback sets it, to the image the pod ran before the update, read from the pod itself because the platform pin can move underneath a long-running pod. A rolled-back Agent therefore stays on the runtime that worked for it across restarts and operator fleet rebuilds. Because the runtime digest is computed from the image the pod actually starts on, it keeps reporting `update_available`, so the Update button stays offered. The next managed update clears the pin before starting the new image, and a successful update leaves the Agent following the platform again. A capture that fails leaves the pin alone. A restore, manual or automatic, does not move the pin: the pin is desired state, and a later start uses it.
+
+**Retention.** Automatic `PRE_UPGRADE` backups are not counted against `RESTORE_POINT_MAX_PER_AGENT` and are never deleted automatically, so each managed update keeps one more restore point volume. Users delete old ones from the restore points list like any other.
 
 ### Capture and restore
 
@@ -119,7 +272,7 @@ Restore first captures the current volume as a Pre-Restore Restore Point, then v
 
 Two consequences are worth stating plainly. The runtime's own session history lives on the volume and rolls back with it, while Agent Barn's conversation record does not — after a restore the product's history is ahead of the runtime's, which is correct because the product record is the audit trail. And deleting an Agent destroys its restore points irreversibly even though the Agent row itself is only soft-deleted, so deletion is the one path this feature cannot undo.
 
-Each Restore Point also records the Agent's pins at capture time — template pin, model, command approval, verbose mode, and skill version pins — in a versioned, display-oriented configuration manifest. The manifest never holds credentials. It records the template pin's scope (platform, organization, or Agent-owned override) rather than the display pin type, because an Organization fork shares its platform lineage's template key and restarts its own version numbering, so scope is what separates two pins that otherwise read alike. Manifest version 1 predates the template and skill pins; a Restore Point carrying one reports those fields as unrecorded, which is not the same as recorded-and-empty, and cannot be replayed.
+Each Restore Point also records the Agent's pins at capture time — template pin, model, command approval, verbose mode, turn limit, and skill version pins — in a versioned, display-oriented configuration manifest. The manifest never holds credentials. It records the template pin's scope (platform, organization, or Agent-owned override) rather than the display pin type, because an Organization fork shares its platform lineage's template key and restarts its own version numbering, so scope is what separates two pins that otherwise read alike. Manifest version 1 predates the template and skill pins; a Restore Point carrying one reports those fields as unrecorded, which is not the same as recorded-and-empty, and cannot be replayed. The turn limit arrived within version 2 as an optional key: a manifest without it reports the limit as unrecorded and leaves the Agent's limit alone on replay, while a recorded null replays as the platform default.
 
 A restore point's status is resolved by reading it, and also on a schedule, so a capture nobody watches still reaches a terminal state and still gives its volume back. The scheduled pass also applies a configuration replay a restore still owes, and deletes restore point volumes and Jobs that no row owns — matching each back to its row through a label, or through the resource's own name when that label is absent, because the stored Job name is cleared once a row goes terminal. Because it deletes storage from a comparison rather than from an instruction, it leaves recently created resources alone, caps how much it removes per run, refuses to delete anything it cannot positively identify, and fails no rows when the listing it compares against is empty or failed.
 
@@ -159,7 +312,8 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 - [`2026-07-21-additive-agent-general-access.md`](../adr/2026-07-21-additive-agent-general-access.md)
 - [`2026-08-09-agent-scoped-template-overrides.md`](../adr/2026-08-09-agent-scoped-template-overrides.md)
 - [`2026-08-19-organization-scoped-agent-settings.md`](../adr/2026-08-19-organization-scoped-agent-settings.md)
-- [`2026-08-22-agent-barn-owned-communications-gateway.md`](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [Gateway ownership (partially superseded)](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [Native runtime gateways](../adr/2026-09-16-native-runtime-gateways-for-chat-platforms.md)
 - [`2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md)
 
 ## Change impact
@@ -187,3 +341,10 @@ How much CPU and memory the container is using, against its limits, is a separat
 read behind the same `activity.read`: the Resource usage tab. See
 [`resource-usage.md`](resource-usage.md). Its out-of-memory callout reads
 `termination_reason` from these diagnostics.
+
+When artifact storage is configured, Agent creation queues a durable storage
+request in its creation transaction and returns without waiting for Garage.
+Storage failures leave the Agent available for text. Existing Agents can request
+storage from Files; progress and retry follow the
+[artifact lifecycle](agent-artifacts.md#per-agent-storage-authority).
+Deliberately disabled storage creates no provisioning request.

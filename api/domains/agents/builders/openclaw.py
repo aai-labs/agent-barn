@@ -4,9 +4,23 @@ from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.agents.restore_point_job import RUNTIME_OPENCLAW
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import (
+    RUNTIME_WEBHOOK_PATH,
+    RUNTIME_WEBHOOK_PORT,
+    AgentBarnTelegramRuntime,
+)
+from api.domains.file_sync.rules import rules_manifest
 
-from .common import _labels, _resource_name, _setting_ids
+from .artifacts import (
+    ARTIFACT_COMMAND,
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_TOOL,
+    artifact_command_mount,
+    artifact_command_volume,
+)
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_PLUGIN_PATH,
@@ -15,16 +29,6 @@ from .memory import (
     memory_command_mount,
     memory_command_volume,
     openclaw_memory_settings,
-)
-
-# Explicit so agents stop inheriting the namespace LimitRange default of
-# 512Mi request / 2Gi limit. requests.memory is the binding quota axis
-# (20Gi hard), so the request sets how many agents fit; the 1Gi limit halves
-# limits.memory consumption and caps V8, which sizes its heap at ~51% of the
-# cgroup limit -- a 2Gi limit invites a 1Gi heap with no leak involved.
-AGENT_RESOURCES = client.V1ResourceRequirements(
-    requests={"memory": "320Mi", "cpu": "50m"},
-    limits={"memory": "1Gi", "cpu": "500m"},
 )
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
@@ -44,6 +48,7 @@ OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+OPENCLAW_PLUGINS_SH: str = (_SCRIPTS / "plugins.sh").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 LEGACY_WORKSPACE_MIGRATION_SH: str = (
     (_SCRIPTS / "legacy-workspace-migration.sh").read_text().replace("@OPENCLAW_WORKSPACE_DIR@", OPENCLAW_WORKSPACE_DIR)
@@ -55,11 +60,9 @@ OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
-
-_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
-AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
-OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
+FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
 def _openclaw_config_core(
@@ -100,17 +103,15 @@ def _openclaw_config_core(
         # multi-user Agent would carry one person's private conversation into the next.
         "session": {"dmScope": "per-channel-peer"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
             "load": {
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
-                    "/home/node/.openclaw/local-plugins/agentbarn-messaging",
                 ]
             },
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
-                "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -251,6 +252,37 @@ def native_discord_channel(settings: dict) -> dict:
     return channel
 
 
+def agentbarn_telegram_channel(runtime: AgentBarnTelegramRuntime) -> dict:
+    """OpenClaw's bundled Telegram channel behind Agent Barn's shared bot.
+
+    Every Bot API call goes to Agent Barn's proxy (``apiRoot``), and the
+    updates Agent Barn forwards arrive on a private webhook. Linking already
+    admitted each sender, so DMs are open; groups are not part of the product.
+    """
+    return {
+        "enabled": True,
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "disabled",
+        "apiRoot": runtime.api_root,
+        "webhookUrl": runtime.webhook_url,
+        # Resolved from the Secret at startup, so the value never sits in openclaw.json.
+        "webhookSecret": "${AGENTBARN_TELEGRAM_WEBHOOK_SECRET}",
+        "webhookHost": "0.0.0.0",
+        "webhookPort": RUNTIME_WEBHOOK_PORT,
+        "webhookPath": RUNTIME_WEBHOOK_PATH,
+        "defaultTo": _NO_HOME_CHANNEL_TARGET,
+    }
+
+
+def agentbarn_telegram_channel_env(runtime: AgentBarnTelegramRuntime) -> dict[str, str]:
+    """Secret entries for ``agentbarn_telegram_channel``."""
+    return {
+        "TELEGRAM_BOT_TOKEN": runtime.api_token,
+        "AGENTBARN_TELEGRAM_WEBHOOK_SECRET": runtime.webhook_secret,
+    }
+
+
 def native_telegram_channel(settings: dict) -> dict:
     """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
 
@@ -305,8 +337,6 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
     """Secret entries for native channel tokens and the observer."""
     env = {
         "AGENTBARN_NATIVE_CHANNELS": ",".join(credentials_by_platform),
-        # The native gateway delivers scheduled results to their origin or defaultTo.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if slack := credentials_by_platform.get("slack"):
         env["SLACK_BOT_TOKEN"] = slack["bot_token"]
@@ -338,17 +368,23 @@ def build_config_map(
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
+    gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    artifacts_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn_artifacts.py": ARTIFACT_TOOL,
+        "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
-        "TOOLS.md": tools_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
-        "AGENTS.md": agents_md,
+        "TOOLS.md": tools_md,
+        "AGENTS.md": agents_md
+        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -360,6 +396,7 @@ def build_config_map(
         data["start.sh"] = START_SH
         data["memory-gateway-ready.py"] = MEMORY_GATEWAY_READY_PY
         data["legacy-workspace-migration.sh"] = LEGACY_WORKSPACE_MIGRATION_SH
+        data["openclaw-plugins.sh"] = OPENCLAW_PLUGINS_SH
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON
@@ -368,14 +405,19 @@ def build_config_map(
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
-        data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
-        data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
+        data["retire-messaging.py"] = RETIRE_MESSAGING_PY
+        data["file-sync.py"] = FILE_SYNC_PY
+        data["file-sync-rules.json"] = json.dumps(rules_manifest(RUNTIME_OPENCLAW))
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
     if gog_setup_sh is not None:
         data["gog-setup.sh"] = gog_setup_sh
+    if gog_shim_sh is not None:
+        # Installed onto PATH by gog-setup.sh; start.sh puts that directory ahead of
+        # /usr/local/bin so every agent command resolves the wrapper first.
+        data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(
@@ -422,7 +464,14 @@ def build_deployment(
     namespace: str,
     image: str,
     image_pull_secret: str = "",
+    *,
+    resources: client.V1ResourceRequirements,
 ) -> client.V1Deployment:
+    """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
+
+    The limit also sizes OpenClaw's heap: V8 sets its ceiling at about half the cgroup
+    limit, so a bigger size gives Node more heap with no other change.
+    """
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id, runtime="openclaw")
 
@@ -454,6 +503,8 @@ def build_deployment(
                             security_context=client.V1SecurityContext(
                                 run_as_user=0,
                             ),
+                            # Fixed, not the size: see INIT_CONTAINER_RESOURCES.
+                            resources=INIT_CONTAINER_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="data",
@@ -467,7 +518,7 @@ def build_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
-                            resources=AGENT_RESOURCES,
+                            resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",
@@ -480,6 +531,7 @@ def build_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -493,6 +545,7 @@ def build_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        artifact_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

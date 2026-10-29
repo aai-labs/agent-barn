@@ -21,3 +21,16 @@ Authentication and management: `../../api/domains/api_keys/`, `../../api/domains
 Changes to any user-authenticated route must preserve session and key access and accurately update OpenAPI and developer guides. Changes to Agent/subordinate resource access must follow the RBAC implementation brief. Incompatible v1 wire changes require a new major API version.
 
 The checked-in `api/developer_docs/operations-v1.json` records current method, path, and operation ID pairs. The API contract test detects accidental operation removal or renaming; reviewers update it intentionally for additions. Schema shape and behavioral compatibility still require API review and integration tests.
+
+The provider-session reconnect operation remains in the v1 inventory and discovery for compatibility, with OpenAPI `deprecated: true`. Authorized active-Connection requests receive terminal `409` and Agent restart guidance; existing authentication, permission, and tenant-concealment responses remain unchanged. See the [developer resource guide](../../api/developer_docs/resources.md).
+
+Agent artifact staging, raw byte publication, paginated metadata, fresh download
+links and deletion are included in the v1 inventory under each Agent. Reads use
+`agent.read`; writes use `agent.update`. The protocol-specific
+`/api/v1/agent-artifacts/runtime` routes use Agent capabilities and remain outside
+the public user schema, even though the single composed domain router is attached
+to the product app. The capability-only `GET /api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+route streams private storage bytes using opaque `access` authority from an issued
+link; it does not use a User session or Personal API Key. Provider signing and expiry
+remain in the storage adapter. Links use the existing app URL, not a public S3 URL.
+See [Agent artifacts](agent-artifacts.md).

@@ -100,9 +100,10 @@ def test_config_map_does_not_ship_the_other_runtime_plugin(runtime, builder, for
 
 @pytest.mark.parametrize("builder", [_hermes_config_map, _openclaw_config_map])
 @pytest.mark.parametrize("enabled", [False, True])
-def test_memory_writer_instructions_are_only_in_enabled_agents_tools(builder, enabled):
+def test_memory_writer_instructions_are_only_in_enabled_agents_startup_context(builder, enabled):
     from api.domains.agents.builders.memory import MEMORY_TOOL_INSTRUCTIONS
 
     data = builder(memory_enabled=enabled).data
-    assert (MEMORY_TOOL_INSTRUCTIONS in data["TOOLS.md"]) == enabled
-    assert data["AGENTS.md"] == "agents"
+    assert (MEMORY_TOOL_INSTRUCTIONS in data["AGENTS.md"]) == enabled
+    assert data["AGENTS.md"].startswith("agents")
+    assert data["TOOLS.md"] == "tools"

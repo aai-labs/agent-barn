@@ -2,9 +2,11 @@ COMPOSE := docker compose -f compose.yml
 RUNTIME ?= hermes
 
 .PHONY: \
-	setup run stop stop-clean test-api-runtime \
+	check-workflows \
+	reconcile-workflows \
+	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-memory dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-sync-engine dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts report-message-counts backfill-business-actions forward-teams forward-triggers forward-telegram forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs purge-agent-memory
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -49,6 +51,8 @@ MEMORY_BASE_URL ?= http://host.docker.internal:$(MEMORY_PORT)/memory/v1
 # The host-run API reaches the viewer directly, not through the pod-facing host hop.
 MEMORY_VIEW_BASE_URL ?= http://localhost:$(MEMORY_PORT)/memory/view/v1
 COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
+GATEWAY_PORT ?= 8004
+CREDENTIAL_GATEWAY_BASE_URL ?= http://host.docker.internal:$(GATEWAY_PORT)/gateway/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
 # Host-run API processes relay runtime-owned Teams through the local
@@ -56,17 +60,20 @@ API_DEV_PORT ?= 8000
 TEAMS_RUNTIME_WEBHOOK_URL ?= http://localhost:3978/api/messages
 # Same for Agent Webhook dispatch through the local `forward-triggers` port-forward.
 AGENT_TRIGGER_URL ?= http://localhost:8082/agent-triggers/v1/invocations
+# Same for Agent Barn Telegram forwarding through the local `forward-telegram` port-forward.
+AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL ?= http://localhost:8443/telegram
 
-# Runs Ingest, Communications, and Memory alongside the main app so native development
+# Runs Ingest, Communications, Memory, and the credential gateway alongside the main app
 # has the same service topology as Docker and Helm. The trap kills every child
 # on Ctrl-C; stray listeners otherwise break the next run confusingly.
 dev-api:
 	@cd api && \
 	trap 'kill 0' EXIT INT TERM; \
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
-	uv run python -m uvicorn api.communications_main:app --app-dir .. --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) --reload --timeout-graceful-shutdown 5 & \
+	AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=$(AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL) uv run python -m uvicorn api.communications_main:app --app-dir .. --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) --reload --timeout-graceful-shutdown 5 & \
 	uv run python -m uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log & \
-	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	uv run python -m fastapi dev gateway_main.py --host 0.0.0.0 --port $(GATEWAY_PORT) & \
+	CREDENTIAL_GATEWAY_BASE_URL=$(CREDENTIAL_GATEWAY_BASE_URL) INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) $(if $(wildcard .garage/provisioner-host.env),--env-file ../.garage/provisioner-host.env,) python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
@@ -76,13 +83,16 @@ dev-ingest:
 
 # Communications on its own — `make dev-api` already starts it.
 dev-communications:
-	cd api && uv run python -m uvicorn api.communications_main:app --app-dir .. --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) --reload --timeout-graceful-shutdown 5
+	cd api && AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=$(AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL) uv run python -m uvicorn api.communications_main:app --app-dir .. --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) --reload --timeout-graceful-shutdown 5
 
 dev-memory:
 	cd api && uv run uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log
 
 check-memory:
 	cd api && uv run python scripts/check_memory_charts.py
+
+check-workflows:
+	cd api && uv run --frozen python scripts/check_workflow_charts.py
 
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
@@ -97,6 +107,12 @@ forward-triggers:
 	@test -n "$(AGENT)" || { echo "usage: make forward-triggers AGENT=<agent-uuid>"; exit 1; }
 	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 8082:8082
 
+# Local Agent Barn Telegram: same reason as forward-teams, for the private Telegram
+# webhook. Re-run after the pod restarts. Usage: make forward-telegram AGENT=<agent-uuid>
+forward-telegram:
+	@test -n "$(AGENT)" || { echo "usage: make forward-telegram AGENT=<agent-uuid>"; exit 1; }
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 8443:8443
+
 # Local Prometheus for the Resource usage views: installs the real monitoring chart
 # into the k3d cluster (needs helm and kubectl on the host). See README, "Resource
 # usage (local Prometheus)".
@@ -109,11 +125,18 @@ PROMETHEUS_PORT ?= 9090
 forward-prometheus:
 	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/monitoring-prometheus-server $(PROMETHEUS_PORT):80
 
+# Credential gateway on its own — `make dev-api` already starts it.
+dev-gateway:
+	cd api && uv run python -m fastapi dev gateway_main.py --host 0.0.0.0 --port $(GATEWAY_PORT)
+
 dev-ui:
 	cd ui && pnpm dev
 
 dev-worker:
 	cd api && uv run dramatiq api.worker_app --path .. --processes 1 --threads 4 --watch .
+
+dev-sync-engine:
+	cd api && uv run python -c "from api.sync_engine_main import main; main()"
 
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
@@ -126,6 +149,10 @@ reconcile:
 reconcile-restore-points:
 	cd api && uv run python -c "from api.domains.restore_points.reconciliation import main; main()"
 
+# Same bounded controller/retention pass as the deployment's workflow CronJob.
+reconcile-workflows:
+	cd api && uv run python -c "from api.domains.workflows.maintenance import main; main()"
+
 # Both run as CronJobs in a deployment; these are the same passes by hand. Named to
 # match `reconcile`, not `check-*`: they mutate the proxy and send notifications,
 # unlike every other check-* target, which is static verification.
@@ -137,6 +164,11 @@ reconcile-llm-budgets:
 
 run-llm-budget-alerts:
 	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
+
+# The hourly product analytics message counts, sent for the previous closed hour. Sends
+# nothing unless ANALYTICS_ENABLED is true; point ANALYTICS_POSTHOG_HOST at a test receiver.
+report-message-counts:
+	cd api && uv run python -c "from api.domains.analytics.message_counts import main; main()"
 
 # Operator-run, never scheduled: classifies stored shell Tool Calls into Business Actions
 # against whatever DB_CONNECTION_URL points at. Safe to re-run; a re-run re-maps changed
@@ -187,7 +219,7 @@ makemigrations:
 	uv run python -m alembic revision --autogenerate -m "$$message"
 
 test-api:
-	cd api && uv run python -m pytest tests --ignore=tests/integration/test_kubernetes_client.py -v
+	cd api && uv run python -m pytest tests --ignore=tests/integration/test_kubernetes_client.py -n auto --dist loadgroup -v
 
 test-api-k8s:
 	cd api && uv run python -m pytest tests/integration/test_kubernetes_client.py -v
@@ -195,6 +227,11 @@ test-api-k8s:
 test-api-runtime:
 	@case "$(RUNTIME)" in hermes|openclaw) ;; *) echo 'RUNTIME must be hermes or openclaw'; exit 1 ;; esac
 	cd api && uv run python -m pytest runtime_tests/test_$(RUNTIME)_*.py -v
+
+test-integration-isolation:
+	@case "$(RUNTIME)" in hermes|openclaw|both) ;; *) echo 'RUNTIME must be hermes, openclaw or both'; exit 1 ;; esac
+	@mkdir -p .scratch
+	cd api && ISOLATION_TEST_RUNTIME=$(RUNTIME) uv run python -m pytest k8s_runtime_tests -v --junitxml=../.scratch/isolation-junit.xml
 
 test-ui:
 	cd ui && pnpm test
@@ -252,3 +289,42 @@ redis-down:
 
 redis-logs:
 	$(COMPOSE) logs -f redis
+
+# Bounded operator-only private file cleanup (requires configured artifact storage).
+.PHONY: purge-artifacts
+purge-artifacts:
+	cd api && PYTHONPATH=.. uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) $(if $(wildcard .garage/provisioner-host.env),--env-file ../.garage/provisioner-host.env,) python -m api.domains.artifacts.maintenance
+
+# Explicit real-image artifact contract (both image variables are required).
+.PHONY: test-artifact-runtime
+test-artifact-runtime:
+	cd api && uv run python -m pytest runtime_tests/test_artifacts.py -v
+
+.PHONY: check-artifacts
+check-artifacts:
+	cd api && uv run python scripts/check_artifact_charts.py
+
+.PHONY: garage-up garage-down garage-status
+# Generates private, ignored credentials once; reuses named volumes and keys on restart.
+garage-up:
+	cd api && uv run python scripts/provision_garage.py up
+
+garage-down:
+	cd api && uv run python scripts/provision_garage.py down
+
+garage-status:
+	cd api && uv run python scripts/provision_garage.py status
+
+.PHONY: test-artifact-deployment
+test-artifact-deployment:
+	cd api && uv run python -m pytest runtime_tests/test_artifact_deployment.py -v
+
+.PHONY: garage-backup
+garage-backup:
+	@test -n "$(BACKUP_DIR)" || (echo 'Set BACKUP_DIR to a new private directory'; exit 1)
+	cd api && uv run python scripts/provision_garage.py backup --backup-dir "$(BACKUP_DIR)"
+
+.PHONY: test-garage-cluster
+# Creates and removes a fresh three-node local k3d cluster; never uses current kubeconfig.
+test-garage-cluster:
+	cd api && uv run python -m pytest runtime_tests/test_garage_cluster.py -v

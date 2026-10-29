@@ -42,6 +42,16 @@ cloudflareAccountId: ""
 cloudflareApiToken: ""
 senderEmail: ""
 
+# Product analytics (PostHog). On by default; set false to opt out. User email and name
+# are never sent. The webAppUrl hostname labels remote installs; local hosts use local-<short UUID>.
+# See docs/features/product-analytics.md.
+analyticsEnabled: true
+
+# Hourly message counts per Agent, platform and direction (no content), sent for the
+# previous closed hour. The CronJob exists only while analyticsEnabled is "true".
+analyticsMessageCounts:
+  schedule: "15 * * * *"
+
 # Per-Agent email addresses. Blank leaves the Email platform disabled — Agent Barn
 # refuses new Email Communication Connections and nothing else changes. Both are needed
 # on top of the three values above. agentEmailDomain must be onboarded for BOTH Email
@@ -56,6 +66,18 @@ emailInboundSecret: ""
 # "<webAppUrl>/api/v1/integrations/google/callback".
 googleCloudClientId: ""
 googleCloudClientSecret: ""
+
+# Buying credit with Stripe: the account's secret key and the signing secret of the
+# webhook endpoint pointed at "<API host>/api/v1/billing/stripe/webhook". With both, a
+# Platform Administrator can turn payments on in the platform Billing settings.
+stripe:
+  secretKey: ""
+  webhookSecret: ""
+# Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
+# disable. Registered Web redirect URI must be
+# "<webAppUrl>/api/v1/integrations/sync-provider/onedrive/callback".
+onedriveSyncClientId: ""
+onedriveSyncClientSecret: ""
 
 # OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
 # via GET /key for the key's remaining credit limit metric. Same key litellm
@@ -88,14 +110,22 @@ prometheus:
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
 
-# Comma-separated Platform keys handled by the Agent runtime's native gateway,
-# e.g. "slack,discord". Empty keeps every Platform on the Communications
-# Gateway, providing an environment-level rollback switch.
-communicationsNativePlatforms: ""
+# How many Agents an Organization that is not a trial may run, unless a Platform
+# Administrator sets its own. Empty means the default of 10.
+organizationDefaultAgentLimit: ""
+
+# Agent Barn's own Telegram bot (token from @BotFather, and its @username without
+# the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per
+# environment: Telegram lets only one deployment poll a bot.
+agentbarnTelegramBotToken: ""
+agentbarnTelegramBotUsername: ""
 
 # Default model preselected in the picker and used at runtime when an agent has
 # no model set. Format: litellm/openrouter/<slug>. Empty uses the code default.
 agentDefaultModel: ""
+
+workflows:
+  runtimeBaseUrl: ""
 
 kubeconfigB64: ""
 # Name of the registry pull Secret this chart creates (registry-secret.yaml) and
@@ -124,6 +154,11 @@ restorePoints:
     # capture timeout above, so a row is only swept once its Job has genuinely had
     # time to finish.
     schedule: "*/10 * * * *"
+
+# Managed updates (the Update button): how long the new pod has to report ready
+# before the update rolls back. Covers pulling an image the node has not seen.
+managedUpdate:
+  readyTimeoutSeconds: 600
 
 registry:
   server: ""
@@ -181,6 +216,11 @@ costs:
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "*/15 * * * *"
 
+businessValue:
+  backfill:
+    enabled: true
+    activeDeadlineSeconds: 3600
+
 organizationLlmBudgets:
   # Percentages at which an Organization is notified. Empty uses 80,100.
   alertThresholds: "80,100"
@@ -213,11 +253,41 @@ worker:
       memory: 512Mi
       cpu: 1000m
 
+syncEngine:
+  enabled: true
+  replicaCount: 1
+  heartbeatMaxAgeSeconds: 600
+  resources:
+    requests:
+      memory: 192Mi
+      cpu: 50m
+    limits:
+      memory: 384Mi
+      cpu: 500m
+
 communications:
   enabled: true
+  # Keep at 1 while Agent Barn Telegram is configured: the shared bot's rate limits
+  # and the list of files each Agent may download are kept in process, so more
+  # replicas would each allow the full budget and refuse each other's downloads.
   replicaCount: 1
   service:
     port: 8002
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# The credential gateway sits on the request path of every agent tool call, so it is a
+# separate Deployment from the API: its availability and scaling are independent.
+gateway:
+  enabled: true
+  replicaCount: 1
+  service:
+    port: 8003
   resources:
     requests:
       memory: 256Mi
@@ -246,8 +316,21 @@ memory:
 
 resources:
   requests:
-    memory: 256Mi
+    memory: 512Mi
     cpu: 100m
   limits:
-    memory: 512Mi
+    memory: 1Gi
     cpu: 500m
+
+# Private per-Agent storage. No installation-wide data credentials.
+artifacts:
+  purgeEnabled: false
+  # Private control-plane Secret for API provisioning and artifact-purge cleanup only.
+  # Contains ARTIFACT_PROVISIONER_URL/TOKEN.
+  provisionerSecret: "garage-artifact-provisioner"
+  # ARTIFACT_S3_ENDPOINT_URL only; no data/provisioning keys or bucket naming options.
+  existingSecret: ""
+  runtimeBaseUrl: ""
+  maxBytes: 26214400
+  linkMaxSeconds: 3600
+  retentionDays: 30

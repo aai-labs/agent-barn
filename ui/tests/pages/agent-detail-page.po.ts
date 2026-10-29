@@ -9,6 +9,11 @@ export class AgentDetailPage {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}`);
   }
 
+  /** The Agent's Chat; an Agent opens on its Overview. */
+  async gotoChat(agentId = "33333333-3333-4333-8333-333333333333") {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=chat`);
+  }
+
   async openFocusedActivity(agentId: string) {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=activity` +
       "&from=2026-09-10T00:00:00Z&to=2026-09-13T00:00:00Z" +
@@ -24,12 +29,38 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-runtime-diagnostics");
   }
 
+  /** The Agent's name: its step in the desktop path bar, or the page heading on a phone. */
   agentName(name: string): Locator {
-    return this.page.getByRole("heading", { name });
+    return this.page
+      .getByRole("button", { name: `Switch agent. Current: ${name}` })
+      .or(this.page.getByRole("heading", { name, level: 1 }));
+  }
+
+  /** The path bar's chip with the Agent's status, runtime and model. */
+  runtimeChip(): Locator {
+    return this.page.getByTestId("agent-runtime-chip");
+  }
+
+  /** A section link in the navigation panel beside the page. */
+  sectionLink(name: string): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
+  }
+
+  async openSection(name: string) {
+    await this.sectionLink(name).click();
+  }
+
+  /**
+   * Opens a section of the Agent's settings. The panel link changes the URL, so this
+   * waits for the section's own heading before anything acts on the section.
+   */
+  async openConfigurationSection(name: string) {
+    await this.sectionLink(name).click();
+    await this.page.getByRole("heading", { name, level: 2, exact: true }).waitFor();
   }
 
   configureButton(): Locator {
-    return this.page.getByRole("link", { name: "Configuration", exact: true });
+    return this.sectionLink("Agent settings");
   }
 
   configDrawerHeading(): Locator {
@@ -45,7 +76,7 @@ export class AgentDetailPage {
   }
 
   costsTab(): Locator {
-    return this.page.getByRole("button", { name: "Costs", exact: true });
+    return this.sectionLink("Costs");
   }
 
   async openCostsTab() {
@@ -53,7 +84,7 @@ export class AgentDetailPage {
   }
 
   resourceUsageTab(): Locator {
-    return this.page.getByRole("button", { name: "Resource usage", exact: true });
+    return this.sectionLink("Resource usage");
   }
 
   async gotoResourceUsage(agentId = "33333333-3333-4333-8333-333333333333", range?: string) {
@@ -61,13 +92,13 @@ export class AgentDetailPage {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=resource-usage${query}`);
   }
 
-  /** The labels of the tab bar, in the order they are drawn. */
+  /** The labels of the Agent's sections in the navigation panel, in the order they are drawn. */
   tabLabels(): Promise<string[]> {
-    return this.page.locator("button.ap-tab").allTextContents();
+    return this.page.getByRole("complementary").getByRole("navigation").getByRole("link").allTextContents();
   }
 
   toolCallsTab(): Locator {
-    return this.page.getByRole("button", { name: /tool calls/i });
+    return this.sectionLink("Tool calls");
   }
 
   toolCallRow(toolName: string): Locator {
@@ -75,7 +106,7 @@ export class AgentDetailPage {
   }
 
   channelsTab(): Locator {
-    return this.page.getByRole("button", { name: /^messaging$/i });
+    return this.sectionLink("Messaging");
   }
 
   connectionDetailsLink(): Locator {
@@ -94,12 +125,34 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-lifecycle-menu");
   }
 
+  /** The desktop path bar's "Update available" button. */
+  updateNotice(): Locator {
+    return this.page.getByTestId("agent-update-notice");
+  }
+
+  /** The details the notice opens: the explanation, release notes and Update. */
+  updateNoticeDetails(): Locator {
+    return this.page.getByRole("dialog");
+  }
+
   updateBanner(): Locator {
     return this.page.getByTestId("agent-update-banner");
   }
 
   updateButton(): Locator {
     return this.page.getByTestId("agent-update-button");
+  }
+
+  pendingModelBanner(): Locator {
+    return this.page.getByTestId("agent-pending-model-banner");
+  }
+
+  pendingModelRestartButton(): Locator {
+    return this.page.getByTestId("agent-pending-model-restart");
+  }
+
+  updateOutcome(): Locator {
+    return this.page.getByTestId("agent-update-outcome");
   }
 
   updateReleasesLink(): Locator {
@@ -242,7 +295,7 @@ export class AgentDetailPage {
   }
 
   skillsTab(): Locator {
-    return this.page.getByRole("button", { name: /^skills$/i });
+    return this.sectionLink("Skills");
   }
 
   skillsSearchInput(): Locator {
@@ -279,7 +332,7 @@ export class AgentDetailPage {
   }
 
   keysTab(): Locator {
-    return this.page.getByRole("button", { name: "Integrations", exact: true });
+    return this.page.getByRole("complementary").getByRole("link", { name: "Integrations", exact: true });
   }
 
   appTokenInput(): Locator {
@@ -307,11 +360,7 @@ export class AgentDetailPage {
   }
 
   removeCredentialButton(): Locator {
-    return this.page.getByRole("button", { name: "Remove" });
-  }
-
-  undoCredentialButton(): Locator {
-    return this.page.getByRole("button", { name: "Undo" });
+    return this.page.getByRole("button", { name: "Remove GitHub", exact: true });
   }
 
   shareButton(): Locator {

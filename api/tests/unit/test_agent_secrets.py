@@ -7,16 +7,18 @@ from pydantic import ValidationError
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentCreate,
+    ApolloContent,
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
+    GmailAppPasswordContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
     SecretProvider,
     SharePointContent,
-    SlackContent,
-    ZohoMailContent,
     decrypt_content,
     encrypt_content,
     validate_content,
@@ -62,23 +64,6 @@ def test_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "secret-token" not in blob  # whole payload is ciphertext, not plaintext
     assert decrypt_content(SecretProvider.JIRA, blob, _KEY) == original
-
-
-def test_zoho_mail_content_validates_oauth_fields():
-    content = validate_content(
-        SecretProvider.ZOHO_MAIL,
-        {
-            "email": "u@z.com",
-            "account_id": "56218000000008002",
-            "client_id": "1000.CLIENTID",
-            "client_secret": "z_secret",
-            "refresh_token": "z_refresh",
-        },
-    )
-    assert isinstance(content, ZohoMailContent)
-    assert content.email == "u@z.com"
-    assert content.account_id == "56218000000008002"
-    assert content.client_id == "1000.CLIENTID"
 
 
 _SHAREPOINT = {
@@ -127,6 +112,53 @@ def test_sharepoint_content_requires_its_fields(field):
     payload = {k: v for k, v in _SHAREPOINT.items() if k != field}
     with pytest.raises(ValidationError):
         validate_content(SecretProvider.SHAREPOINT, payload)
+
+
+_SELECTED_SITES = {
+    "mode": "selected_sites",
+    "connection_id": "0199c2a4-7b1e-7c3d-9f00-1234567890ab",
+    "tenant_id": "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3",
+    "client_id": "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9",
+    "email": "admin@contoso.com",
+    "sites": [
+        {
+            "url": "https://contoso.sharepoint.com/sites/finance",
+            "site_id": "contoso.sharepoint.com,aaa,bbb",
+            "permission_id": "perm-1",
+        }
+    ],
+}
+
+
+def test_sharepoint_content_defaults_to_delegated_for_existing_credentials():
+    content = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    assert isinstance(content, SharePointContent)
+    assert content.mode == "delegated"
+    assert content.sites == []
+
+
+def test_selected_sites_content_round_trips_through_encryption():
+    original = validate_content(SecretProvider.SHAREPOINT, _SELECTED_SITES)
+    assert isinstance(original, SharePointContent)
+    assert original.sites[0].permission_id == "perm-1"
+    assert decrypt_content(SecretProvider.SHAREPOINT, encrypt_content(original, _KEY), _KEY) == original
+
+
+def test_selected_sites_content_needs_at_least_one_site():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SELECTED_SITES, "sites": []})
+
+
+def test_selected_sites_content_never_keeps_the_administrators_token():
+    # The administrator's sign-in only creates the grants; holding on to a token that can
+    # manage every site's permissions would defeat the point of selecting sites.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SELECTED_SITES, "refresh_token": "rt"})
+
+
+def test_delegated_content_holds_no_sites():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, "sites": _SELECTED_SITES["sites"]})
 
 
 def test_display_names_cover_every_provider():
@@ -353,41 +385,107 @@ def test_pipedrive_content_normalizes_domain_to_its_subdomain_label(domain):
     assert content.domain == "aai-labs"
 
 
+# --- Apollo ---
+
+_APOLLO_BASE = {"api_token": "apollo-test-key"}
+
+
+def test_apollo_content_validates_api_token():
+    content = validate_content(SecretProvider.APOLLO, _APOLLO_BASE)
+    assert isinstance(content, ApolloContent)
+    assert content.api_token == "apollo-test-key"
+
+
+@pytest.mark.parametrize("raw", [{}, {"api_token": ""}])
+def test_apollo_content_rejects_missing_api_token(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.APOLLO, raw)
+
+
+@pytest.mark.parametrize("field", ["base_url", "extra"])
+def test_apollo_content_rejects_extra_fields(field):
+    # A base_url would let a caller send the key to a host other than Apollo's API.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.APOLLO, {**_APOLLO_BASE, field: "https://evil.example"})
+
+
+def test_apollo_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.APOLLO, _APOLLO_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "apollo-test-key" not in blob
+    assert decrypt_content(SecretProvider.APOLLO, blob, _KEY) == original
+
+
+# --- Gmail app password ---
+
+_GMAIL_APP_PASSWORD_BASE = {"email": "someone@gmail.com", "app_password": "abcdefghijklmnop"}
+
+
+def test_gmail_app_password_content_validates():
+    content = validate_content(SecretProvider.GMAIL_APP_PASSWORD, _GMAIL_APP_PASSWORD_BASE)
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.email == "someone@gmail.com"
+    assert content.app_password == "abcdefghijklmnop"
+
+
+def test_gmail_app_password_drops_the_spaces_google_displays():
+    # Google shows the 16 characters in groups of four; the spaces are not part of it.
+    content = validate_content(
+        SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, "app_password": " abcd efgh ijkl mnop "}
+    )
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.app_password == "abcdefghijklmnop"
+
+
+def test_gmail_app_password_trims_the_address():
+    content = validate_content(
+        SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, "email": " someone@gmail.com "}
+    )
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.email == "someone@gmail.com"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        {"email": "someone@gmail.com"},
+        {"app_password": "abcdefghijklmnop"},
+        {"email": "someone@gmail.com", "app_password": "    "},
+        {"email": "not-an-address", "app_password": "abcdefghijklmnop"},
+        {"email": "", "app_password": "abcdefghijklmnop"},
+    ],
+)
+def test_gmail_app_password_content_rejects_incomplete_credentials(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL_APP_PASSWORD, raw)
+
+
+@pytest.mark.parametrize("field", ["host", "extra"])
+def test_gmail_app_password_content_rejects_extra_fields(field):
+    # A host would let a caller send the password to a server other than Gmail's.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, field: "imap.evil.example"})
+
+
+def test_gmail_app_password_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GMAIL_APP_PASSWORD, _GMAIL_APP_PASSWORD_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "abcdefghijklmnop" not in blob
+    assert decrypt_content(SecretProvider.GMAIL_APP_PASSWORD, blob, _KEY) == original
+
+
+def test_gmail_app_password_has_its_own_display_name():
+    assert PROVIDER_DISPLAY_NAMES[SecretProvider.GMAIL_APP_PASSWORD] == "Gmail app password"
+
+
 def test_retired_google_providers_are_gone():
-    """The per-service Google providers were removed outright, rows and all (their
-    secrets are deleted by migration). Nothing may resurrect them as a provider value:
-    one google_workspace credential covers Gmail, Calendar, Drive and Sheets."""
-    for retired in ("gmail", "google_calendar", "google_sheets"):
+    """The per-service Calendar and Sheets providers were removed outright, rows and all
+    (their secrets are deleted by migration); google_workspace covers them. Gmail is a
+    provider again, as the read-only one-click integration beside Google Workspace."""
+    for retired in ("google_calendar", "google_sheets"):
         with pytest.raises(ValueError):
             SecretProvider(retired)
-
-
-# --- Slack (AF-209) ---
-
-_SLACK_BASE = {"token": "xoxb-test-token"}
-
-
-def test_slack_content_validates_token():
-    content = validate_content(SecretProvider.SLACK, _SLACK_BASE)
-    assert isinstance(content, SlackContent)
-    assert content.token == "xoxb-test-token"
-
-
-def test_slack_content_rejects_missing_token():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.SLACK, {})
-
-
-def test_slack_content_rejects_extra_fields():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.SLACK, {**_SLACK_BASE, "extra": "nope"})
-
-
-def test_slack_encrypt_decrypt_round_trip():
-    original = validate_content(SecretProvider.SLACK, _SLACK_BASE)
-    blob = encrypt_content(original, _KEY)
-    assert "xoxb-test-token" not in blob
-    assert decrypt_content(SecretProvider.SLACK, blob, _KEY) == original
 
 
 # --- google_workspace ---
@@ -500,3 +598,138 @@ def test_google_workspace_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "rt-123" not in blob
     assert decrypt_content(SecretProvider.GOOGLE_WORKSPACE, blob, _KEY) == original
+
+
+# --- Merkys ---
+
+_MERKYS_BASE = {"base_url": "https://slack-chatbot.k8s.aai-labs.com", "api_key": "cb_test-key"}
+
+
+def test_merkys_content_validates_and_normalizes():
+    content = validate_content(
+        SecretProvider.MERKYS, {"base_url": " https://Merkys.Example.COM/ ", "api_key": " cb_test-key "}
+    )
+    assert isinstance(content, MerkysContent)
+    assert content.base_url == "https://merkys.example.com"
+    assert content.api_key == "cb_test-key"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://merkys.example.com:8443", "https://merkys.example.com:8443"),
+        ("https://10.1.2.3", "https://10.1.2.3"),
+        ("https://[2001:db8::1]", "https://[2001:db8::1]"),
+    ],
+)
+def test_merkys_content_keeps_a_port_and_private_hosts(url, expected):
+    # An on-prem Merkys is often reached over a VPN, so private ranges stay allowed.
+    content = validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "base_url": url})
+    assert isinstance(content, MerkysContent)
+    assert content.base_url == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://merkys.example.com",
+        "merkys.example.com",
+        "https://user:pw@merkys.example.com",
+        "https://merkys.example.com/api",
+        "https://merkys.example.com?x=1",
+        "https://merkys.example.com#frag",
+        "https://merkys.example.com:99999",
+        "https://localhost",
+        "https://app.localhost",
+        "https://127.0.0.1",
+        "https://[::1]",
+        "https://169.254.169.254",
+        "https://0.0.0.0",
+        "",
+    ],
+)
+def test_merkys_content_rejects_urls_that_could_move_the_key(url):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "base_url": url})
+
+
+@pytest.mark.parametrize("raw", [{}, {"base_url": "https://a.example.com"}, {"api_key": "k"}])
+def test_merkys_content_requires_both_fields(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, raw)
+
+
+@pytest.mark.parametrize("key", ["", "   ", "a b", "a\nb"])
+def test_merkys_content_rejects_blank_or_spaced_keys(key):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "api_key": key})
+
+
+def test_merkys_content_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "token": "x"})
+
+
+def test_merkys_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.MERKYS, _MERKYS_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "cb_test-key" not in blob
+    assert decrypt_content(SecretProvider.MERKYS, blob, _KEY) == original
+
+
+_GMAIL_BASE = {
+    "email": "alice@example.com",
+    "scopes": ["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+    "refresh_token": "gmail-rt-123",
+}
+
+
+def test_gmail_parses_with_the_shared_client_by_default():
+    content = validate_content(SecretProvider.GMAIL, _GMAIL_BASE)
+    assert isinstance(content, GmailContent)
+    assert content.email == "alice@example.com"
+    # Empty means the deployment's shared Google client is filled in at agent start.
+    assert content.client_id == ""
+    assert content.client_secret == ""
+
+
+def test_gmail_keeps_a_user_supplied_client():
+    content = validate_content(
+        SecretProvider.GMAIL,
+        {**_GMAIL_BASE, "client_id": "own.apps.googleusercontent.com", "client_secret": "own-secret"},
+    )
+    assert isinstance(content, GmailContent)
+    assert content.client_id == "own.apps.googleusercontent.com"
+    assert content.client_secret == "own-secret"
+
+
+def test_gmail_rejects_a_grant_without_read_only_gmail():
+    with pytest.raises(ValidationError, match="gmail.readonly"):
+        validate_content(SecretProvider.GMAIL, {**_GMAIL_BASE, "scopes": ["openid", "email"]})
+
+
+def test_gmail_requires_refresh_token_and_email():
+    for missing in ("refresh_token", "email"):
+        payload = {k: v for k, v in _GMAIL_BASE.items() if k != missing}
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.GMAIL, payload)
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL, {**_GMAIL_BASE, "email": ""})
+
+
+def test_gmail_rejects_workspace_fields():
+    # Gmail is read-only and single-service; it must not silently accept Workspace's knobs.
+    for extra in ({"services": ["gmail"]}, {"read_only": False}):
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.GMAIL, {**_GMAIL_BASE, **extra})
+
+
+def test_gmail_has_a_display_name():
+    assert PROVIDER_DISPLAY_NAMES[SecretProvider.GMAIL] == "Gmail credential"
+
+
+def test_gmail_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GMAIL, _GMAIL_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "gmail-rt-123" not in blob
+    assert decrypt_content(SecretProvider.GMAIL, blob, _KEY) == original

@@ -1,25 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
-import { MessageCircleWarning, Plus } from "lucide-react";
 import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
-import { PendingModelNote } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
-import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
-import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
+import { ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentResourceUsageTab } from "@/features/resource-usage/components/agent-resource-usage-tab";
 import { AgentAvatar } from "./agent-avatar";
-import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
-import { AgentUpdateBanner } from "./agent-update-banner";
+import { AgentNotices } from "./agent-notices";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
@@ -27,40 +22,41 @@ import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
+import { AgentFiles } from "@/features/artifacts/components/agent-files";
+import { WorkflowsPage } from "@/features/workflows/components/workflows-page";
+import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
+import { FileSyncTab } from "@/features/file-sync/components/file-sync-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
+import { useIsDesktop } from "@/features/navigation/hooks/use-is-desktop";
+import { cn } from "@/lib/utils";
+import {
+  AGENT_PAGE_TABS,
+  AGENT_PAGE_TAB_LABELS,
+  DEFAULT_AGENT_TAB,
+  visibleAgentPageTabs,
+  type AgentPageTab,
+} from "../agent-page-tabs";
 
 interface AgentDetailPageProps {
   agentId: string;
 }
 
-type Tab =
-  | "chat"
-  | "conversations"
-  | "tool-calls"
-  | "logs"
-  | "memory"
-  | "activity"
-  | "costs"
-  | "resource-usage"
-  | "about";
-const VALID_TABS: Tab[] = [
-  "chat",
-  "conversations",
-  "tool-calls",
-  "logs",
-  "memory",
-  "activity",
-  "costs",
-  "resource-usage",
-  "about",
-];
-
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
-  const canReadCosts = canAgent(agent, "cost.read");
+  const { role } = useActiveOrgRole();
+  const workflowCapabilities = useWorkflowCapabilities(agentId, canAgent(agent, "agent.read"));
+  const tabs = visibleAgentPageTabs(agent, role, {
+    workflowAuthoring: workflowCapabilities.data?.authoring === true,
+  });
+  const canExtractPlaybooks = tabs.includes("playbooks");
+  // The desktop path bar carries the Agent's lifecycle and Share actions; the page's own
+  // copies wait for this check so the two never coexist.
+  const isDesktop = useIsDesktop();
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -68,8 +64,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   );
   const [tab, setTab] = useQueryState(
     "tab",
-    parseAsStringEnum<Tab>(VALID_TABS)
-      .withDefault("chat")
+    parseAsStringEnum<AgentPageTab>(AGENT_PAGE_TABS)
+      .withDefault(DEFAULT_AGENT_TAB)
       .withOptions({ scroll: false, history: "replace" }),
   );
   const [, setChannel] = useQueryState(
@@ -80,74 +76,55 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "range",
     parseAsString.withOptions({ history: "replace" }),
   );
+  const [workflow, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
 
-  function selectTab(next: Tab) {
+  const [workflowRun, setWorkflowRun] = useQueryState("workflowRun", parseAsString.withOptions({ history: "replace" }));
+  const [, setWorkflowView] = useQueryState("workflowView", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [, setWorkflowRunPage] = useQueryState("workflowRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [startingRun, setStartingRun] = useState(false);
+
+  function selectTab(next: AgentPageTab) {
     void setTab(next);
     // channel is only meaningful on the conversations tab; drop it elsewhere
     if (next !== "conversations") void setChannel(null);
     // likewise the time range, which only the resource usage tab reads
     if (next !== "resource-usage") void setUsageRange(null);
+    // and the open workflow, which only the workflows tab reads
+    if (next !== "workflows") {
+      void setWorkflow(null);
+      void setWorkflowRun(null);
+      void setWorkflowView(null);
+      void setWorkflowRunPage(null);
+    }
   }
 
-  const tabs: [Tab, string][] = [
-    ...(canReadActivity
-      ? ([
-          ["chat", "Chat"],
-          ["conversations", "Conversations"],
-          ["tool-calls", "Tool calls"],
-          ["logs", "Logs"],
-          // Memory content is conversation content, so it follows activity.read.
-          ["memory", "Memory"],
-        ] as [Tab, string][])
-      : []),
-    // Every part of Activity needs activity.read: the runtime diagnostics on
-    // their own, the usage sections together with cost.read. The tab itself
-    // decides what to show a reader who has only the first.
-    ...(canReadActivity ? ([["activity", "Activity"]] as [Tab, string][]) : []),
-    // Costs is gated on cost.read alone, independent of activity.read: a custom
-    // Agent Access Role can grant one Permission without the other, and this is
-    // the only tab that surfaces cost.read on its own — Activity's usage section
-    // needs activity.read too.
-    ...(canReadCosts ? ([["costs", "Costs"]] as [Tab, string][]) : []),
-    // How the container is doing, so it follows Activity's gate rather than Costs':
-    // the same activity.read that guards runtime diagnostics and health.
-    ...(canReadActivity
-      ? ([["resource-usage", "Resource usage"]] as [Tab, string][])
-      : []),
-    ["about", "About"],
-  ];
-  const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
+  // Overview is always visible, and a section the viewer cannot open falls back to it.
+  const resolvedTab = tabs.includes(tab) ? tab : DEFAULT_AGENT_TAB;
+
+  const workflowFocus = resolvedTab === "workflows" && (Boolean(workflow) || Boolean(workflowRun) || startingRun);
 
   const isRunning = agent?.status === "RUNNING";
   const isAgentWorking = isRunning && health?.status === "ok";
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const canManageAccess = canAgent(agent, "agent.access.manage");
-  const canManageConnections = canAgent(agent, "agent.update");
-  const connections = useCommunicationConnections(agent?.id ?? "");
-  // The built-in Chat tab lazily provisions a "web" Connection on first send so people
-  // can try the Agent without setting anything up; it is not a real messaging platform
-  // for this nudge.
-  const externalConnections = connections.data?.filter((connection) => connection.platformKey !== "web");
-  const needsMessagingSetup =
-    !connections.isPending && externalConnections?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);
 
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const homeHref = orgId ? `/dashboard/${orgId}` : "/dashboard";
 
-  return (
-    <div style={{ background: "var(--bg)" }}>
-      <div className="af-page">
-        <Link
-          href={homeHref}
-          className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
-          style={{ color: "var(--ink-3)" }}
-        >
-          <ChevLeftIcon />
-          Your team
-        </Link>
+  // The shell frames the page (`usePageFrame`): on desktop, Chat and Conversations edge to
+  // edge below the path bar, the live Logs at the usual width grown to the window's height.
+  // The page only passes that height down to the section, and on Chat and Conversations
+  // insets its notices, since the frame there has no margins of its own. All of it is CSS,
+  // so what is open stays mounted when the window crosses the breakpoint.
+  const fillsPage = resolvedTab === "chat" || resolvedTab === "conversations";
+  const fillsHeight = fillsPage || resolvedTab === "logs";
+  const passesHeight = cn(fillsHeight && "lg:flex lg:min-h-0 lg:flex-1 lg:flex-col");
 
+  return (
+    <div className={passesHeight}>
+      <div className={passesHeight}>
         {isLoading && <AgentDetailHeaderSkeleton />}
 
         {error && (
@@ -165,150 +142,68 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
         {agent && (
           <>
-            <div className="flex items-start gap-5.5 pb-8">
-              <AgentAvatar agent={agent} size="xl" />
-              <div className="flex-1 min-w-0">
-                <h1
-                  className="text-[2.5rem] font-semibold tracking-[-0.028em] m-0 mb-1 leading-[1.1]"
-                  style={{ color: "var(--ink)" }}
-                >
-                  {agent.name}
-                </h1>
-                {currentModelOf(agent) && (
-                  <>
+            {/* The desktop path bar names the Agent and shows its status, runtime, model
+                and actions, so the header is for phones. Identity and actions wrap onto
+                separate rows when they do not fit side by side, so the buttons sit under
+                the name, not over it. */}
+            <div hidden={workflowFocus}>
+            <div className="flex flex-wrap items-start gap-x-5.5 gap-y-4 pb-8 lg:hidden">
+              <div className="flex min-w-0 flex-1 basis-[20rem] items-start gap-4 sm:gap-5.5">
+                <AgentAvatar agent={agent} size="xl" />
+                <div className="flex-1 min-w-0">
+                  <h1
+                    className="text-[1.75rem] sm:text-[2.5rem] font-semibold tracking-[-0.028em] m-0 mb-1 leading-[1.1] break-words"
+                    style={{ color: "var(--ink)" }}
+                  >
+                    {agent.name}
+                  </h1>
+                  {currentModelOf(agent) && (
                     <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
                       <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
                       <ModelSourceBadge source={agent.modelSource} />
                     </div>
-                    <PendingModelNote pendingModel={agent.pendingModel} />
-                  </>
-                )}
-                <AgentMetaBadges
-                  agent={agent}
-                  variant="full"
-                  className="mt-2"
-                />
-                <div className="mt-2">
-                  <StatusLine status={agent.status} health={health} />
+                  )}
+                  <AgentMetaBadges agent={agent} variant="full" className="mt-2" />
+                  <div className="mt-2">
+                    <StatusLine status={agent.status} health={health} />
+                  </div>
                 </div>
               </div>
-              <div className="flex gap-2">
-                {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
-                <Link
-                  href={`${homeHref}/agents/${agent.id}/configuration`}
-                  className="af-btn"
-                >
-                  <CogIcon /> Configuration
-                </Link>
-                {canManageAccess && (
-                  <button className="af-btn" onClick={() => setShareOpen(true)}>
-                    <ShareIcon /> Share
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {canManageLifecycle && <AgentUpdateBanner agent={agent} />}
-
-            {/* The classified provisioning failure comes off the Agent itself, so
-                it renders on first paint and does not depend on health polling —
-                which is also gated on activity.read. Health only explains a
-                runtime fault on an Agent that did start. */}
-            {agent.status === "ERROR" && agent.lastError ? (
-              <AgentErrorBanner failure={agent.lastError} />
-            ) : (
-              (agent.status === "ERROR" ||
-                health?.status === "crashed" ||
-                health?.status === "error") &&
-              health?.reason && <AgentHealthErrorBanner reason={health.reason} />
-            )}
-
-            {needsMessagingSetup && (
-              <div
-                className="mb-6 overflow-hidden rounded-2xl"
-                style={{
-                  border:
-                    "1px solid color-mix(in srgb, var(--warn) 30%, var(--line))",
-                  background: "var(--warn-soft)",
-                }}
-              >
-                <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 items-start gap-3.5">
-                    <span
-                      className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-xl"
-                      style={{
-                        background:
-                          "color-mix(in srgb, var(--warn) 16%, transparent)",
-                        color: "var(--warn)",
-                      }}
-                    >
-                      <MessageCircleWarning size={19} />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <span
-                          className="text-[0.6875rem] font-semibold uppercase tracking-[0.1em]"
-                          style={{ color: "var(--warn)" }}
-                        >
-                          Messaging setup
-                        </span>
-                        <span
-                          className="rounded-full px-2 py-0.5 text-[0.6875rem] font-medium"
-                          style={{
-                            border:
-                              "1px solid color-mix(in srgb, var(--warn) 28%, transparent)",
-                            color: "var(--warn)",
-                          }}
-                        >
-                          Web chat only
-                        </span>
-                      </div>
-                      <div
-                        className="text-[0.95rem] font-semibold"
-                        style={{ color: "var(--ink)" }}
-                      >
-                        Bring {agent.name} to your messaging tools
-                      </div>
-                      <p
-                        className="mb-0 mt-1 text-[0.844rem] leading-relaxed"
-                        style={{ color: "var(--ink-3)" }}
-                      >
-                        {agent.name} is available in Web Chat. Add a connection
-                        so your team can also message {agent.name} from Slack,
-                        Teams, Telegram, or Discord.
-                      </p>
-                    </div>
-                  </div>
-                  {canManageConnections && (
-                    <Link
-                      href={`${homeHref}/agents/${agent.id}/configuration?section=channels&connect=true`}
-                      className="af-btn af-btn-primary af-btn-sm flex-shrink-0 self-start sm:self-auto"
-                    >
-                      <Plus size={14} /> Add messaging connection
-                    </Link>
+              {/* Only the actions wait for the width check: the path bar has its own,
+                  and two copies of the lifecycle and Share dialogs must not coexist. */}
+              {!isDesktop && (
+                <div className="flex flex-wrap gap-2">
+                  {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
+                  {canManageAccess && (
+                    <button className="af-btn" onClick={() => setShareOpen(true)}>
+                      <ShareIcon /> Share
+                    </button>
                   )}
                 </div>
-              </div>
-            )}
-
-            <div
-              className="flex items-center gap-1 mb-7"
-              style={{ borderBottom: "1px solid var(--line)" }}
-            >
-              {tabs.map(([k, l]) => (
-                <button
-                  key={k}
-                  className="ap-tab"
-                  data-active={resolvedTab === k}
-                  onClick={() => {
-                    selectTab(k);
-                  }}
-                >
-                  {l}
-                </button>
-              ))}
+              )}
             </div>
 
+            </div>
+
+            <div className={cn(fillsPage && "lg:px-6 lg:pt-4 lg:empty:hidden")}>
+              <AgentNotices
+                agent={agent}
+                health={health}
+                homeHref={homeHref}
+                onOpenChat={() => selectTab("chat")}
+              />
+            </div>
+
+            {/* The path bar names the section on desktop. */}
+            <h2
+              hidden={workflowFocus}
+              className="m-0 mb-7 pb-3 text-[1.125rem] font-semibold lg:hidden"
+              style={{ color: "var(--ink)", borderBottom: "1px solid var(--line)" }}
+            >
+              {AGENT_PAGE_TAB_LABELS[resolvedTab]}
+            </h2>
+
+            <div className={cn(fillsHeight && "lg:min-h-0 lg:flex-1")}>
             {resolvedTab === "chat" && (
               <ChatTab agent={agent} isAgentWorking={isAgentWorking} />
             )}
@@ -318,6 +213,12 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
+            {resolvedTab === "files" && <AgentFiles key={`${orgId}:${agent.id}`} agentId={agent.id} canManageFiles={agent.allowedActions.includes("agent.update")} />}
+            {resolvedTab === "workflows" && orgId && (
+              <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded onStartingChange={setStartingRun} />
+            )}
+            {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
+            {resolvedTab === "file-sync" && canReadActivity && <FileSyncTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "resource-usage" && (
@@ -329,11 +230,12 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               />
             )}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
+            </div>
           </>
         )}
       </div>
 
-      {agent && canManageAccess && (
+      {agent && canManageAccess && !isDesktop && (
         <ShareDialog
           agentId={agent.id}
           agentName={agent.name}

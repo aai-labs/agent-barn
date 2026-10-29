@@ -207,3 +207,63 @@ def there_is_a_template_skill_group(skill_names: tuple[str, ...], group_key: str
         context.template_skill_group = {"group_key": group_key, "skills": skills}
 
     return step
+
+
+def agent_uses_template_pin(pin_type: str):
+    def step(context):
+        from uuid import uuid7
+
+        from api.domains.agents.models import AgentTemplateOverrideSourceType, AgentTemplateOverrideVersion
+        from api.domains.templates.models import PlatformTemplate
+
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        template = repository.get_pinned_template(context.agent)
+        if not isinstance(template, AgentTemplate):
+            raise TypeError("This fixture requires an Organization Template pin")
+        snapshot = {
+            field: getattr(template, field)
+            for field in (
+                "template_name",
+                "description",
+                "soul_md",
+                "identity_md",
+                "user_md",
+                "tools_md",
+                "agents_md",
+                "boot_md",
+                "bootstrap_md",
+                "heartbeat_md",
+            )
+        }
+        context.expected_template_pin = (template.template_key, template.version, "shared", None)
+        if pin_type == "platform":
+            platform = PlatformTemplate(template_key=f"platform-{uuid7()}", version=3, **snapshot)
+            context.postgres_delegate.save(platform)
+            context.agent.agent_template_id = None
+            context.agent.platform_template_id = platform.id
+            context.expected_template_pin = (platform.template_key, platform.version, "shared", None)
+        elif pin_type == "override":
+            override = AgentTemplateOverrideVersion(
+                organization_id=context.organization.id,
+                agent_id=context.agent.id,
+                version=7,
+                source_type=AgentTemplateOverrideSourceType.ORGANIZATION,
+                source_template_key=template.template_key,
+                source_template_version=template.version,
+                source_agent_template_id=template.id,
+                **snapshot,
+            )
+            context.postgres_delegate.save(override)
+            context.agent.agent_template_id = None
+            context.agent.agent_template_override_version_id = override.id
+            context.expected_template_pin = (
+                override.source_template_key,
+                override.version,
+                "override",
+                override.version,
+            )
+        elif pin_type != "organization":
+            raise ValueError(f"Unknown template pin type: {pin_type}")
+        context.postgres_delegate.save(context.agent)
+
+    return step

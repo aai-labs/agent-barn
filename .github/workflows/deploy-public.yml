@@ -281,6 +281,15 @@ jobs:
           KUBECONFIG: /home/runner/.kube/config
         run: kubectl apply -f k8s/agent-farm-user.yaml
 
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Bootstrap private Garage
+        env:
+          GARAGE_RPC_SECRET_INPUT: ${{ secrets.PUBLIC_ARTIFACT_STORAGE_SECRET }}
+          GARAGE_ADMIN_TOKEN_INPUT: ${{ secrets.PUBLIC_ARTIFACT_PROVISIONER_SECRET }}
+          STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
+        run: uv run --project api --frozen python -m api.scripts.bootstrap_garage_ci --namespace agent-farm --kubeconfig "$HOME/.kube/config" --storage-class "$STORAGE_CLASS"
+
       - name: Helmfile sync
         env:
           KUBECONFIG: /home/runner/.kube/config
@@ -301,7 +310,9 @@ jobs:
           WEB_APP_URL: ${{ vars.PUBLIC_WEB_APP_URL }}
           GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
           STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
+          ARTIFACT_PURGE_ENABLED: ${{ vars.PUBLIC_ARTIFACT_PURGE_ENABLED }}
           SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
+          ANALYTICS_ENABLED: "true"
           AGENT_EMAIL_DOMAIN: ${{ vars.PUBLIC_AGENT_EMAIL_DOMAIN }}
           EMAIL_INBOUND_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
           POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
@@ -313,6 +324,9 @@ jobs:
           POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
+          HINDSIGHT_DB_PASSWORD: ${{ secrets.PUBLIC_HINDSIGHT_DB_PASSWORD }}
+          HINDSIGHT_API_KEY: ${{ secrets.PUBLIC_HINDSIGHT_API_KEY }}
+          MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets.PUBLIC_MEMORY_RUNTIME_SERVICE_KEY }}
           LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
           SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
@@ -327,14 +341,43 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
+          # Payments are turned on in the platform Billing settings; these make it possible.
+          STRIPE_SECRET_KEY: ${{ secrets.PUBLIC_STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.PUBLIC_STRIPE_WEBHOOK_SECRET }}
+          ONEDRIVE_SYNC_CLIENT_ID: ${{ vars.ONEDRIVE_SYNC_CLIENT_ID }}
+          ONEDRIVE_SYNC_CLIENT_SECRET: ${{ secrets.ONEDRIVE_SYNC_CLIENT_SECRET }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
           ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS: ${{ vars.ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS }}
           # The public deployment's own defaults, like its other PUBLIC_ settings.
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD }}
-          COMMUNICATIONS_NATIVE_PLATFORMS: ${{ vars.COMMUNICATIONS_NATIVE_PLATFORMS }}
-        run: helmfile -f helmfile.yaml.gotmpl sync --wait
+          # Public trial signup, opted into on purpose; unset means off.
+          # Empty means the default of 10.
+          ORGANIZATION_DEFAULT_AGENT_LIMIT: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT || '' }}
+          # The public deployment's own bot; Telegram allows one consumer per bot.
+          AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN }}
+          AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ vars.PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME }}
+          MEMORY_DEFAULT_MODEL: ${{ vars.PUBLIC_MEMORY_DEFAULT_MODEL }}
+          MEMORY_LITELLM_KEY_HASHES: ${{ vars.PUBLIC_MEMORY_LITELLM_KEY_HASHES }}
+        run: |
+          set -euo pipefail
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          # Validate required GitHub Secrets before Helmfile renders the releases.
+          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          helmfile -f helmfile.yaml.gotmpl -l name=hindsight sync --include-transitive-needs --wait
+          python3 api/scripts/provision_memory.py --include-key-hashes --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          # Hindsight already synced: do not rotate its key again in this run.
+          helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
 
   # Runs after `deploy` on purpose: the Worker posts inbound mail into this
   # cluster's Communications service, so the cluster must already hold the

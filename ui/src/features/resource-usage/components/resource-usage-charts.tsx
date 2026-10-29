@@ -27,6 +27,8 @@ interface UsageAreaChartProps {
   format: (value: number) => string;
   /** Drawn as a dashed line, and the top of the axis, so the gap to it is the headroom. */
   limit?: number | null;
+  /** What the pod asks for, drawn as a second dashed line, in grey so it is not read as a limit. */
+  request?: number | null;
   /** The axis never tops out below this, so a share of time that peaks at 2% is not
    *  stretched to fill the chart and made to look like a spike. */
   minTop?: number;
@@ -35,6 +37,9 @@ interface UsageAreaChartProps {
   compact?: boolean;
   testId?: string;
 }
+
+/** Request over limit above which their two labels would sit on each other. */
+const CROWDED_RATIO = 0.85;
 
 const CHART_CONFIG = {
   value: { label: "Usage", color: "var(--ink-3)" },
@@ -50,6 +55,7 @@ const UsageAreaChart = memo(function UsageAreaChart({
   label,
   format,
   limit,
+  request,
   minTop,
   maxTop,
   compact,
@@ -66,8 +72,10 @@ const UsageAreaChart = memo(function UsageAreaChart({
 
   // With a limit, the axis ends on it, so its label is the limit and not a rounded-up
   // neighbour. Without one, a little headroom keeps the line off the top edge.
-  const wanted = limit ? Math.max(limit, highest) : highest * 1.1;
+  const wanted = limit ? Math.max(limit, request ?? 0, highest) : Math.max(request ?? 0, highest) * 1.1;
   const top = Math.min(Math.max(wanted, minTop ?? 0), maxTop ?? Number.POSITIVE_INFINITY) || 1;
+  // A label is about 12px tall. Within this share of the limit the two lines are closer than that.
+  const crowded = !!limit && !!request && request / limit > CROWDED_RATIO;
 
   return (
     <div data-testid={testId} aria-label={label} role="img">
@@ -109,7 +117,22 @@ const UsageAreaChart = memo(function UsageAreaChart({
               y={limit}
               stroke="var(--err)"
               strokeDasharray="4 4"
-              label={{ value: "Limit", position: "insideTopRight", fontSize: 11, fill: "var(--ink-4)" }}
+              label={{
+                value: "Limit",
+                // Under its line at the left, like "Request". Too close to the request for two
+                // labels to stack, it goes to the right instead, where nothing else is.
+                position: crowded ? "insideTopRight" : "insideTopLeft",
+                fontSize: 11,
+                fill: "var(--ink-4)",
+              }}
+            />
+          ) : null}
+          {request ? (
+            <ReferenceLine
+              y={request}
+              stroke="var(--ink-3)"
+              strokeDasharray="2 4"
+              label={{ value: "Request", position: "insideTopLeft", fontSize: 11, fill: "var(--ink-4)" }}
             />
           ) : null}
           <Area
@@ -139,9 +162,10 @@ export const MemoryChart = memo(function MemoryChart({
   series,
   range,
   limitBytes,
+  requestBytes = null,
   compact,
   testId,
-}: SeriesChartProps & { limitBytes: number | null }) {
+}: SeriesChartProps & { limitBytes: number | null; requestBytes?: number | null }) {
   const points = useMemo(
     () => series.map((point) => ({ bucket: point.bucket, value: point.memoryWorkingSetBytes })),
     [series],
@@ -153,6 +177,7 @@ export const MemoryChart = memo(function MemoryChart({
       label="Memory over time"
       format={formatBytes}
       limit={limitBytes}
+      request={requestBytes}
       compact={compact}
       testId={testId}
     />
@@ -163,9 +188,10 @@ export const CpuChart = memo(function CpuChart({
   series,
   range,
   limitCores,
+  requestCores = null,
   compact,
   testId,
-}: SeriesChartProps & { limitCores: number | null }) {
+}: SeriesChartProps & { limitCores: number | null; requestCores?: number | null }) {
   const points = useMemo(
     () => series.map((point) => ({ bucket: point.bucket, value: point.cpuCores })),
     [series],
@@ -177,6 +203,7 @@ export const CpuChart = memo(function CpuChart({
       label="CPU over time"
       format={formatCores}
       limit={limitCores}
+      request={requestCores}
       compact={compact}
       testId={testId}
     />

@@ -8,7 +8,6 @@ import {
   mockCommunicationDeliveryJournalPage,
   mockCommunicationDeliveryLifecyclePage,
   mockCommunicationDeliveryLifecyclePage2,
-  mockCommunicationReconnectResponse,
   mockCommunicationPlatforms,
   mockCreatedCommunicationConnection,
   mockUpdatedCommunicationConnection,
@@ -17,7 +16,27 @@ import {
 export class CommunicationConnectionDataSupport {
   constructor(private page: Page) {}
 
-  async interceptChannelsRequests({ agentId }: { agentId: string }) {
+  async interceptQuickStartConnections(agentId: string, connectionId: string, { loseFirstResponse = false } = {}) {
+    const connection = { ...mockCommunicationConnection, id: connectionId, agent_id: agentId, platform_key: "agentbarn_telegram", display_name: "Telegram", external_identity: "@AgentBarnTestBot", settings: {} };
+    let saved = false;
+    const creates: unknown[] = [];
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections`, async (route) => {
+      if (route.request().method() === "GET") return route.fulfill({ json: saved ? [connection] : [] });
+      if (route.request().method() !== "POST") return route.fallback();
+      creates.push(route.request().postDataJSON());
+      saved = true;
+      if (loseFirstResponse && creates.length === 1) return route.abort("failed");
+      return route.fulfill({ status: 201, json: connection });
+    });
+    return creates;
+  }
+
+  async interceptChannelsRequests({ agentId, connection, deliveryJournal = mockCommunicationDeliveryJournalPage }: {
+    agentId: string;
+    connection?: Partial<typeof mockCommunicationConnection>;
+    deliveryJournal?: typeof mockCommunicationDeliveryJournalPage;
+  }) {
+    const savedConnection = { ...mockCommunicationConnection, ...connection };
     await this.page.route("**/api/v1/organizations/*/communication-platforms", async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -62,7 +81,7 @@ export class CommunicationConnectionDataSupport {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([mockCommunicationConnection]),
+        body: JSON.stringify([savedConnection]),
       });
     });
 
@@ -89,7 +108,7 @@ export class CommunicationConnectionDataSupport {
         body: JSON.stringify(
           route.request().method() === "PATCH"
             ? mockUpdatedCommunicationConnection
-            : { ...mockCommunicationConnection, id: COMMUNICATION_CONNECTION_ID },
+            : { ...savedConnection, id: COMMUNICATION_CONNECTION_ID },
         ),
       });
     });
@@ -102,7 +121,10 @@ export class CommunicationConnectionDataSupport {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(mockCommunicationConnectionSummary),
+        body: JSON.stringify({
+          ...mockCommunicationConnectionSummary,
+          connection: { ...mockCommunicationConnectionSummary.connection, ...connection },
+        }),
       });
     });
 
@@ -122,7 +144,7 @@ export class CommunicationConnectionDataSupport {
               ? url.searchParams.get("page") === "2"
                 ? mockCommunicationDeliveryLifecyclePage2
                 : mockCommunicationDeliveryLifecyclePage
-              : mockCommunicationDeliveryJournalPage,
+              : deliveryJournal,
         ),
       });
     });
@@ -140,18 +162,6 @@ export class CommunicationConnectionDataSupport {
         roles: [{ id: "role-one", label: "@Maintainer", detail: null }],
       }[kind] ?? [];
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(entries) });
-    });
-
-    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections/*/reconnect`, async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.fallback();
-        return;
-      }
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify(mockCommunicationReconnectResponse),
-      });
     });
   }
 }

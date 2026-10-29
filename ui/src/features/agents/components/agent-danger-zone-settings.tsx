@@ -4,8 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { useSyncProvidersQuery } from "@/features/sync-provider/hooks/use-sync-providers-query";
+import { FILE_SYNC } from "@/features/sync-provider/schemas";
 import { toastError } from "@/shared/toast";
 import { useDeleteAgent } from "../hooks/use-delete-agent";
+import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import type { Agent } from "../schemas";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
@@ -13,6 +16,14 @@ export function AgentDangerZoneSettings({ agent, canDelete, homeHref }: { agent:
   const router = useRouter();
   const deleteAgent = useDeleteAgent();
   const [retireOpen, setRetireOpen] = useState(false);
+  const sharepointAccess = useSharePointAccess(agent.id, {
+    enabled: (agent.secrets ?? []).some((secret) => secret.provider === "sharepoint"),
+  });
+  const sharepointSites = sharepointAccess.data?.mode === "selected_sites" ? sharepointAccess.data.sites : [];
+  const { providers } = useSyncProvidersQuery();
+  const fileSyncProvider = providers?.find(
+    (provider) => provider.connection?.status === "active" && provider.capabilities.includes(FILE_SYNC),
+  );
 
   async function retire() {
     try {
@@ -47,7 +58,13 @@ export function AgentDangerZoneSettings({ agent, canDelete, homeHref }: { agent:
         open={retireOpen}
         onOpenChange={setRetireOpen}
         title={`Retire ${agent.name}?`}
-        description="This permanently deletes the Agent's managed runtime resources and configuration. This action cannot be undone."
+        description={
+          "This permanently deletes the Agent's managed runtime resources and configuration. This action cannot be undone." +
+          (sharepointSites.length > 0
+            ? ` Its SharePoint sites (${sharepointSites.join(", ")}) stay granted to its Microsoft Teams app; to take them away, remove all sites under SharePoint in the agent's Integrations first.`
+            : "") +
+          (fileSyncProvider ? ` Its folder in ${fileSyncProvider.displayName} is deleted too.` : "")
+        }
         confirmLabel="Retire Agent"
         pendingLabel="Retiring…"
         onConfirm={() => void retire()}

@@ -61,6 +61,14 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
+            {{- if .Values.artifacts.existingSecret }}
+            - secretRef:
+                name: {{ .Values.artifacts.existingSecret }}
+            {{- end }}
+            {{- if .Values.artifacts.existingSecret }}
+            - secretRef:
+                name: {{ .Values.artifacts.provisionerSecret | required "artifacts.provisionerSecret is required for API provisioning" }}
+            {{- end }}
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:
@@ -91,12 +99,16 @@ spec:
               value: "{{ .Values.agentLitellmBaseUrl }}"
             - name: COMMUNICATIONS_BASE_URL
               value: "http://{{ .Release.Name }}-communications:{{ .Values.communications.service.port }}/communications/v1"
+            - name: CREDENTIAL_GATEWAY_BASE_URL
+              value: "http://{{ .Release.Name }}-gateway:{{ .Values.gateway.service.port }}/gateway/v1"
             - name: AGENT_IMAGE_PULL_SECRET
               value: "{{ .Values.agentImagePullSecret }}"
             - name: ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS
               value: {{ .Values.organizationLlmBudgets.alertThresholds | quote }}
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
+            - name: ORGANIZATION_DEFAULT_AGENT_LIMIT
+              value: {{ .Values.organizationDefaultAgentLimit | quote }}
             - name: AGENT_FIRECRAWL_BASE_URL
               value: "{{ .Values.agentFirecrawlBaseUrl }}"
             - name: PROMETHEUS_URL
@@ -128,6 +140,10 @@ spec:
             {{- if .Values.restorePoints.restoreTimeoutSeconds }}
             - name: RESTORE_POINT_RESTORE_TIMEOUT_SECONDS
               value: "{{ .Values.restorePoints.restoreTimeoutSeconds }}"
+            {{- end }}
+            {{- if .Values.managedUpdate.readyTimeoutSeconds }}
+            - name: AGENT_UPDATE_READY_TIMEOUT_SECONDS
+              value: "{{ .Values.managedUpdate.readyTimeoutSeconds }}"
             {{- end }}
           volumeMounts:
             - name: kubeconfig

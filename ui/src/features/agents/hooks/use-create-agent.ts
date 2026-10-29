@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
+import { organizationsKey } from "@/features/organizations/utils";
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
@@ -24,6 +25,9 @@ export type CreateAgentData = {
   // Shared credentials to attach (by ID)
   sharedCredentials?: Array<{ sharedCredentialId: string }>;
   approvalMode?: "manual" | "auto" | "off";
+  fileSyncEnabled?: boolean;
+  // Omitted hires on the platform default; Owners and Admins may name another allowed size.
+  agentSizeId?: string;
 };
 
 export function useCreateAgent() {
@@ -39,6 +43,7 @@ export function useCreateAgent() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: agentsKey.all });
+      void queryClient.invalidateQueries({ queryKey: organizationsKey.all });
     },
   });
 }

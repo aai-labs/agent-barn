@@ -14,7 +14,21 @@ helmDefaults:
   timeout: 600
 
 releases:
-{{- if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}
+  - name: garage
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/garage
+    # Bootstrap Garage with helm and cluster-init before application deployment.
+    # CLI --wait overrides this default; normal deploys wait for existing storage.
+    wait: false
+    labels:
+      name: garage
+    values:
+      - storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        replicas: {{ env "GARAGE_REPLICAS" | default "1" }}
+        replicationFactor: {{ env "GARAGE_REPLICATION_FACTOR" | default "1" }}
+        requireDistinctNodes: {{ env "GARAGE_REQUIRE_DISTINCT_NODES" | default "false" }}
+        ingress:
+          enabled: false
   - name: postgres-hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -33,6 +47,8 @@ releases:
   - name: hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/hindsight
+    labels:
+      name: hindsight
     needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
     values:
       - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
@@ -40,8 +56,8 @@ releases:
         apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
         llm:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
-          apiKey: {{ env "HINDSIGHT_LITELLM_API_KEY" | required "HINDSIGHT_LITELLM_API_KEY is required" | quote }}
-{{- end }}
+          retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+        litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -147,6 +163,14 @@ releases:
         value: {{ env "POSTGRES_FIRECRAWL_PASSWORD" | required "POSTGRES_FIRECRAWL_PASSWORD is required" | quote }}
       - name: postgres.db
         value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
+{{ if env "FIRECRAWL_API_MEMORY_LIMIT" }}
+      - name: resources.api.limits.memory
+        value: {{ env "FIRECRAWL_API_MEMORY_LIMIT" | quote }}
+{{ end }}
+{{ if env "FIRECRAWL_RABBITMQ_MEMORY_LIMIT" }}
+      - name: resources.rabbitmq.limits.memory
+        value: {{ env "FIRECRAWL_RABBITMQ_MEMORY_LIMIT" | quote }}
+{{ end }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
@@ -157,6 +181,12 @@ releases:
     labels:
       name: agentbarn-api
     set:
+      - name: artifacts.existingSecret
+        value: "garage-artifact-storage"
+      - name: artifacts.purgeEnabled
+        value: {{ env "ARTIFACT_PURGE_ENABLED" | default "true" }}
+      - name: artifacts.provisionerSecret
+        value: "garage-artifact-provisioner"
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
@@ -175,6 +205,9 @@ releases:
         value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: organizationLlmBudgets.defaultAgentUsd
         value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
+      # Empty means the default of 10 Agents for Organizations that are not trials.
+      - name: organizationDefaultAgentLimit
+        value: {{ env "ORGANIZATION_DEFAULT_AGENT_LIMIT" | default "" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -190,11 +223,11 @@ releases:
       - name: memory.defaultModel
         value: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
       - name: memory.enabled
-        value: {{ env "HINDSIGHT_ENABLED" | default "false" }}
+        value: true
       - name: memory.litellmKeyHashes
-        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}{{ else }}{{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}{{ end }}
+        value: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
       - name: memory.litellmActiveKeyHash
-        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ env "HINDSIGHT_LITELLM_API_KEY" | sha256sum | quote }}{{ else }}{{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}{{ end }}
+        value: {{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}
       - name: memory.settingsKeyChecksum
         value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
       - name: memory.authChecksum
@@ -215,6 +248,8 @@ releases:
         value: {{ env "CLOUDFLARE_API_TOKEN" | default "" | quote }}
       - name: senderEmail
         value: {{ env "SENDER_EMAIL" | default "" | quote }}
+      - name: analyticsEnabled
+        value: {{ env "ANALYTICS_ENABLED" | default "true" | quote }}
       - name: agentEmailDomain
         value: {{ env "AGENT_EMAIL_DOMAIN" | default "" | quote }}
       - name: emailInboundSecret
@@ -223,6 +258,15 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      # Payments are turned on in the platform Billing settings; these only make it possible.
+      - name: stripe.secretKey
+        value: {{ env "STRIPE_SECRET_KEY" | default "" | quote }}
+      - name: stripe.webhookSecret
+        value: {{ env "STRIPE_WEBHOOK_SECRET" | default "" | quote }}
+      - name: onedriveSyncClientId
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_ID" | default "" | quote }}
+      - name: onedriveSyncClientSecret
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_SECRET" | default "" | quote }}
       - name: agentFirecrawlApiKey
         value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl
@@ -242,12 +286,16 @@ releases:
         value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
       - name: restorePoints.maxPerAgent
         value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
+      - name: workflows.runtimeBaseUrl
+        value: {{ env "WORKFLOW_RUNTIME_BASE_URL" | default "" | quote }}
       - name: agentDefaultModel
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
-      - name: communicationsNativePlatforms
-        value: {{ env "COMMUNICATIONS_NATIVE_PLATFORMS" | default "" | quote }}
+      - name: agentbarnTelegramBotToken
+        value: {{ env "AGENTBARN_TELEGRAM_BOT_TOKEN" | default "" | quote }}
+      - name: agentbarnTelegramBotUsername
+        value: {{ env "AGENTBARN_TELEGRAM_BOT_USERNAME" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username
@@ -270,6 +318,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
+      - {{ env "NAMESPACE" | default "agent-farm" }}/hindsight
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}

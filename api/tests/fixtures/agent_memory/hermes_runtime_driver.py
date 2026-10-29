@@ -19,7 +19,7 @@ agent = AIAgent(
     api_mode="chat_completions",
     enabled_toolsets=[],
     quiet_mode=True,
-    skip_context_files=True,
+    skip_context_files=False,
     skip_background_review=True,
     session_id="new-memory-contract-session",
     platform="api",
@@ -37,11 +37,12 @@ finally:
         agent._memory_manager.shutdown_all()
 
 organization_tool = None
+explicit_recalls = []
 if os.environ.get("MEMORY_API_KEY"):
     discovery = json.loads(terminal_tool(command="command -v agentbarn-memory", timeout=5))
     if discovery.get("exit_code") != 0:
         raise RuntimeError("Hermes terminal cannot find the installed agentbarn-memory command")
-    instructions = Path("/workspace/TOOLS.md").read_text()
+    instructions = Path("/workspace/AGENTS.md").read_text()
     match = re.search(r"run `([^`]+remember-organization)`", instructions)
     if match is None:
         raise RuntimeError("Organization Memory instructions must name the writer command")
@@ -52,6 +53,17 @@ if os.environ.get("MEMORY_API_KEY"):
             timeout=15,
         )
     )
+    for option, query in [("", "Explicit release convention"), (" --thorough", "Focused release convention")]:
+        call = json.loads(
+            terminal_tool(
+                command="/usr/local/bin/agentbarn-memory recall" + option + " <<'QUERY'\n" + query + "\nQUERY",
+                timeout=25,
+            )
+        )
+        outcome = json.loads(call["output"].splitlines()[0])
+        explicit_recalls.append({"exit_code": call["exit_code"], "outcome": outcome})
+        if outcome["status"] == "unavailable":
+            break
 
 settings = Path("/opt/data/hindsight/config.json")
 print(
@@ -61,6 +73,7 @@ print(
             "providers": providers,
             "organization_tool_exit": organization_tool.get("exit_code") if organization_tool else None,
             "organization_tool_error": str(organization_tool) if organization_tool else "",
+            "explicit_recalls": explicit_recalls,
             "native_prompt": native_prompt,
             "response": result.get("final_response", ""),
             "saved_settings_exist": settings.exists(),

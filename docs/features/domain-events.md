@@ -63,7 +63,22 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `agent.stopped` — emitted after an Agent transitions to `STOPPED`.
 - `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
 - `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
-- `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a capacity limit, one event per limit that moved, naming the setting with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
+- `platform.agent_size.created` / `platform.agent_size.deleted` — emitted atomically when a Platform Administrator adds a size to the Agent Size catalog or removes one, carrying the size's name as `subject_display` and all of its values (CPU and memory requests and limits, `enabled`, `is_default`). The subject is the `SYSTEM` size row.
+- `platform.agent_size.changed` — emitted atomically, one event per field that moved, naming the `setting` with its `previous` and `current` value. Making a size the default records two events in one correlation: `is_default` turning false on the old default and true on the new one. Not emitted when a save leaves every value unchanged. All three go to Security Audit.
+- `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a namespace quota ceiling, one event per ceiling that moved, naming the setting (`limits_memory_bytes`, `limits_cpu_cores`, `requests_memory_bytes`, `requests_cpu_cores`, `requests_storage_bytes` or `pods`) with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
+- `platform.trial_settings.changed` — emitted atomically when a Platform Administrator changes a trial setting (`self_signup_enabled`, `credit_usd`, `agent_limit` or `max_active_trials`), one event per setting that moved, with its previous and current value (booleans for signup, numbers for credit and limits, `null` for no cap). The subject is the `SYSTEM` trial settings row. Not emitted when a save leaves the value unchanged.
+- `organization.trial.ended` — emitted atomically when a Platform Administrator ends a Trial Organization's trial. Not emitted when the Organization was not a trial.
+- `organization.agent_sizes.changed` — emitted atomically when a Platform Administrator changes the [Agent Sizes](agent-sizes.md#organization-choice) an Organization may choose, with the set before and after as ids and names. Organization scope, like the platform-set `organization.llm_budget.changed`; the actor is the administrator's Membership when they have one there, else their user. Also emitted, once per Organization and in the switch's correlation with the administrator's user as actor, when making a size the default gives the old default to every Organization that can choose. Not emitted when the set is unchanged. Security Audit.
+- `agent.agent_size.changed` — emitted atomically when an Owner or Admin chooses an Agent's size, on hire (from the default, in the `agent.created` correlation) or later, or a Platform Administrator overrides or clears it, with the size before and after (`agent_size_id` and `agent_size_name`, both null for the default). `by_platform` is true for the platform's override and its clearing (absent, so false, on records written before overrides existed); the actor is then the administrator's Membership when they have one there, else their user. Organization scope, Security Audit. Not emitted when the choice is unchanged. A dedicated event rather than an `agent.updated` field, because the size has its own route and permission and is never written by the general Agent update.
+
+AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
+
+- `organization.trial.ended` is also emitted when a credit purchase converts a trial (actor: the payment system, `actor_display` "Credit purchase").
+- `organization.trial.expired` — emitted once when a trial runs out of credit; it then no longer counts toward the cap on active trials. Emitted by the `organization.trial_expiry.projection` Event Handler, which handles `organization.llm_budget.exhausted` (alongside the budget email and product analytics handlers).
+- `organization.agent_limit.changed` — emitted atomically when a Platform Administrator sets or clears an Organization's own Agent limit, with the previous and current limit (`null` follows the default).
+- `platform.billing_settings.changed` — emitted atomically when a Platform Administrator changes a billing setting (`payments_enabled`, `min_purchase_usd`, `max_purchase_usd`, `purchase_fee_percent`), one event per setting that moved, same payload shape as `platform.trial_settings.changed`.
+- `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
+- `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit, the amount paid and the reason (for example, the amount paid doesn't match the checkout we created), and names the Organization in `subject_display` (a Platform event carries no Organization id). Also emitted for a paid session that doesn't match a checkout we created.
 
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
@@ -78,11 +93,23 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
   - Not emitted when a save changes nothing.
   - Emitted by `PUT /organizations/{organization_id}/value-settings` (see [`business-value.md`](business-value.md#value-settings)).
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
+- `organization.created` — emitted in the creating transaction, for self-service creation (`POST /organizations`, User Actor = creator), for Platform Administrator onboarding (`POST /platform/users`, User Actor = administrator), and for a Google self-signup's trial Organization (`GoogleSignInService._sign_up`, User Actor = the new user). Its only intended handler is `product_analytics.posthog`.
+- `organization.updated` — emitted by `PATCH /organizations/{organization_id}` only when the Organization's name or description actually changes. Its actor is the acting User, not their Membership, so it is still attributable if the Organization is deleted before delivery. It carries the changed field names, never their values, and its only intended handler is `product_analytics.posthog`. An allowlist change in the same request still emits `organization.model_allowlist.changed` alongside it.
+- `organization.deleted` — staged in the same transaction as the Organization's hard delete, with a User Actor (the deleting Owner). The outbox and delivery rows have no foreign key to the Organization, so they outlive it. Its only intended handler is `product_analytics.posthog`.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
+
+Workflow authoring adds the Platform-scoped `platform.workflow_authoring.changed`
+event, carrying previous/current booleans and safe actor/subject display snapshots,
+projected by `security_audit.projection`. Its atomic settings boundary and no-op
+behavior are owned by [Agent workflows](agent-workflows.md#platform-authoring-setting).
 
 Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
 
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
+
+File Sync adds `agent.file_sync.enabled` and `agent.file_sync.disabled`, handled by `security_audit.projection`. The Subject is the Agent whose per-Agent File Sync switch changed. The payload carries the Organization and Agent ids and display snapshots of the actor and the Agent, and nothing about the folder or its files. See [Sync providers](sync-provider/README.md#agent-file-sync).
+
+Playbooks add the Platform-scoped `platform.playbook_model.changed` event, carrying previous/current model IDs and display snapshots, and the Organization-scoped `playbook.extraction.requested` event, both projected by `security_audit.projection`. It commits with the queued run; its Subject is the source Agent whose transcripts the run reads, and its payload carries IDs, the target Skill name, the window length, the session bound, and display snapshots, never transcript or playbook content. See [`Playbooks`](playbooks.md).
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 
@@ -95,6 +122,8 @@ AF-273 adds Communications operational events as Organization-scoped audit input
 These events carry scoped resource IDs, lifecycle status, attempt/error metadata, and safe actor/subject display snapshots only. The Connection health event may also carry the validated, content-free diagnostic envelope (category, operation, HTTP status, provider code, retryability, bounded retry-after value, and provider request ID); it never carries provider URLs, credentials, headers, bodies, or exception text. The separate Communications operation journal remains runtime diagnostics rather than a Domain Event stream; it records intermediate attempts and timings without payload content, credentials, or sender identity.
 
 RBAC, Platform Privilege, and the AF-167 events above are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
+
+`agent.created`, `agent.updated`, `agent.started`, `agent.stopped`, `agent.deleted`, `organization.member.added`, `organization.member.removed`, `organization.role.changed`, `organization.ownership_transferred`, and `organization.llm_budget.exhausted` are also intended for the `product_analytics.posthog` Event Handler. That handler forwards them to PostHog when analytics is enabled. See [`product-analytics.md`](product-analytics.md).
 
 ## Delivery worker contract
 
@@ -272,7 +301,7 @@ AF-247 adds the first read API and UI over this domain: a Platform Administrator
 - Endpoints (Platform Administrator only, `401` unauthenticated / `403` non-admin, no Active Organization resolved or accepted):
   - `GET /api/v1/platform/event-deliveries/summary` — global counts for all five lifecycle statuses (including zero) plus, for each active state (`PENDING`, `ENQUEUED`, `PROCESSING`), oldest age, stale count, unknown-age count, and the configured stale threshold.
   - `GET /api/v1/platform/event-deliveries` — page/offset explorer, default and max page size 50/100, deterministic `(created_at, id)` ordering (newest-first default, oldest-first optional), covering both Organization- and Platform-scoped deliveries. It is filterable by status/Organization/event name/created-at range, with free-text search (exact match on Delivery ID or Event ID; case-insensitive prefix match on Organization name, event name, or handler name; `last_error` is never searched). Platform-scoped rows return `organization_id` and `organization_name` as `null`.
-  - `GET /api/v1/platform/event-deliveries/event-types` — the registry catalogue as event name plus schema versions, limited to definitions with at least one intended Event Handler (a handler-less event, e.g. `agent.created`, can never produce a delivery and is excluded).
+  - `GET /api/v1/platform/event-deliveries/event-types` — the registry catalogue as event name plus schema versions, limited to definitions with at least one intended Event Handler (a handler-less event, e.g. `agent.restore_point.created`, can never produce a delivery and is excluded).
 - State age semantics reuse the domain's own clocks — `PENDING` → `created_at`, `ENQUEUED` → `enqueued_at`, `PROCESSING` → `claimed_at` — and the reconciler's configured thresholds (`EVENT_DELIVERY_RECONCILIATION_PENDING_GRACE_SECONDS`, `EVENT_DELIVERY_RECONCILIATION_ENQUEUED_STALE_SECONDS`, `EVENT_DELIVERY_PROCESSING_STALE_SECONDS`) as the single source of truth for "stale." A missing required state timestamp is surfaced as unknown age, never backfilled from `created_at`.
 - The delivery response is safe operational metadata only (identity, status, timing, attempt count, dead-letter reason, bounded/redacted `last_error`, derived `status_since`) and never includes Event Payload, Actor/Subject Identity, or correlation/causation data. `last_error` is re-bounded/redacted at this read boundary as defense in depth, independent of the write-time bounding in `repository.py`.
 - The UI (`../../ui/src/features/event-deliveries/`) renders this at `/dashboard/platform/event-deliveries` with URL-backed filters/sort, a manual **Refresh** action (no polling), `useInfiniteQuery` + TanStack Virtual for the explorer, and one expandable inline row at a time.
@@ -293,6 +322,7 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 | Session-aware outbox staging and persistence reads | `../../api/domains/events/repository.py` |
 | Event Handler registry and delivery processor | `../../api/domains/events/handlers.py`, `../../api/domains/events/processor.py` |
 | Security Audit Record model and projection | `../../api/domains/events/security_audit.py` |
+| Product analytics Event Handler | `../../api/domains/analytics/event_handlers.py`, [`product-analytics.md`](product-analytics.md) |
 | Dramatiq transport adapter and worker actors | `../../api/domains/events/transport.py`, `../../api/domains/events/worker.py`, `../../api/worker_app.py` |
 | Event Delivery reconciler | `../../api/domains/events/reconciliation.py` |
 | Platform Event Delivery Monitor service and routes | `../../api/domains/events/service.py`, `../../api/domains/events/routes.py` |
@@ -316,6 +346,44 @@ Adding a Domain Event requires a registered event name/version, payload schema, 
 
 Changes to the Platform Event Delivery Monitor's summary/explorer response contract, stale-threshold semantics, redaction behavior, or supported filters require updating `api/domains/events/models.py` (DTOs), `repository.py` (query composition), `service.py`/`routes.py`, the matching UI schemas/hooks/components under `ui/src/features/event-deliveries/`, this document, and both test suites listed in the source map. A new index needed for a monitor query requires an Alembic migration under `api/migrations/versions/`.
 
+## Workflow run wakeups
+
+Workflow run transitions stage `workflow.run.changed` v1 with the run identity,
+revision and state only, alongside their ledger/history transaction. The
+`workflow.controller` handler advances durable intent and dispatches steps to the
+owning Agent through the Kubernetes client. It tolerates duplicate events and
+uses the same cluster access as the API. Services and the controller enqueue
+staged delivery IDs immediately after each successful ledger commit, including
+starts, cancellation, step results, failures and recovery transitions. Broker
+failures leave committed deliveries pending for reconciliation. A scheduled
+workflow operator pass handles missed events, expired attempts and retention. Run inputs, reasoning, files and capability credentials never enter
+the event payload. These are workflow wakeup facts, not Security Audit or product
+analytics projections. See the [workflow feature](agent-workflows.md#wf02-execution-and-outputs).
+
 ## Personal API Key security events
 
 Platform-scoped `api_key.created` and `api_key.revoked` events record account credential lifecycle with a User actor and User subject. Their payloads contain only the User ID, key record ID, access mode, and safe display fields. The API Key repository commits each key mutation and outbox/delivery rows in one transaction; the Security Audit projection persists the resulting record.
+
+## User login events
+
+Platform-scoped `user.logged_in` records each successful login, with a User actor and User subject and the payload `user_id` and `method`. It is written through `AuthService.record_login`, which uses `OutboxMessageRepository.create` and enqueues the event. A failure to record it is logged and never fails the login. Its only intended handler is `product_analytics.posthog`. Failed logins, token refresh and API-key authentication emit nothing.
+
+- **Password login** (`POST /auth/login`) records `method: "password"` after the credential check.
+- **Google sign-in** (`GET /auth/google/callback`) records `method: "google"` after the session is issued, but only when the account already existed and was verified. That covers an account found by its Google id and an existing verified account linked to Google by its address. A first sign-in that creates the account, and an invitee enrolled through Google, are not logins. Nor is the losing side of two simultaneous first sign-ins.
+
+Platform-scoped `user.signed_up` records an invitee's first enrollment. `PasswordResetTokenRepository.redeem` handles both invite acceptance and password reset in one transaction. It locks the token and the user, applies the password, marks the token used, and stages the event only for invite acceptance when the email was not yet verified. A reused token is rejected, and a password reset never emits it. Its payload carries `method`: `invite` for these enrollments. Google sign-in also emits it through `UserRepository.stage_user_signed_up`, in the transaction that creates or enrolls the account:
+
+- `method: "google"` when `_sign_up` creates a self-signed-up User and trial Organization. The same transaction also stages `organization.created`.
+- `method: "invite"` when `_link` enrolls a pending invitee.
+
+Refused sign-ups and returning sign-ins emit nothing. `GoogleSignInService.complete` enqueues the deliveries after the sign-in. Its only intended handler is `product_analytics.posthog`.
+
+`user.onboarding.completed` records the first `POST /onboarding/complete` for a user, with a User actor and User subject and the payload `user_id`. `UserRepository.complete_onboarding` sets `onboarding_completed_at` with a conditional update (only while it is null) and stages the event in the same transaction only when that update changed the row, so a repeat or a simultaneous second call emits nothing. It is scoped to the first Organization the user created (a self-signed-up user's trial), or to the platform when they created none. Its definition has no fixed scope for that reason. Its only intended handler is `product_analytics.posthog`.
+
+`telegram.account.linked` and `telegram.account.unlinked` record Agent Barn Telegram links. They are Organization-scoped to the link's own Organization, with the link's issuing Membership as a Membership actor and the link's Agent as subject. The payload is `organization_id`, `agent_id`, `connection_id` and `link_id`, plus `reason` on an unlink. They never carry the Telegram user id or username. `AgentBarnTelegramRepository._consume` stages `linked` in the transaction that spends the token, and `unlinked` with `reason: "relinked"` for the Telegram user's previous link that it ends. That previous link can belong to another Organization, so its event uses that link's Organization and Membership. A failed attempt that is retried rolls its staged rows back with the rest of the transaction. Every other path that ends a link stages `unlinked` in the same transaction as the ending, and only when a link actually ended:
+- `unlink_in_scope` (the web app's unlink) uses `reason: "user_removed"`, with the clicking user's resolved actor.
+- `end_active_link` and `end_link_for_connection` (the shared bot's poller, forwarder and Bot API proxy) use `reason: "blocked_bot"` or `"access_lost"`, with the link's issuing Membership as actor.
+
+A Membership deletion cascades its links away without an event.
+
+`telegram.first_message.received` uses the same scope, actor, subject and payload as `linked`. `AgentBarnTelegramRepository.queue_update` stages it in the transaction that queues a linked user's new message, through a conditional update that sets `agentbarn_telegram_link.first_message_at` only while the link is active and the column is null. So it fires once per link, even for simultaneous messages. The processor asks for it only for a new `message`, never for an edit or a button press. Migration `a78bcde4b918` set `first_message_at` to `created_at` for links that already existed. It is delivered by the outbox reconciler. These writes run in the Communications process. The link-token and web-app paths enqueue after commit; the poller, forwarder and proxy paths rely on the outbox reconciler. Their only intended handler is `product_analytics.posthog`.

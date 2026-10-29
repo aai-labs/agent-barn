@@ -21,11 +21,15 @@ def build_policy_md() -> str:
 
 _ASSEMBLY_METHODS = {
     "_provision_and_start",
+    "_platform_pin_for",
+    "_effective_runtime_image",
     "_auto_attached_aai_cli_skills",
     "_build_skill_pointers",
     "_native_slack_connection",
     "_native_connection_configuration",
+    "_agentbarn_telegram_runtime",
     "_backfill_google_client_credentials",
+    "_spend_limit_kind",
 }
 
 
@@ -142,3 +146,9 @@ def test_asset_files_cover_both_runtime_script_trees():
     assert "init-openclaw.js" in names
     assert "bootloader-footer.md" in names
     assert "SKILL.md" in names
+    assert "file-sync.py" in names
+
+
+def test_closure_covers_the_file_sync_rules_shipped_to_pods():
+    modules = {module for module, _ in discover_closure()}
+    assert "api.domains.file_sync.rules" in modules

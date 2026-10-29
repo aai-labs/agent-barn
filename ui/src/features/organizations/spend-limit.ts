@@ -10,13 +10,27 @@ export const SPEND_LIMIT_WINDOWS = [
 
 export const DEFAULT_SPEND_LIMIT_WINDOW = "30d";
 
+// A limit granted once and never renewed: a trial's credit. Shown, never offered as a
+// choice for an organization that renews.
+export const ONE_OFF_SPEND_LIMIT_WINDOW = { value: "once", label: "in total", period: "so far" } as const;
+
+/** Credit is a limit granted once and spent down. Nothing sits beneath it: any lower
+ *  limit would never renew, so a top-up could never lift it. */
+export function runsOnCredit(value: string | null | undefined) {
+  return value === ONE_OFF_SPEND_LIMIT_WINDOW.value;
+}
+
+function findWindow(value: string | null | undefined) {
+  return [...SPEND_LIMIT_WINDOWS, ONE_OFF_SPEND_LIMIT_WINDOW].find((option) => option.value === value);
+}
+
 export function windowLabel(value: string | null | undefined) {
-  return SPEND_LIMIT_WINDOWS.find((option) => option.value === value)?.label ?? "";
+  return findWindow(value)?.label ?? "";
 }
 
 /** "this month" for a monthly limit — the period spend so far is counted over. */
 export function periodLabel(value: string | null | undefined) {
-  return SPEND_LIMIT_WINDOWS.find((option) => option.value === value)?.period ?? "so far";
+  return findWindow(value)?.period ?? "so far";
 }
 
 /** Both halves of "X of Y used" share a precision chosen from the limit. Formatting

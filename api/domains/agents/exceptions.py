@@ -10,6 +10,14 @@ class AgentProvisioningPrecondition(HTTPException):
     """
 
 
+class AgentLimitReached(HTTPException):
+    """An Organization already runs as many Agents as it may."""
+
+    def __init__(self, limit: int) -> None:
+        agents = "one agent" if limit == 1 else f"{limit} agents"
+        super().__init__(status_code=status.HTTP_409_CONFLICT, detail=f"This organization can have {agents}.")
+
+
 class BotTokenConflictHTTPException(HTTPException):
     def __init__(self, agent_name: str, platform: str = "Slack"):
         self.status_code = status.HTTP_409_CONFLICT

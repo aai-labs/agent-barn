@@ -34,6 +34,7 @@ export const CommunicationDirectoryPreviewSchema = z.object({
 
 export const CommunicationPlatformSchema = z.object({
   key: z.string(),
+  transport: z.enum(["gateway", "native"]).optional(),
   displayName: z.string(),
   schemaVersion: z.number().int().positive(),
   capabilities: z.array(z.string()),
@@ -49,6 +50,8 @@ export const CommunicationConnectionSchema = z.object({
   platformKey: z.string(),
   displayName: z.string(),
   enabled: z.boolean(),
+  transport: z.enum(["gateway", "native"]).optional(),
+  recoveryActions: z.array(z.enum(["retry_delivery"])).default([]),
   schemaVersion: z.number().int().positive(),
   settings: z.record(z.string(), z.unknown()),
   externalIdentity: z.string().nullable(),
@@ -172,11 +175,6 @@ export const CommunicationDiagnosticsSchema = z.object({
   windowEnd: z.string(),
 });
 
-export const CommunicationReconnectSchema = z.object({
-  connection: CommunicationConnectionSchema,
-  requestedAt: z.string(),
-});
-
 export const CommunicationRetrySchema = z.object({
   deliveryId: z.string().uuid(),
   status: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]),
@@ -188,10 +186,28 @@ export const CommunicationInstallLinkSchema = z.object({
   url: z.string().url(),
 });
 
+export const TelegramLinkTokenSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(["waiting", "linked", "expired"]),
+  expiresAt: z.string(),
+  telegramUsername: z.string().nullable(),
+  // Present only on the response that creates the link.
+  url: z.string().url().optional(),
+});
+
+export const TelegramLinkedAccountSchema = z.object({
+  id: z.string().uuid(),
+  telegramUsername: z.string().nullable(),
+  linkedByMembershipId: z.string().uuid(),
+  createdAt: z.string(),
+});
+
 export type CommunicationDirectoryEntry = z.infer<typeof CommunicationDirectoryEntrySchema>;
 export type CommunicationDirectoryPreview = z.infer<typeof CommunicationDirectoryPreviewSchema>;
 export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationInstallLink = z.infer<typeof CommunicationInstallLinkSchema>;
+export type TelegramLinkToken = z.infer<typeof TelegramLinkTokenSchema>;
+export type TelegramLinkedAccount = z.infer<typeof TelegramLinkedAccountSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
 export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;
 export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;
@@ -233,7 +249,6 @@ export type CommunicationJournalFilters = {
   deliveryId?: string;
   order?: "asc" | "desc";
 };
-export type CommunicationReconnect = z.infer<typeof CommunicationReconnectSchema>;
 export type CommunicationRetry = z.infer<typeof CommunicationRetrySchema>;
 
 export type CreateCommunicationConnection = {

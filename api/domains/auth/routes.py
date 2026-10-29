@@ -5,16 +5,18 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     Request,
     Response,
     status,
 )
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_injector import Injected
 from pydantic import BaseModel
 
 from api.core.config import Config
-from api.domains.auth.hashing import check_hash
+from api.domains.auth.google_sign_in import STATE_TTL_SECONDS, GoogleSignInService
 from api.domains.auth.models import (
     AcceptInviteRequest,
     CredentialClass,
@@ -33,6 +35,9 @@ from api.domains.users.service import UserService
 auth_router = APIRouter(prefix="/auth", tags=["authentication"])
 
 REFRESH_TOKEN_COOKIE_KEY = "refresh_token"
+GOOGLE_SIGN_IN_COOKIE_KEY = "google_sign_in_nonce"
+# Sent only to the Google sign-in routes, never to the rest of the API.
+GOOGLE_SIGN_IN_COOKIE_PATH = "/api/v1/auth/google"
 
 
 class ApiContextOrganization(BaseModel):
@@ -68,27 +73,10 @@ def _set_refresh_token_cookie(response: Response, refresh_token: str, config: Co
 def login_for_access_token(
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    user_service: UserService = Injected(UserService),
     auth_service: AuthService = Injected(AuthService),
     config: Config = Injected(Config),
 ):
-    credential_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Incorrect email or password",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        user = user_service.get_user_by_email(form_data.username)
-    except HTTPException:
-        raise credential_exception
-    if not user or not check_hash(form_data.password, user.hashed_password):
-        raise credential_exception
-
-    token_data = TokenData(
-        user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION
-    )
-    token_pair = auth_service.create_token_pair(token_data)
+    token_pair = auth_service.login(form_data.username, form_data.password)
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
     return token_pair
 
@@ -209,8 +197,57 @@ def forgot_password(
 def signup():
     raise HTTPException(
         status_code=status.HTTP_410_GONE,
-        detail="Self-registration is disabled. Contact an administrator.",
+        detail="Sign up with Google instead.",
     )
+
+
+@auth_router.get("/google/start")
+def start_google_sign_in(
+    origin: str = Query(default="signup"),
+    service: GoogleSignInService = Injected(GoogleSignInService),
+    config: Config = Injected(Config),
+):
+    started = service.start(origin)
+    response = RedirectResponse(started.redirect_url, status_code=status.HTTP_302_FOUND)
+    if started.nonce is not None:
+        # Lax, not None: the browser must send it on Google's top-level redirect back to
+        # us, and nowhere else.
+        response.set_cookie(
+            key=GOOGLE_SIGN_IN_COOKIE_KEY,
+            value=started.nonce,
+            max_age=STATE_TTL_SECONDS,
+            path=GOOGLE_SIGN_IN_COOKIE_PATH,
+            httponly=True,
+            secure=config.environment not in {"local", "test"},
+            samesite="lax",
+        )
+    return response
+
+
+@auth_router.get("/google/callback")
+def finish_google_sign_in(
+    request: Request,
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    service: GoogleSignInService = Injected(GoogleSignInService),
+    config: Config = Injected(Config),
+):
+    outcome = service.complete(
+        code=code, state=state, error=error, nonce=request.cookies.get(GOOGLE_SIGN_IN_COOKIE_KEY)
+    )
+    response = RedirectResponse(outcome.redirect_url, status_code=status.HTTP_302_FOUND)
+    # Single use: whatever happened, this browser's attempt is over.
+    response.delete_cookie(
+        key=GOOGLE_SIGN_IN_COOKIE_KEY,
+        path=GOOGLE_SIGN_IN_COOKIE_PATH,
+        httponly=True,
+        secure=config.environment not in {"local", "test"},
+        samesite="lax",
+    )
+    if outcome.refresh_token is not None:
+        _set_refresh_token_cookie(response, outcome.refresh_token, config)
+    return response
 
 
 @auth_router.post("/reset-password")

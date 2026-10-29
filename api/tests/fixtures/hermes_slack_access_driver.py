@@ -73,6 +73,7 @@ def host(image: str) -> None:
 def check() -> None:
     import asyncio
     import tempfile
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     home = Path(tempfile.mkdtemp())
@@ -96,6 +97,7 @@ def check() -> None:
     adapter = SlackAdapter(config.platforms[Platform.SLACK])
     adapter._bot_user_id = "UBOT"
     adapter._client = AsyncMock()
+    adapter._app = SimpleNamespace(client=adapter._client)
     adapter._client.users_info.return_value = {"user": {"name": "test", "is_bot": False}}
     adapter._client.conversations_info.return_value = {"channel": {"name": "test"}}
     got = set()
@@ -110,6 +112,7 @@ def check() -> None:
     runner.adapters = {Platform.SLACK: adapter}
     runner.pairing_store = PairingStore()
     adapter._message_handler = runner.receive
+    adapter.set_authorization_check(runner._make_adapter_auth_check(Platform.SLACK))
 
     async def replay():
         for label, channel_type, channel, user, text in MESSAGES:
@@ -124,7 +127,23 @@ def check() -> None:
                 }
             )
 
+    async def thread_context():
+        adapter._client.conversations_replies.return_value = {
+            "ok": True,
+            "messages": [
+                {"user": "U1", "text": "earlier context", "ts": "100.0"},
+                {"user": "U2", "text": "more context", "ts": "101.0"},
+            ],
+        }
+        for channel in ("C1", "C2"):
+            context = await adapter._fetch_thread_context(channel, "100.0", "102.0")
+            settings = json.loads(os.environ["SLACK_CASE"])["settings"]
+            allowed = settings["group_policy"] == "open" or channel in settings["channel_ids"]
+            assert "earlier context" in context and "more context" in context, context
+            assert ("[unverified]" not in context) == allowed, context
+
     asyncio.run(replay())
+    asyncio.run(thread_context())
     case = json.loads(os.environ["SLACK_CASE"])
     if got != set(case["expected"]):
         raise SystemExit(

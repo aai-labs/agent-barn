@@ -6,6 +6,7 @@ import {
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
   mockCommunicationPlatforms,
+  mockDeadLetteredCommunicationDeliveryJournalPage,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -54,18 +55,28 @@ test.describe("Agent Detail Page", () => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
   });
 
-  test("should load agent detail page", async ({ page }) => {
+  test("should load agent detail page on its Overview, with Chat a section away", async ({ page }) => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(page.getByTestId("agent-about-overview")).toBeVisible();
+
+    await agentDetailPage.openSection("Chat");
     await expect(page.getByLabel("Message input")).toBeEnabled();
   });
 
-  test("shows configured messaging platform icons", async ({ page }) => {
+  // On desktop the path bar names the Agent; the page header is the phone's.
+  test("shows configured messaging platform icons in the phone header", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
     await expect(page.getByAltText("Slack")).toBeVisible();
     await expect(page.getByAltText("Discord")).toBeVisible();
   });
 
-  test("shows model name in header", async ({ page }) => {
-    await expect(page.getByText("litellm/gpt-5-mini")).toBeVisible();
+  test("shows model name in the phone header", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(page.getByRole("main").getByText("litellm/gpt-5-mini").first()).toBeVisible();
   });
 
   test("disables web chat until the Agent is working", async ({ page }) => {
@@ -82,7 +93,7 @@ test.describe("Agent Detail Page", () => {
       });
     });
 
-    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.gotoChat(MOCK_AGENT_ID);
 
     await expect(page.getByLabel("Message input")).toBeDisabled();
   });
@@ -116,8 +127,8 @@ test.describe("Agent Detail Page", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Chat", exact: true }).click();
 
     await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
   });
@@ -153,8 +164,8 @@ test.describe("Agent Detail Page", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Chat", exact: true }).click();
 
     const failureNotice = page.getByRole("alert").filter({ hasText: "I couldn't process that message" });
     await expect(failureNotice).toContainText(errorMessage);
@@ -196,7 +207,7 @@ test.describe("Agent Detail Page", () => {
       });
     });
 
-    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.gotoChat(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "Stop generating" }).click();
 
     await expect.poll(() => stopRequests).toBe(1);
@@ -224,7 +235,7 @@ test.describe("Agent Detail Page", () => {
       },
     });
 
-    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.gotoChat(MOCK_AGENT_ID);
     await expect(page.getByRole("button", { name: "Allow for session" })).toHaveCount(0);
     await page.getByRole("button", { name: "Allow once" }).click();
 
@@ -254,7 +265,7 @@ test.describe("Agent Detail Page", () => {
       },
     });
 
-    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.gotoChat(MOCK_AGENT_ID);
     await page.getByRole("button", { name: "Allow once" }).click();
 
     await expect(page.getByRole("button", { name: "Allow once" })).toBeDisabled();
@@ -269,7 +280,7 @@ test.describe("Agent Detail Page", () => {
       },
     });
 
-    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.gotoChat(MOCK_AGENT_ID);
     const failed = page.waitForResponse((response) => response.request().method() === "POST" && response.status() === 500);
     await page.getByRole("button", { name: "Allow once" }).click();
     await failed;
@@ -286,7 +297,7 @@ test.describe("Agent Detail Page", () => {
       prompt: { ...mockWebChatApprovalPrompt, content: "Reply with one of: once, deny" },
     });
 
-    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.gotoChat(MOCK_AGENT_ID);
 
     await expect(page.getByText("Reply with one of: once, deny")).toBeVisible();
     await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
@@ -327,7 +338,7 @@ test.describe("Agent Detail Page", () => {
     await agentDetailPage.configureButton().click();
 
     await expect(agentDetailPage.configDrawerHeading()).toBeVisible();
-    await expect(page.getByRole("button", { name: "Template selection", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true })).toBeVisible();
   });
 
   test("shows Pause button when agent is RUNNING", async ({ page }) => {
@@ -515,7 +526,7 @@ test.describe("Agent Detail Page — running template selection", () => {
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration`);
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
     await page.getByRole("combobox", { name: "Template version" }).click();
     await page.getByRole("option", { name: /General Purpose.*v1.*Organization fork/ }).click();
 
@@ -551,7 +562,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
   });
 
   test("re-pins the agent to a browsed template + version", async ({ page }) => {
@@ -626,7 +637,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     });
 
     await page.reload();
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
     await page.getByRole("combobox", { name: "Template version" }).click();
     await page.getByRole("option", { name: /General Purpose.*v1.*Built-in platform/ }).click();
 
@@ -652,7 +663,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     });
 
     await page.reload();
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
     await page.getByRole("combobox", { name: "Template version" }).click();
     await page.getByRole("option", { name: /Scrum Master.*v2/ }).click();
 
@@ -679,7 +690,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     });
 
     await page.reload();
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
     await page.getByRole("combobox", { name: "Template version" }).click();
     await page.getByRole("option", { name: /Scrum Master.*v2/ }).click();
 
@@ -704,7 +715,7 @@ test.describe("Agent Detail Page — Template tab (re-pin)", () => {
     });
 
     await page.reload();
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
     await page.getByRole("combobox", { name: "Template version" }).click();
     await page.getByRole("option", { name: /Scrum Master.*v2/ }).click();
 
@@ -739,8 +750,28 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await dataSupportPage.communicationConnections.interceptChannelsRequests({ agentId: MOCK_AGENT_ID });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
   });
+
+  for (const existing of ["none", "agentbarn_telegram", "telegram", "disabled-telegram"] as const) {
+    test(`Telegram picker respects ${existing} and reserves Agent Barn Telegram for ready-made setup`, async ({ page }) => {
+      await page.route("**/api/v1/organizations/*/communication-platforms", (route) => route.fulfill({ json: [
+        ...mockCommunicationPlatforms,
+        { ...mockCommunicationPlatforms[2], key: "agentbarn_telegram", display_name: "Agent Barn Telegram", credentials_schema: { type: "object", properties: {} } },
+      ] }));
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, (route) => route.fulfill({ json: existing === "none" ? [] : [{
+        ...mockCommunicationConnection,
+        platform_key: existing === "disabled-telegram" ? "telegram" : existing,
+        enabled: existing !== "disabled-telegram",
+      }] }));
+      await page.reload();
+      await agentDetailPage.addConnectionButton().click();
+      await expect(agentDetailPage.selectPlatformButton("Slack")).toBeVisible();
+      await expect(agentDetailPage.selectPlatformButton("Agent Barn Telegram")).toHaveCount(0);
+      if (existing === "none") await expect(agentDetailPage.selectPlatformButton("Telegram")).toBeVisible();
+      else await expect(agentDetailPage.selectPlatformButton("Telegram")).toHaveCount(0);
+    });
+  }
 
   test("lists Connection identity and health independently of the Agent runtime", async () => {
     await expect(agentDetailPage.connectionIdentity("validation-skipped")).toBeVisible();
@@ -767,7 +798,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
 
     const webhookInput = page.getByRole("textbox", { name: "Webhook URL" });
     await expect(webhookInput).toHaveValue(webhookUrl);
@@ -815,7 +846,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     expect(widths.alert).toBeCloseTo(widths.content, 0);
   });
 
-  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ context }) => {
+  test("shows native delivery history and lets an operator copy an error", async ({ context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     // Delivery transitions are the primary activity surface. Connection
     // failures are explained inline from the diagnostics read model.
@@ -883,12 +914,36 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await connectionDetailPage.failedOnlyCheckbox().uncheck();
 
-    const reconnect = connectionDetailPage.waitForReconnectRequest();
-    await connectionDetailPage.reconnectButton().click();
-    await expect(connectionDetailPage.reconnectDialog()).toBeVisible();
-    await connectionDetailPage.confirmReconnectButton().click();
-    await reconnect;
+    await expect(connectionDetailPage.reconnectButton()).toHaveCount(0);
+    await expect(connectionDetailPage.nativeRecoveryGuidance()).toBeVisible();
   });
+
+  for (const recovery of [
+    { name: "native transport", transport: "native", recovery_actions: [], canRetry: false },
+    { name: "gateway without a provider session", transport: "gateway", recovery_actions: ["retry_delivery"], canRetry: true },
+    { name: "an older API without recovery metadata", transport: undefined, recovery_actions: undefined, canRetry: false },
+  ]) {
+    test(`keeps historical deliveries readable with supported recovery for ${recovery.name}`, async () => {
+      await dataSupportPage.communicationConnections.interceptChannelsRequests({
+        agentId: MOCK_AGENT_ID,
+        connection: { transport: recovery.transport, recovery_actions: recovery.recovery_actions },
+        deliveryJournal: mockDeadLetteredCommunicationDeliveryJournalPage,
+      });
+      await connectionDetailPage.goto(MOCK_AGENT_ID, COMMUNICATION_CONNECTION_ID);
+
+      await expect(connectionDetailPage.pipelineSummary()).toBeVisible();
+      await expect(connectionDetailPage.reconnectButton()).toHaveCount(0);
+      if (recovery.transport === "native") {
+        await expect(connectionDetailPage.nativeRecoveryGuidance()).toBeVisible();
+      }
+      await connectionDetailPage.deliveryTransitionRow(/dead lettered/i).click();
+      await expect(connectionDetailPage.retryDeliveryButton()).toHaveCount(recovery.canRetry ? 1 : 0);
+
+      await connectionDetailPage.deliveryTimelineButton().click();
+      await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
+      await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
+    });
+  }
 
   test("drills down into a Delivery's full lifecycle from a transition row", async () => {
     await agentDetailPage.connectionDetailsLink().click();
@@ -941,7 +996,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
@@ -988,7 +1043,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
@@ -1020,7 +1075,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();
 
@@ -1044,20 +1099,20 @@ test.describe("Agent Detail Page — Channels tab", () => {
     settings: { channel_ids: ["C1"], dm_user_ids: [] },
   };
 
-  async function serveSavedSlackConnection(page: Page) {
+  async function serveSavedSlackConnection(page: Page, overrides: Partial<typeof savedSlackConnection> = {}) {
     // Registered after the shared intercepts, and the last matching route wins.
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([savedSlackConnection]),
+        body: JSON.stringify([{ ...savedSlackConnection, ...overrides }]),
       });
     });
     // Re-run the beforeEach navigation so the list refetches through the new route.
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
   }
 
   test("hides platforms that already have a Connection from the chooser", async ({ page }) => {
@@ -1089,7 +1144,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("restarts a running Agent to apply a change to a Connection its runtime runs", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: ["slack"] },
+      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: [] },
     });
     await dataSupportPage.agents.interceptStopAgentRequest();
     await dataSupportPage.agents.interceptStartAgentRequest();
@@ -1103,7 +1158,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       if (request.method() === "POST" && /\/(stop|start)$/.test(url)) calls.push(url.endsWith("/stop") ? "stop" : "start");
       if (request.method() === "PATCH" && url.includes("/connections/")) calls.push("update");
     });
-    await serveSavedSlackConnection(page);
+    await serveSavedSlackConnection(page, { transport: "native", recovery_actions: [] });
 
     await agentDetailPage.editConnectionButton("Team Slack").click();
     await expect(agentDetailPage.saveConnectionButton()).toHaveCount(0);
@@ -1116,6 +1171,21 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await expect(dialog).toBeHidden();
     expect(calls).toEqual(["stop", "update", "start"]);
+  });
+
+  test("requires lifecycle permission to apply a native Connection change using server ownership", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "RUNNING",
+        native_platform_keys: [],
+        allowed_actions: mockAgentAllowedActions.filter((action) => action !== "agent.lifecycle.manage"),
+      },
+    });
+    await serveSavedSlackConnection(page, { transport: "native", recovery_actions: [] });
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await expect(page.getByRole("button", { name: "Save & Restart", exact: true })).toBeDisabled();
   });
 
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {
@@ -1342,7 +1412,7 @@ test.describe("Agent Detail Page — Channels tab, Email connection", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.channelsTab().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
   });
 
   test("shows the address people should write to", async ({ page }) => {
@@ -1390,7 +1460,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
   });
 
   test("Skills tab is clickable and shows the tab panel", async () => {
@@ -1403,7 +1473,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     const assignedSkillLink = page.locator(
       `a[href="/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}"]`,
@@ -1437,7 +1507,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     const assignedSkillLink = page.locator(
       `a[href="/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/skills/${mockAssignedSkill.id}"]`,
@@ -1561,7 +1631,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     await agentDetailPage.removeSkillButton().click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -1578,7 +1648,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     await agentDetailPage.removeSkillButton().click();
     await agentDetailPage.confirmRemoveSkillButton().click();
@@ -1611,7 +1681,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     await agentDetailPage.addSkillButton().last().click(); // custom skill — no required providers
 
@@ -1631,7 +1701,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     await expect(page.getByText("Required", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeSkillButton()).toBeDisabled();
@@ -1643,7 +1713,7 @@ test.describe("Agent Detail Page — Skills tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.skillsTab().click();
+    await agentDetailPage.openConfigurationSection("Skills");
 
     await agentDetailPage.removeSkillButton().hover();
 
@@ -1677,7 +1747,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.keysTab().click();
+    await agentDetailPage.openConfigurationSection("Integrations");
     await agentDetailPage.editButton().click();
   });
 
@@ -1696,48 +1766,52 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await dataSupportPage.agents.interceptValidateIntegrationRequest();
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.keysTab().click();
+    await agentDetailPage.openConfigurationSection("Integrations");
     await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
   });
 
-  test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
+  test("removing a credential stages its deletion until Apply", async () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.keysTab().click();
+    await agentDetailPage.openConfigurationSection("Integrations");
     await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeCredentialButton().click();
 
-    await expect(page.getByText("Will be removed")).toBeVisible();
-    await expect(agentDetailPage.undoCredentialButton()).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
     await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
-  test("clicking Undo reverts credential to normal state", async ({ page }) => {
+  test("Cancel discards a staged credential removal", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
     await dataSupportPage.agents.interceptValidateIntegrationRequest();
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.keysTab().click();
+    await agentDetailPage.openConfigurationSection("Integrations");
     await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeCredentialButton().click();
-    await agentDetailPage.undoCredentialButton().click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByText("github-secret", { exact: true })).toBeVisible();
+    await expect(page.getByRole("switch")).toHaveCount(0);
+    await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
     await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
 
-  test("when integrations save fails, the pending removal and error remain visible", async ({ page }) => {
+  test("failed removal keeps the draft and error available for retry", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1751,7 +1825,7 @@ test.describe("Agent Detail Page — Keys tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await agentDetailPage.keysTab().click();
+    await agentDetailPage.openConfigurationSection("Integrations");
     await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeCredentialButton().click();
@@ -1761,7 +1835,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(
       page.locator('section[aria-label="Integrations"]').getByText("Secret is used by a skill"),
     ).toBeVisible();
-    await expect(page.getByText("Will be removed")).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
 });
@@ -1794,7 +1869,7 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await page.getByRole("button", { name: "Profile", exact: true }).click();
+    await agentDetailPage.openConfigurationSection("Profile");
     await agentDetailPage.editButton().click();
   });
 
@@ -1819,6 +1894,30 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
 
     expect(body.approval_mode).toBe("off");
+  });
+
+  test("saving a turn limit sends max_turns in the PATCH request", async ({ page }) => {
+    await page.getByRole("spinbutton", { name: "Turn limit" }).fill("150");
+
+    const patchPromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: /^Apply$/i }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Apply", exact: true })
+      .click();
+    const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
+
+    expect(body.max_turns).toBe(150);
+  });
+
+  test("a turn limit outside its bounds cannot be applied", async ({ page }) => {
+    await page.getByRole("spinbutton", { name: "Turn limit" }).fill("0");
+
+    await expect(page.getByRole("button", { name: /^Apply$/i })).toBeDisabled();
   });
 });
 
@@ -1850,7 +1949,7 @@ test.describe("Agent Detail Page — Personality tab (approval mode, OpenClaw)",
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.configureButton().click();
-    await page.getByRole("button", { name: "Profile", exact: true }).click();
+    await agentDetailPage.openConfigurationSection("Profile");
   });
 
   test("shows full access instead of a command approval value", async ({ page }) => {
@@ -2232,7 +2331,7 @@ test.describe("Agent Detail Page — About tab", () => {
 
   test("leaves spend to the Costs tab", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(page.getByTestId("agent-about-overview")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Spend over time" })).toHaveCount(0);
@@ -2240,11 +2339,13 @@ test.describe("Agent Detail Page — About tab", () => {
 
   test("summarises how the agent is set up", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const overview = page.getByTestId("agent-about-overview");
-    await expect(overview).toContainText("OpenClaw");
-    await expect(overview).toContainText("gpt-5-mini");
+    // The runtime and model sit in the path bar's chip, so the card leaves them out.
+    await expect(agentDetailPage.runtimeChip()).toContainText("OpenClaw");
+    await expect(agentDetailPage.runtimeChip()).toContainText("gpt-5-mini");
+    await expect(overview).not.toContainText("OpenClaw");
     // The blueprint reads off the active configuration, not the raw template key.
     await expect(overview).toContainText("Maya");
     await expect(overview).toContainText("v1");
@@ -2256,16 +2357,24 @@ test.describe("Agent Detail Page — About tab", () => {
     page,
   }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, agent_type: "hermes", approval_mode: "manual", verbose_mode: true },
+      body: {
+        ...mockAgent,
+        agent_type: "hermes",
+        approval_mode: "manual",
+        verbose_mode: true,
+        max_turns: 150,
+        effective_max_turns: 150,
+      },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const overview = page.getByTestId("agent-about-overview");
-    await expect(overview).toContainText("Hermes");
+    await expect(agentDetailPage.runtimeChip()).toContainText("Hermes");
     await expect(overview).toContainText("Manual — every command waits for approval");
     await expect(overview).toContainText("Shows progress while working");
+    await expect(overview).toContainText("150 turns per run");
   });
 
   test("lists the agent's skills without opening configuration", async ({
@@ -2294,7 +2403,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const skills = page.getByTestId("agent-about-skills");
     await expect(skills.getByRole("heading", { name: "Skills (2)" })).toBeVisible();
@@ -2311,7 +2420,7 @@ test.describe("Agent Detail Page — About tab", () => {
 
   test("says so plainly when the agent has no skills", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(page.getByTestId("agent-about-skills")).toContainText(
       "No skills assigned yet",
@@ -2324,7 +2433,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const messaging = page.getByTestId("agent-about-messaging");
     await expect(messaging).toContainText(mockCommunicationConnection.display_name);
@@ -2349,7 +2458,7 @@ test.describe("Agent Detail Page — About tab", () => {
     );
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const messaging = page.getByTestId("agent-about-messaging");
     await expect(messaging).toContainText("Slack");
@@ -2373,7 +2482,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const integrations = page.getByTestId("agent-about-integrations");
     await expect(integrations).toContainText("GitHub");
@@ -2403,13 +2512,12 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const overview = page.getByTestId("agent-about-overview");
     // Precondition: the blueprint has resolved from its key to its display
     // name, so whatever the Overview reads has been requested and answered.
-    const blueprint = overview.locator("dt", { hasText: "Blueprint" }).locator("xpath=..");
-    await expect(blueprint).toContainText("Maya");
+    await expect(overview.getByRole("heading", { level: 2 })).toContainText("Maya");
     expect(configurationReads).toEqual([]);
     await expect(overview).toContainText("Answers the support queue.");
   });
@@ -2422,7 +2530,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(
       page.getByTestId("agent-about-skills").getByRole("link", { name: "View skills" }),
@@ -2446,7 +2554,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(
       page.getByTestId("agent-about-skills").getByRole("link", { name: "Manage skills" }),
@@ -2485,7 +2593,7 @@ test.describe("Agent Detail Page — About tab", () => {
     );
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const messaging = page.getByTestId("agent-about-messaging");
     await expect(messaging).toContainText("Microsoft Teams");

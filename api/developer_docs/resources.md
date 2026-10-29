@@ -6,4 +6,35 @@ Templates and Skills live beneath `/organizations/{organization_id}/templates` a
 
 Shared Credentials live beneath `/organizations/{organization_id}/shared-credentials`; credentials are never returned as plaintext. Agent-specific Secrets and integration configuration are controlled by Agent Permissions. Google authorization and token exchange use `/integrations/google/...`; callback navigation remains a browser/provider flow. Communications Connections are managed beneath each Agent's `/connections` routes.
 
+Optional credential isolation uses `PUT /organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation`. Consult [OpenAPI](/api/v1/openapi.json) for request fields and recovery metadata. The response may describe a provisioned runtime awaiting readiness; consult the Agent's isolation metadata on subsequent reads.
+
+Custom API connections use `/organizations/{organization_id}/agents/{agent_id}/custom-api-connections`. `GET` lists named connections and `POST` creates one; `PATCH` and `DELETE` at `/{connection_id}` update or remove it. Creation accepts a connection name and generates its immutable identifier by lowercasing and replacing spaces with hyphens; callers cannot supply or edit the identifier. Each connection has an allowed public HTTPS base URL, authentication, additional headers, and an optional credential isolation setting. Credentials and secret header values are write-only; omit them on update to retain saved values. Reads require Agent visibility, while changes require both `agent.update` and `agent.secret.manage`.
+
+For a running Agent, use `POST /{connection_id}/apply` with `restart: true` to apply edits. Creation accepts `restart: true`, and deletion accepts `?restart=true`. Restart also requires `agent.lifecycle.manage`. The complete resulting configuration is prepared before the running Agent stops. Stopped-Agent edits remain pending until start; `pending_apply` and `applied_isolated` describe runtime application. Requests through a connection require complete absolute URLs within its configured origin and path; API-specific instructions belong in the Agent's Template or Skills.
+
+For multiple connection changes, `POST /custom-api-connections/apply` accepts `creates`, `updates` (`id` and `data`), `deletes` (IDs), and an outer `restart` flag. It validates the complete resulting connection set before stopping, saves all connection changes and events atomically, and restarts once when requested. `POST /custom-api-connections/preflight` accepts the same body and returns `204` after validation without saving or stopping. Both require the same Agent permissions as individual changes; a preflight does not reserve configuration for a later request. See [Custom API connections](https://github.com/aai-labs/agent-barn/blob/staging/docs/features/integrations.md#custom-api-connections) for the editor workflow.
+
 For exact field names and request bodies, consult [OpenAPI](/api/v1/openapi.json). In particular, the API field `agent_type` names the Agent Runtime (Hermes or OpenClaw).
+
+The deprecated `POST /api/v1/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/reconnect` route remains for compatibility and discovery. Authorized requests for an active Connection always return `409`; native transport recovery requires restarting the Agent. Authentication, Agent update permission, and tenant visibility checks still apply, so invalid credentials, insufficient permission, and concealed or missing resources retain their `401`, `403`, and `404` responses. The route creates no reconnect work.
+
+## Agent files
+
+Under `/organizations/{organization_id}/agents/{agent_id}/artifacts`, POST file
+metadata (filename, content_type, size, lowercase SHA-256 checksum), then PUT raw
+bytes to `/{artifact_id}/content`. Only verified READY files appear in GET lists.
+GET `/{artifact_id}/download-link` issues a fresh 15-minute bearer URL under current
+Agent read access. GET metadata/list/link requires `agent.read`; staging, publication
+and DELETE require `agent.update` and a full-access key. File bytes are immutable;
+failed publication retries create a new artifact identity. Optional `run_id` and
+`step_id` filters apply before pagination. Download links may be shared through
+existing tools; anyone holding one can read until expiry. Expiry neither deletes
+the file nor changes approval state. Returned URLs use the existing app domain and
+`/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}?access=…`.
+Treat the entire URL, including its opaque query, as a bearer credential; do not
+parse or rewrite it. The app streams bytes from private storage, whose provider
+validates signature and expiry. No separate public storage address, login cookie
+or Authorization header is needed to use an issued URL. Invalid/expired authority
+returns 403; unavailable storage returns 503. Responses force attachment download,
+octet-stream and no-store. Request a fresh link if expired; neither a bare artifact
+ID nor a User API key grants access on the byte route.

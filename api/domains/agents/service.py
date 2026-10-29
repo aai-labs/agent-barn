@@ -4,8 +4,9 @@ import hashlib
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterator, Mapping
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -14,22 +15,23 @@ from injector import inject, singleton
 from pydantic import ValidationError
 
 from api.core.config import Config
+from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
+from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
+from api.domains.agent_sizes.models import size_is_pending, size_resources
 from api.domains.agents.aai_cli_artifacts import (
-    PROFILE_SLUGS,
-    build_config_toml,
-    build_env,
-    build_integrations_policy_md,
     build_local_tools_policy_md,
-    build_setup_sh,
     build_tool_context_md,
-    provider_secrets_map,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_DEFAULT_MAX_TURNS,
     HERMES_WORKSPACE_DIR,
     OPENCLAW_WORKSPACE_DIR,
+    agentbarn_telegram_channel,
+    agentbarn_telegram_channel_env,
+    agentbarn_telegram_env,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -40,6 +42,7 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    container_resources,
     native_channel_env,
     native_discord_channel,
     native_discord_env,
@@ -51,8 +54,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentProvisioningPrecondition
-from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -61,15 +63,18 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentCreatorRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentManagedUpdateRead,
     AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
     AgentProvisioningErrorRead,
     AgentRead,
+    AgentRestorePoint,
     AgentRuntimeDiagnosticsRead,
     AgentSecret,
     AgentSecretCreate,
@@ -92,12 +97,17 @@ from api.domains.agents.models import (
     CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
+    ManagedUpdateOutcome,
+    RestorePointStatus,
     SecretProvider,
+    SharePointContent,
     SkillVersionPin,
     decrypt_content,
     encrypt_content,
+    managed_update_in_flight,
     validate_content,
 )
 from api.domains.agents.naming import choose_first_name
@@ -112,7 +122,7 @@ from api.domains.agents.provisioning_errors import (
     normalize_agent_provisioning_error,
     persisted_provisioning_error,
 )
-from api.domains.agents.repository import AgentRepository
+from api.domains.agents.repository import AgentRepository, AgentSizeSetByPlatform, AgentSizeUnavailable
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
@@ -123,13 +133,30 @@ from api.domains.agents.runtime_policy import (
 from api.domains.agents.selection import (
     SelectionValidator,
     ensure_approval_mode_supported,
+    ensure_max_turns_supported,
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
+from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
+from api.domains.artifacts.buckets import ArtifactBucketRepository
+from api.domains.artifacts.credentials import runtime_token as artifact_runtime_token
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.agentbarn_telegram import (
+    AgentBarnTelegramRuntime,
+    runtime_api_token,
+    runtime_webhook_secret,
+)
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
+from api.domains.conversations.repository import ConversationRepository
+from api.domains.credential_gateway.models import gateway_token_env_var
+from api.domains.credential_gateway.service import CredentialGatewayService
+from api.domains.custom_api.models import CustomApiConnection
+from api.domains.custom_api.repository import CustomApiRepository
+from api.domains.custom_api.runtime import connection_snapshot, materialize_custom_api
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -137,9 +164,26 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
+from api.domains.integrations.isolation import isolation_read, legacy_isolation
+from api.domains.integrations.repository import IntegrationRepository
+from api.domains.integrations.runtime import (
+    RuntimeBinding,
+    RuntimeContext,
+    materialize_integrations,
+    select_egress_mode,
+)
+from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
+from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.restore_points.service import RestorePointService
+from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
+from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
+from api.domains.restore_points.service import (
+    MANAGED_UPDATE_IN_FLIGHT_DETAIL,
+    STILL_SHUTTING_DOWN_DETAIL,
+    RestorePointService,
+)
+from api.domains.shared_credentials.models import SharedCredential
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -178,9 +222,18 @@ _CREDENTIAL_FIELDS = frozenset(
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
+# Google-backed providers whose credential may omit its OAuth client, in which case the
+# server-owned client is filled in at agent start and before live validation.
+_GOOGLE_OAUTH_PROVIDERS = (SecretProvider.GOOGLE_WORKSPACE, SecretProvider.GMAIL)
+
 RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
 )
+
+MANAGED_UPDATE_BACKUP_LABEL = "Automatic backup before managed update"
+# How long a managed update waits for the stopped pod to let go of the volume.
+# Capture and restore wait only the pod's default 30s grace period themselves.
+MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS = 120
 
 _PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -211,6 +264,36 @@ def _stored_provisioning_error(agent: Agent) -> NormalizedAgentProvisioningError
 def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
     normalized = _stored_provisioning_error(agent)
     return _provisioning_error_dto(normalized) if normalized is not None else None
+
+
+def _refuse_during_managed_update(agent: Agent) -> None:
+    if managed_update_in_flight(agent):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
+
+
+def _size_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="That size isn't available to your organization.",
+    )
+
+
+def _size_set_by_platform() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="A platform administrator set this agent's size, so it can't be changed here.",
+    )
+
+
+def _managed_update_failure_text(exc: Exception) -> str:
+    """Why a managed update's backup step failed, in words safe to show anyone.
+
+    An HTTPException carries our own copy (cluster text is already sanitized by
+    then). Anything else may quote the cluster, so it stays in the logs.
+    """
+    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
+        return exc.detail
+    return "The backup step failed unexpectedly. The API logs have the details."
 
 
 @dataclass(frozen=True)
@@ -274,12 +357,22 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    trial_settings: TrialSettingsService
+    organization_settings: OrganizationSettingsService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    credential_gateway: CredentialGatewayService
+    custom_api: CustomApiRepository
+    integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
+    conversation_repository: ConversationRepository
+    activity_repository: ActivityRepository
     plugins: PlatformPluginRegistry
+    agentbarn_telegram_secrets: AgentBarnTelegramService
+    agent_sizes: AgentSizeLookupService
+    artifact_buckets: ArtifactBucketRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -313,6 +406,28 @@ class AgentService:
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         self.selection.ensure_model_allowed(model, org_id)
 
+    def _require_size_manage(self, context: CurrentUserContext, org_id: UUID) -> None:
+        self.authorization.policy.require(
+            context,
+            org_id,
+            PermissionKey.AGENT_SIZE_MANAGE,
+            detail="You don't have permission to choose an agent's size.",
+        )
+
+    def _size_to_store(self, agent_size_id: UUID | None, org_id: UUID) -> UUID | None:
+        """The `agent_size_id` to store for a size someone asked for.
+
+        The size must be one the Organization may choose now: the default, or an enabled
+        size the platform allowed it. Choosing the default stores None, so the Agent keeps
+        following the default wherever it moves.
+        """
+        if agent_size_id is None:
+            return None
+        size = next((size for size in self.agent_sizes.choosable(org_id) if size.id == agent_size_id), None)
+        if size is None:
+            raise _size_unavailable()
+        return None if size.is_default else size.id
+
     @staticmethod
     def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
         ensure_approval_mode_supported(agent_type, approval_mode)
@@ -322,8 +437,19 @@ class AgentService:
         ensure_verbose_mode_supported(agent_type, verbose_mode)
 
     @staticmethod
+    def _ensure_max_turns_supported(agent_type: AgentType, max_turns: int | None) -> None:
+        ensure_max_turns_supported(agent_type, max_turns)
+
+    @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
         return "".join(derive_tools_pointer(s) for s in skills)
+
+    def _spend_limit_kind(self, organization_id: UUID) -> str:
+        limit = self.organization_lookup.get_llm_limit(organization_id)
+        on_credit = limit is not None and limit.runs_on_credit
+        # Not whether payments are on: that can change while the pod runs, and the pod
+        # reads this once, at start. The credit wording holds either way.
+        return "credit" if on_credit else "limit"
 
     def _auto_attached_aai_cli_skills(
         self,
@@ -456,7 +582,7 @@ class AgentService:
     def _build_agent_read(
         self,
         agent: Agent,
-        secrets: list[AgentSecret] | None = None,
+        secrets: Sequence[AgentSecret | AgentSecretRead] | None = None,
         skills: list[PinnedSkill] | None = None,
         required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
@@ -468,19 +594,25 @@ class AgentService:
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
         configured_platform_keys: list[str] | None = None,
+        creator: AgentCreatorRead | None = None,
+        last_message_at: dt.datetime | None = None,
+        last_call_at: dt.datetime | None = None,
+        shared_credential_names: Mapping[UUID, str] | None = None,
+        size_catalog: AgentSizeCatalog | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
-        shared_creds_by_id = {}
-        if shared_ids:
-            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
-            shared_creds_by_id = {c.id: c for c in shared_creds}
+        credential_names = shared_credential_names if shared_credential_names is not None else {}
+        if shared_credential_names is None and shared_ids:
+            credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+                shared_ids, agent.organization_id
+            )
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
-                sc = shared_creds_by_id[secret.shared_credential_id]
-                read.shared_credential_id = sc.id
-                read.shared_credential_name = sc.name
+            if read.isolation is None:
+                read.isolation = isolation_read(SecretProvider(read.provider), None)
+            if secret.shared_credential_id and secret.shared_credential_id in credential_names:
+                read.shared_credential_name = credential_names[secret.shared_credential_id]
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
@@ -516,6 +648,11 @@ class AgentService:
                 )
             )
         resolved_model = agent.model or effective_default_model
+        size = (
+            size_catalog.resolve(agent.agent_size_id)
+            if size_catalog is not None
+            else self.agent_sizes.resolve(agent.agent_size_id)
+        )
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -533,10 +670,26 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            agent_size_id=agent.agent_size_id,
+            agent_size=to_option(size),
+            pending_size=size_is_pending(agent.running_resources, size),
+            agent_size_set_by_platform=agent.agent_size_set_by_platform,
+            # The recorded digest names the image the pod actually started on, so an
+            # Agent pinned behind the platform pin (rolled back) reports an update too.
             update_available=(
                 agent.status == AgentStatus.RUNNING
                 and agent.running_config_digest
                 != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
+            update_in_progress=managed_update_in_flight(agent),
+            last_managed_update=(
+                AgentManagedUpdateRead(
+                    outcome=agent.managed_update_outcome,
+                    restore_point_id=agent.managed_update_restore_point_id,
+                    failure_reason=agent.managed_update_failure_reason,
+                )
+                if agent.managed_update_outcome is not None
+                else None
             ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
@@ -545,19 +698,108 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            # Same for max_turns: only the Hermes builder reads it.
+            max_turns=agent.max_turns if agent.agent_type == AgentType.HERMES else None,
+            effective_max_turns=(
+                agent.max_turns
+                if agent.agent_type == AgentType.HERMES and agent.max_turns is not None
+                else HERMES_DEFAULT_MAX_TURNS
+            ),
             memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
-            native_platform_keys=sorted(self.config.native_platform_keys),
+            native_platform_keys=sorted(NATIVE_PLATFORM_KEYS),
             allowed_actions=allowed_actions or [],
+            creator=creator,
+            last_message_at=last_message_at,
+            last_activity_at=max((t for t in (last_message_at, last_call_at) if t is not None), default=None),
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
 
+    def _observe_integration_readiness(self, agent: Agent, readiness: str | None = None) -> None:
+        runtime = self.integrations.runtime(agent.id)
+        if (
+            agent.status == AgentStatus.RUNNING
+            and runtime is not None
+            and runtime.state in {"provisioned", "ready"}
+            and (runtime.state == "provisioned" or bool(runtime.bindings))
+        ):
+            if readiness is None:
+                readiness, _ = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
+            if readiness == "ready" and runtime.state == "provisioned" and runtime.authentication_complete:
+                self.integrations.set_state(agent.id, "ready", runtime.generation, expected_state="provisioned")
+            elif readiness == "crashed" and runtime.bindings:
+                # A stale observation must never delete a replacement generation.
+                with self.repository.lifecycle_lock(agent.id) as acquired:
+                    if not acquired or self.restore_points.has_blocking_operation(agent.id):
+                        return
+                    current = self.repository.get_by_id(agent.id)
+                    latest = self.integrations.runtime(agent.id)
+                    if (
+                        current is None
+                        or current.status != AgentStatus.RUNNING
+                        or managed_update_in_flight(current)
+                        or latest is None
+                        or latest.generation != runtime.generation
+                        or latest.state not in {"provisioned", "ready"}
+                    ):
+                        return
+                    observed, reason = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
+                    if observed != "crashed" or not self.k8s.runtime_has_exited(
+                        f"agent-{agent.id}", self.config.k8s_namespace
+                    ):
+                        return
+                    if (
+                        latest.state == "ready"
+                        and reason == "CrashLoopBackOff"
+                        and not self._failed_for_good(f"agent-{agent.id}", reason)
+                    ):
+                        return
+                    self._record_provisioning_failure(current, RuntimeError("Agent runtime exited"))
+                    agent.status = current.status
+                    agent.last_error = current.last_error
+                    agent.last_error_code = current.last_error_code
+                    agent.last_error_detail = current.last_error_detail
+
     def _get_agent_read(self, agent: Agent, context: CurrentUserContext) -> AgentRead:
-        secrets = self.repository.get_secrets_for_agent(agent.id)
+        self._observe_integration_readiness(agent)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        secrets = self.repository.get_secret_summaries_for_agents([agent.id], read_scope).get(agent.id, [])
+        if (
+            self.config.agent_firecrawl_api_key
+            and self.config.agent_firecrawl_base_url
+            and not any(s.provider == SecretProvider.FIRECRAWL for s in secrets)
+        ):
+            desired = self.integrations.policies(agent.id, "platform_default").get(SecretProvider.FIRECRAWL, False)
+            metadata = isolation_read(SecretProvider.FIRECRAWL, desired)
+            runtime = self.integrations.runtime(agent.id)
+            applied = runtime.bindings.get("firecrawl") if runtime else None
+            verified = runtime.previous_bindings.get("firecrawl", {}) if runtime else {}
+            if runtime and applied and applied.get("source") == "platform_default":
+                metadata.generation = runtime.generation
+            if verified.get("source") == "platform_default":
+                metadata.last_verified = verified.get("isolated")
+            if (
+                runtime
+                and runtime.state == "ready"
+                and agent.status == AgentStatus.RUNNING
+                and applied
+                and applied.get("source") == "platform_default"
+            ):
+                metadata.applied = applied["isolated"]
+                metadata.generation = runtime.generation
+                metadata.pending = metadata.desired != metadata.applied
+            secrets.append(
+                AgentSecretRead(
+                    provider=SecretProvider.FIRECRAWL,
+                    secret_name="Platform Firecrawl",
+                    source="platform_default",
+                    isolation=metadata,
+                )
+            )
         skills = [
             PinnedSkill(skill=s, version=row.pinned_version)
             for row, s in self.skill_repository.get_agent_skills_with_details(agent.id)
@@ -575,8 +817,11 @@ class AgentService:
             template_key = template.source_template_key
         elif template is not None:
             template_key = template.template_key
-        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
+        creators = self.repository.get_creators_for_agents([agent.id], read_scope)
+        activity_scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        message_times = self.conversation_repository.latest_message_times_for_agents([agent.id], activity_scope)
+        call_times = self.activity_repository.latest_call_times_for_agents([agent.id], activity_scope)
         return self._build_agent_read(
             agent,
             secrets,
@@ -585,6 +830,9 @@ class AgentService:
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
+            creator=creators.get(agent.id),
+            last_message_at=message_times.get(agent.id),
+            last_call_at=call_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -672,6 +920,12 @@ class AgentService:
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
+        self._ensure_max_turns_supported(data.agent_type, data.max_turns)
+        # Omitted means the default, which anyone who may create an Agent gets.
+        agent_size_id = None
+        if data.agent_size_id is not None:
+            self._require_size_manage(context, org_id)
+            agent_size_id = self._size_to_store(data.agent_size_id, org_id)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -682,6 +936,18 @@ class AgentService:
             missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
+        # Checked again under a lock when the Agent is stored; checked here too so a
+        # refused create never allocates a LiteLLM key.
+        limits = self.organization_lookup.get_agent_limit(org_id)
+        agent_limit = (
+            limits.in_force(
+                trial_limit=self.trial_settings.agent_limit, default=self.organization_settings.default_agent_limit
+            )
+            if limits is not None
+            else None
+        )
+        if agent_limit is not None and self.repository.count_active_by_org(org_id) >= agent_limit:
+            raise AgentLimitReached(agent_limit)
 
         agent = Agent(
             organization_id=org_id,
@@ -691,6 +957,9 @@ class AgentService:
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
             verbose_mode=data.verbose_mode,
+            max_turns=data.max_turns,
+            file_sync_enabled=data.file_sync_enabled,
+            agent_size_id=agent_size_id,
         )
         self._set_pin(agent, template)
 
@@ -743,22 +1012,7 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            try:
-                shared_content = decrypt_content(
-                    shared_cred.provider,
-                    shared_cred.content,
-                    self.config.agent_token_encryption_key,
-                )
-            except ValidationError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Shared credential {shared_cred.name!r} has stored "
-                        f"{PROVIDER_DISPLAY_NAMES[shared_cred.provider]} settings that are no longer valid "
-                        f"({_validation_problems(exc)}). Edit the shared credential and save it again."
-                    ),
-                ) from exc
-            live_validation_contents.append((shared_cred.provider, shared_content))
+            live_validation_contents.append((shared_cred.provider, self._decrypt_shared_credential(shared_cred)))
             prepared_secrets.append(
                 AgentSecret(
                     agent_id=agent.id,
@@ -836,14 +1090,24 @@ class AgentService:
                     self.config.agent_token_encryption_key,
                 )
 
-            created = self.repository.create_with_creator_access(
-                agent,
-                creator_membership_id,
-                actor=secret_actor,
-                secrets=prepared_secrets,
-                skills=prepared_skills,
-                actor_display=secret_actor_display,
-            )
+            try:
+                created = self.repository.create_with_creator_access(
+                    agent,
+                    creator_membership_id,
+                    actor=secret_actor,
+                    secrets=prepared_secrets,
+                    skills=prepared_skills,
+                    actor_display=secret_actor_display,
+                    agent_limit=agent_limit,
+                    artifact_bucket=(
+                        self.artifact_buckets.new_request(agent.id, agent.organization_id)
+                        if self.config.artifact_s3_endpoint_url
+                        else None
+                    ),
+                )
+            except AgentSizeUnavailable:
+                # Disabled or withdrawn since the check above.
+                raise _size_unavailable() from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:
@@ -859,14 +1123,64 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
-            prepared_secrets,
+            self.repository.get_secret_summaries_for_agents(
+                [agent.id], self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+            ).get(agent.id, []),
             skills_read_versions,
             required_map,
             allowed_actions,
             template_key=template.template_key,
             template_version=template.version,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
+            creator=AgentCreatorRead.model_validate(context.user),
         )
+
+    def set_agent_size(self, agent_id: UUID, agent_size_id: UUID | None, context: CurrentUserContext) -> AgentRead:
+        """Choose the size an Agent starts on next; None follows the platform default.
+
+        Never stops or restarts the Agent: a running Agent reads `pending_size` until its
+        next start. Holds the lifecycle lock so it cannot interleave with a start or stop,
+        whose failure paths save the whole Agent row.
+        """
+        agent = self.authorization.require_action(
+            context,
+            agent_id,
+            PermissionKey.AGENT_SIZE_MANAGE,
+            detail="You don't have permission to change this agent's size.",
+        )
+        # The Organization grant, which the Agent check above takes for granted from an
+        # Owner or Admin role.
+        self._require_size_manage(context, agent.organization_id)
+        if agent.agent_size_set_by_platform:
+            raise _size_set_by_platform()
+        if agent_size_id == agent.agent_size_id:
+            # Before the size rules, so re-sending a size that has since been disabled or
+            # withdrawn succeeds as the no-op it is.
+            return self._get_agent_read(agent, context)
+        to_store = self._size_to_store(agent_size_id, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent.id} has a lifecycle operation already in progress",
+                )
+            try:
+                result = self.repository.set_agent_size_with_event(
+                    agent,
+                    to_store,
+                    actor=resolve_actor_identity(context, agent.organization_id),
+                    actor_display=context.user.full_name or context.user.email,
+                )
+            except AgentSizeUnavailable:
+                raise _size_unavailable() from None
+            except AgentSizeSetByPlatform:
+                # A Platform Administrator set it after the check above.
+                raise _size_set_by_platform() from None
+        if result is None:
+            # Deleted between the visibility check and the write.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent.id} not found")
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._get_agent_read(result.agent, context)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_visible(context, agent_id)
@@ -1458,7 +1772,22 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
-        secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
+        activity_scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        message_times = self.conversation_repository.latest_message_times_for_agents(agent_ids, activity_scope)
+        call_times = self.activity_repository.latest_call_times_for_agents(agent_ids, activity_scope)
+        secrets_by_agent = self.repository.get_secret_summaries_for_agents(agent_ids, read_scope)
+        shared_credential_ids = list(
+            {
+                secret.shared_credential_id
+                for secrets in secrets_by_agent.values()
+                for secret in secrets
+                if secret.shared_credential_id is not None
+            }
+        )
+        shared_credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+            shared_credential_ids, read_scope.organization_id
+        )
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
             {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
@@ -1472,6 +1801,7 @@ class AgentService:
         # Resolved once for the page. Every Agent in it belongs to the same
         # Organization, so resolving per row would be one query per row.
         effective_default_model = self.agent_settings_lookup.resolve_default_model(read_scope.organization_id)
+        size_catalog = self.agent_sizes.catalog()
 
         items = [
             self._build_agent_read(
@@ -1492,6 +1822,11 @@ class AgentService:
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
+                creator=creators.get(agent.id),
+                last_message_at=message_times.get(agent.id),
+                last_call_at=call_times.get(agent.id),
+                shared_credential_names=shared_credential_names,
+                size_catalog=size_catalog,
             )
             for agent in agents
         ]
@@ -1503,7 +1838,58 @@ class AgentService:
             items=items,
         )
 
+    def _decrypt_shared_credential(self, credential: SharedCredential) -> Any:
+        try:
+            return decrypt_content(credential.provider, credential.content, self.config.agent_token_encryption_key)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Shared credential {credential.name!r} has stored "
+                    f"{PROVIDER_DISPLAY_NAMES[credential.provider]} settings that are no longer valid "
+                    f"({_validation_problems(exc)}). Edit the shared credential and save it again."
+                ),
+            ) from exc
+
+    def _shared_credentials_for_update(self, agent: Agent, data: AgentUpdate) -> list[SharedCredential]:
+        """Validate source replacements before deleting the old credential binding."""
+        removed = set(data.removed_secret_providers or [])
+        manual = {
+            SecretProvider(s.provider)
+            for s in self.repository.get_secrets_for_agent(agent.id)
+            if not s.shared_credential_id and SecretProvider(s.provider) not in removed
+        }
+        manual.update(item.provider for item in data.secrets or [])
+        providers: set[str] = set()
+        credentials: list[SharedCredential] = []
+        for attach in data.shared_credentials or []:
+            credential = self.shared_credential_repository.get_by_id_and_org(
+                attach.shared_credential_id, agent.organization_id
+            )
+            if credential is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Shared credential {attach.shared_credential_id} not found"
+                )
+            if credential.provider in manual:
+                raise HTTPException(
+                    status_code=400, detail=f"Provider {credential.provider} already has a manual credential"
+                )
+            if credential.provider in providers:
+                raise HTTPException(
+                    status_code=400, detail=f"Duplicate shared credential provider: {credential.provider}"
+                )
+            providers.add(credential.provider)
+            credentials.append(credential)
+        return credentials
+
     def update_agent(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(409, "An Agent lifecycle operation is already in progress")
+            return self._update_agent_locked(agent_id, data, context)
+
+    def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         updated = data.model_dump(exclude_unset=True)
@@ -1516,11 +1902,17 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
+        if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
+            self._refuse_forgetting_granted_sites(agent.id)
+
         if "approval_mode" in updated:
             self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
 
         if "verbose_mode" in updated:
             self._ensure_verbose_mode_supported(agent.agent_type, updated["verbose_mode"])
+
+        if "max_turns" in updated:
+            self._ensure_max_turns_supported(agent.agent_type, updated["max_turns"])
 
         # Validate every requested skill pin before mutating the Agent, its
         # template pin, or any attached credential.
@@ -1564,6 +1956,10 @@ class AgentService:
 
         if "verbose_mode" in updated:
             agent.verbose_mode = updated["verbose_mode"]
+
+        if "max_turns" in updated:
+            # Nullable column: null is the Agent returning to the platform default.
+            agent.max_turns = updated["max_turns"]
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
@@ -1631,24 +2027,35 @@ class AgentService:
         secret_actor = resolve_actor_identity(context, org_id)
         secret_actor_display = context.user.full_name or context.user.email
         secret_delivery_ids: list[UUID] = []
+        shared_upserts = self._shared_credentials_for_update(agent, data) if data.shared_credentials else []
+        replaced_by_shared = {credential.provider for credential in shared_upserts}
+
+        # Validate every added or replaced credential before touching the DB, so a
+        # validation failure never leaves already-deleted secrets permanently gone.
+        # Credentials set here are live-validated the same way as on create: an
+        # Agent's credential settings save through this path, and a key that only
+        # passes the schema would otherwise first fail in the Agent's conversation.
+        manual_upserts = [
+            (item, _enrich_atlassian_content(validate_content(item.provider, item.content)))
+            for item in data.secrets or []
+        ]
+        for item, content in manual_upserts:
+            self._validate_live_integration(item.provider, content)
+        for credential in shared_upserts:
+            self._validate_live_integration(credential.provider, self._decrypt_shared_credential(credential))
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
-        # Validate and encrypt all upserts before touching the DB so that a
-        # validation failure never leaves already-deleted secrets permanently gone.
         if "removed_secret_providers" in updated or "secrets" in updated:
             key = self.config.agent_token_encryption_key
             upserts: list[tuple[AgentSecretCreate, str]] = [
-                (
-                    item,
-                    encrypt_content(
-                        _enrich_atlassian_content(validate_content(item.provider, item.content)),
-                        key,
-                    ),
-                )
-                for item in data.secrets or []
+                (item, encrypt_content(content, key)) for item, content in manual_upserts
             ]
             for provider in updated.get("removed_secret_providers") or []:
+                if provider in replaced_by_shared:
+                    # An explicitly requested source swap updates the same binding
+                    # below, preserving its policy in the credential/event transaction.
+                    continue
                 secret_delivery_ids += self.repository.delete_secret_with_event(
                     agent.id,
                     provider,
@@ -1689,27 +2096,7 @@ class AgentService:
 
         # Shared credential attachments
         if "shared_credentials" in updated:
-            current_secrets = self.repository.get_secrets_for_agent(agent.id)
-            manual_providers = {s.provider for s in current_secrets if not s.shared_credential_id}
-            shared_providers_seen: set[str] = set()
-            for attach in data.shared_credentials or []:
-                shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
-                if shared_cred is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Shared credential {attach.shared_credential_id} not found",
-                    )
-                if shared_cred.provider in manual_providers:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Provider {shared_cred.provider} already has a manual credential",
-                    )
-                if shared_cred.provider in shared_providers_seen:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Duplicate shared credential provider: {shared_cred.provider}",
-                    )
-                shared_providers_seen.add(shared_cred.provider)
+            for shared_cred in shared_upserts:
                 existing = self.repository.get_secret(agent.id, shared_cred.provider)
                 if existing:
                     existing.content = None
@@ -1772,6 +2159,7 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
             if self.restore_points.has_blocking_operation(current.id):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -1786,7 +2174,7 @@ class AgentService:
         platform_key: str,
     ) -> _NativeConnectionConfiguration | None:
         """Load an enabled Connection configured for native runtime transport."""
-        if platform_key not in self.config.native_platform_keys:
+        if platform_key not in NATIVE_PLATFORM_KEYS:
             return None
         connection = self.connection_repository.get_active_by_platform_key(agent_id, platform_key)
         if connection is None or not connection.enabled:
@@ -1795,6 +2183,31 @@ class AgentService:
             decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
         )
         return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
+
+    def _agentbarn_telegram_runtime(self, agent_id: UUID) -> AgentBarnTelegramRuntime | None:
+        """Runtime settings for an enabled Agent Barn Telegram Connection.
+
+        The runtime gets a stand-in token and the proxy's address; the shared
+        bot's real token is only ever sent to Telegram, by the Communications process.
+        """
+        bot_token = self.config.agentbarn_telegram_bot_token.strip()
+        if not bot_token or not self.config.agentbarn_telegram_bot_username.strip():
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, "agentbarn_telegram")
+        if connection is None or not connection.enabled:
+            return None
+        # Created on the Agent's first start with this Connection and kept after
+        # that, so a restarted pod presents the same credentials.
+        connection_secret = self.agentbarn_telegram_secrets.runtime_secret(connection.id, create=True)
+        assert connection_secret is not None
+        return AgentBarnTelegramRuntime(
+            api_root=f"{self.config.communications_base_url.rstrip('/')}/telegram/{connection.id}",
+            api_token=runtime_api_token(connection_secret, bot_token),
+            webhook_secret=runtime_webhook_secret(connection_secret),
+            webhook_url=self.config.agentbarn_telegram_runtime_webhook_url.format(
+                agent_id=agent_id, namespace=self.config.k8s_namespace
+            ),
+        )
 
     def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
         """The settings, credentials, and resolved home channel of a native Slack Connection."""
@@ -1806,7 +2219,7 @@ class AgentService:
         if target:
             plugin = self.plugins.require("slack")
             try:
-                # Same resolution and allowlist policy as gateway-delivered sends.
+                # Resolve the native home target through the Connection recipient policy.
                 home_channel = plugin.resolve_outbound_target(
                     plugin.settings_model.model_validate(connection.settings),
                     plugin.credentials_model.model_validate(connection.credentials),
@@ -1820,6 +2233,7 @@ class AgentService:
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         try:
+            self._provision_and_start(agent, preflight=True)
             previous_status = self._provision_and_start(agent)
         except AgentProvisioningPrecondition:
             raise
@@ -1834,6 +2248,13 @@ class AgentService:
         The full exception is already in the logs; only the normalized form is
         persisted or returned, so no cluster text reaches a client.
         """
+        try:
+            self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
+            self.k8s.wait_for_termination(f"agent-{agent.id}", self.config.k8s_namespace)
+        except Exception:
+            logger.exception("Could not terminate failed runtime for agent %s", agent.id)
+        self.integrations.set_state(agent.id, "failed")
+        self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
         normalized = normalize_agent_provisioning_error(exc)
         agent.status = AgentStatus.ERROR
         agent.last_error = normalized.display_message
@@ -1853,14 +2274,29 @@ class AgentService:
             detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
         )
 
-    def _provision_and_start(self, agent: Agent) -> str:
+    def _platform_pin_for(self, agent: Agent) -> str:
+        """The platform-wide runtime image the Agent's flavor is pinned to."""
+        return self.config.hermes_image if agent.agent_type == AgentType.HERMES else self.config.openclaw_image
+
+    def _effective_runtime_image(self, agent: Agent) -> str:
+        """The image this Agent starts on: its own pin, else the platform pin."""
+        return agent.pinned_runtime_image or self._platform_pin_for(agent)
+
+    def _provision_and_start(
+        self,
+        agent: Agent,
+        *,
+        preflight: bool = False,
+        isolation_overrides: Mapping[SecretProvider, bool] | None = None,
+        custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+    ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
-        if agent.status == AgentStatus.RUNNING:
+        if agent.status == AgentStatus.RUNNING and not preflight:
             raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is already running",
@@ -1909,13 +2345,25 @@ class AgentService:
 
         runtime_api_key = secrets.token_urlsafe(32)
         runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        agentbarn_telegram = self._agentbarn_telegram_runtime(agent.id)
         service = build_service(
             agent.id,
             org_id,
             ns,
             include_webhook_port=runtime_teams is not None,
+            include_telegram_webhook_port=agentbarn_telegram is not None,
             org_name=org_name,
             agent_name=agent.name,
+        )
+        # The agent container's CPU and memory: the Agent's Agent Size, or the default when
+        # it has none, read at every start so a changed size reaches the Agent the next time
+        # it starts.
+        size = self.agent_sizes.resolve(agent.agent_size_id)
+        resources = container_resources(
+            cpu_request_millicores=size.cpu_request_millicores,
+            cpu_limit_millicores=size.cpu_limit_millicores,
+            memory_request_bytes=size.memory_request_bytes,
+            memory_limit_bytes=size.memory_limit_bytes,
         )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
@@ -1934,7 +2382,9 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
+                max_turns=agent.max_turns,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1955,12 +2405,15 @@ class AgentService:
                 secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
             if runtime_teams is not None:
                 secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_env(agentbarn_telegram))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
                 ns,
-                self.config.hermes_image,
+                self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
+                resources=resources,
             )
         else:
             native_channels: dict[str, dict] = {}
@@ -1977,6 +2430,10 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
+            if agentbarn_telegram is not None:
+                # The runtime's Telegram channel, carried through Agent Barn's proxy.
+                native_credentials["telegram"] = {"bot_token": agentbarn_telegram.api_token}
+                native_channels["telegram"] = agentbarn_telegram_channel(agentbarn_telegram)
             overlay = build_openclaw_gateway_config(
                 effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
             )
@@ -1991,15 +2448,32 @@ class AgentService:
             )
             if native_credentials:
                 secret.string_data.update(native_channel_env(native_credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_channel_env(agentbarn_telegram))
             deployment = build_deployment(
                 agent.id,
                 org_id,
                 ns,
-                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
+                resources=resources,
             )
 
         # aai-cli integration secrets — all agent types.
+        if not preflight:
+            # Reconcile stale workloads before rotating any machine authorization.
+            self.k8s.delete_deployment(name, ns)
+            self.k8s.wait_for_termination(name, ns)
+            previous_runtime = self.integrations.runtime(agent.id)
+            previous_sharepoint = previous_runtime.bindings.get("sharepoint", {}) if previous_runtime else {}
+            desired_sharepoint = self.integrations.policies(agent.id).get(SecretProvider.SHAREPOINT, False)
+            if (
+                previous_sharepoint.get("isolated")
+                and previous_sharepoint.get("handoff_complete")
+                and not desired_sharepoint
+                and self.repository.get_secret(agent.id, SecretProvider.SHAREPOINT)
+            ):
+                self.credential_gateway.sharepoint_broker.prepare_direct(agent.id, agent.organization_id)
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
         shared_ids = [s.shared_credential_id for s in agent_secrets if s.shared_credential_id is not None]
         shared_by_id = {}
@@ -2030,63 +2504,113 @@ class AgentService:
                     ),
                 ) from exc
         self._backfill_google_client_credentials(decrypted)
-        # Only google_workspace is materialized. The retired per-service Google providers
-        # and their rows were deleted by migration; affected agents must reconnect through
-        # Google Workspace.
-        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(gws_content, GoogleWorkspaceContent) and (
-            not gws_content.client_id or not gws_content.client_secret
-        ):
-            raise AgentProvisioningPrecondition(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
-                    "and Google OAuth is not configured on this server. Reconnect via "
-                    "Authenticate with Google, or configure google_cloud_client_id/secret."
-                ),
+        # A Google refresh token is useless without the client it was issued under: either
+        # the credential's own, or the server-owned one backfilled just above.
+        for google_provider in _GOOGLE_OAUTH_PROVIDERS:
+            google_content = decrypted.get(google_provider)
+            if isinstance(google_content, (GoogleWorkspaceContent, GmailContent)) and (
+                not google_content.client_id or not google_content.client_secret
+            ):
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
+                        "and Google OAuth is not configured on this server. Reconnect via "
+                        "Authenticate with Google, or configure google_cloud_client_id/secret."
+                    ),
+                )
+        policies = self.integrations.policies(agent.id)
+        default_firecrawl = SecretProvider.FIRECRAWL not in decrypted and bool(
+            self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
+        )
+        if default_firecrawl:
+            decrypted[SecretProvider.FIRECRAWL] = FirecrawlContent(
+                api_key=self.config.agent_firecrawl_api_key, base_url=self.config.agent_firecrawl_base_url
             )
-        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
-        store = {
-            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
-        }
+            policies[SecretProvider.FIRECRAWL] = self.integrations.policies(agent.id, "platform_default").get(
+                SecretProvider.FIRECRAWL, False
+            )
+        policies.update(isolation_overrides or {})
+        bindings = [
+            RuntimeBinding(
+                provider,
+                content,
+                select_egress_mode(provider, isolated=policies.get(provider, legacy_isolation(provider))),
+            )
+            for provider, content in decrypted.items()
+        ]
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
-        # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
-        # Hermes' home is its volume; OpenClaw's volume is only ~/.openclaw.
         aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
-        # Gated on providers that actually get an aai-cli profile: an agent whose only
-        # integrations are profile-less (google_workspace, firecrawl) would otherwise get
-        # a config.toml holding nothing but the store header.
-        has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = (
-            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+        gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
+        runtime_context = RuntimeContext(
+            aai_home,
+            gog_home_dir,
+            gateway_base_url=self.config.credential_gateway_base_url,
+            sharepoint_token_url=f"{self.config.ingest_base_url}/agents/{agent.id}/integrations/sharepoint/token",
+            store_dir=aai_store_dir,
+            gateway_tokens={provider: "preflight" for provider in decrypted},
         )
-        # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
-        aai_setup_sh = build_setup_sh(
-            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+        # Validate all artifacts before changing authorization or cluster resources.
+        artifacts = materialize_integrations(bindings, runtime_context)
+        snapshot: dict[str, dict[str, Any]] = {
+            s.provider: {
+                "binding_id": str(s.id),
+                "isolated": policies.get(SecretProvider(s.provider), legacy_isolation(SecretProvider(s.provider))),
+            }
+            for s in agent_secrets
+        }
+        if default_firecrawl:
+            snapshot["firecrawl"] = {
+                "binding_id": None,
+                "isolated": policies[SecretProvider.FIRECRAWL],
+                "source": "platform_default",
+            }
+        custom_connections = self.custom_api.runtime_connections(agent.id)
+        if custom_api_overrides:
+            by_id: dict[UUID, CustomApiConnection | None] = {row.id: row for row in custom_connections}
+            by_id.update(custom_api_overrides)
+            custom_connections = sorted((row for row in by_id.values() if row is not None), key=lambda row: row.slug)
+        snapshot.update(connection_snapshot(custom_connections))
+        custom_artifacts = materialize_custom_api(
+            custom_connections,
+            self.config.agent_token_encryption_key,
+            self.config.credential_gateway_base_url,
+            self.custom_api,
+            home_dir=aai_home,
+            store_dir=aai_store_dir,
         )
-        if store:
-            secret.string_data.update(build_env(store))
-
-        # gog (Google Workspace) — its own CLI with its own on-disk state, rebuilt from
-        # this secret on every boot. GOG_HOME is deliberately the container filesystem,
-        # not the PVC that aai_home points at for Hermes.
-        gog_setup_sh = None
-        if isinstance(gws_content, GoogleWorkspaceContent):
-            gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
-            secret.string_data.update(
-                build_gog_env(gws_content, gog_home_dir, secrets.token_urlsafe(32)),
+        gateway_tokens = []
+        if not preflight:
+            runtime = self.integrations.begin(agent.id, snapshot)
+            gateway_tokens = self.credential_gateway.issue_for_agent(
+                agent.id, agent.organization_id, set(decrypted), generation=runtime.generation
             )
-            gog_setup_sh = build_gog_setup_sh()
-
-        fc_content = decrypted.get(SecretProvider.FIRECRAWL)
-        fc_api_key = (
-            fc_content.api_key if isinstance(fc_content, FirecrawlContent) else self.config.agent_firecrawl_api_key
+            artifacts = materialize_integrations(
+                bindings,
+                replace(runtime_context, gateway_tokens={issued.provider: issued.value for issued in gateway_tokens}),
+            )
+        if not preflight:
+            custom_artifacts = materialize_custom_api(
+                custom_connections,
+                self.config.agent_token_encryption_key,
+                self.config.credential_gateway_base_url,
+                self.custom_api,
+                runtime.generation,
+                home_dir=aai_home,
+                store_dir=aai_store_dir,
+            )
+        secret.string_data.update(custom_artifacts.env)
+        secret.string_data.update(artifacts.env)
+        aai_config_toml = artifacts.files.get("aai-cli-config.toml") or (
+            f'secrets_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/aai-secrets.enc.json"\n'
+            f'key_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/key"\n'
         )
-        fc_base_url = (
-            fc_content.base_url
-            if isinstance(fc_content, FirecrawlContent) and fc_content.base_url
-            else self.config.agent_firecrawl_base_url
-        )
+        aai_config_toml += "\n" + custom_artifacts.files["custom-api-profiles.toml"]
+        aai_setup_sh = artifacts.files["aai-cli-setup.sh"] + custom_artifacts.files["custom-api-setup.sh"]
+        gog_setup_sh = artifacts.files.get("gog-setup.sh")
+        gog_shim_sh = artifacts.files.get("gog-shim.sh")
+        fc_api_key = artifacts.env.get("FIRECRAWL_API_KEY", self.config.agent_firecrawl_api_key)
+        fc_base_url = artifacts.env.get("FIRECRAWL_API_URL", self.config.agent_firecrawl_base_url)
         if fc_api_key and fc_base_url:
             secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
             if hermes_cfg is not None:
@@ -2119,6 +2643,10 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
+        for issued in gateway_tokens:
+            secret.string_data[gateway_token_env_var(issued.provider)] = issued.value
+        if gateway_tokens:
+            secret.string_data["AF_GATEWAY_URL"] = self.config.credential_gateway_base_url
         memory_key = secrets.token_urlsafe(32) if agent.memory_enabled else None
         if memory_key:
             secret.string_data.update({"MEMORY_URL": self.config.memory_base_url, "MEMORY_API_KEY": memory_key})
@@ -2127,6 +2655,12 @@ class AgentService:
                 "AGENT_ID": str(agent.id),
                 "INGEST_URL": self.config.ingest_base_url,
                 "INGEST_API_KEY": ingest_key,
+                "ARTIFACT_URL": self.config.artifact_runtime_base_url,
+                "ARTIFACT_API_KEY": artifact_runtime_token(agent.id, ingest_key),
+                "ARTIFACT_MAX_BYTES": str(self.config.artifact_max_bytes),
+                "ARTIFACT_UPLOAD_ROOTS": "/workspace"
+                if agent.agent_type == AgentType.HERMES
+                else "/home/node/.openclaw/workspace",
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
                 "COMMUNICATIONS_PROTOCOL_VERSION": "2",
@@ -2134,6 +2668,10 @@ class AgentService:
                 "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
                 "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
+                # What the in-pod proxy tells the person chatting when spend runs out:
+                # buy credit, or have a limit raised. Read at start, so a change of
+                # kind reaches a running Agent on its next restart.
+                "AGENTBARN_SPEND_LIMIT_KIND": self._spend_limit_kind(agent.organization_id),
             }
         )
 
@@ -2185,12 +2723,13 @@ class AgentService:
         workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
         agents_md = (
             rendered.agents_md
-            + build_integrations_policy_md(decrypted)
-            + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
+            + artifacts.policy_md
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_file_delivery_policy_md(
                 # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
-                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+                workspace_dir
+                if any(c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram))
+                else None
             )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
@@ -2209,12 +2748,14 @@ class AgentService:
                 tools_md=tools_md,
                 agents_md=agents_md,
                 memory_enabled=agent.memory_enabled,
+                artifacts_enabled=bool(self.config.artifact_s3_endpoint_url),
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
+                gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
         else:
@@ -2228,6 +2769,7 @@ class AgentService:
                 tools_md=tools_md,
                 agents_md=agents_md,
                 memory_enabled=agent.memory_enabled,
+                artifacts_enabled=bool(self.config.artifact_s3_endpoint_url),
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -2235,8 +2777,14 @@ class AgentService:
                 aai_cli_config_toml=aai_config_toml,
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
+                gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
+
+        config_map.data["AGENTS.md"] += custom_artifacts.policy_md
+
+        if preflight:
+            return previous_status
 
         # Failures here are recorded and normalized by _start_agent_unchecked, which
         # wraps this whole method rather than only the cluster calls.
@@ -2250,6 +2798,7 @@ class AgentService:
         )
         self.k8s.create_service(ns, service)
         self.k8s.create_deployment(ns, deployment)
+        self.integrations.set_state(agent.id, "provisioned", runtime.generation)
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
@@ -2259,10 +2808,18 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
-        agent.running_config_digest = agent_runtime_config_digest(
-            self.config.openclaw_image,
-            self.config.hermes_image,
-        )
+        # Likewise the resources, so a size changed while it runs reads as pending.
+        agent.running_resources = size_resources(size)
+        if agent.agent_type == AgentType.HERMES:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
+            )
+        else:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self._effective_runtime_image(agent),
+                self.config.hermes_image,
+            )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
         agent.memory_key_hash = hashlib.sha256(memory_key.encode()).hexdigest() if memory_key else None
         agent.communication_key_encrypted = encrypt_token(
@@ -2409,8 +2966,37 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
             stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
+
+    def restart_agent_for_platform(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
+        """Restart any Agent for a Platform Administrator: stop it if it runs, then start it.
+
+        Platform authority, so the route's `require_platform_admin` is the check and no
+        Membership is needed; the Agent's lifecycle Events name the administrator. The same
+        lock and guards as an Organization's own start apply. Returns the Agent as started.
+        """
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        actor = resolve_actor_identity(context, agent.organization_id)
+        self.restore_points.reconcile_agent(agent.id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None or current.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+            if current.status == AgentStatus.RUNNING:
+                current = self._stop_agent_unchecked(current, actor)
+            return self._start_agent_unchecked(current, actor)
 
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Stop a known Agent after its caller has established authority."""
@@ -2425,12 +3011,19 @@ class AgentService:
         self._capture_logs_before_stop(agent)
         name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
+        self.integrations.set_state(agent.id, "stopping")
         self.k8s.delete_deployment(name, ns)
+        self.k8s.wait_for_termination(name, ns)
         self.k8s.delete_config_map(name, ns)
         self.k8s.delete_secret(name, ns)
+        # The pod is gone, so its gateway tokens must stop resolving even if a copy of
+        # the Secret was taken while it ran.
+        self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
 
+        self.integrations.set_state(agent.id, "stopped")
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
+        agent.running_resources = None
         agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
@@ -2441,6 +3034,304 @@ class AgentService:
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return result.agent
+
+    # --- Managed updates (MDP-47 / AF-201) ----------------------------------
+
+    def managed_update(self, agent_id: UUID, context: CurrentUserContext, schedule: Callable[..., None]) -> AgentRead:
+        """One-click runtime update: capture, start on the new image, roll back on failure.
+
+        The orchestration runs as a scheduled background task; this call only
+        checks authority and preconditions, and marks the update as running so
+        every other lifecycle and restore point action is refused until it ends.
+        `schedule` is `BackgroundTasks.add_task`, passed in by the route so this
+        service keeps no FastAPI request-scoped dependency.
+        """
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        # The rollback replays the recorded configuration, which restore authorizes
+        # as an Agent update. Settle that here: refused in the background task, it
+        # would only show up as an Agent left in ERROR.
+        self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_UPDATE)
+        if agent.status != AgentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A managed update applies to a running Agent.",
+            )
+        if self.restore_points.has_blocking_operation(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+        if not self.repository.claim_managed_update(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
+        schedule(self._run_managed_update, agent.id, context)
+        # Re-read so the response already says the update is in progress.
+        return self._get_agent_read(self.repository.get_by_id(agent.id) or agent, context)
+
+    def _run_managed_update(self, agent_id: UUID, context: CurrentUserContext) -> None:
+        try:
+            self._update_or_roll_back(agent_id, context)
+        except Exception:
+            # Every step handles its own failures. This only catches a fault
+            # between them, so the task never dies without a trace.
+            logger.exception("Managed update for agent %s stopped unexpectedly", agent_id)
+        finally:
+            self.repository.release_managed_update(agent_id)
+
+    def _update_or_roll_back(self, agent_id: UUID, context: CurrentUserContext) -> None:
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.status != AgentStatus.RUNNING:
+            return
+        actor = resolve_actor_identity(context, agent.organization_id)
+        logger.info("Managed update started for agent %s", agent_id)
+
+        # 1-2. Stop, then capture the pre-update state. Nothing about the Agent
+        #      has changed yet, so a failure here only ends the update, saying why.
+        try:
+            previous_image = self._stop_for_update(agent_id, actor)
+            if previous_image is None:
+                return
+            backup = self._capture_for_update(agent_id, context)
+        except Exception as exc:
+            logger.exception("Managed update for agent %s could not take its backup", agent_id)
+            self.repository.record_managed_update_outcome(
+                agent_id,
+                ManagedUpdateOutcome.BACKUP_FAILED,
+                restore_point_id=None,
+                failure_reason=_managed_update_failure_text(exc),
+            )
+            return
+        if backup.status != RestorePointStatus.READY:
+            self.repository.record_managed_update_outcome(
+                agent_id,
+                ManagedUpdateOutcome.BACKUP_FAILED,
+                restore_point_id=backup.id,
+                failure_reason=backup.failure_reason,
+            )
+            return
+
+        # 3. Start on the platform image and watch it come up. A start that fails
+        #    to provision rolls back exactly like one that never becomes ready.
+        try:
+            self._start_for_update(agent_id, actor, pinned_image="")
+            healthy = self._wait_for_ready(
+                agent_id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except Exception:
+            logger.exception("Managed update start failed for agent %s", agent_id)
+            healthy = False
+        if healthy:
+            logger.info("Managed update succeeded for agent %s", agent_id)
+            self.repository.record_managed_update_outcome(
+                agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=backup.id
+            )
+            return
+
+        # 4. Roll back: free the volume, restore the archive and the recorded
+        #    configuration, then start the image the pod ran before.
+        self._rollback_managed_update(agent_id, backup.id, context, actor, previous_image)
+
+    def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> str | None:
+        """Stop the Agent and return the image its pod was running.
+
+        None means the Agent was not running after all, so there is nothing to do.
+        """
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent_id)
+            if current is None or current.status != AgentStatus.RUNNING:
+                return None
+            # What the pod proves it ran, not what the pin or the platform says:
+            # both can move underneath a long-running pod.
+            previous_image = self.k8s.get_pod_image(
+                f"agent-{agent_id}", self.config.k8s_namespace
+            ) or self._effective_runtime_image(current)
+            self._stop_agent_unchecked(current, actor)
+        return previous_image
+
+    def _capture_for_update(self, agent_id: UUID, context: CurrentUserContext) -> AgentRestorePoint:
+        self._wait_for_volume_release(agent_id)
+        backup = self.restore_points.create_restore_point(
+            agent_id,
+            AgentRestorePointCreate(label=MANAGED_UPDATE_BACKUP_LABEL),
+            context,
+            managed_update=True,
+        )
+        return self.restore_points.wait_until_terminal(
+            agent_id,
+            backup.id,
+            timeout_seconds=self.config.restore_point_capture_timeout_seconds,
+            on_poll=lambda: self.repository.beat_managed_update(agent_id),
+        )
+
+    def _start_for_update(self, agent_id: UUID, actor: ActorIdentity, *, pinned_image: str) -> None:
+        """Start the Agent on `pinned_image`; empty follows the platform pin.
+
+        The same checks `start_agent` makes, except the managed-update guard:
+        this is that update.
+        """
+        self.restore_points.reconcile_agent(agent_id)
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(agent_id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+            current.pinned_runtime_image = pinned_image
+            self._start_agent_unchecked(self.repository.save(current), actor)
+
+    def _rollback_managed_update(
+        self,
+        agent_id: UUID,
+        backup_id: UUID,
+        context: CurrentUserContext,
+        actor: ActorIdentity,
+        previous_image: str,
+    ) -> None:
+        try:
+            self._free_volume_for_rollback(agent_id, actor)
+            restored = self.restore_points.restore_restore_point(
+                agent_id,
+                backup_id,
+                AgentRestorePointRestore(reapply_configuration=True),
+                context,
+                managed_update=True,
+            )
+            row = self.restore_points.wait_until_terminal(
+                agent_id,
+                restored.id,
+                timeout_seconds=self.config.restore_point_restore_timeout_seconds,
+                on_poll=lambda: self.repository.beat_managed_update(agent_id),
+            )
+            restored_ok = row.status == RestorePointStatus.READY
+        except Exception:
+            logger.exception("Managed update rollback could not restore agent %s", agent_id)
+            restored_ok = False
+        if not restored_ok:
+            # A restore that failed marks its target FAILED. This one ran without a
+            # safety copy, so the archive — mounted read-only, and kept — is the
+            # only way back: make it restorable again. A no-op for any other state.
+            self.restore_points.reopen_failed_restore(backup_id)
+            # Skip the restart: a pod on a runtime the volume may no longer match
+            # is worse than none.
+            self._mark_update_failed(agent_id, backup_id, previous_image)
+            return
+
+        try:
+            self._start_for_update(agent_id, actor, pinned_image=previous_image)
+            healthy = self._wait_for_ready(
+                agent_id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except Exception:
+            logger.exception("Managed update rollback could not restart agent %s", agent_id)
+            healthy = False
+        if not healthy:
+            self._mark_update_failed(agent_id, backup_id, previous_image)
+            return
+        logger.info("Managed update rolled back for agent %s", agent_id)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.ROLLED_BACK, restore_point_id=backup_id
+        )
+
+    def _free_volume_for_rollback(self, agent_id: UUID, actor: ActorIdentity) -> None:
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent_id)
+            if current is not None and current.status == AgentStatus.RUNNING:
+                self._stop_agent_unchecked(current, actor)
+        # A start that failed to provision is in ERROR, not RUNNING, so the stop
+        # above skipped it — but it may have left its Deployment behind.
+        self._teardown_workload(agent_id)
+        self._wait_for_volume_release(agent_id)
+
+    def _mark_update_failed(self, agent_id: UUID, backup_id: UUID, previous_image: str) -> None:
+        """Leave the Agent in ERROR, ready for the user to restore the backup by hand.
+
+        Pinned to its previous image so the start after that restore lands on
+        the runtime that worked, and with no pod holding the volume, since a
+        restore refuses while one does.
+        """
+        try:
+            self._teardown_workload(agent_id)
+        except Exception:
+            logger.exception("Could not remove the workload of agent %s after a failed rollback", agent_id)
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None:
+            return
+        agent.status = AgentStatus.ERROR
+        agent.pinned_runtime_image = previous_image
+        self.repository.save(agent)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.ROLLBACK_FAILED, restore_point_id=backup_id
+        )
+
+    def _wait_for_ready(self, agent_id: UUID, timeout_seconds: int, poll_seconds: int = 5) -> bool:
+        """Poll the Deployment's newest pod until it is ready, fails for good, or time runs out."""
+        deployment = f"agent-{agent_id}"
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            self.repository.beat_managed_update(agent_id)
+            pod_status, reason = self.k8s.get_pod_readiness(deployment, self.config.k8s_namespace)
+            if pod_status == "ready":
+                runtime = self.integrations.runtime(agent_id)
+                if runtime is None or runtime.authentication_complete:
+                    agent = self.repository.get_by_id(agent_id)
+                    if agent is not None:
+                        self._observe_integration_readiness(agent, pod_status)
+                    return True
+            if pod_status == "crashed" and self._failed_for_good(deployment, reason):
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_seconds)
+
+    def _failed_for_good(self, deployment: str, reason: str | None) -> bool:
+        """Whether a pod the readiness check calls 'crashed' will never become ready.
+
+        Image pull errors are not final: the kubelet keeps retrying, and one
+        registry blip must not roll an update back. The readiness window bounds
+        them instead. A crash loop is final once the container has failed twice,
+        so a crashing image does not burn the whole window before rolling back.
+        """
+        if reason == "CrashLoopBackOff":
+            return self.k8s.get_pod_restart_count(deployment, self.config.k8s_namespace) >= 2
+        return reason in ("CreateContainerConfigError", "CreateContainerError")
+
+    def _wait_for_volume_release(self, agent_id: UUID) -> None:
+        """Wait for the stopped pod to let go of the volume.
+
+        Capture and restore wait too, but only for the pod's default grace
+        period, and refuse after that so a person can try again. A managed
+        update has no one to retry it, so it waits longer here first.
+        """
+        deadline = time.monotonic() + MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS
+        while self.k8s.has_pods_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace):
+            self.repository.beat_managed_update(agent_id)
+            if time.monotonic() >= deadline:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STILL_SHUTTING_DOWN_DETAIL)
+            time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
+
+    def _teardown_workload(self, agent_id: UUID) -> None:
+        """Delete the Deployment so the RWO PVC is free for a restore Job.
+
+        A failed start leaves a (likely crash-looping) Deployment behind, and
+        `restore_restore_point` refuses while any pod holds the volume.
+        ConfigMap and Secret are left in place — `start_agent` rebuilds both.
+        """
+        self.k8s.delete_deployment(f"agent-{agent_id}", self.config.k8s_namespace)
 
     def rebuild_running_agents_for_maintenance(
         self, *, apply: bool
@@ -2464,6 +3355,8 @@ class AgentService:
                     current = self.repository.get_by_id(agent.id)
                     if current is None:
                         raise RuntimeError(f"Agent {agent.id} not found")
+                    if managed_update_in_flight(current):
+                        raise RuntimeError(f"Agent {agent.id} has a managed update in progress")
                     stopped = self._stop_agent_unchecked(current, actor)
                     started = self._start_agent_unchecked(stopped, actor)
                 if started.status != AgentStatus.RUNNING:
@@ -2495,6 +3388,7 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
             if self.restore_points.has_blocking_operation(current.id):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -2577,17 +3471,28 @@ class AgentService:
         return options
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Inject the server-owned OAuth client when a Google Workspace secret omits it.
+        """Inject the server-owned OAuth client when a Google-backed secret omits it.
 
         Backfill only when empty so a user-supplied client (the one the refresh token
         was issued under) keeps working.
         """
-        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(content, GoogleWorkspaceContent):
-            if not content.client_id:
-                content.client_id = self.config.google_cloud_client_id
-            if not content.client_secret:
-                content.client_secret = self.config.google_cloud_client_secret
+        for provider in _GOOGLE_OAUTH_PROVIDERS:
+            content = decrypted.get(provider)
+            if isinstance(content, (GoogleWorkspaceContent, GmailContent)):
+                if not content.client_id:
+                    content.client_id = self.config.google_cloud_client_id
+                if not content.client_secret:
+                    content.client_secret = self.config.google_cloud_client_secret
+
+    def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
+        """Removing SharePoint would forget sites still granted to the Teams app, which its next
+        agent could reach; an administrator's removal sign-in revokes them and disconnects it."""
+        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        if secret is None or secret.content is None:
+            return
+        content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
 
     def _validate_live_integration(self, provider: SecretProvider, content: Any) -> None:
         """Validate submitted credentials with the provider before they are persisted.
@@ -2595,7 +3500,8 @@ class AgentService:
         The browser can be modified, so any client-side preflight is advisory only. This
         method receives the exact content from the current request and runs the provider
         validator before Agent creation allocates a LiteLLM key or opens its persistence
-        transaction. Providers without a live validator still receive schema validation;
+        transaction, and before an Agent update changes any credential. Providers without
+        a live validator still receive schema validation;
         their credentials remain eligible for the existing on-demand validation endpoint.
         """
         validator = PROVIDER_VALIDATORS.get(provider)
@@ -2603,7 +3509,7 @@ class AgentService:
             return
 
         validation_content = content
-        if provider == SecretProvider.GOOGLE_WORKSPACE and isinstance(content, GoogleWorkspaceContent):
+        if provider in _GOOGLE_OAUTH_PROVIDERS and isinstance(content, (GoogleWorkspaceContent, GmailContent)):
             # The stored payload may intentionally omit the deployment-owned OAuth client;
             # validate with the same server-side backfill used during runtime materialization
             # without changing the caller's encrypted payload.
@@ -2706,6 +3612,7 @@ class AgentService:
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
+        self._observe_integration_readiness(agent, pod_status)
         if pod_status == "crashed":
             return AgentHealthRead(status="crashed", reason=friendly_pod_reason(pod_reason))
         if pod_status != "ready":

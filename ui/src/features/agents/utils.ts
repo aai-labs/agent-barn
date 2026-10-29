@@ -91,6 +91,19 @@ export function agentInitials(name: string): string {
 
 const MODEL_DISPLAY_PREFIX = "litellm/openrouter/";
 
+/** Bounds of an Agent's own Hermes turn limit, the same ones the API enforces. */
+export const MAX_TURNS_MIN = 1;
+export const MAX_TURNS_MAX = 500;
+
+export function turnLimitText(maxTurns: number | null): string {
+  return maxTurns === null ? "Platform default" : `${maxTurns} turns per run`;
+}
+
+/** Names the platform default only when the Agent follows it; that is the only read that knows it. */
+export function turnLimitLabel(agent: Pick<Agent, "maxTurns" | "effectiveMaxTurns">): string {
+  return agent.maxTurns === null ? `Platform default (${agent.effectiveMaxTurns})` : turnLimitText(agent.maxTurns);
+}
+
 // Strips the internal litellm/openrouter routing prefix for display, leaving the
 // provider/model slug (e.g. "openai/gpt-5-mini"). No-op if the prefix is absent.
 export function formatModelName(model: string): string {
@@ -239,4 +252,16 @@ export function isShareDraftDirty(
  */
 export function currentModelOf(agent: { runningModel: string; effectiveModel: string }) {
   return agent.runningModel || agent.effectiveModel;
+}
+
+export const QUIET_AFTER_DAYS = 14;
+
+/** An Agent that has been active before but not in the last {@link QUIET_AFTER_DAYS} days. */
+export function isQuiet(lastActivityAt: string | null | undefined, now = Date.now()) {
+  return !!lastActivityAt && now - new Date(lastActivityAt).getTime() >= QUIET_AFTER_DAYS * 86_400_000;
+}
+
+/** Last activity within the past day. */
+export function isRecent(lastActivityAt: string | null | undefined, now = Date.now()) {
+  return !!lastActivityAt && now - new Date(lastActivityAt).getTime() < 86_400_000;
 }

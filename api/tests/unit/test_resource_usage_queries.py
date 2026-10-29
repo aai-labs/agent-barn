@@ -7,13 +7,15 @@ import pytest
 from api.domains.resource_usage.models import ResourceUsageRange, ResourceUsageState, resolve_usage_window
 from api.domains.resource_usage.promql import (
     agent_id_from_labels,
+    agent_requests_query,
+    group_agent_requests,
     group_instant,
     group_instant_all,
-    group_namespace_limits,
+    group_namespace_commitments,
     group_range,
     group_totals,
     instant_query,
-    namespace_limits_query,
+    namespace_commitments_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -125,16 +127,69 @@ def test_the_platform_range_query_keeps_a_rate_window_long_enough_for_scrapes():
     assert "[120s]" in platform_range_query(platform_selector(), 60)
 
 
-def test_the_namespace_limits_query_adds_up_live_pods_from_kube_state_metrics_only():
-    query = namespace_limits_query()
+def test_the_namespace_query_charges_a_pod_what_a_quota_charges_it():
+    query = namespace_commitments_query()
 
+    for kind in ("limits", "requests"):
+        containers = f'sum by (namespace, pod, resource) (kube_pod_container_resource_{kind}{{job="kube-state-metrics", resource=~"memory|cpu"}})'
+        init = f'max by (namespace, pod, resource) (kube_pod_init_container_resource_{kind}{{job="kube-state-metrics", resource=~"memory|cpu"}})'
+        # The containers added up, and the biggest init container, joined by `or` on labels
+        # that differ (`part`), then the larger of the two for each pod.
+        assert f'label_replace({containers}, "part", "containers", "", "")' in query
+        assert f'label_replace({init}, "part", "init", "", "")' in query
+        assert f'"kind", "{kind}"' in query
+    assert query.count("max by (namespace, pod, resource) (label_replace(") == 2
+    # Only pods that are Pending or Running count, as with the quota.
+    assert query.count('kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1') == 2
+    assert query.count("on (namespace, pod) group_left ()") == 2
     # Pinned to its own job, as the Agent queries are pinned to theirs.
-    assert query.count('job="kube-state-metrics"') == 2
-    assert 'kube_pod_container_resource_limits{job="kube-state-metrics", resource=~"memory|cpu"}' in query
-    # Only pods that are Pending or Running count, as with the quota; one row per resource.
+    assert query.count('job="kube-state-metrics"') == 2 * (2 + 1)
+
+
+def test_the_agent_requests_query_reads_only_agent_pods_by_name_and_names_the_agent_in_app():
+    query = agent_requests_query()
+    agent_pod = "agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+    # Both halves of the pod rule (containers and init container) are limited to agent pods,
+    # so a restore job or a hook never reaches the label rewrite.
+    assert (
+        f'kube_pod_container_resource_requests{{job="kube-state-metrics", resource=~"memory|cpu", pod=~"{agent_pod}-.+"}}'
+        in query
+    )
+    assert (
+        f'kube_pod_init_container_resource_requests{{job="kube-state-metrics", resource=~"memory|cpu", pod=~"{agent_pod}-.+"}}'
+        in query
+    )
+    assert "kube_pod_container_resource_limits" not in query
+    # The Deployment's name becomes `app`, as the scrape's own label is, so one parser maps both.
+    assert f'"app", "$1", "pod", "({agent_pod})-.+"' in query
+    # An Agent with a pod being replaced is counted once, by its highest, never added twice.
+    assert query.startswith("max by (app, resource) (label_replace(")
     assert 'kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1' in query
-    assert query.startswith("sum by (resource) (")
     assert "on (namespace, pod) group_left ()" in query
+
+
+def test_the_agent_requests_query_can_be_limited_to_the_agents_it_is_given():
+    one = agent_requests_query([_A])
+    two = agent_requests_query([_A, _B, _A])
+
+    # Only those Agents' pods, never the pattern for every Agent, on both halves of the pod rule.
+    assert f'pod=~"agent-{_A}-.+"' in one
+    assert one.count(f'pod=~"agent-{_A}-.+"') == 2
+    assert f'pod=~"agent-({_A}|{_B})-.+"' in two
+    assert 'pod=~"agent-[0-9a-f]' not in one
+    assert 'pod=~"agent-[0-9a-f]' not in two
+    # The `app` rewrite still reads any agent name, so one parser maps both forms.
+    assert '"app", "$1", "pod", "(agent-[0-9a-f]{8}' in one
+
+
+def test_an_agent_request_query_with_no_agents_is_refused_rather_than_asking_about_everyone():
+    with pytest.raises(ValueError):
+        agent_requests_query([])
+
+
+def test_the_namespace_query_is_not_limited_to_agent_pods():
+    assert "agent-[0-9a-f]" not in namespace_commitments_query()
 
 
 # --- mapping results back to agents ----------------------------------------
@@ -192,20 +247,29 @@ def test_the_platform_view_keeps_every_agent_that_reported():
     assert group_instant_all(samples) == {_A: {"cpu_cores": 0.1}, stranger: {"up": 1.0}}
 
 
-def test_namespace_limits_are_read_by_resource():
+def test_namespace_commitments_are_read_by_kind_and_resource():
     samples = [
-        PrometheusSample({"resource": "memory"}, 4_294_967_296.0),
-        PrometheusSample({"resource": "cpu"}, 1.5),
-        PrometheusSample({"resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({"kind": "limits", "resource": "memory"}, 4_294_967_296.0),
+        PrometheusSample({"kind": "limits", "resource": "cpu"}, 1.5),
+        PrometheusSample({"kind": "requests", "resource": "memory"}, 1_073_741_824.0),
+        PrometheusSample({"kind": "requests", "resource": "cpu"}, 0.25),
+        PrometheusSample({"kind": "limits", "resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({"kind": "other", "resource": "cpu"}, 3.0),
+        PrometheusSample({"resource": "cpu"}, 7.0),
         PrometheusSample({}, 7.0),
     ]
 
-    assert group_namespace_limits(samples) == {"memory": 4_294_967_296.0, "cpu": 1.5}
+    assert group_namespace_commitments(samples) == {
+        "limits": {"memory": 4_294_967_296.0, "cpu": 1.5},
+        "requests": {"memory": 1_073_741_824.0, "cpu": 0.25},
+    }
 
 
-def test_a_resource_the_source_did_not_answer_for_is_absent_not_zero():
-    assert group_namespace_limits([]) == {}
-    assert group_namespace_limits([PrometheusSample({"resource": "cpu"}, 2.0)]) == {"cpu": 2.0}
+def test_a_kind_or_resource_the_source_did_not_answer_for_is_absent_not_zero():
+    assert group_namespace_commitments([]) == {}
+    assert group_namespace_commitments([PrometheusSample({"kind": "requests", "resource": "cpu"}, 2.0)]) == {
+        "requests": {"cpu": 2.0}
+    }
 
 
 def test_combined_points_are_keyed_by_field_and_epoch_second():
@@ -318,3 +382,33 @@ def test_a_snapshot_of_nothing_is_all_null():
     assert snapshot.state == ResourceUsageState.NO_DATA
     assert snapshot.memory_working_set_bytes is None
     assert snapshot.cpu_cores is None
+
+
+def test_agent_requests_are_read_by_agent_and_resource():
+    other = uuid4()
+    samples = [
+        PrometheusSample({"app": f"agent-{_A}", "resource": "memory"}, 805_306_368.0),
+        PrometheusSample({"app": f"agent-{_A}", "resource": "cpu"}, 0.1),
+        PrometheusSample({"app": f"agent-{other}", "resource": "memory"}, 268_435_456.0),
+        # Not an Agent, not a resource we show, and a row with no resource at all.
+        PrometheusSample({"app": "agentbarn-api", "resource": "cpu"}, 9.0),
+        PrometheusSample({"app": f"agent-{_B}", "resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({"app": f"agent-{_B}"}, 9.0),
+        PrometheusSample({"resource": "cpu"}, 9.0),
+    ]
+
+    assert group_agent_requests(samples) == {
+        _A: {"memory_request_bytes": 805_306_368.0, "cpu_request_cores": 0.1},
+        other: {"memory_request_bytes": 268_435_456.0},
+    }
+    assert group_agent_requests([]) == {}
+
+
+def test_agent_requests_can_be_limited_to_the_agents_that_were_asked_about():
+    samples = [
+        PrometheusSample({"app": f"agent-{_A}", "resource": "memory"}, 100.0),
+        PrometheusSample({"app": f"agent-{_B}", "resource": "memory"}, 200.0),
+    ]
+
+    assert group_agent_requests(samples, {_A}) == {_A: {"memory_request_bytes": 100.0}}
+    assert group_agent_requests(samples, set()) == {}

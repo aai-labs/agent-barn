@@ -90,9 +90,11 @@ deployment limits cannot change their expected budget contracts.
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
 | `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
-| `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
+| `make test-api` | API unit and integration tests, excluding the Kubernetes client test; runs one pytest-xdist worker per CPU, each with its own PostgreSQL container; tests marked `xdist_group("heavy_containers")` (pinned LiteLLM/Hindsight contracts) share one worker so those containers never start concurrently | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
+| `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
+| `make check-workflows` | Render API, event worker and workflow maintenance cluster-access wiring with default and custom kubeconfig Secrets | Helm 3.19.0 |
 | `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
 | `make lint-ui` | ESLint | None |
 | `make check-ui` | TypeScript type check | None |
@@ -128,7 +130,33 @@ pnpm test:debug
 
 Choose commands for the touched area. Full Kubernetes or browser suites are required when the changed contract depends on those environments, not for unrelated documentation-only changes.
 
+### When CI runs
+
+`../../.github/workflows/ci.yml` runs once per pull request, on the
+`pull_request` event, against the merge result. It does not listen to `push`:
+doing so ran every commit on a PR branch twice. A branch without a pull request
+is not checked automatically; open a draft pull request, or start **CI** from the
+Actions tab with `workflow_dispatch`, which checks every component.
+
+CI selects components by changed path and finishes with a single `ci-gate` job.
+`ci-gate` passes when every selected component passed or was skipped, and fails
+on any failure or cancellation. It is the check to require on `staging` and
+`main`; the per-component jobs are skipped when their paths are untouched, so
+requiring them by name is unreliable.
+
+`../../.github/workflows/deploy.yml` does not repeat lint and tests for a commit
+that is the merge result of a pull request whose head passed `ci-gate`; it builds
+and ships. It runs the full checks for direct pushes and manual dispatches, and
+always runs `make check-migrations` first. The rules are in
+[`operations.md`](operations.md#staging-environment).
+
 ## API tests
+
+Workflow execution is covered by `tests/integration/test_workflow_runs.py` (ledger,
+dispatch, fences, retries) and `tests/unit/test_agent_trigger_server.py` (the
+Agent-side step runner, including one test against a fake Hermes API). An
+end-to-end run needs a running local Agent restarted on the current trigger
+server script.
 
 API behavior changes MUST cover:
 
@@ -153,7 +181,87 @@ Representative sources:
 - Ingest/activity: `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_conversations.py`, `../../api/tests/integration/test_tool_calls.py`
 - Test application setup: `../../api/tests/conftest.py`, `../../api/tests/core/`
 
+## On-demand integration isolation verification
+
+Run the same deployment-boundary suite locally or manually in GitHub Actions.
+It is outside `api/tests/` and normal PR workflows, so `make test-api` does not
+collect it. The **Integration Isolation (on demand)** workflow
+(`../../.github/workflows/integration-isolation.yml`) accepts Hermes, OpenClaw,
+or both and builds the selected images from the chosen Git ref before testing.
+It publishes a JUnit report and never pushes images or deploys to an existing cluster.
+
+For local runs, reuse images built from the code under test:
+
+```bash
+docker build -t hermes-base:isolation hermes-base
+docker build -t openclaw-base:isolation openclaw-base
+HERMES_TEST_IMAGE=hermes-base:isolation \
+OPENCLAW_TEST_IMAGE=openclaw-base:isolation \
+make test-integration-isolation RUNTIME=both
+```
+
+Use `RUNTIME=hermes` or `RUNTIME=openclaw` and only its image variable to test
+one runtime. `RUNTIME` defaults to Hermes, consistently with the other runtime
+target. Install k3d (the CI/local bootstrap CLI pin is v5.8.3) and kubectl first;
+Docker must support privileged k3d node containers. The suite pins
+`rancher/k3s:v1.31.5-k3s1`, imports local images, creates its own uniquely named
+cluster and kubeconfig, and deletes that cluster on completion or test failure.
+It never uses the current Kubernetes context, application `.env` credentials,
+or an existing Agent PVC. A force-killed runner may leave an `isolation-*`
+cluster; inspect `k3d cluster list` and delete that specific test cluster.
+
+The contract runs generated setup and pinned CLI binaries as the images' own
+non-root users, with separate Jobs and Kubernetes Secrets for each phase and a
+shared PVC. It seeds direct credentials, rotates the PVC SharePoint grant,
+rejects a handoff and verifies preservation, applies isolation, repeats boot,
+and hands the newest service grant back to direct mode. It reads the actual
+isolated Secret and ConfigMap to check for embedded renewable credentials, verifies known CLI store
+entries are gone, exercises GitHub proxy and SharePoint token-url authentication,
+and checks that a missing dedicated token cannot use an unrelated environment token.
+A NetworkPolicy permits only cluster DNS and the in-cluster fixture
+boundary; each phase waits for policy enforcement, proves a second listening
+fixture port is unreachable, and confirms the allowed port is reachable before
+setup. Successful phases emit phase/uid metadata. Failure diagnostics may
+include fixture values; the suite uses no real credentials.
+The old Job pod and Secret are removed before the next phase starts. JUnit
+results are written to the ignored `.scratch/isolation-junit.xml`.
+
+This is a **runtime deployment contract**, not a complete application E2E test:
+it uses a fake provider/broker boundary and does not deploy the product API,
+real credential gateway, UI, LLM, or live provider accounts. API tests own actual
+gateway authorization/revocation, database rotation/cache, RBAC, tenancy,
+preflight and lifecycle error handling. Existing offline image contracts own
+typed Graph files/Excel and gog import. Keep those checks alongside this suite;
+a green cluster run alone does not prove their contracts.
+
 ## Runtime plugin tests
+
+Direct Google credential import is tested against the real pinned gog binary in
+both selected runtime images, with networking disabled. The contracts are
+`../../api/runtime_tests/test_hermes_gog_direct.py` and
+`../../api/runtime_tests/test_openclaw_gog_direct.py`; they run through
+`make test-api-runtime` with the corresponding image variable. They prove the
+generated client/token setup imports a grant that gog can decrypt from its
+file keyring, without contacting a live Google account. The Hermes broker contract in
+`../../api/runtime_tests/test_hermes_gog_broker.py` also runs the real terminal
+backend: its login-shell snapshot must resolve the wrapper, and two service
+commands must each fetch a temporary token. It uses a fixture broker boundary
+and disables external networking.
+
+The Hermes auxiliary credentials contract in `../../api/runtime_tests/test_hermes_auxiliary_credentials.py` resolves the key for the main model and every auxiliary task inside the real image, from the generated config and runtime Secret, with networking disabled. Each must resolve the runtime's LiteLLM key. Which key Hermes sends depends on the resolver a task goes through, so a builder unit test cannot show it. Rerun it after a Hermes upgrade or a change to the auxiliary pin list.
+
+Apollo contracts run the patched aai-cli in both images against an offline loopback server. They check direct API-key profiles, isolated bearer profiles, typed and passthrough API paths, the separate health path, persistent-store cleanup when switching modes, and credential exclusion. Run the corresponding `test_*_apollo.py` contracts through `make test-api-runtime`; rebuild both images after changing `aai-apollo-routing.patch`.
+
+SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
+
+File sync contracts (`../../api/runtime_tests/test_{hermes,openclaw}_file_sync.py`) run each image's real `start.sh` from the generated ConfigMap with external networking disabled. A loopback ingest stub (`runtime_tests/fixtures/file_sync_ingest_stub.py`) logs every request, and a probe replaces the runtime command. They check:
+- the helper runs on the image's own `python3`;
+- its first round finishes before the runtime starts;
+- the Template files, skills and native memory are offered, nothing the rules never sync is offered, and the planted secrets stay out;
+- uploads carry no credential and are confirmed;
+- the runtime still starts when ingest cannot be reached.
+
+Bodies are validated against the API's Pydantic models. Run them through `make test-api-runtime` with the image variable; they need no image rebuild after a helper change, because the helper ships in the ConfigMap.
 
 Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
 from `../../api/tests/fixtures/agent_memory/` through a real HTTP listener. They
@@ -172,10 +280,18 @@ recovery, expired leases and stale completions, unsafe targets, and late retaine
 documents. The pinned-image purge test verifies private/shared removal without
 changing another Agent or bank. Test queue migrations against already deleted Agents.
 Explicit Organization Memory write tests cover read-only and combined read/write grants, immediate revocation, cross-Agent write rejection, runtime credential use, content-only payloads, and refusal handling. The shared writer targets Python 3.12 in Ruff, matching the oldest runtime. Both pinned-runtime startup contracts execute the mounted writer command; Hermes
-executes the command from its generated instructions through the real terminal
-tool, covering short-name discovery after shell PATH changes and explicit 403
+proves the shared-save instructions appear in its first model system prompt without
+reading `TOOLS.md`, then executes the command from its generated `AGENTS.md`
+through the real terminal tool, covering short-name discovery after shell PATH changes and explicit 403
 refusals. Runtime fixtures mount the same executable ConfigMap command into the
-standard binary directory. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
+standard binary directory. Both pinned-runtime contracts also execute explicit
+recall, distinguishing an empty search, a successful focused retry, and backend
+unavailability while checking `mid`/4,096 and `high`/8,192 request budgets. OpenClaw
+uses its real bootstrap loader and system-prompt renderer to verify the shared
+save and recall instructions are present and disappear when memory is disabled.
+The pinned Hindsight contract retains a source Agent's private fact and verifies
+recall before granting access, while granted, and immediately after revocation.
+Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
 memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
 limits, precise combined totals, missing/stale data, renewal, immediate limit
 changes, and recall availability when changing this policy. Failed and truncated
@@ -221,8 +337,8 @@ hooks directly. Shared setup lives in
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
-  selects the matching workflow when base-image, builder, startup, or
-  telemetry-plugin paths change.
+  selects the matching workflow using the path triggers documented in
+  [CONTRIBUTING.md](../../CONTRIBUTING.md#open-a-pull-request).
 - `../../hermes-base/test-image.sh` and `../../openclaw-base/test-healthz-metrics.sh`
   run each healthz script in its pinned image under `--memory 1g --cpus 0.5`, as the
   image's own user, and check the CPU and memory it reports. Whether the cgroup files
@@ -241,6 +357,19 @@ hooks directly. Shared setup lives in
   listener's environment/port/path contract, and runs
   the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
+- `../../api/tests/fixtures/test-messaging-retirement.sh` exercises fresh, upgraded,
+  and restored persistent state using generated configuration in both pinned images.
+  It covers malformed-job isolation, managed files, inactive/main-session jobs, effective
+  home targets, and rejection of stale saved defaults after OpenClaw configuration merge.
+  Hermes image tests also drive native origin/home scheduled delivery and silence.
+  `../../openclaw-base/test-native-runtime.sh` checks native one-shot scheduling,
+  observer hooks, retirement, and native `message`/`cron` tool access. Its pinned-image
+  message fixture uses the real tool factory/filter and dry-run sends for replies
+  to an existing message and other channels, and verifies native context restrictions.
+  Upgraded/restored state retains unrelated tool denies and message policy while
+  removing the stale `message` deny. Hermes checks that its send engine is absent
+  from the agent tool registry. Scheduler fixtures simulate model/provider execution;
+  message fixtures use dry runs. These checks send no live provider messages.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The
@@ -298,3 +427,100 @@ concurrent bank attribution. Run `make check-memory` for bridge/chart wiring and
 ## Failure handling
 
 Fix failures introduced by the change. If an unrelated pre-existing failure blocks verification, report the exact command and failure without reshaping unrelated code to make the suite green.
+
+Custom API scope, DNS pinning and redirect contracts live in
+`../../api/tests/unit/test_custom_api_request.py`; CRUD, authorization and generation
+revocation live in `../../api/tests/integration/test_custom_api.py`. Custom API runtime profiles are
+consumed by aai-cli's generic `custom-api request` command. The focused
+`runtime_tests/test_custom_api_cli.py` contract executes a real CLI binary with
+materialized encrypted-store references; set `AAI_CLI_TEST_BINARY` to a binary built
+from the runtime Dockerfiles' pinned `main` revision when it is not installed on PATH. Run it explicitly with
+`cd api && AAI_CLI_TEST_BINARY=/path/to/aai-cli uv run python -m pytest runtime_tests/test_custom_api_cli.py -q`.
+This prerequisite-bearing subprocess contract is outside ordinary `make test-api`.
+The pinned-image
+`runtime_tests/test_{hermes,openclaw}_custom_api.py` contracts require images built
+with that CLI feature and exercise the installed binary as the runtime user.
+
+## Agent artifact storage and runtime contracts
+
+`api/tests/integration/test_artifacts.py` uses disposable Garage 2.4.1 and the
+migrated PostgreSQL test database. It exercises actual bytes, signed-link download
+and expiry, publication/checksum fences, current access, pinned retention and
+retryable purge; injected failures isolate recovery while keeping real storage.
+The migration contract verifies upgrade and refusal to drop cleanup evidence.
+These tests require Docker, never installation storage credentials.
+
+`make test-artifact-runtime` is an explicit additional contract; set both
+`HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` to already-built images. It executes
+the generated ConfigMap command as each image's normal user against real API,
+PostgreSQL and Garage, including verified retrieval. It uses Linux Docker host
+networking for its disposable HTTP listener. It proves executable/byte behavior,
+not a live model's tool selection, provider messaging or workflow stop semantics.
+The regular `make test-api-runtime RUNTIME=...` pattern remains runtime-specific;
+this cross-runtime contract runs through the dedicated target.
+
+`make check-artifacts` uses Helm 3.19.0 to render disabled/enabled purge and
+verify storage credentials reach only the API/purge containers, retention
+configuration is shared with workers, and no storage credentials appear in
+the chart-owned common Secret. It creates no Kubernetes resources.
+
+Persistent storage checks add two explicit opt-in contracts:
+
+- `make test-artifact-deployment` requires Docker, both runtime image variables,
+  pnpm/Node and installed Chromium. Both native CLIs publish through the real API
+  to the shipped persistent Compose Garage. After container replacement, Chromium
+  signs into the real local API, opens Agent Artifacts and verifies actual downloads;
+  there is no API-route or download interception. PostgreSQL/identity are disposable
+  fixtures; external integrations and Kubernetes Agent execution are not live.
+- `make test-garage-cluster` requires Docker, k3d, kubectl, Helm 3.19.0 and the
+  Garage image (it pulls a missing Garage/local-path helper image into Docker).
+  It imports the host platform into containerd on each owned node and asserts the
+  cache contents; the Garage pod uses `imagePullPolicy=Never`. It creates a fresh three-node local cluster with its own kubeconfig,
+  applies the rendered chart once and bootstraps it twice, tests quorum reads/writes
+  and two ready S3 Service endpoints with one node unschedulable, and verifies the
+  same node identity/bytes after PVC recovery with a required change of pod IP.
+  Bootstrap and recovery assert advertised RPC Service addresses. Stable per-replica RPC Services
+  preserve peer addresses when the pod IP changes. It
+  deletes only its own cluster. It never consumes current kubeconfig.
+
+The normal API suite's `tests/integration/test_garage_persistent.py` exercises
+the shipped Compose/bootstrap files, private bucket grants, container replacement,
+consistent stopped backups, fresh-volume restore, application links and purge.
+It also covers failed setup/restore recovery, lost-volume refusal, conflicting
+shell defaults and exclusion of the application secret from actual Docker exec
+events. A real adoption case publishes bytes in the former standalone store,
+then starts the root Compose service and verifies unchanged bytes, keys, node ID,
+endpoint, volume names and container identity. Configuration tests render the main
+stack without profiles and assert Garage/purge presence, storage health
+dependencies, private backup paths, `.env` parsing and service credential isolation.
+A no-`.garage` case renders config and dry-runs db startup/shutdown. A real Docker
+case keeps another project service running and verifies Garage backup refuses and
+status excludes it for missing and stopped Garage containers. A real pre-bootstrap
+Garage start must fail on absent bind sources without creating real store volumes;
+the same test then bootstraps successfully and removes its sentinel volumes.
+It deletes only its own generated Compose project/volumes; developer storage is
+untouched. The local cleanup process supports one bounded pass or `--interval 600`
+with graceful shutdown. `make check-artifacts` also checks the single-node default and the explicit three-node Garage
+chart's persistent storage, non-root pods, private Secret reference, distinct-node
+scheduling, network policy and TLS ingress render.
+
+Asynchronous artifact provisioning is covered by
+`tests/integration/test_artifact_creation.py`: real Garage/PostgreSQL creation
+commits Agent/events/request before provider work, and a real HTTP listener proves
+201 and PROVISIONING remain readable while Garage is deliberately held open.
+Provider failures preserve the Agent and exact retry identity; creation failures
+leave no request or provider work. Existing-Agent Provision/status/retry checks
+cover read-only keys, tenant scope, authentication, disabled storage and recovery
+without discovery. Compose/chart contracts exclude the retired provisioner and
+restrict management authority to API/maintenance. Persistent Garage checks call
+the generated loopback management endpoint with its private credential and verify
+settings-file permissions. `ui/tests/e2e/artifacts.spec.ts` covers missing storage,
+progress to READY, failure/retry and permission denial; these use synthetic API
+responses. The explicit runtime/deployment contracts above retain real byte evidence.
+
+The artifact review suite retains a PostgreSQL snapshot/row-lock race contract.
+A test-only always-true SQL scheduling barrier holds candidate selection after
+its snapshot; the test observes the database wait event, commits a real review pin,
+and runs the original cleanup path against real Garage. It verifies both the
+active reference and actual file bytes for a live owner, plus deliberate deleted-owner
+reclamation. This is a concurrency schedule, not a simulated storage result.

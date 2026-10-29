@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: {{ .Release.Name }}-rpc
+  replicas: {{ .Values.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: garage
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: garage
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      {{- if .Values.requireDistinctNodes }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: garage
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
+      initContainers:
+        - name: wait-for-rpc-dns
+          image: {{ .Values.dnsWaitImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-ec"]
+          args:
+            - |
+              attempts=0
+              while [ "$attempts" -lt 120 ]; do
+                if nslookup "${POD_NAME}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}" >/dev/null 2>&1; then
+                  exit 0
+                fi
+                attempts=$((attempts + 1))
+                sleep 1
+              done
+              echo "Garage RPC Service DNS is not ready" >&2
+              exit 1
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 64Mi}
+      containers:
+        - name: garage
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/garage", "server"]
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingRpcSecret | required "existingRpcSecret is required" }}
+                  key: rpc-secret
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingRpcSecret }}
+                  key: admin-token
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          ports:
+            - {name: s3, containerPort: 3900}
+            - {name: rpc, containerPort: 3901}
+            - {name: admin, containerPort: 3903}
+          readinessProbe:
+            exec: {command: ["/garage", "health"]}
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: {command: ["/garage", "node", "id"]}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/garage.toml, subPathExpr: "$(POD_NAME).toml", readOnly: true}
+            - {name: metadata, mountPath: /var/lib/garage/meta}
+            - {name: data, mountPath: /var/lib/garage/data}
+      volumes:
+        - name: config
+          configMap: {name: {{ .Release.Name }}}
+  volumeClaimTemplates:
+    {{- range $name, $size := dict "metadata" .Values.metadataSize "data" .Values.dataSize }}
+    - metadata:
+        name: {{ $name }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if $.Values.storageClass }}
+        storageClassName: {{ $.Values.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $size }}
+    {{- end }}

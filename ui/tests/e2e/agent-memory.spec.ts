@@ -11,6 +11,7 @@ import {
 } from "../pages/data-support/agent-data-support.po";
 import {
   MOCK_READER_AGENT_ID,
+  MOCK_SOURCE_AGENT_ID,
   mockMemoryGrant,
   mockMemoryItems,
 } from "../pages/data-support/agent-memory-data-support.po";
@@ -82,6 +83,24 @@ test.describe("Agent Memory setting", () => {
 
     await expect(memory.settingsSection()).toContainText("On");
     expect(setting.requests.map((request) => request.body)).toEqual([{ enabled: true }]);
+  });
+
+  test("names the always-on built-in memory and keeps the comparison collapsed until opened", async ({ page }) => {
+    const { memory } = await open(page, OWNER_ACTIONS);
+
+    await expect(memory.builtInMemory()).toContainText("Always on");
+    await expect(memory.builtInMemory()).toContainText("cannot be switched off");
+    await expect(memory.settingsSection().getByRole("table")).toHaveCount(0);
+    // The restart instruction is operational, so it never hides behind the disclosure.
+    await expect(memory.settingsSection()).toContainText("applies the next time the Agent starts");
+
+    await memory.comparisonToggle().click();
+    const table = memory.settingsSection().getByRole("table");
+    await expect(table).toContainText("Not possible");
+    await expect(table).toContainText("Not rolled back");
+
+    await memory.comparisonToggle().click();
+    await expect(table).toHaveCount(0);
   });
 
   test("turns memory off and states that saved memories are kept", async ({ page }) => {
@@ -256,6 +275,36 @@ test.describe("Memory access settings", () => {
     await expect(memory.sourceOptions().filter({ hasText: /^Organization Memory$/ })).toHaveCount(1);
   });
 
+  test("offers only Agents with memory enabled to receive access, but any Agent as a source", async ({ page }) => {
+    const data = await signIn(page);
+    await data.agentMemory.interceptAgentOptions();
+    await data.agentMemory.interceptMemoryGrants();
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoMemoryAccess();
+
+    await page.getByRole("combobox", { name: "Agent receiving access" }).click();
+    await expect(memory.sourceOptions().filter({ hasText: /^Billing$/ })).toHaveCount(1);
+    await expect(memory.sourceOptions().filter({ hasText: /^Triage$/ })).toHaveCount(1);
+    await expect(memory.sourceOptions().filter({ hasText: /^Archivist$/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await memory.chooseReader("Billing");
+    await memory.openSourceChoices();
+    await expect(memory.sourceOptions().filter({ hasText: /^Archivist$/ })).toHaveCount(1);
+  });
+
+  test("explains when no Agent has memory enabled", async ({ page }) => {
+    const data = await signIn(page);
+    await data.agentMemory.interceptAgentOptions({ agents: [{ ...mockAgent, id: MOCK_SOURCE_AGENT_ID, name: "Triage", memory_enabled: false }] });
+    await data.agentMemory.interceptMemoryGrants();
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoMemoryAccess();
+
+    const reader = page.getByRole("combobox", { name: "Agent receiving access" });
+    await expect(reader).toBeDisabled();
+    await expect(reader).toContainText("No Agent has memory enabled");
+  });
+
   test("shows the server's error when creating a grant is refused", async ({ page }) => {
     const data = await signIn(page);
     await data.agentMemory.interceptAgentOptions();
@@ -290,7 +339,7 @@ test.describe("Memory access settings", () => {
     const memory = new AgentMemoryPage(page);
     await memory.gotoMemoryAccess();
 
-    await expect(page.getByRole("button", { name: "Memory access" })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true })).toHaveCount(0);
     await expect(page.getByText("can read Triage")).toHaveCount(0);
     expect(grants.requests).toHaveLength(0);
   });
@@ -305,8 +354,8 @@ test.describe("Memory access settings", () => {
     const memory = new AgentMemoryPage(page);
     await memory.gotoMemoryAccess();
 
-    await expect(page.getByRole("button", { name: "Shared Credentials" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Memory access" })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Shared Credentials", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true })).toHaveCount(0);
     expect(grants.requests).toHaveLength(0);
   });
 
@@ -321,12 +370,12 @@ test.describe("Memory access settings", () => {
     await memory.gotoMemoryAccess(ORG_A_ID);
     await expect(memory.grantsSection()).toContainText("Billing can read Triage's private memories");
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await switcher.click();
-    await page.getByRole("listbox").getByRole("option", { name: /globex/i }).click();
+    await page.getByRole("menuitem", { name: /globex/i }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}`));
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
-    await page.getByRole("button", { name: "Memory access" }).click();
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true }).click();
 
     await expect(page.getByText("No memory access granted")).toBeVisible();
     await expect(page.getByText("Triage's private memories")).toHaveCount(0);
@@ -439,8 +488,39 @@ test.describe("Agent memory viewer", () => {
       items: [],
     });
 
-    await expect(memory.viewer()).toContainText("Nothing saved yet");
     await expect(memory.viewer()).toContainText("Long-term memory is off");
+    await expect(memory.viewer()).not.toContainText("Nothing saved yet");
+    await expect(memory.builtInMemory()).toContainText("Always on");
+    await expect(memory.viewer()).toContainText("still remembers through its built-in memory");
+    await expect(memory.viewer().getByRole("searchbox")).toHaveCount(0);
+    await expect(memory.viewer().getByRole("link", { name: "Turn on in Configuration" })).toHaveAttribute(
+      "href",
+      `/dashboard/${mockAgent.organization_id}/agents/${MOCK_AGENT_ID}/configuration?section=memory`,
+    );
+  });
+
+  test("does not offer to turn memory on without the memory-management permission", async ({ page }) => {
+    const { memory } = await open(page, {
+      allowedActions: mockAgentAllowedActions,
+      agent: { memory_enabled: false },
+      items: [],
+    });
+
+    await expect(memory.viewer()).toContainText("Long-term memory is off");
+    await expect(memory.viewer().getByRole("link", { name: "Turn on in Configuration" })).toHaveCount(0);
+  });
+
+  test("keeps built-in memory as a quiet line, with runtime details on request, beside saved memories", async ({
+    page,
+  }) => {
+    const { memory } = await open(page, { agent: { agent_type: "hermes", memory_enabled: true } });
+
+    await expect(memory.viewer()).toContainText("Customers prefer invoices");
+    await expect(memory.builtInMemory()).toContainText("Always on");
+    await expect(memory.builtInMemory()).not.toContainText("MEMORY.md");
+    await memory.builtInMemory().getByRole("button", { name: "Details" }).click();
+    await expect(memory.builtInMemory()).toContainText("MEMORY.md, USER.md");
+    await expect(memory.viewer().getByRole("searchbox")).toBeVisible();
   });
 
   test("can return from an empty later page when saved memories change", async ({ page }) => {
@@ -489,7 +569,7 @@ test.describe("Agent memory viewer", () => {
       tab: "memory",
     });
 
-    await expect(page.getByRole("button", { name: "Costs", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Costs", exact: true })).toBeVisible();
     await expect(memory.tab()).toHaveCount(0);
     await expect(memory.viewer()).toHaveCount(0);
     expect(mock.requests).toHaveLength(0);
@@ -534,7 +614,7 @@ test.describe("Organization Memory viewer", () => {
       const mock = await data.agentMemory.interceptMemoryItems({ organization: true });
       const memory = new AgentMemoryPage(page);
       await memory.gotoOrganizationMemory();
-      await expect(page.getByRole("button", { name: "Organization Memory", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("complementary").getByRole("link", { name: "Organization Memory", exact: true })).toHaveCount(0);
       expect(mock.requests).toHaveLength(0);
     });
   }

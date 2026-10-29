@@ -1,11 +1,27 @@
+import {
+  Brain,
+  FileCode2,
+  History,
+  KeyRound,
+  MessageSquare,
+  ShieldAlert,
+  SlidersHorizontal,
+  Sparkles,
+  UserRound,
+  Wallet,
+  Webhook,
+} from "lucide-react";
+
 import type { TemplateFileKey } from "@/features/templates/utils";
 
 import type {
+  Agent,
   AgentConfigurationVersion,
   AgentOverrideDraft,
   AgentOverrideVersion,
   AgentTemplateRead,
 } from "../schemas";
+import { canAgent } from "../utils";
 
 export type ArtifactKey = TemplateFileKey;
 export type ConfigurationSnapshot =
@@ -61,7 +77,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   {
     key: "memory",
     label: "Memory",
-    description: "Long-term memory that adds to this Agent's own notes.",
+    description: "Built-in memory is always on; long-term memory is an optional add-on.",
   },
   {
     key: "keys",
@@ -90,10 +106,40 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   },
 ];
 
+export const AGENT_CONFIGURATION_ICONS = {
+  template: FileCode2,
+  profile: UserRound,
+  channels: MessageSquare,
+  webhooks: Webhook,
+  skills: Sparkles,
+  memory: Brain,
+  keys: KeyRound,
+  override: SlidersHorizontal,
+  restore: History,
+  spend: Wallet,
+  danger: ShieldAlert,
+} as const;
+
 export function configurationSectionLabel(
   key: AgentConfigurationSectionKey,
 ): string {
   return AGENT_CONFIGURATION_SECTIONS.find((section) => section.key === key)?.label ?? key;
+}
+
+/**
+ * The configuration sections this viewer may open. Restore points read from the
+ * activity surface and the spend limit from the cost surface, so an Agent the viewer
+ * can see without that access does not offer them.
+ */
+export function visibleAgentConfigurationSections(
+  agent: Pick<Agent, "allowedActions"> | null | undefined,
+): AgentConfigurationSection[] {
+  const canReadActivity = canAgent(agent, "activity.read");
+  const canReadCosts = canAgent(agent, "cost.read");
+  return AGENT_CONFIGURATION_SECTIONS.filter(
+    (item) =>
+      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
+  );
 }
 
 export type RequiredSkillGroupDraft = { groupKey: string; skillIds: string[] };

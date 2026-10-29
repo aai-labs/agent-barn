@@ -23,6 +23,8 @@ An Agent Webhook lets an external system trigger one Agent over authenticated HT
 - Retiring a webhook closes public ingress and destroys its signing secret. It does not cancel Agent Trigger Jobs already accepted by a runtime.
 - Webhook triggers never create Communication Deliveries and never pass through the Communications Gateway or Platform Plugin registry.
 
+Eligibility follows the [fixed Platform ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary), independent of the legacy deployment allowlist.
+
 ## State model
 
 ```text
@@ -39,7 +41,7 @@ RECEIVED ── native scheduler accepts ──> SUBMITTED
 
 ## Primary flow
 
-1. An authorized user creates an Agent Webhook, selects an eligible native platform, and copies the one-time signing secret.
+1. An authorized user creates an Agent Webhook, selects an eligible runtime-owned platform, and copies the one-time signing secret.
 2. An external system posts a versioned JSON body to the public URL with the current Unix time in `X-AgentBarn-Timestamp`, and signs the timestamp and raw bytes.
 3. Agent Barn authenticates the request and atomically creates the invocation, or finds the existing one when the caller supplied a repeated `event_id`.
 4. For a new invocation, Agent Barn immediately calls the Agent's authenticated private trigger listener, retrying transient submission failures at most three times.

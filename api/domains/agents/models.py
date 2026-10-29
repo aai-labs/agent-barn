@@ -1,8 +1,10 @@
 import enum
+import ipaddress
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Self
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -13,7 +15,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
-from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agent_sizes.models import AgentSizeOption
+from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
@@ -45,6 +48,24 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_UPGRADE = "PRE_UPGRADE"
 
 
+class ManagedUpdateOutcome(str, enum.Enum):
+    """How an Agent's last managed update ended."""
+
+    SUCCEEDED = "SUCCEEDED"
+    # The automatic backup could not be taken. The Agent was stopped but not changed.
+    BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy; the backup and the old image are back.
+    ROLLED_BACK = "ROLLED_BACK"
+    # The rollback did not finish. The backup holds the pre-update state.
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
+
+
+# Bounds for an Agent's own Hermes turn limit. The lower bound keeps a run able to
+# answer at all; the upper one keeps a runaway run inside one spend-limit window.
+MAX_TURNS_MIN = 1
+MAX_TURNS_MAX = 500
+
+
 class CommandApprovalMode(str, enum.Enum):
     MANUAL = "manual"
     AUTO = "auto"
@@ -74,13 +95,14 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    ZOHO_MAIL = "zoho_mail"
-    ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
-    SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
+    APOLLO = "apollo"
+    MERKYS = "merkys"
+    GMAIL = "gmail"
+    GMAIL_APP_PASSWORD = "gmail_app_password"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -94,13 +116,14 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
-    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
-    SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
+    SecretProvider.APOLLO: "Apollo credential",
+    SecretProvider.MERKYS: "Merkys credential",
+    SecretProvider.GMAIL: "Gmail credential",
+    SecretProvider.GMAIL_APP_PASSWORD: "Gmail app password",
 }
 
 
@@ -204,15 +227,55 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
-class SharePointContent(SecretContent):
-    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+class GmailContent(SecretContent):
+    """Credential for aai-cli's Gmail profile: one read-only Gmail grant.
 
-    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
-    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
-    that and stores each rotated token itself. The Teams app's secret is never read for
-    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    Separate from Google Workspace: it covers Gmail alone, is always read-only, and is
+    reached through aai-cli rather than gog. ``scopes`` records what Google granted.
+    ``client_id``/``client_secret`` are optional: empty means the server-owned client
+    is backfilled from config at agent-start time, which is the one-click path.
     """
 
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    client_id: str = ""
+    client_secret: str = ""
+
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if self.scopes and GMAIL_READONLY_SCOPE not in self.scopes:
+            raise ValueError(f"scopes do not include read-only Gmail access ({GMAIL_READONLY_SCOPE})")
+        return self
+
+
+class GrantedSite(PydanticBaseModel):
+    """One SharePoint site the agent's Teams app was granted under ``Sites.Selected``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1)
+    site_id: str = Field(min_length=1)
+    # The grant on the site, kept so a later administrator sign-in can revoke it.
+    permission_id: str = Field(min_length=1)
+
+
+class SharePointContent(SecretContent):
+    """SharePoint for an agent, on the agent's Microsoft Teams app. One of two modes.
+
+    ``delegated``: a person signed in as a public client (PKCE, no secret), so the refresh
+    token here refreshes without the Teams app's secret; aai-cli's ``microsoft_delegated``
+    profile does exactly that and stores each rotated token itself.
+
+    ``selected_sites``: an administrator signed in once to grant the Teams app access to
+    ``sites`` under ``Sites.Selected``. Nothing from that sign-in is kept; ``email`` is the
+    administrator's account. The pod fetches short-lived app-only tokens from the API, which
+    mints them with the Teams app's secret, read server-side.
+
+    Neither mode stores the Teams app's secret (``extra="forbid"`` on SecretContent).
+    """
+
+    mode: Literal["delegated", "selected_sites"] = "delegated"
     # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
     # object would break. Validated and normalised below.
     connection_id: str
@@ -221,39 +284,43 @@ class SharePointContent(SecretContent):
     email: str = Field(min_length=1)
     scopes: list[str] = Field(default_factory=list)
     read_only: bool = False
-    refresh_token: str = Field(min_length=1)
-    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
-    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
-    sign_in_id: str
+    refresh_token: str | None = Field(default=None, min_length=1)
+    # New for every delegated sign-in. The pod writes the refresh token into aai-cli's store
+    # only when this changes, so a restart keeps aai-cli's rotated token and a reconnect
+    # replaces it.
+    sign_in_id: str | None = None
+    sites: list[GrantedSite] = Field(default_factory=list)
+    broker_access_token: str | None = Field(default=None, repr=False)
+    broker_expires_at: float | None = None
+    store_revision: str | None = None
+    subject_id: str | None = None
 
     @field_validator("connection_id", "sign_in_id")
     @classmethod
-    def _validate_uuid(cls, value: str) -> str:
-        return str(UUID(value))
+    def _validate_uuid(cls, value: str | None) -> str | None:
+        return None if value is None else str(UUID(value))
 
-
-class ZohoMailContent(SecretContent):
-    email: str
-    account_id: str
-    client_id: str
-    client_secret: str
-    refresh_token: str
-
-
-class ZohoCalendarContent(SecretContent):
-    username: str
-    email: str
-    app_password: str
-    caldav_url: str
+    @model_validator(mode="after")
+    def _validate_mode(self) -> Self:
+        if self.mode == "delegated":
+            if self.refresh_token is None or self.sign_in_id is None:
+                raise ValueError("a delegated SharePoint sign-in needs refresh_token and sign_in_id")
+            if self.sites:
+                raise ValueError("a delegated SharePoint sign-in holds no granted sites")
+        else:
+            if not self.sites:
+                raise ValueError("selected-sites SharePoint needs at least one granted site")
+            if self.refresh_token is not None or self.sign_in_id is not None:
+                raise ValueError("selected-sites SharePoint keeps no token from the administrator's sign-in")
+        return self
 
 
 class FirecrawlContent(SecretContent):
     api_key: str
+    # Self-hosted override. Kept for backward-compatible decryption of already-stored
+    # content (SecretContent forbids extra fields) but no longer read by anything —
+    # FirecrawlPlugin.upstream_base_url ignores it. See that plugin for why.
     base_url: str = ""
-
-
-class SlackContent(SecretContent):
-    token: str
 
 
 _PIPEDRIVE_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -279,18 +346,107 @@ class PipedriveContent(SecretContent):
         return label
 
 
+class ApolloContent(SecretContent):
+    # No base URL: an Apollo API key is only ever sent to Apollo's own API host, so a
+    # configurable endpoint would only be a way to move the key somewhere else.
+    api_token: str = Field(min_length=1)
+
+
+class MerkysContent(SecretContent):
+    # Unlike Apollo, Merkys has no single public host: each deployment (cloud or on-prem)
+    # has its own, so the origin is part of the credential. It is reduced to a bare https
+    # origin because the API server, the agent's aai-cli and the credential gateway all
+    # send the key there; a path, userinfo or query would let a pasted URL move it.
+    base_url: str
+    api_key: str = Field(min_length=1)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ValueError("base_url has an invalid port") from None
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("base_url must be an https origin such as https://merkys.example.com")
+        host = parsed.hostname.lower()
+        # A typo guard, not SSRF protection: a hostname or a short or decimal IP form can still
+        # resolve to these addresses. The validator limits what a probe can learn instead.
+        if host == "localhost" or host.endswith(".localhost"):
+            raise ValueError("base_url must not point at localhost")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            address = None  # a DNS name
+        if address is not None:
+            # Private ranges stay allowed: an on-prem Merkys is often reached over a VPN.
+            if address.is_loopback or address.is_link_local or address.is_unspecified:
+                raise ValueError("base_url must not be a loopback or link-local address")
+            host = f"[{host}]" if address.version == 6 else host
+        return f"https://{host}" + (f":{port}" if port else "")
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str) -> str:
+        key = value.strip()
+        if not key or any(ch.isspace() for ch in key):
+            raise ValueError("api_key must not be empty or contain whitespace")
+        return key
+
+
+class GmailAppPasswordContent(SecretContent):
+    """A Gmail address and Google app password, read over IMAP by the credential gateway.
+
+    An app password cannot be limited to reading, so it never enters the agent pod: the
+    gateway signs in on the agent's behalf and only opens the mailbox read-only. There is
+    no host field, so the password can only ever be sent to Gmail.
+    """
+
+    email: str = Field(min_length=3)
+    app_password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _trim_email(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("email")
+    @classmethod
+    def _require_address(cls, value: str) -> str:
+        local, _, domain = value.partition("@")
+        if not local or "." not in domain:
+            raise ValueError("email must be an email address")
+        return value
+
+    @field_validator("app_password", mode="before")
+    @classmethod
+    def _drop_display_spaces(cls, value: object) -> object:
+        # Google displays the password in groups of four; the spaces are not part of it.
+        return "".join(value.split()) if isinstance(value, str) else value
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.ZOHO_MAIL: ZohoMailContent,
-    SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
-    SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
+    SecretProvider.APOLLO: ApolloContent,
+    SecretProvider.MERKYS: MerkysContent,
+    SecretProvider.GMAIL: GmailContent,
+    SecretProvider.GMAIL_APP_PASSWORD: GmailAppPasswordContent,
 }
 
 
@@ -397,6 +553,54 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(64), nullable=False, server_default=""),
     )
+    # The Agent Size the Organization, or a Platform Administrator, chose. None follows the
+    # platform default, so moving the default moves every Agent that never chose. See
+    # docs/features/agent-sizes.md.
+    agent_size_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_sizes.id",
+        nullable=True,
+        ondelete="RESTRICT",
+        index=True,
+    )
+    # A Platform Administrator set `agent_size_id`; the Organization cannot change it until
+    # the override is cleared.
+    agent_size_set_by_platform: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
+    # The container requests and limits the running pod was started with, as
+    # `RunningResources`; None means "not running". Like `running_model`, it stays put
+    # while the size changes underneath it, which is how a pending size is told apart.
+    running_resources: dict[str, int] | None = SqlField(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
+    # The exact runtime image this Agent starts on. Empty means "follow the
+    # platform pin" (config.openclaw_image / config.hermes_image). Only a
+    # managed update's rollback sets it, to the image the pod ran before the
+    # update, so the rolled-back Agent stays on the runtime that worked for it.
+    # The next managed update clears it again before starting the new image.
+    pinned_runtime_image: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(255), nullable=False, server_default=""),
+    )
+    # Refreshed by a running managed update; NULL when none is running. A value
+    # older than MANAGED_UPDATE_STALE_SECONDS means the process running it died,
+    # so the Agent is no longer blocked. See `managed_update_in_flight`.
+    managed_update_heartbeat_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    # How the last managed update ended, the backup it took, and — for a backup
+    # that failed — why. Cleared when the next managed update starts.
+    managed_update_outcome: ManagedUpdateOutcome | None = SqlField(
+        default=None,
+        sa_column=Column(sa.String(20), nullable=True),
+    )
+    managed_update_restore_point_id: UUID | None = SqlField(default=None, nullable=True)
+    managed_update_failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
@@ -423,10 +627,18 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # How many turns one Hermes run may take before the runtime stops it. NULL
+    # follows the platform default (builders/hermes.py). Hermes-only, like
+    # verbose_mode: OpenClaw has no equivalent runtime setting.
+    max_turns: int | None = SqlField(default=None, nullable=True)
     # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
     memory_enabled: bool = SqlField(
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    file_sync_enabled: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
     )
     # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
     # Organization's default Agent limit. Never above the Organization's own limit.
@@ -447,6 +659,19 @@ class Agent(BaseModel, table=True):
     )
     llm_alerted_threshold: int | None = SqlField(default=None, nullable=True)
     llm_alert_key: str | None = SqlField(default=None, nullable=True, max_length=128)
+
+
+# A managed update refreshes its heartbeat on every poll while it waits. It runs
+# as a background task in one API process; if that process dies, nothing clears
+# the heartbeat, so one this old is treated as no update at all. Long enough to
+# cover the slowest single step between beats (a stop or a start).
+MANAGED_UPDATE_STALE_SECONDS = 120
+
+
+def managed_update_in_flight(agent: Agent) -> bool:
+    """True while a managed update is running for this Agent."""
+    beat = agent.managed_update_heartbeat_at
+    return beat is not None and beat > datetime.now(UTC) - timedelta(seconds=MANAGED_UPDATE_STALE_SECONDS)
 
 
 class AgentAccess(BaseModel, table=True):
@@ -943,6 +1168,12 @@ class AgentCreate(PydanticBaseModel):
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
     verbose_mode: bool = False
+    # None follows the platform default; see AgentRead.effective_max_turns.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
+    file_sync_enabled: bool = True
+    # None, or the default's id, follows the platform default. Anything else needs
+    # agent.size.manage and a size the Organization may choose.
+    agent_size_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -975,6 +1206,9 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    # Unset leaves the limit alone; an explicit null returns the Agent to the
+    # platform default, as `model: null` does for the model.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -1132,12 +1366,13 @@ class AgentTemplateSelection(PydanticBaseModel):
     removed_skill_ids: list[UUID] = Field(default_factory=list)
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
 
-    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    # Unset means "leave as it is"; a null model or max_turns clears the override, as in AgentUpdate.
     model: str | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
-    # These columns are not nullable; only `model` gives null a meaning.
+    # These columns are not nullable; only `model` and `max_turns` give null a meaning.
     @model_validator(mode="before")
     @classmethod
     def reject_null_approval_mode(cls, values: object) -> object:
@@ -1223,6 +1458,24 @@ class AgentConfigurationRead(PydanticBaseModel):
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 
 
+class IntegrationIsolationRead(PydanticBaseModel):
+    desired: bool
+    supported_modes: list[Literal["direct", "isolated"]]
+    direct_description: str
+    isolated_description: str
+    switch_available: bool = False
+    applied: bool | None = None
+    generation: UUID | None = None
+    pending: bool = True
+    last_verified: bool | None = None
+    reconnect_required: bool = False
+
+
+class IntegrationIsolationUpdate(PydanticBaseModel):
+    isolated: bool
+    restart: bool = False
+
+
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -1230,6 +1483,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
     shared_credential_id: UUID | None = None
     shared_credential_name: str | None = None
+    isolation: IntegrationIsolationRead | None = None
+    source: Literal["agent_secret", "shared_credential", "platform_default"] = "agent_secret"
 
 
 class AgentAccessRoleRead(PydanticBaseModel):
@@ -1297,6 +1552,16 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentManagedUpdateRead(PydanticBaseModel):
+    """How the Agent's last managed update ended."""
+
+    outcome: ManagedUpdateOutcome
+    #: The automatic backup the update took, when it got that far.
+    restore_point_id: UUID | None = None
+    #: Why the backup failed; set only for BACKUP_FAILED.
+    failure_reason: str | None = None
+
+
 class AgentProvisioningErrorRead(PydanticBaseModel):
     """A failed start, as shown to anyone who can read the Agent.
 
@@ -1310,6 +1575,14 @@ class AgentProvisioningErrorRead(PydanticBaseModel):
     category: AgentProvisioningErrorCategory
     summary: str
     detail: str | None = None
+
+
+class AgentCreatorRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str | None
+    email: str
 
 
 class AgentRead(PydanticBaseModel):
@@ -1336,7 +1609,20 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
+    #: The stored choice: null means the Agent follows the platform default size.
+    agent_size_id: UUID | None = None
+    #: The size it would start on now: its chosen one, else the default.
+    agent_size: AgentSizeOption | None = None
+    #: True only when a running Agent's pod started with other resources than
+    #: `agent_size` gives, so a restart would change them.
+    pending_size: bool = False
+    #: A Platform Administrator set the size; the Organization cannot change it.
+    agent_size_set_by_platform: bool = False
     update_available: bool = False
+    #: A managed update is running. Lifecycle and restore point actions are
+    #: refused until it ends; a client polls until this goes back to false.
+    update_in_progress: bool = False
+    last_managed_update: AgentManagedUpdateRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
@@ -1345,9 +1631,19 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    #: The Agent's own turn limit; null when it follows the platform default.
+    max_turns: int | None = None
+    #: The limit a Hermes run actually gets: the Agent's own, or the platform default.
+    effective_max_turns: int
     memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
+    creator: AgentCreatorRead | None = None
+    #: Latest recorded inbound or outbound message, withheld without activity.read.
+    last_message_at: datetime | None = None
+    #: Latest message or successful model call, so background-only work counts.
+    #: Withheld without activity.read.
+    last_activity_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1368,6 +1664,63 @@ class PlatformAgentIdentity(NamedTuple):
     status: AgentStatus
     organization_id: UUID
     organization_name: str
+
+
+class PlatformFailedAgent(NamedTuple):
+    """An Agent in ERROR as the Platform view may show it: identity and the stored failure.
+
+    The failure columns are read only to be rebuilt through `persisted_provisioning_error`,
+    which keeps the category's fixed copy and a detail that matches its grammar.
+    """
+
+    id: UUID
+    name: str
+    organization_id: UUID
+    organization_name: str
+    last_error_code: str | None
+    last_error_detail: str | None
+    last_error: str | None
+    updated_at: datetime
+
+
+class PlatformAgentRow(NamedTuple):
+    """An Agent as the Platform Agents page reads it: identity, lifecycle and its size.
+
+    A fixed column list, like `PlatformAgentIdentity`; `running_resources` is read only to
+    tell whether a size is pending and never leaves the service.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    agent_type: AgentType
+    created_at: datetime
+    organization_id: UUID
+    organization_name: str
+    agent_size_id: UUID | None
+    agent_size_set_by_platform: bool
+    running_resources: dict[str, int] | None
+
+
+class PlatformAgentRead(PydanticBaseModel):
+    """One Agent on the Platform Agents page, as Platform Oversight Data.
+
+    Identity, lifecycle and the size it runs on; never its configuration, so this is not
+    `AgentRead` with fields removed. `agent_size` is the size it would start on now, and
+    `pending_size` says a running Agent's pod was started on another.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    agent_type: AgentType
+    created_at: datetime
+    organization_id: UUID
+    organization_name: str
+    agent_size_id: UUID | None
+    agent_size: AgentSizeOption
+    agent_size_set_by_platform: bool
+    pending_size: bool
 
 
 class AgentRuntimeDiagnosticsRead(PydanticBaseModel):

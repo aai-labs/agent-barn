@@ -48,7 +48,7 @@ export function UserDetail({ userId }: { userId: string }) {
 
   if (isLoading) {
     return (
-      <div className="af-page">
+      <div>
         <div
           className="flex items-center gap-2 py-10 text-[13.5px]"
           style={{ color: "var(--ink-3)" }}
@@ -61,7 +61,7 @@ export function UserDetail({ userId }: { userId: string }) {
 
   if (error) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState
           error={error}
           title="We couldn't load this user"
@@ -76,7 +76,7 @@ export function UserDetail({ userId }: { userId: string }) {
 
   if (!user) {
     return (
-      <div className="af-page">
+      <div>
         <div className="text-[14px]" style={{ color: "var(--ink-3)" }}>User not found.</div>
       </div>
     );
@@ -86,7 +86,7 @@ export function UserDetail({ userId }: { userId: string }) {
   const memberships = user.organizationUsers ?? [];
 
   return (
-    <div className="af-page">
+    <div>
       <Link
         href="/dashboard/platform/users"
         className="inline-flex items-center gap-1 text-[13px] mb-4"

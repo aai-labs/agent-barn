@@ -165,7 +165,7 @@ def main() -> None:
             "databaseUrl": "postgresql://test:test@postgres-hindsight/test",
             "apiKey": "test-backend-key",
             "runtimeServiceKey": "test-memory-runtime-key",
-            "llm": {"apiKey": "test-platform-key", "model": "openrouter/custom/default"},
+            "llm": {"model": "openrouter/custom/default"},
         },
     )
     deployment = next(document for document in backend if document["kind"] == "Deployment")
@@ -180,10 +180,23 @@ def main() -> None:
         "1",
     ]
     assert "checksum/attribution" in deployment["spec"]["template"]["metadata"]["annotations"]
-    bridge = next(document for document in backend if document["kind"] == "ConfigMap")
+    bridge = next(document for document in backend if "memory_model.py" in document.get("data", {}))
     assert "start_hindsight.py" in bridge["data"]
     assert "memory_model.py" in bridge["data"]
-    environment = {entry["name"]: entry["value"] for entry in container["env"]}
+    environment = {entry["name"]: entry.get("value") for entry in container["env"]}
+    platform_key = next(entry for entry in container["env"] if entry["name"] == "HINDSIGHT_API_LLM_API_KEY")
+    assert platform_key["valueFrom"]["secretKeyRef"] == {"name": "hindsight-litellm-key", "key": "LITELLM_API_KEY"}
+    assert "litellm-key-revision" in deployment["spec"]["template"]["metadata"]["annotations"]
+    backend_secret = next(document for document in backend if document["kind"] == "Secret")
+    assert "HINDSIGHT_API_LLM_API_KEY" not in backend_secret["stringData"]
+    key_job = next(document for document in backend if document["kind"] == "Job")
+    assert key_job["metadata"]["annotations"]["helm.sh/hook"] == "pre-install,pre-upgrade"
+    assert key_job["metadata"]["annotations"]["helm.sh/hook-weight"] == "-5"
+    key_container = key_job["spec"]["template"]["spec"]["containers"][0]
+    assert key_container["image"] == "python:3.12-alpine"
+    assert key_container["envFrom"] == [{"secretRef": {"name": "litellm"}}]
+    hook_script = next(document for document in backend if "generate_key.py" in document.get("data", {}))
+    assert hook_script["data"]["generate_key.py"] == (ROOT / "helm/hindsight/files/generate_key.py").read_text()
     assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api:8004/memory/runtime/v1/model"
     assert environment["HINDSIGHT_API_LLM_MODEL"] == shared_secret["stringData"]["MEMORY_DEFAULT_MODEL"]
     assert environment["HINDSIGHT_ENABLE_CP"] == "false"
