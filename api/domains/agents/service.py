@@ -2375,9 +2375,6 @@ class AgentService:
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
                 native_slack=native_slack is not None,
                 native_discord=native_discord is not None,
-                discord_require_mention=(
-                    native_discord.settings.get("require_mention", True) if native_discord else True
-                ),
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,

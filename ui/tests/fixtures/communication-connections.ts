@@ -26,6 +26,7 @@ export const mockCommunicationPlatforms = [
         allowed_user_ids: { title: "Allowed users", type: "array", items: { type: "string" } },
         allowed_role_ids: { title: "Allowed roles", type: "array", items: { type: "string" } },
         allow_all_users: { title: "Allow all users", type: "boolean" },
+        listen_in_channel_ids: { title: "Listen-in channels", type: "array", items: { type: "string" } },
       },
     },
     credentials_schema: {
@@ -47,6 +48,7 @@ export const mockCommunicationPlatforms = [
         default_delivery_target: { title: "Default delivery target", type: "object" },
         channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
+        listen_in_channel_ids: { title: "Listen-in channels", type: "array", items: { type: "string" } },
       },
     },
     credentials_schema: {

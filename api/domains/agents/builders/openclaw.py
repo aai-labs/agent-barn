@@ -45,6 +45,19 @@ OPENCLAW_GATEWAY_PORT = 18789
 # The OpenClaw config, the legacy-migration script, and the file-delivery policy all use it.
 OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
 
+LISTEN_IN_SYSTEM_PROMPT = (
+    "You are listening in on this room. Most messages here are not meant for you. "
+    "Stay silent (do not call the message tool) for greetings, small talk, thanks, jokes, "
+    "messages aimed at someone else, and anything you would only acknowledge or agree with. "
+    "Speak (message action=send) only when you can add something concrete the people here are missing: "
+    "a factual error or outdated claim worth correcting, missing context or a relevant fact you know, "
+    "a risk or blocker, or an open question nobody has answered that you can answer. "
+    "When you speak, send one short message with no greeting and get straight to the point. "
+    "Messages that @mention you are normal requests; answer those as usual."
+)
+_LISTEN_IN_ROOM = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+_ROOM_EVENT_PLATFORMS = frozenset({"slack", "discord", "telegram"})
+
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
@@ -152,6 +165,8 @@ def build_openclaw_gateway_config(
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    unmentioned = "room_event" if _ROOM_EVENT_PLATFORMS & channels.keys() else "user_request"
+    config["messages"] = {"groupChat": {"unmentionedInbound": unmentioned}}
     config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
     if memory_enabled:
         config["plugins"]["allow"].append("hindsight-openclaw")
@@ -178,7 +193,7 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
     config file persisted on the PVC.
     """
     dm_policy = settings.get("dm_policy", "off")
-    channel = {
+    channel: dict = {
         "enabled": True,
         "mode": "socket",
         "requireMention": True,
@@ -197,6 +212,12 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
     }
     if channel["groupPolicy"] == "allowlist":
         channel["channels"] = {channel_id: {"enabled": True} for channel_id in settings.get("channel_ids") or []}
+    if listen_in := settings.get("listen_in_channel_ids") or []:
+        rooms = channel.setdefault("channels", {})
+        allowed = set(rooms) if channel["groupPolicy"] == "allowlist" else set(listen_in)
+        for channel_id in listen_in:
+            if channel_id in allowed:
+                rooms[channel_id] = {**rooms.get(channel_id, {}), **_LISTEN_IN_ROOM}
     if dm_policy == "open":
         channel["allowFrom"] = ["*"]
     elif dm_policy == "allowlist":
@@ -223,7 +244,7 @@ def native_discord_channel(settings: dict) -> dict:
     roles = _setting_ids(settings, "allowed_role_ids")
     channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
-    guild: dict = {"requireMention": settings.get("require_mention", True)}
+    guild: dict = {"requireMention": True}
     if not allow_all:
         if users:
             guild["users"] = users
@@ -233,7 +254,11 @@ def native_discord_channel(settings: dict) -> dict:
     # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
     # ponytail: OpenClaw skips requireMention inside threads the bot created, and
     # has no switch to keep it; Hermes still requires the mention there.
-    guild["channels"] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    rooms: dict[str, dict] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    for channel_id in _setting_ids(settings, "listen_in_channel_ids"):
+        if not channel_ids or channel_id in channel_ids:
+            rooms[channel_id] = {"enabled": True, "autoThread": True, **_LISTEN_IN_ROOM}
+    guild["channels"] = rooms
     if allow_all or users or roles or channel_ids:
         channel["guilds"] = {"*": guild}
     else:
@@ -287,7 +312,7 @@ def native_telegram_channel(settings: dict) -> dict:
     """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
 
     ``groups`` is the group allowlist and ``groupPolicy: "open"`` admits any member
-    of those groups. Groups always require a mention; DMs never do.
+    of those groups. Groups require a mention, except listen-in groups; DMs never do.
     """
     channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
     user_ids = _setting_ids(settings, "allowed_user_ids")
@@ -297,12 +322,15 @@ def native_telegram_channel(settings: dict) -> dict:
     elif dm_policy == "allowlist" and user_ids:
         # An empty allowlist drops every DM anyway and OpenClaw warns about it.
         channel.update(dmPolicy="allowlist", allowFrom=user_ids)
-    group_ids = (
-        ["*"] if settings.get("group_policy", "allowlist") == "open" else _setting_ids(settings, "allowed_chat_ids")
-    )
+    open_groups = settings.get("group_policy", "allowlist") == "open"
+    group_ids = ["*"] if open_groups else _setting_ids(settings, "allowed_chat_ids")
     if group_ids:
+        groups: dict[str, dict] = {group_id: {"requireMention": True} for group_id in group_ids}
+        for chat_id in _setting_ids(settings, "listen_in_chat_ids"):
+            if open_groups or chat_id in group_ids:
+                groups[chat_id] = dict(_LISTEN_IN_ROOM)
         channel["groupPolicy"] = "open"
-        channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
+        channel["groups"] = groups
     if home_channel_id := settings.get("home_channel_id"):
         channel["defaultTo"] = str(home_channel_id)
     else:

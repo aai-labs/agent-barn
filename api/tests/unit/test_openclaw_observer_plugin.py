@@ -132,6 +132,55 @@ def test_native_channel_turn_reports_content_free_journal_stages() -> None:
     )
 
 
+def test_replies_follow_the_inbound_channel_and_thread_and_names_come_from_metadata() -> None:
+    session = {"sessionKey": "agent:main:slack:channel:c1:thread:1700.1"}
+    payloads = _run(
+        [
+            {
+                "hook": "message_received",
+                "event": {
+                    "content": "We should use Python 2.7",
+                    "messageId": "1700.1",
+                    "threadId": "1700.1",
+                    "senderId": "U1",
+                    "metadata": {"senderName": "Dominykas", "channelName": "all-testing"},
+                },
+                "ctx": {"channelId": "slack", "chatId": "C1", **session},
+            },
+            {
+                "hook": "message_sent",
+                "event": {
+                    "to": "channel:c1",
+                    "content": "Python 2.7 is end-of-life",
+                    "messageId": "1700.2",
+                    "success": True,
+                },
+                "ctx": {"channelId": "slack", **session},
+            },
+            {
+                "hook": "message_sent",
+                "event": {"to": "channel:C2", "content": "elsewhere", "messageId": "1700.3", "success": True},
+                "ctx": {"channelId": "slack", **session},
+            },
+        ]
+    )
+
+    messages = [message for payload in payloads for message in payload["messages"]]
+    assert_that(
+        [
+            (m["direction"], m["channel_id"], m["thread_id"], m.get("sender_name"), m.get("channel_name"))
+            for m in messages
+        ],
+        equal_to(
+            [
+                ("INBOUND", "C1", "1700.1", "Dominykas", "all-testing"),
+                ("OUTBOUND", "C1", "1700.1", None, None),
+                ("OUTBOUND", "C2", None, None, None),
+            ]
+        ),
+    )
+
+
 def test_openclaw_msteams_events_use_the_product_teams_platform_key() -> None:
     session = {"sessionKey": "agent:main:msteams:conversation:c1"}
     payloads = _run(

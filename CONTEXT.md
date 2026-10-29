@@ -204,6 +204,10 @@ _Avoid_: Communication Delivery, webhook reply
 A Communication Connection whose provider transport, session, and delivery behavior run inside the Agent Runtime rather than the Communications Gateway. Agent Barn still owns the Connection record, credentials, policy, and operational visibility.
 _Avoid_: native Connection
 
+**Listen-in channel**:
+A shared room, listed on a Communication Connection, where the Agent reads every message without being mentioned and posts only when it has something useful to add. Mentions are still required in every other room.
+_Avoid_: ambient room, free-response channel, lurking
+
 **Runtime Webhook Relay**:
 The product API boundary that authenticates and policy-checks a provider webhook, then forwards the accepted request to a private Agent Runtime listener and returns that listener's HTTP response to the provider.
 _Avoid_: native webhook, native service

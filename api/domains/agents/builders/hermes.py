@@ -177,7 +177,6 @@ def build_hermes_gateway_config(
     approval_mode: str = "auto",
     native_slack: bool = False,
     native_discord: bool = False,
-    discord_require_mention: bool = True,
     telegram_settings: dict | None = None,
     runtime_teams: bool = False,
     verbose_mode: bool = False,
@@ -216,8 +215,8 @@ def build_hermes_gateway_config(
             # Agent Barn's Discord contract requires the same mention policy in
             # parent channels and threads. Hermes otherwise keeps responding in
             # a thread after its first turn without another mention.
-            "require_mention": discord_require_mention,
-            "thread_require_mention": discord_require_mention,
+            "require_mention": True,
+            "thread_require_mention": True,
         }
         config["display"]["platforms"]["discord"] = {
             "tool_progress": "all" if verbose_mode else "off",

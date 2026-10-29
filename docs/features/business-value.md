@@ -270,6 +270,7 @@ What the delivery statuses mean:
 - **An approval answer is a Request.** Answering a command approval in Web Chat sends a new inbound message and delivery.
 - **Webhook Invocations without an event id are never deduplicated.** Each one is its own row, and so its own Request.
 - **Inbound messages may be overcounted** on Hermes, as described in [Known gaps](#known-gaps).
+- **Every message in a listen-in channel is a Request**, whether or not the Agent replies, and each costs one model turn. A busy listen-in channel raises Requests and lowers Cost per Request without the Agent doing more work. See [Mention gating](../architecture/runtime-and-deployment.md#mention-gating).
 
 ## KPI dashboard
 

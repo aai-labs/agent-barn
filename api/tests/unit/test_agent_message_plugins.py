@@ -3,12 +3,13 @@ from unittest.mock import patch
 
 import pytest
 from hamcrest import assert_that, equal_to, has_key, not_
+from pydantic import ValidationError
 
 from api.domains.communications.models import OutboundTargetRequest
-from api.domains.communications.plugins.discord import DiscordPlatformPlugin
+from api.domains.communications.plugins.discord import DiscordPlatformPlugin, DiscordSettings
 from api.domains.communications.plugins.slack import SlackCredentials, SlackPlatformPlugin, SlackSettings
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
-from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.telegram import TelegramPlatformPlugin, TelegramSettings
 
 CONFIG = SimpleNamespace(
     skip_slack_token_validation=True,
@@ -30,6 +31,48 @@ def test_slack_settings_retire_announce_steps_and_discard_legacy_values():
     legacy_settings = SlackSettings.model_validate({"verbose_mode": True})
     assert_that(legacy_settings.model_dump(), not_(has_key("verbose_mode")))
     assert_that(SlackPlatformPlugin(CONFIG).descriptor.schema_version, equal_to(2))
+
+
+def test_slack_listen_in_channels_must_be_allowed_channels():
+    with pytest.raises(ValidationError, match="Listen-in channels"):
+        SlackSettings(channel_ids=["C1"], listen_in_channel_ids=["C2"])
+
+    allowed = SlackSettings(channel_ids=["C1", "C2"], listen_in_channel_ids=["C2"])
+    assert_that(allowed.listen_in_channel_ids, equal_to(["C2"]))
+    open_ = SlackSettings(group_policy="open", listen_in_channel_ids=["C9"])
+    assert_that(open_.listen_in_channel_ids, equal_to(["C9"]))
+    assert_that(SlackSettings().listen_in_channel_ids, equal_to([]))
+
+
+def test_discord_listen_in_channels_must_be_allowed_channels():
+    with pytest.raises(ValidationError, match="Listen-in channels"):
+        DiscordSettings(allowed_channel_ids=["c1"], listen_in_channel_ids=["c2"])
+
+    allowed = DiscordSettings(allowed_channel_ids=["c1", "c2"], listen_in_channel_ids=["c2"])
+    assert_that(allowed.listen_in_channel_ids, equal_to(["c2"]))
+    every_channel = DiscordSettings(allow_all_users=True, listen_in_channel_ids=["c9"])
+    assert_that(every_channel.listen_in_channel_ids, equal_to(["c9"]))
+    assert_that(DiscordSettings().listen_in_channel_ids, equal_to([]))
+
+
+def test_telegram_listen_in_groups_must_be_allowed_groups():
+    with pytest.raises(ValidationError, match="Listen-in groups"):
+        TelegramSettings(allowed_chat_ids=["-1001"], listen_in_chat_ids=["-1002"])
+
+    allowed = TelegramSettings(allowed_chat_ids=["-1001", "-1002"], listen_in_chat_ids=["-1002"])
+    assert_that(allowed.listen_in_chat_ids, equal_to(["-1002"]))
+    open_ = TelegramSettings(group_policy="open", listen_in_chat_ids=["-1009"])
+    assert_that(open_.listen_in_chat_ids, equal_to(["-1009"]))
+    assert_that(TelegramSettings().listen_in_chat_ids, equal_to([]))
+
+
+def test_discord_settings_retire_require_mention_and_discard_legacy_values():
+    schema = DiscordSettings.model_json_schema()
+
+    assert_that(schema["properties"], not_(has_key("require_mention")))
+    legacy_settings = DiscordSettings.model_validate({"require_mention": False})
+    assert_that(legacy_settings.model_dump(), not_(has_key("require_mention")))
+    assert_that(DiscordPlatformPlugin(CONFIG).descriptor.schema_version, equal_to(3))
 
 
 def test_slack_resolves_channel_thread_and_rejects_ambiguous_names():

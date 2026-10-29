@@ -15,6 +15,28 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-29 — MDP-118 — OpenClaw transcripts keep reply threads and names — PR pending
+
+- Fixed: OpenClaw transcripts now record sender and channel names, which OpenClaw reports under the message hook's `metadata`; they were always empty. A reply in the same session as an inbound message is recorded under that message's channel ID and thread, so Conversations shows it inside the thread. OpenClaw's `message_sent` hook carries no thread, and a message-tool send names the channel as the model typed it, so a listen-in reply previously opened a second channel such as `c0b3k981aak` beside `C0B3K981AAK`. A reply sent to another channel keeps its own target. Already-recorded rows are not repaired.
+
+### 2026-10-29 — MDP-118 — Telegram listen-in groups — PR pending
+
+- Added: Telegram Connections offer **Listen-in groups**, numeric group IDs that must also be Allowed groups under an allowlist. On OpenClaw each gets its own `groups` entry next to `"*"` or the allowed groups; Hermes ignores the list. Setup guidance says listen-in groups need privacy mode disabled or the bot made an administrator, so it sees every message.
+
+### 2026-10-29 — MDP-118 — Discord listen-in channels — PR pending
+
+- Added: Discord Connections offer **Listen-in channels**, browsed per server like Allowed channels. When Allowed channels is set, they must be in it. On OpenClaw a listen-in channel gets its own entry next to the guild's `"*"` or allowed-channel entries, and threads inherit it; Hermes ignores the list.
+
+### 2026-10-29 — MDP-118 — Slack listen-in channels — PR pending
+
+- Added: Slack Connections offer **Listen-in channels**, a list of channel IDs that must also be Allowed channels under an allowlist. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; Hermes ignores the list. The Connection form browses Slack channels for it, as it does for Allowed channels.
+- Changed: every OpenClaw Agent's config sets `messages.groupChat.unmentionedInbound` explicitly: `room_event` with native Slack, Discord, or Telegram, otherwise `user_request`. The runtime configuration digest changes, so running OpenClaw Agents report an update. See [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating).
+
+### 2026-10-28 — MDP-118 — Retire Discord's Require @mention setting — PR pending
+
+- Removed: Discord Connections no longer offer **Require @mention**. Server messages always require a mention of the bot on both runtimes, in parent channels and Hermes threads, as Slack and Telegram already do. Turning the setting off had made Agents answer every message in every allowed channel. Listen-in channels ([silent contributors](../silent-contributors/CHANGELOG.md)) replace it.
+- Changed: Discord's Connection schema advances to version 3. Migration `16ac819db080` removes `require_mention` from persisted Discord Connection settings. Validation temporarily discards that one legacy key, so Connections written by an older replica stay usable during a rolling deployment. Other unknown settings remain rejected. Connections that had it off become mention-only at the Agent's next start.
+
 ### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
 
 - Fixed: a Teams app package's manifest `id` now derives from the organization's first Connection for the same Microsoft App ID, including retired ones, instead of from the current Connection. Re-creating a Connection for a bot previously produced a second Teams app for that bot. Once both reached the org catalogue, Teams reported "Invalid Bot" on the new one, even though the bot was healthy.
