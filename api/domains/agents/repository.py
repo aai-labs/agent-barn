@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agent_sizes.models import AgentSize, OrganizationAgentSize
+from api.domains.agent_tasks.cleanup import stage_agent_task_cleanup
 from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import (
     MANAGED_UPDATE_STALE_SECONDS,
@@ -1429,6 +1430,7 @@ class AgentRepository:
             session.add(persisted)
             session.flush()
             stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
+            stage_agent_task_cleanup(session, persisted.id, persisted.organization_id)
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired

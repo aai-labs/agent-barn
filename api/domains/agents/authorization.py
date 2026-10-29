@@ -29,6 +29,11 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
     PermissionKey.AGENT_SIZE_MANAGE,
+    PermissionKey.TASK_READ,
+)
+# A read-only Personal API Key keeps only the read Permissions, so a new one needs no edit here.
+_READ_ONLY_ACTION_PERMISSIONS = frozenset(
+    permission for permission in _AGENT_ACTION_PERMISSIONS if permission.value.endswith(".read")
 )
 
 
@@ -165,7 +170,7 @@ class AgentAuthorization:
                 if permission in permissions_by_agent.get(agent.id, set())
                 and (
                     context.api_key_access_mode != ApiKeyAccessMode.READ_ONLY
-                    or permission in {PermissionKey.AGENT_READ, PermissionKey.ACTIVITY_READ, PermissionKey.COST_READ}
+                    or permission in _READ_ONLY_ACTION_PERMISSIONS
                 )
             ]
             for agent in agents

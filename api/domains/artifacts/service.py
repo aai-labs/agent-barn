@@ -7,11 +7,13 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from injector import inject, singleton
+from sqlmodel import Session
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.artifacts.buckets import ArtifactBucketRepository
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead, ArtifactStorageRead
+from api.domains.artifacts.references import pin_published
 from api.domains.artifacts.repository import ArtifactRepository, PublicationBusy
 from api.domains.artifacts.storage import (
     ArtifactCredentialsUnavailable,
@@ -177,6 +179,14 @@ class ArtifactService:
     ) -> PaginatedItems[ArtifactRead]:
         rows, total = self.repository.list_ready(agent_id, scope, page, size, run_id, step_id)
         return PaginatedItems(page, size, total, [ArtifactRead.model_validate(row) for row in rows])
+
+    def pin(
+        self, session: Session, artifact_id: UUID, agent_id: UUID, organization_id: UUID, kind: str, owner_id: UUID
+    ) -> ArtifactRead:
+        """Keep a READY Artifact from expiring while `owner_id` uses it, in the caller's transaction."""
+        return ArtifactRead.model_validate(
+            pin_published(session, artifact_id, agent_id, organization_id, kind, owner_id)
+        )
 
     def ready(self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope) -> Artifact:
         row = self.repository.get(artifact_id, agent_id, scope)

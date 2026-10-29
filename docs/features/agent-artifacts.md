@@ -316,6 +316,11 @@ Paused/blocked runs remain pinned. Cancellation retains published outputs and
 releases pins on settlement. This is independent of the workflow's 90-day
 content-bearing text/history retention and future approval lifetimes.
 
+A Task File pins its artifact with kind `task`, owned by the Task File's id, for as
+long as the Task has it ([`agent-tasks.md`](agent-tasks.md#task-files)). Deleting
+the Agent removes its Tasks without releasing those pins; the purge removes a
+deleted Agent's files regardless.
+
 Deletion refuses an actively pinned artifact. Authorized deletion conceals it by
 marking DELETING; actual S3 deletion is asynchronous. Agent soft deletion
 immediately conceals all files through scoped queries. Owner and provenance IDs

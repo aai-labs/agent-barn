@@ -8,6 +8,7 @@ from hamcrest import assert_that, equal_to
 
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent, AgentStatus
+from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import OrganizationRole, PermissionKey
 from api.domains.users.models import User
@@ -122,6 +123,27 @@ def test_organization_admin_has_implicit_owner_actions():
     assert PermissionKey.AGENT_DELETE in actions
     assert PermissionKey.AGENT_ACCESS_MANAGE in actions
     repository.find_agent_permissions.assert_not_called()
+
+
+def test_read_only_api_key_keeps_only_read_actions_including_tasks():
+    context, membership = _context(OrganizationRole.ADMIN)
+    context.api_key_access_mode = ApiKeyAccessMode.READ_ONLY
+    agent = _agent(membership.organization_id)
+    authorization = AgentAuthorization(policy=Mock(), repository=Mock())
+
+    actions = authorization.allowed_actions(context, [agent])[agent.id]
+
+    assert_that(
+        actions,
+        equal_to(
+            [
+                PermissionKey.AGENT_READ,
+                PermissionKey.ACTIVITY_READ,
+                PermissionKey.COST_READ,
+                PermissionKey.TASK_READ,
+            ]
+        ),
+    )
 
 
 def test_unassigned_agent_is_concealed_and_visible_missing_action_is_forbidden():

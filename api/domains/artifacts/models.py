@@ -65,7 +65,7 @@ class ArtifactReference(BaseModel, table=True):
     __table_args__ = (sa.UniqueConstraint("artifact_id", "kind", "owner_id", name="uq_artifact_reference"),)
     artifact_id: UUID = SqlField(foreign_key="artifact.id", ondelete="CASCADE", index=True)
     checksum: str
-    kind: str  # run/checkpoint/review; only trusted services can acquire/release references.
+    kind: str  # run/checkpoint/review/task; only trusted services can acquire/release references.
     owner_id: UUID = SqlField(index=True)
     released_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
 
