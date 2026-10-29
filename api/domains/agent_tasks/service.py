@@ -85,6 +85,37 @@ class AgentTaskService:
             raise _task_not_found(task_id)
         return AgentTaskFileRead.model_validate(stored)
 
+    def list_own_tasks(
+        self, organization_id: UUID, agent_id: UUID, task_status: AgentTaskStatus | None, pagination: Pagination
+    ) -> PaginatedItems[AgentTaskRead]:
+        """An Agent's own Tasks, for the Agent itself; a deleted Agent has none.
+
+        Most recently changed first, so a Task the Agent just finished is among the latest it sees.
+        """
+        return self.repository.find_in_organization(
+            AgentTaskFilter(agent_id=agent_id, status=task_status),
+            pagination,
+            AuthorizationScope(organization_id=organization_id),
+            recently_changed_first=True,
+        )
+
+    def get_own_task(self, organization_id: UUID, agent_id: UUID, task_id: UUID) -> AgentTaskDetail:
+        task = self.repository.get_detail(agent_id, task_id, AuthorizationScope(organization_id=organization_id))
+        if task is None:
+            raise _task_not_found(task_id)
+        return task
+
+    def remove_file(self, organization_id: UUID, agent_id: UUID, task_id: UUID, file_id: UUID) -> None:
+        released = self.repository.remove_file(
+            organization_id,
+            agent_id,
+            task_id,
+            file_id,
+            lambda session, owner_id: self.artifacts.release(session, _TASK_FILE_PIN, owner_id),
+        )
+        if not released:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File {file_id} not found")
+
     def file_link(self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext) -> ArtifactLinkRead:
         scope = self._agent_read_scope(agent_id, context)
         stored = self.repository.get_file(agent_id, task_id, file_id, scope)

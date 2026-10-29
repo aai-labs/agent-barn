@@ -1,0 +1,8 @@
+{
+  "id": "agentbarn-tasks",
+  "name": "Agent Barn Tasks",
+  "description": "Give the Agent a Task tool, show its open Tasks each turn, and remind it to record its work",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["agentbarn_task"] },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}
