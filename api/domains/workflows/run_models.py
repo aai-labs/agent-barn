@@ -62,7 +62,9 @@ class WorkflowRun(BaseModel, table=True):
     settled_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
     content_expired: bool = False
     # Set when this run repeats another run's version and inputs.
-    rerun_of_run_id: UUID | None = SqlField(default=None, foreign_key="workflow_run.id", ondelete="SET NULL")
+    rerun_of_run_id: UUID | None = SqlField(
+        default=None, foreign_key="workflow_run.id", ondelete="SET NULL", index=True
+    )
 
 
 class WorkflowAttempt(BaseModel, table=True):

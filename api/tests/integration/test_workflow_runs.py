@@ -10,8 +10,9 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.events.models import EventDelivery, OutboxMessage
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.workflows.repository import WorkflowConflict
-from api.domains.workflows.run_models import AttemptResult, WorkflowCheckpoint, WorkflowRun
+from api.domains.workflows.run_models import AttemptResult, WorkflowCheckpoint, WorkflowRun, WorkflowRunCreate
 from api.domains.workflows.run_repository import WorkflowRunRepository
 from api.domains.workflows.run_service import WorkflowRunService
 from api.domains.workflows.runtime_service import WorkflowRuntimeService
@@ -400,6 +401,56 @@ def test_rerun_requires_a_running_agent() -> None:
         context.agent.status = AgentStatus.STOPPED
         context.injector.get(AgentRepository).save(context.agent)
         assert_that(rerun(context, response.json()["id"]).status_code, equal_to(409))
+
+
+def test_run_again_is_only_advertised_when_a_re_run_could_start() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, saved, _ = start(context)
+        run_id = response.json()["id"]
+        settle(context, run_id)
+
+        def advertised() -> tuple[list[str], list[str]]:
+            listed = context.client.get(base(context) + "/workflow-runs", headers=auth(context)).json()["items"]
+            return run_detail(context, run_id)["allowed_actions"], listed[0]["allowed_actions"]
+
+        assert_that(advertised(), equal_to((["rerun"], ["rerun"])))
+        context.agent.status = AgentStatus.STOPPED
+        context.injector.get(AgentRepository).save(context.agent)
+        assert_that(advertised(), equal_to(([], [])))
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+        archived = context.client.post(
+            base(context) + f"/workflows/{saved['id']}/archive",
+            headers=auth(context),
+            json={"expected_revision": saved["revision"]},
+        )
+        assert_that(archived.status_code, equal_to(204), archived.text)
+        assert_that(advertised(), equal_to(([], [])))
+        assert_that(rerun(context, run_id).status_code, equal_to(409))
+
+
+def test_rerun_refuses_a_source_whose_inputs_were_removed_after_it_was_read() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, saved, _ = start(context)
+        run_id = UUID(response.json()["id"])
+        settle(context, str(run_id))
+        with Session(context.postgres_delegate.engine) as session:
+            run = session.get_one(WorkflowRun, run_id)
+            run.inputs, run.content_expired = {}, True
+            session.add(run)
+            session.commit()
+        repository = context.injector.get(WorkflowRunRepository)
+        with pytest.raises(WorkflowConflict):
+            repository.start(
+                UUID(saved["id"]),
+                context.agent.id,
+                AuthorizationScope(organization_id=context.organization.id),
+                WorkflowRunCreate(version_id=UUID(saved["version"]["id"]), client_request_id=uuid4(), inputs={}),
+                context.user.id,
+                context.organization_user.id,
+                "openclaw",
+                run_id,
+            )
 
 
 @pytest.mark.parametrize("general", [False, True])

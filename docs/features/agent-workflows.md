@@ -291,7 +291,8 @@ identity is unique per definition as for starts, and for a re-run it is bound to
 original run and the actor rather than to inputs: a retry with the same identity and
 original returns the same run, even after retention has removed the original's inputs;
 reusing it for another run or by another actor returns 409. The server advertises `rerun` in `allowed_actions` for a settled run
-whose inputs remain.
+whose inputs remain, while its Agent is running and its workflow is not archived. A
+BLOCKED or PAUSED run is still live and has no re-run; cancel it first.
 
 In the UI, settled runs with `rerun` in `allowed_actions` show **Run again** in the
 header when the overview's Run workflow would also be enabled (execution enabled and

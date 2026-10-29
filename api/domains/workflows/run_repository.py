@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -87,6 +88,16 @@ class WorkflowRunRepository:
             if run.request_hash != start_hash(payload, user_id, rerun_of_run_id):
                 raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
             return run.id
+
+    def archived_workflow_ids(self, workflow_ids: Iterable[UUID]) -> set[UUID]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(Workflow.id).where(
+                        col(Workflow.id).in_(set(workflow_ids)), col(Workflow.archived_at).is_not(None)
+                    )
+                )
+            )
 
     def owning_agent_id(self, workflow_id: UUID) -> UUID:
         with Session(self.delegate.engine) as session:
@@ -248,6 +259,13 @@ class WorkflowRunRepository:
                 if existing.request_hash != request_hash:
                     raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
                 return existing, []
+            if rerun_of_run_id:
+                # Retention may have removed the source's inputs since the caller read them.
+                source = session.exec(
+                    select(WorkflowRun).where(col(WorkflowRun.id) == rerun_of_run_id).with_for_update(of=WorkflowRun)
+                ).one_or_none()
+                if source is None or source.content_expired:
+                    raise WorkflowConflict("The source run's inputs are no longer available")
             version = session.get(WorkflowVersion, payload.version_id)
             if workflow.archived_at or version is None or version.workflow_id != workflow_id:
                 raise WorkflowConflict("The saved version is unavailable or the workflow is archived")
