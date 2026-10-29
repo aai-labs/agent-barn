@@ -1296,6 +1296,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/re-run",
+    "rerun_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
   ],
