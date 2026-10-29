@@ -1,0 +1,17 @@
+{{- range $i := until (int .Values.replicas) }}
+---
+# Stable per-node RPC addresses survive Pod IP changes without a discovery CRD.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-{{ $i }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: garage
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    statefulset.kubernetes.io/pod-name: {{ $.Release.Name }}-{{ $i }}
+  ports:
+    - {name: rpc, port: 3901, targetPort: rpc}
+{{- end }}

@@ -10,8 +10,9 @@ def stage_agent_task_cleanup(session: Session, agent_id: UUID, organization_id: 
     """Remove a deleted Agent's Tasks in the caller's Agent deletion transaction.
 
     Agent deletion is a soft delete, so the Agent foreign key never cascades. Deleting
-    the Tasks cascades to their Notes, Files and the Postgres store's chunks; a store
-    outside Postgres would need its bytes removed here too.
+    the Tasks cascades to their Notes and Files. The Files' Artifacts are left to the
+    Artifacts purge, which removes a deleted Agent's Artifacts whether or not they are
+    pinned.
     """
     session.exec(
         sa.delete(AgentTask).where(

@@ -50,15 +50,21 @@ class Config(BaseSettings):
     # to the cluster's default StorageClass.
     storage_class: str = ""
 
+    # Empty endpoint disables files only. Data keys live encrypted in per-Agent journals.
+    artifact_s3_endpoint_url: str = ""
+    # Private Garage management authority: API provisioning and operator cleanup only.
+    artifact_provisioner_url: str = ""
+    artifact_provisioner_token: str = Field(default="", repr=False)
+    artifact_runtime_base_url: str = "http://agentbarn-api:8000/api/v1/agent-artifacts/runtime"
+    artifact_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    artifact_link_max_seconds: int = Field(default=3600, ge=900, le=86400)
+    artifact_retention_days: int = Field(default=30, ge=1, le=3650)
+
     api_image: str = ""
     restore_point_size: str = "1Gi"
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
     restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
-    # Task Files live in the application database, so both limits bound how much of
-    # it Agents' files can take: one file, and every Task File in one Organization.
-    task_file_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
-    task_organization_storage_max_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)
     # How long a managed update waits for the new pod to report ready before it
     # rolls back, counted from when the start returns. It has to cover pulling
     # an image the node has never seen, init, the start script's installs, and

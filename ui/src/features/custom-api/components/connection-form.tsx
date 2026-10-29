@@ -18,6 +18,11 @@ import { ConnectionHeaders } from "./connection-headers";
 
 import type { CustomApiConnection, CustomApiWrite } from "../schemas";
 
+// The client secret is exchanged for access tokens by Agent Barn's credential gateway and
+// never given to the Agent, so this scheme has no direct mode. Mirrors the server, which
+// refuses to save it unisolated.
+const OAUTH2 = "oauth2_client_credentials";
+
 export function ConnectionForm({
   agent,
   connection,
@@ -37,18 +42,31 @@ export function ConnectionForm({
   const token = auth.token ?? "";
   const username = auth.username ?? "";
   const password = auth.password ?? "";
+  const tokenUrl = auth.tokenUrl ?? "";
+  const clientId = auth.clientId ?? "";
+  const clientSecret = auth.clientSecret ?? "";
+  const scope = auth.scope ?? "";
+  const alwaysIsolated = authType === OAUTH2;
   const setName = (name: string) => onChange({ ...value, name });
   const setBaseUrl = (baseUrl: string) => onChange({ ...value, baseUrl });
   const setIsolated = (isolated: boolean) => onChange({ ...value, isolated });
-  const setAuthType = (type: CustomApiWrite["auth"]["type"]) => onChange({ ...value, auth: { type, ...(type === "api_key" ? { headerName: "X-API-Key" } : {}) } });
+  const setAuthType = (type: CustomApiWrite["auth"]["type"]) =>
+    onChange({
+      ...value,
+      ...(type === OAUTH2 ? { isolated: true } : {}),
+      auth: { type, ...(type === "api_key" ? { headerName: "X-API-Key" } : {}) },
+    });
   const setHeaderName = (headerName: string) => onChange({ ...value, auth: { ...auth, headerName } });
   const setToken = (token: string) => onChange({ ...value, auth: { ...auth, token } });
   const setUsername = (username: string) => onChange({ ...value, auth: { ...auth, username } });
   const setPassword = (password: string) => onChange({ ...value, auth: { ...auth, password } });
+  const setAuthField = (field: "tokenUrl" | "clientId" | "clientSecret" | "scope") => (fieldValue: string) =>
+    onChange({ ...value, auth: { ...auth, [field]: fieldValue } });
   const retainsToken =
     connection?.authType === authType &&
     (authType !== "api_key" ||
-      connection.authHeaderName?.toLowerCase() === headerName.toLowerCase());
+      connection.authHeaderName?.toLowerCase() === headerName.toLowerCase()) &&
+    (authType !== OAUTH2 || connection.authTokenUrl === tokenUrl);
   return (
     <div className="flex flex-col gap-3.5" role="group" aria-label="Custom API connection">
         <div className="space-y-2">
@@ -87,10 +105,69 @@ export function ConnectionForm({
                 <SelectItem value="bearer">Bearer token</SelectItem>
                 <SelectItem value="api_key">API key header</SelectItem>
                 <SelectItem value="basic">Basic authentication</SelectItem>
+                <SelectItem value={OAUTH2}>OAuth2 client credentials</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
+          {alwaysIsolated && (
+            <p className="text-sm text-muted-foreground">
+              Agent Barn requests an access token from the token URL with these
+              credentials and renews it before it expires. Saving checks them
+              against the token URL once.
+            </p>
+          )}
         </div>
+        {alwaysIsolated && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor={`${prefix}-token-url`}>Token URL</Label>
+              <Input
+                id={`${prefix}-token-url`}
+                type="url"
+                maxLength={2048}
+                required
+                value={tokenUrl}
+                onChange={(e) => setAuthField("tokenUrl")(e.target.value)}
+                placeholder="https://api.example.com/oauth/token"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor={`${prefix}-client-id`}>Client ID</Label>
+                <Input
+                  id={`${prefix}-client-id`}
+                  autoComplete="off"
+                  required={!retainsToken}
+                  value={clientId}
+                  onChange={(e) => setAuthField("clientId")(e.target.value)}
+                  placeholder={retainsToken ? "Leave blank to keep saved client ID" : ""}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={`${prefix}-client-secret`}>Client secret</Label>
+                <Input
+                  id={`${prefix}-client-secret`}
+                  type="password"
+                  autoComplete="new-password"
+                  required={!retainsToken}
+                  value={clientSecret}
+                  onChange={(e) => setAuthField("clientSecret")(e.target.value)}
+                  placeholder={retainsToken ? "Leave blank to keep saved secret" : ""}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`${prefix}-scope`}>Scope (optional)</Label>
+              <Input
+                id={`${prefix}-scope`}
+                maxLength={1024}
+                value={scope}
+                onChange={(e) => setAuthField("scope")(e.target.value)}
+                placeholder="Only if the token endpoint requires one"
+              />
+            </div>
+          </>
+        )}
         {authType === "api_key" && (
           <div className="space-y-2">
             <Label htmlFor={`${prefix}-header`}>
@@ -163,12 +240,17 @@ export function ConnectionForm({
           savedHeaders={connection?.headers}
           setHeaders={(headers) => onChange({ ...value, headers })}
         />
-        <IntegrationIsolationControl agent={agent} isolated={isolated} onChange={setIsolated} secret={{
+        <IntegrationIsolationControl agent={agent} isolated={alwaysIsolated || isolated} onChange={setIsolated} secret={{
           provider: "custom_api", secretName: name || "Custom API", isolation: {
-            desired: isolated, applied: connection?.appliedIsolated,
-            pending: connection?.pendingApply ?? true, switchAvailable: true, supportedModes: ["direct", "isolated"],
-            directDescription: "This Agent receives credentials and connects directly.",
-            isolatedDescription: "Credentials stay in Agent Barn. This Agent sends requests through the credential gateway.",
+            desired: alwaysIsolated || isolated, applied: connection?.appliedIsolated,
+            pending: connection?.pendingApply ?? true, switchAvailable: !alwaysIsolated,
+            supportedModes: alwaysIsolated ? ["isolated"] : ["direct", "isolated"],
+            directDescription: alwaysIsolated
+              ? "The client secret is never given to this Agent."
+              : "This Agent receives credentials and connects directly.",
+            isolatedDescription: alwaysIsolated
+              ? "The client secret stays in Agent Barn, which obtains the access tokens; this Agent sends requests through the credential gateway."
+              : "Credentials stay in Agent Barn. This Agent sends requests through the credential gateway.",
           },
         }} />
     </div>

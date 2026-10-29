@@ -163,13 +163,6 @@ RESTORE_POINT_SIZE=1Gi
 # — the chart derives it from the API image so both are always the same build.
 RESTORE_POINT_MAX_PER_AGENT=5
 
-# ── Agent Tasks ──────────────────────────────────────────────────────────────
-# Task Files are stored in the application database (postgres-app), so these
-# bound how much of it, and of its backups, Agents' files can take: the largest
-# single file (20 MiB) and the total across one Organization (2 GiB), in bytes.
-TASK_FILE_MAX_BYTES=20971520
-TASK_ORGANIZATION_STORAGE_MAX_BYTES=2147483648
-
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
 # Same value serves both sides. Generate with: openssl rand -hex 24
@@ -201,3 +194,8 @@ AGENT_DEFAULT_MODEL=
 # $KUBECONFIG (deploy.sh derives it). Set only if the API pod must use a
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
+
+# Garage credentials for CI are GitHub Secrets; see docs/guidelines/garage.md.
+# For deploy.sh, prepare the fixed Kubernetes Secrets and Garage layout first.
+# Maintenance defaults to enabled.
+ARTIFACT_PURGE_ENABLED=

@@ -281,6 +281,15 @@ jobs:
           KUBECONFIG: /home/runner/.kube/config
         run: kubectl apply -f k8s/agent-farm-user.yaml
 
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Bootstrap private Garage
+        env:
+          GARAGE_RPC_SECRET_INPUT: ${{ secrets.PUBLIC_ARTIFACT_STORAGE_SECRET }}
+          GARAGE_ADMIN_TOKEN_INPUT: ${{ secrets.PUBLIC_ARTIFACT_PROVISIONER_SECRET }}
+          STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
+        run: uv run --project api --frozen python -m api.scripts.bootstrap_garage_ci --namespace agent-farm --kubeconfig "$HOME/.kube/config" --storage-class "$STORAGE_CLASS"
+
       - name: Helmfile sync
         env:
           KUBECONFIG: /home/runner/.kube/config
@@ -301,6 +310,7 @@ jobs:
           WEB_APP_URL: ${{ vars.PUBLIC_WEB_APP_URL }}
           GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
           STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
+          ARTIFACT_PURGE_ENABLED: ${{ vars.PUBLIC_ARTIFACT_PURGE_ENABLED }}
           SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
           ANALYTICS_ENABLED: "true"
           AGENT_EMAIL_DOMAIN: ${{ vars.PUBLIC_AGENT_EMAIL_DOMAIN }}

@@ -1,5 +1,6 @@
 "use client";
 
+import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, FileCheck2, LayoutDashboard } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -90,11 +91,13 @@ export function WorkflowRunDetail({
   agentId,
   agent,
   agentHref,
+  canManageFiles,
   runId,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
+  canManageFiles: boolean;
   runId: string;
 }) {
   const run = useWorkflowRun(agentId, runId);
@@ -113,6 +116,7 @@ export function WorkflowRunDetail({
       agentId={agentId}
       agent={agent}
       agentHref={agentHref}
+      canManageFiles={canManageFiles}
       run={run.data}
     />
   );
@@ -259,11 +263,13 @@ function RunContents({
   agentId,
   agent,
   agentHref,
+  canManageFiles,
   run,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
+  canManageFiles: boolean;
   run: WorkflowRun;
 }) {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
@@ -342,7 +348,7 @@ function RunContents({
             onSelectStep={setSelectedStepId}
           />
         </nav>
-        <div className="contents">
+        <div className="min-w-0 space-y-4">
           <div id="workflow-run-panel" className="min-w-0 [&>section]:h-full">
             {selectedStep ? (
               <StepDetail run={run} step={selectedStep} />
@@ -350,6 +356,7 @@ function RunContents({
               <RunSummary run={run} agentName={agent.name} />
             )}
           </div>
+          <AgentFiles canManageFiles={canManageFiles} key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
           <WorkflowRunTiming run={run} />
         </div>
       </div>

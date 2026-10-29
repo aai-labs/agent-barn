@@ -168,17 +168,17 @@ export const ResourceLimitsSchema = z.object({
   limitsCpuCores: z.number().nullable().default(null),
   requestsMemoryBytes: z.number().nullable().default(null),
   requestsCpuCores: z.number().nullable().default(null),
+  requestsStorageBytes: z.number().nullable().default(null),
+  pods: z.number().nullable().default(null),
   updatedAt: z.string().nullable().default(null),
 });
 export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
 
-/** A null clears a ceiling. All four are always sent: an unchanged one is not a change. */
-export interface ResourceLimitsUpdate {
-  limitsMemoryBytes: number | null;
-  limitsCpuCores: number | null;
-  requestsMemoryBytes: number | null;
-  requestsCpuCores: number | null;
-}
+/**
+ * A null clears a ceiling, and a ceiling left out is left as it is. Every ceiling a dialog
+ * shows is sent: an unchanged one is not a change.
+ */
+export type ResourceLimitsUpdate = Partial<Omit<ResourceLimits, "updatedAt">>;
 
 export const PlatformResourceUsageSchema = z.object({
   range: ResourceUsageRangeSchema,

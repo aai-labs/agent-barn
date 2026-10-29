@@ -61,6 +61,14 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
+            {{- if .Values.artifacts.existingSecret }}
+            - secretRef:
+                name: {{ .Values.artifacts.existingSecret }}
+            {{- end }}
+            {{- if .Values.artifacts.existingSecret }}
+            - secretRef:
+                name: {{ .Values.artifacts.provisionerSecret | required "artifacts.provisionerSecret is required for API provisioning" }}
+            {{- end }}
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:
@@ -133,10 +141,6 @@ spec:
             - name: RESTORE_POINT_RESTORE_TIMEOUT_SECONDS
               value: "{{ .Values.restorePoints.restoreTimeoutSeconds }}"
             {{- end }}
-            - name: TASK_FILE_MAX_BYTES
-              value: "{{ .Values.agentTasks.fileMaxBytes | int64 }}"
-            - name: TASK_ORGANIZATION_STORAGE_MAX_BYTES
-              value: "{{ .Values.agentTasks.organizationStorageMaxBytes | int64 }}"
             {{- if .Values.managedUpdate.readyTimeoutSeconds }}
             - name: AGENT_UPDATE_READY_TIMEOUT_SECONDS
               value: "{{ .Values.managedUpdate.readyTimeoutSeconds }}"

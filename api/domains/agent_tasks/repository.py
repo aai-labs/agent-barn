@@ -1,19 +1,16 @@
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID, uuid7
 
-import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from api.domains.agent_tasks.file_storage import TaskFileStorage
 from api.domains.agent_tasks.models import (
     AgentTask,
     AgentTaskCreate,
     AgentTaskDetail,
     AgentTaskFile,
-    AgentTaskFileCreate,
     AgentTaskFileRead,
     AgentTaskFilter,
     AgentTaskNote,
@@ -23,6 +20,7 @@ from api.domains.agent_tasks.models import (
 )
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.artifacts.models import ArtifactRead
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -57,30 +55,11 @@ def _find_agent_task(session: Session, organization_id: UUID, agent_id: UUID, ta
     return session.exec(query).first()
 
 
-class OrganizationTaskStorageFullError(Exception):
-    """Storing the File would take the Organization's Task Files past its limit."""
-
-
-class EmptyTaskFileError(Exception):
-    """The upload had no bytes."""
-
-
-def _within_organization_limit(data: Iterable[bytes], remaining_bytes: int) -> Iterator[bytes]:
-    """Pass the upload through, stopping as soon as it no longer fits in the space left."""
-    total = 0
-    for piece in data:
-        total += len(piece)
-        if total > remaining_bytes:
-            raise OrganizationTaskStorageFullError
-        yield piece
-
-
 @inject
 @singleton
 @dataclass
 class AgentTaskRepository:
     delegate: PostgresRepositoryDelegate
-    file_storage: TaskFileStorage
 
     def create_for_live_agent(self, organization_id: UUID, agent_id: UUID, data: AgentTaskCreate) -> AgentTask | None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -121,42 +100,36 @@ class AgentTaskRepository:
         organization_id: UUID,
         agent_id: UUID,
         task_id: UUID,
-        metadata: AgentTaskFileCreate,
-        data: Iterable[bytes],
-        organization_limit_bytes: int,
+        artifact_id: UUID,
+        pin: Callable[[Session, UUID], ArtifactRead],
     ) -> AgentTaskFile | None:
-        """Stream a File into storage and record it in one transaction, within the Organization's limit.
+        """Attach an Artifact to a Task, pinning it in the same transaction.
 
-        A per-Organization advisory lock serialises the usage check with the insert, so
-        two uploads at once cannot both fit under the limit and together exceed it. The
-        bytes are written before the File row, which records their total.
+        `pin` takes the Artifact's row lock, so a second attach of the same Artifact
+        waits here and then finds the first one's File instead of adding another.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
             if _find_agent_task(session, organization_id, agent_id, task_id) is None:
                 return None
-            session.connection().execute(
-                sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-                {"key": f"agent_task_file:{organization_id}"},
-            )
-            used = session.exec(
-                select(func.coalesce(func.sum(AgentTaskFile.size_bytes), 0)).where(
-                    col(AgentTaskFile.organization_id) == organization_id
-                )
-            ).one()
             file_id = uuid7()
-            size = self.file_storage.write(
-                session, file_id, _within_organization_limit(data, organization_limit_bytes - used)
-            )
-            if size == 0:
-                raise EmptyTaskFileError
+            artifact = pin(session, file_id)
+            existing = session.exec(
+                select(AgentTaskFile).where(
+                    col(AgentTaskFile.task_id) == task_id, col(AgentTaskFile.artifact_id) == artifact_id
+                )
+            ).first()
+            if existing is not None:
+                return existing
             stored = AgentTaskFile(
                 id=file_id,
                 organization_id=organization_id,
                 task_id=task_id,
-                size_bytes=size,
-                **metadata.model_dump(),
+                artifact_id=artifact_id,
+                filename=artifact.filename,
+                content_type=artifact.content_type,
+                size_bytes=artifact.size,
             )
             session.add(stored)
             session.commit()

@@ -14,6 +14,21 @@ helmDefaults:
   timeout: 600
 
 releases:
+  - name: garage
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/garage
+    # Bootstrap Garage with helm and cluster-init before application deployment.
+    # CLI --wait overrides this default; normal deploys wait for existing storage.
+    wait: false
+    labels:
+      name: garage
+    values:
+      - storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        replicas: {{ env "GARAGE_REPLICAS" | default "1" }}
+        replicationFactor: {{ env "GARAGE_REPLICATION_FACTOR" | default "1" }}
+        requireDistinctNodes: {{ env "GARAGE_REQUIRE_DISTINCT_NODES" | default "false" }}
+        ingress:
+          enabled: false
   - name: postgres-hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -158,6 +173,12 @@ releases:
     labels:
       name: agentbarn-api
     set:
+      - name: artifacts.existingSecret
+        value: "garage-artifact-storage"
+      - name: artifacts.purgeEnabled
+        value: {{ env "ARTIFACT_PURGE_ENABLED" | default "true" }}
+      - name: artifacts.provisionerSecret
+        value: "garage-artifact-provisioner"
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository
@@ -257,10 +278,6 @@ releases:
         value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
       - name: restorePoints.maxPerAgent
         value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
-      - name: agentTasks.fileMaxBytes
-        value: {{ env "TASK_FILE_MAX_BYTES" | default "20971520" | quote }}
-      - name: agentTasks.organizationStorageMaxBytes
-        value: {{ env "TASK_ORGANIZATION_STORAGE_MAX_BYTES" | default "2147483648" | quote }}
       - name: workflows.runtimeBaseUrl
         value: {{ env "WORKFLOW_RUNTIME_BASE_URL" | default "" | quote }}
       - name: agentDefaultModel

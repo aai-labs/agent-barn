@@ -81,7 +81,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, namespace health, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
@@ -181,8 +181,8 @@ An append-only entry on a Task's timeline. Notes are never edited or removed on 
 _Avoid_: comment, log line
 
 **Task File**:
-A file an Agent attaches to a Task. Task Files are limited in size per file and in total per Organization.
-_Avoid_: attachment, artifact, upload
+An Agent Artifact the Agent attaches to a Task. The Task keeps the Artifact for as long as the Task exists.
+_Avoid_: attachment, upload
 
 **Platform**:
 The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
@@ -486,3 +486,9 @@ _Avoid_: Agent Skill, native scheduled job
 An immutable saved snapshot of a Workflow. Editing and saving appends a new
 version; a future run pins the version it starts with.
 _Avoid_: mutable draft, runtime session
+
+**Agent Artifact**:
+An immutable published file owned by one Organization and Agent, with PostgreSQL
+metadata and private Garage/S3 bytes. Workflow provenance is optional. Consumers
+pin its exact artifact ID and SHA-256; signed download links are temporary bearer
+access, not file identity. See [Agent artifacts](docs/features/agent-artifacts.md).

@@ -8,8 +8,10 @@ export const CustomApiConnectionSchema = z.object({
   isolated: z.boolean(),
   appliedIsolated: z.boolean().nullable(),
   pendingApply: z.boolean(),
-  authType: z.enum(["none", "bearer", "api_key", "basic"]),
+  authType: z.enum(["none", "bearer", "api_key", "basic", "oauth2_client_credentials"]),
   authHeaderName: z.string().nullable(),
+  authTokenUrl: z.string().nullable().optional(),
+  authScope: z.string().nullable().optional(),
   headers: z.array(
     z.object({
       name: z.string(),
@@ -24,11 +26,15 @@ export const CustomApiWriteSchema = z.object({
   baseUrl: z.string(),
   isolated: z.boolean(),
   auth: z.object({
-    type: z.enum(["none", "bearer", "api_key", "basic"]),
+    type: z.enum(["none", "bearer", "api_key", "basic", "oauth2_client_credentials"]),
     headerName: z.string().optional(),
     token: z.string().optional(),
     username: z.string().optional(),
     password: z.string().optional(),
+    tokenUrl: z.string().optional(),
+    clientId: z.string().optional(),
+    clientSecret: z.string().optional(),
+    scope: z.string().optional(),
   }),
   headers: z.array(
     z.object({

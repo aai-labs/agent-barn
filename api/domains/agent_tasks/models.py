@@ -1,13 +1,12 @@
 import enum
-import re
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, StringConstraints, field_validator
-from sqlmodel import Column, SQLModel
+from pydantic import ConfigDict, StringConstraints
+from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -90,10 +89,12 @@ class AgentTaskNote(BaseModel, table=True):
 
 
 class AgentTaskFile(BaseModel, table=True):
-    """Metadata for a File attached to a Task; its bytes live behind `TaskFileStorage`.
+    """An Artifact the Agent attached to a Task; the bytes stay in Artifact storage.
 
-    `organization_id` is denormalised so the per-Organization storage total is one
-    indexed sum; the composite foreign key keeps it equal to the Task's.
+    Name, type and size are copied from the Artifact when it is attached. Artifacts
+    never change once published, so the copies cannot drift. Each File pins its
+    Artifact, with the File's id as the pin's owner, so the Artifact does not expire
+    while the Task has it.
     """
 
     __tablename__: str = "agent_task_file"
@@ -105,41 +106,16 @@ class AgentTaskFile(BaseModel, table=True):
             name="fk_agent_task_file_task_organization",
             ondelete="CASCADE",
         ),
-        sa.CheckConstraint("size_bytes > 0", name="ck_agent_task_file_size_positive"),
-        sa.Index("ix_agent_task_file_task", "task_id"),
+        sa.UniqueConstraint("task_id", "artifact_id", name="uq_agent_task_file_task_artifact"),
         sa.Index("ix_agent_task_file_organization", "organization_id"),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     task_id: UUID = SqlField(nullable=False)
+    artifact_id: UUID = SqlField(foreign_key="artifact.id", nullable=False, index=True)
     filename: str = SqlField(sa_column=Column(sa.String(length=255), nullable=False))
-    content_type: str = SqlField(sa_column=Column(sa.String(length=255), nullable=False))
+    content_type: str = SqlField(sa_column=Column(sa.String(length=128), nullable=False))
     size_bytes: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
-
-
-class AgentTaskFileChunk(SQLModel, table=True):
-    """One ordered slice of a File's bytes, owned by the Postgres `TaskFileStorage`.
-
-    The foreign key is checked at commit, so chunks can be written before the File row
-    that records their total size.
-    """
-
-    __tablename__: str = "agent_task_file_chunk"
-
-    __table_args__ = (
-        sa.ForeignKeyConstraint(
-            ["file_id"],
-            ["agent_task_file.id"],
-            name="fk_agent_task_file_chunk_file",
-            ondelete="CASCADE",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-    )
-
-    file_id: UUID = SqlField(primary_key=True)
-    sequence: int = SqlField(primary_key=True)
-    data: bytes = SqlField(sa_column=Column(sa.LargeBinary(), nullable=False))
 
 
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -168,33 +144,10 @@ class AgentTaskNoteCreate(PydanticBaseModel):
     body: LongText
 
 
-# Path separators, quotes, C0 and C1 control characters, and the Unicode marks that
-# reorder how a name is displayed.
-_UNSAFE_FILENAME_CHARACTERS = re.compile(r'[/\\"\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]')
-
-
 class AgentTaskFileCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    filename: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
-    # A bare `type/subtype`, without parameters. Serving a File safely (as an
-    # attachment, never sniffed) is still the download route's job.
-    content_type: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True,
-            max_length=255,
-            pattern=r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
-        ),
-    ]
-
-    @field_validator("filename")
-    @classmethod
-    def _bare_name(cls, filename: str) -> str:
-        """A name that is safe to write to disk and to offer back as a download name."""
-        if filename in {".", ".."} or _UNSAFE_FILENAME_CHARACTERS.search(filename):
-            raise ValueError("The filename must be a plain name, without paths, quotes or control characters.")
-        return filename
+    artifact_id: UUID
 
 
 class AgentTaskFilter(PydanticBaseModel):
@@ -229,6 +182,7 @@ class AgentTaskFileRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    artifact_id: UUID
     filename: str
     content_type: str
     size_bytes: int
