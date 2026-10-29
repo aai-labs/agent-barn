@@ -21,6 +21,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    providers_accept_credentials,
     there_is_a_shared_credential,
     there_is_an_agent,
     use_org_for_auth,
@@ -142,7 +143,7 @@ def test_create_agent_rejects_shared_and_manual_same_provider():
 
 
 def test_update_agent_attach_shared_credential():
-    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), providers_accept_credentials()]) as ctx:
         client: TestClient = ctx.client
 
         with when("I update the agent to attach a shared credential"):
@@ -164,6 +165,30 @@ def test_update_agent_attach_shared_credential():
                 jira_secret["shared_credential_id"],
                 equal_to(str(ctx.shared_credential.id)),
             )
+
+
+def test_update_agent_rejects_a_shared_credential_the_provider_refuses():
+    """Attaching a shared credential live-validates it, as creating an Agent with it does."""
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
+        client: TestClient = ctx.client
+        refused = IntegrationValidationResult(valid=False, error="Invalid email or API token")
+
+        with when("I attach a shared credential that Jira rejects"):
+            with patch.dict(
+                "api.domains.agents.service.PROVIDER_VALIDATORS",
+                {SecretProvider.JIRA: lambda _content: refused},
+            ):
+                response = client.patch(
+                    f"{_AGENTS}/{ctx.agent.id}",
+                    json={"shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}]},
+                    headers=_auth(ctx),
+                )
+
+        with then("it returns 400 with the provider's reason and attaches nothing"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Invalid email or API token"))
+            agent = client.get(f"{_AGENTS}/{ctx.agent.id}", headers=_auth(ctx)).json()
+            assert_that([s["provider"] for s in agent["secrets"]], equal_to([]))
 
 
 def test_creating_an_agent_with_a_shared_credential_that_no_longer_validates_returns_400():
@@ -195,17 +220,18 @@ def test_creating_an_agent_with_a_shared_credential_that_no_longer_validates_ret
 
 
 def test_update_agent_detach_shared_credential():
-    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), providers_accept_credentials()]) as ctx:
         client: TestClient = ctx.client
 
         with when("I attach then detach a shared credential"):
-            client.patch(
+            saved = client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={
                     "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 },
                 headers=_auth(ctx),
             )
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={"removed_secret_providers": ["jira"]},

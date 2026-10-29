@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import { DataSupport } from "../pages/data-support/data-support.po";
+import { org } from "../pages/data-support/organization-data-support.po";
 import { SettingsAgentDefaultsPage } from "../pages/settings-agent-defaults.po";
 import UserContext from "../fixtures/user-context.json";
 
@@ -86,12 +87,53 @@ test.describe("Settings · Models", () => {
     await section.getByRole("button", { name: "Add models" }).click();
     const dialog = page.getByRole("dialog", { name: "Add models" });
     await dialog.getByLabel("Search catalog").fill("claude");
-    await dialog.getByRole("checkbox", { name: "Claude Sonnet" }).check();
+    const checkbox = dialog.getByRole("checkbox", { name: "Claude Sonnet" });
+    await checkbox.check();
+    const checkboxBox = await checkbox.boundingBox();
+    const listBox = await checkbox.locator("xpath=../..").boundingBox();
+    expect(checkboxBox).not.toBeNull();
+    expect(listBox).not.toBeNull();
+    expect(checkboxBox!.x + checkboxBox!.width + 3).toBeLessThan(listBox!.x + listBox!.width);
     await dialog.getByRole("button", { name: "Add 1 model" }).click();
     await expect(section.getByText("Claude Sonnet", { exact: true })).toBeVisible();
     await expect(section.getByText("128,000 tokens context")).toBeVisible();
     await expect(section.getByText("Input $2.5 / 1M tokens")).toBeVisible();
     await expect(section.getByText("Output $10 / 1M tokens")).toBeVisible();
+  });
+
+  test("keeps unavailable models visible and removable", async ({ page }) => {
+    await dataSupport.organizations.interceptGetOrganization({ organization: org({ allowed_models: ["openai/gpt-5-mini", "nex-agi/nex-n2-pro"] }) });
+    await dataSupport.agents.interceptGetModelsRequest({ body: [
+      { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
+      { value: "litellm/openrouter/anthropic/claude-sonnet", label: "Claude Sonnet", context_length: 200000, pricing: { prompt: "0.000003", completion: "0.000015" } },
+    ] });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    await expect(section.getByText("Not in the OpenRouter catalog")).toBeVisible();
+    await expect(section.getByText("Kept in the allowed list until removed.")).toBeVisible();
+    await section.getByRole("button", { name: "Edit" }).click();
+    await section.getByRole("button", { name: "Remove nex-agi/nex-n2-pro" }).click();
+    await expect(section.getByText("nex-agi/nex-n2-pro")).toHaveCount(0);
+    await section.getByRole("button", { name: "Cancel" }).click();
+    await expect(section.getByText("nex-agi/nex-n2-pro")).toBeVisible();
+  });
+
+  test("shows the reason when an allowed model cannot be removed", async ({ page }) => {
+    await dataSupport.organizations.interceptRenameOrganization({
+      status: 409,
+      detail: "1 Agent is still pinned to 'openai/gpt-5-mini': Staging. Point them at an allowed model before removing it.",
+    });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    await section.getByRole("button", { name: "Edit" }).click();
+    await section.getByRole("button", { name: "Remove GPT-5 mini" }).click();
+    await section.getByRole("button", { name: "Save models" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save models" }).click();
+    const alert = section.getByRole("alert");
+    await expect(alert.getByText("Could not save allowed models")).toBeVisible();
+    await expect(alert).toContainText("1 Agent is still pinned to");
+    await expect(alert).toContainText("openai/gpt-5-mini");
+    await expect(alert).toContainText("Staging");
   });
 
   test("a member never sees the Models tab", async ({ page }) => {
