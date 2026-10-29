@@ -296,7 +296,9 @@ deadline under the run lock. Unmet criteria reported by the Agent
 fail the run at once with the Agent's reason. Other reported failures retry the step
 with a fresh attempt, showing the reason as the run's note while it retries; at most
 three attempts per unfinished step are admitted, the last failure's reason ends the
-run, and an attempt that exceeds its 15-minute deadline counts as lost. When the Agent asks
+run, and an attempt that exceeds its 15-minute deadline counts as lost. A lost attempt
+adds why (the Agent never accepted the step, or timed out) to the reason and keeps the
+failure an earlier attempt reported. When the Agent asks
 for a command approval, the session is stopped and the run becomes BLOCKED with the
 reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
 approval handling arrives with WF03. Agent stop or lost initiator authority pauses

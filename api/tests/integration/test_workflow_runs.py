@@ -730,3 +730,43 @@ def test_running_step_reports_its_attempt_and_an_unresponsive_agent() -> None:
         assert context.client.get(url, headers=auth(context)).json()["attempt"]["agent_unresponsive"] is True
         repository.mark_dispatched(row.id)
         assert context.client.get(url, headers=auth(context)).json()["attempt"]["agent_unresponsive"] is False
+
+
+def test_timeouts_keep_the_reported_failure_and_name_an_agent_that_never_accepted() -> None:
+    from api.domains.workflows.run_models import WorkflowAttempt
+
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        repository = context.injector.get(WorkflowRunRepository)
+        run_id = UUID(response.json()["id"])
+
+        def expire(row) -> str | None:
+            with Session(context.postgres_delegate.engine) as session:
+                stored = session.get_one(WorkflowAttempt, row.id)
+                stored.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.add(stored)
+                session.commit()
+            repository.advance(run_id)
+            repository.advance(run_id, stopped=True)
+            return repository.inspect(run_id)[0].reason
+
+        row, _ = repository.advance(run_id)
+        context.client.post(
+            f"/workflow-runtime/v1/attempts/{row.id}/failure",
+            headers={"Authorization": f"Bearer {repository.token(row.id)}"},
+            json={"reason": "Pipedrive is not configured"},
+        )
+        row, _ = repository.advance(run_id)
+        repository.mark_dispatched(row.id)
+        assert_that(
+            expire(row),
+            equal_to("Step failed, retrying: Pipedrive is not configured (last attempt: The attempt timed out)"),
+        )
+        row, _ = repository.advance(run_id)
+        assert_that(
+            expire(row),
+            equal_to(
+                "Attempt recovery limit reached: Pipedrive is not configured "
+                "(last attempt: The Agent did not accept the step)"
+            ),
+        )

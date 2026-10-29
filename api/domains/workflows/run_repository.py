@@ -37,6 +37,20 @@ from api.domains.workflows.run_models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
+RETRY_PREFIX = "Step failed, retrying: "
+TIMEOUT_NOTE = " (last attempt: "
+TIMEOUT_CAUSES = {"The Agent did not accept the step", "The attempt timed out"}
+
+
+def _timeout_cause(accepted: bool, previous_reason: str | None) -> str:
+    """Why an attempt expired unreported, keeping the failure an earlier attempt reported."""
+    timeout = "The attempt timed out" if accepted else "The Agent did not accept the step"
+    reason = previous_reason or ""
+    earlier = reason.removeprefix(RETRY_PREFIX).split(TIMEOUT_NOTE, 1)[0] if reason.startswith(RETRY_PREFIX) else ""
+    if not earlier or earlier in TIMEOUT_CAUSES:
+        return timeout
+    return f"{earlier}{TIMEOUT_NOTE}{timeout})"
+
 
 def digest(value: object) -> str:
     return hashlib.sha256(
@@ -490,12 +504,15 @@ class WorkflowRunRepository:
                         .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
                     ).one()
                     # A reported cause stays visible through the retry and into the final failure.
+                    # A timeout reports nothing, so it names why and keeps any earlier reported cause.
+                    if cause is None:
+                        cause = _timeout_cause(attempt is not None and attempt.dispatched_at is not None, run.reason)
                     run.state, run.reason = (
-                        ("QUEUED", f"Step failed, retrying: {cause}" if cause else "Fresh attempt after runtime loss")
+                        ("QUEUED", f"{RETRY_PREFIX}{cause}")
                         if retries < workflow_config.MAX_ATTEMPTS
                         else (
                             "FAILED",
-                            f"Attempt recovery limit reached: {cause}" if cause else "Attempt recovery limit reached",
+                            f"Attempt recovery limit reached: {cause}",
                         )
                     )
                     if run.state == "FAILED":
