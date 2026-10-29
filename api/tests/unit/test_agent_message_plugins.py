@@ -44,6 +44,17 @@ def test_slack_listen_in_channels_must_be_allowed_channels():
     assert_that(SlackSettings().listen_in_channel_ids, equal_to([]))
 
 
+def test_discord_listen_in_channels_must_be_allowed_channels():
+    with pytest.raises(ValidationError, match="Listen-in channels"):
+        DiscordSettings(allowed_channel_ids=["c1"], listen_in_channel_ids=["c2"])
+
+    allowed = DiscordSettings(allowed_channel_ids=["c1", "c2"], listen_in_channel_ids=["c2"])
+    assert_that(allowed.listen_in_channel_ids, equal_to(["c2"]))
+    every_channel = DiscordSettings(allow_all_users=True, listen_in_channel_ids=["c9"])
+    assert_that(every_channel.listen_in_channel_ids, equal_to(["c9"]))
+    assert_that(DiscordSettings().listen_in_channel_ids, equal_to([]))
+
+
 def test_discord_settings_retire_require_mention_and_discard_legacy_values():
     schema = DiscordSettings.model_json_schema()
 

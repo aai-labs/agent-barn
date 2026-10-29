@@ -779,6 +779,7 @@ export function AgentChannelSettings({
           : "Choose a server above to browse.";
       return {
         allowedChannelIds: previewSource("channels", "channels", discordAddGuildId, disabledReason),
+        listenInChannelIds: previewSource("channels", "channels", discordAddGuildId, disabledReason),
         allowedUserIds: previewSource("people", "users", discordAddGuildId, disabledReason),
         allowedRoleIds: previewSource("roles", "roles", discordAddGuildId, disabledReason),
       };
@@ -800,6 +801,7 @@ export function AgentChannelSettings({
       return {
         guildIds: queryBrowse("servers", discordGuilds),
         allowedChannelIds: queryBrowse("channels", discordChannels, needsGuild),
+        listenInChannelIds: queryBrowse("channels", discordChannels, needsGuild),
         allowedUserIds: queryBrowse("people", discordUsers, needsGuild),
         allowedRoleIds: queryBrowse("roles", discordRoles, needsGuild),
       };

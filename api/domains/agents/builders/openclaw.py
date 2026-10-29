@@ -251,7 +251,11 @@ def native_discord_channel(settings: dict) -> dict:
     # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
     # ponytail: OpenClaw skips requireMention inside threads the bot created, and
     # has no switch to keep it; Hermes still requires the mention there.
-    guild["channels"] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    rooms: dict[str, dict] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    for channel_id in _setting_ids(settings, "listen_in_channel_ids"):
+        if not channel_ids or channel_id in channel_ids:
+            rooms[channel_id] = {"enabled": True, "autoThread": True, **_LISTEN_IN_ROOM}
+    guild["channels"] = rooms
     if allow_all or users or roles or channel_ids:
         channel["guilds"] = {"*": guild}
     else:

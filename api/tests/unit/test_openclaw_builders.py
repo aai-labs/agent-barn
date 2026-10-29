@@ -356,6 +356,21 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
     assert "guilds" not in closed
 
 
+def test_native_discord_channel_listens_in_on_chosen_channels() -> None:
+    listen_in = {"enabled": True, "autoThread": True, "requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+
+    everyone = native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]})
+    assert everyone["guilds"]["*"]["requireMention"] is True
+    assert everyone["guilds"]["*"]["channels"] == {"*": {"enabled": True, "autoThread": True}, "c9": listen_in}
+
+    allowed = native_discord_channel({"allowed_channel_ids": ["c1", "c2"], "listen_in_channel_ids": ["c2", "c3"]})
+    assert allowed["guilds"]["*"]["channels"] == {"c1": {"enabled": True, "autoThread": True}, "c2": listen_in}
+
+    closed = native_discord_channel({"listen_in_channel_ids": ["c9"]})
+    assert closed["groupPolicy"] == "disabled"
+    assert "guilds" not in closed
+
+
 def test_native_telegram_channel_confines_groups_to_the_allowlist_and_requires_mentions() -> None:
     channel = native_telegram_channel(
         {"allowed_chat_ids": ["-1001"], "dm_policy": "allowlist", "allowed_user_ids": ["111"]}

@@ -56,6 +56,22 @@ class DiscordSettings(PlatformSettings):
     home_channel_id: str | None = Field(
         default=None, title="Alert channel", description="Optional channel ID for scheduled or proactive updates."
     )
+    listen_in_channel_ids: list[str] = Field(
+        default_factory=list,
+        title="Listen-in channels",
+        description=(
+            "Channel IDs where the Agent reads every message without an @mention and posts only when it has "
+            "something useful to add, such as a correction or missing context. Each message there costs one model "
+            "turn, even when the Agent stays silent. When Allowed channels is set, these must be in it. "
+            "OpenClaw only for now; Hermes Agents still answer only when mentioned."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_allowed_listen_in_channels(self) -> DiscordSettings:
+        if self.allowed_channel_ids and (outside := set(self.listen_in_channel_ids) - set(self.allowed_channel_ids)):
+            raise ValueError(f"Listen-in channels must also be Allowed channels: {', '.join(sorted(outside))}")
+        return self
 
 
 class DiscordCredentials(PlatformCredentials):

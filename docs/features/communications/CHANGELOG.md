@@ -15,6 +15,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-29 — MDP-118 — Discord listen-in channels — PR pending
+
+- Added: Discord Connections offer **Listen-in channels**, browsed per server like Allowed channels. When Allowed channels is set, they must be in it. On OpenClaw a listen-in channel gets its own entry next to the guild's `"*"` or allowed-channel entries, and threads inherit it; Hermes ignores the list.
+
 ### 2026-10-29 — MDP-118 — Slack listen-in channels — PR pending
 
 - Added: Slack Connections offer **Listen-in channels**, a list of channel IDs that must also be Allowed channels under an allowlist. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; Hermes ignores the list. The Connection form browses Slack channels for it, as it does for Allowed channels.

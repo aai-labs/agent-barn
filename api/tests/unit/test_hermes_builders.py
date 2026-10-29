@@ -144,6 +144,15 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert "AGENTBARN_DISCORD_POLICY" not in env
 
 
+def test_native_discord_env_ignores_listen_in_channels() -> None:
+    credentials = {"bot_token": "discord-token"}
+    settings = {"allowed_channel_ids": ["channel-1"]}
+
+    assert native_discord_env({**settings, "listen_in_channel_ids": ["channel-1"]}, credentials) == native_discord_env(
+        settings, credentials
+    )
+
+
 def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
     env = native_discord_env({}, {"bot_token": "discord-token"})
 

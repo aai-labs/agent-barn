@@ -8,12 +8,22 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
-- Next: PR 4, Discord Listen-in channels. PR 2 (a telemetry fix) was dropped after the spike.
+- Next: PR 5, Telegram Listen-in channels. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-10-29 — MDP-118 PR 4 — Discord listen-in channels
+
+- Delivered: Discord Connections list Listen-in channels, with the same behaviour as Slack. A listen-in ID outside a non-empty Allowed channels list is rejected on save and never added by the builder; with no channel list every channel may listen in.
+- Changed:
+  - Runtime: each listen-in channel gets its own `guilds["*"].channels` entry with `requireMention: false` and `LISTEN_IN_SYSTEM_PROMPT`, next to the `"*"` or allowed-channel entries. The guild entry stays mention-gated.
+  - API: `DiscordSettings.listen_in_channel_ids`. Hermes ignores it.
+  - UI: the Discord Connection form browses the chosen server's channels for Listen-in channels.
+  - Docs: [Agents](../agents.md), [communications](../communications/CHANGELOG.md).
+- Follow-up: PR 5 (Telegram).
 
 ### 2026-10-29 — MDP-118 PR 3 — silent-listening switch and Slack listen-in channels
 
