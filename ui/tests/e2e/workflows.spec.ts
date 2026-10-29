@@ -47,6 +47,28 @@ test.describe("WF01 workflow authoring", () => {
       expect(support.reads).toEqual({ list: 0, detail: 0, versions: 0 });
     });
   }
+  test("save file inputs and output descriptions without format switches", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await workflows.create("Transform an uploaded file");
+    await workflows.buildExample();
+    await workflows.useFileInput();
+    await workflows.selectStep(1);
+    await expect(page.getByRole("checkbox", { name: /Require a downloadable/ })).toHaveCount(0);
+    await workflows.selectSection("Outputs & review");
+    await expect(page.getByRole("checkbox", { name: /Require a downloadable/ })).toHaveCount(0);
+    await workflows.save();
+    await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
+    expect(support.saveRequests[0]).toMatchObject({
+      inputs: [{ type: "file" }],
+      steps: [{ artifact_description: "Source data" }, {}],
+      final_artifact_description: "Weekly Markdown summary",
+    });
+    await workflows.selectStep(1);
+    await expect(page.getByText("Source data", { exact: true })).toBeVisible();
+    await workflows.selectSection("Outputs & review");
+    await expect(page.getByText("Weekly Markdown summary", { exact: true })).toBeVisible();
+  });
   test("create, edit, reorder, remove, undo and save an immutable plan", async ({
     page,
   }) => {

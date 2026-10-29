@@ -33,9 +33,14 @@ class WorkflowRuntimeService:
             packet["file_publication"] = {
                 "command": "/usr/local/bin/agentbarn-artifacts upload <workspace-file>",
                 "required_arguments": {"--attempt-id": str(attempt_id)},
-                "instructions": "Publish requested files before replying. Existing files are identified by exact artifact_id/checksum in completed_steps; use agentbarn-artifacts retrieve to read them. Never report a local path as a published artifact. Storage failure does not prevent an honest text-only result.",
+                "instructions": "Publish requested files before replying. Existing files are identified by exact artifact_id/checksum in completed_steps; use agentbarn-artifacts retrieve to read them. Never report a local path as a published artifact. Use the step and final output descriptions to decide whether a file is needed and which format serves the user. Every generated file must be published so it is downloadable. A description alone is not a published file. If you cannot produce or publish a requested deliverable, report that honestly and set criteria_met to false.",
             }
         context = json.dumps(packet, ensure_ascii=False)
         if len(context.encode()) > workflow_config.MAX_CONTEXT_BYTES:
             raise WorkflowConflict("Workflow context (summaries and file references) exceeds the context limit")
-        return {"runtime": run.runtime, "session_id": f"workflow-{attempt_id}", "prompt": STEP_INSTRUCTIONS + context}
+        return {
+            "runtime": run.runtime,
+            "session_id": f"workflow-{attempt_id}",
+            "prompt": STEP_INSTRUCTIONS + context,
+            "files": packet["files"],
+        }

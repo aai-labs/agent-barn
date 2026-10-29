@@ -222,7 +222,7 @@ def test_duplicate_wakeups_do_not_reemit_pause_after_a_completed_step() -> None:
             assert_that(len(session.exec(select(OutboxMessage)).all()), equal_to(events_before))
 
 
-def test_lost_attempt_restarts_fresh_without_replaying_checkpoint() -> None:
+def test_lost_attempt_blocks_without_replaying_checkpoint() -> None:
     from api.tests.helpers.workflows import draft
 
     with given(_RUN_GIVEN) as context:
@@ -241,12 +241,14 @@ def test_lost_attempt_restarts_fresh_without_replaying_checkpoint() -> None:
         repository.advance(first.run_id, lost=True)
         repository.advance(first.run_id, stopped=True)
         fresh, _ = repository.advance(first.run_id)
-        assert_that((fresh.step_index, fresh.generation), equal_to((1, 3)))
-        assert_that(fresh.id != second.id, is_(True))
+        assert fresh is None
+        run, stopped = repository.inspect(first.run_id)
+        assert (run.state, run.next_step, run.generation) == ("BLOCKED", 1, 2)
+        assert stopped.id == second.id
         with pytest.raises(WorkflowConflict, match="fenced"):
             repository.admit(second.id, repository.token(second.id))
-        _, _, packet = repository.admit(fresh.id, repository.token(fresh.id))
-        assert_that(packet["completed_steps"], has_length(1))
+        with Session(context.postgres_delegate.engine) as session:
+            assert len(session.exec(select(WorkflowCheckpoint).where(WorkflowCheckpoint.run_id == run.id)).all()) == 1
 
 
 def test_tenant_hidden_reader_cannot_read_run_or_history() -> None:
@@ -488,27 +490,20 @@ def test_cancel_stops_the_agent_session_and_settles() -> None:
         assert_that(context.injector.get(WorkflowRunRepository).inspect(run_id)[0].state, equal_to("CANCELLED"))
 
 
-def test_agent_reported_failure_retries_then_fails_the_run() -> None:
+def test_agent_reported_failure_blocks_without_replay() -> None:
     with given(_RUN_GIVEN) as context:
         response, _, _ = start(context)
-        repository = context.injector.get(WorkflowRunRepository)
-        run_id = UUID(response.json()["id"])
-        for expected in ("QUEUED", "QUEUED", "FAILED"):
-            row, _ = repository.advance(run_id)
-            failed = context.client.post(
-                f"/workflow-runtime/v1/attempts/{row.id}/failure",
-                headers={"Authorization": f"Bearer {repository.token(row.id)}"},
-                json={"reason": "The Agent session ended without a result"},
-            )
-            assert_that(failed.status_code, equal_to(204), failed.text)
-            assert_that(repository.inspect(run_id)[0].state, equal_to(expected))
-        kinds = [
-            event["kind"]
-            for event in context.client.get(
-                base(context) + f"/workflow-runs/{run_id}/history?page_size=50", headers=auth(context)
-            ).json()["items"]
-        ]
-        assert_that(kinds.count("ATTEMPT_FAILED"), equal_to(3))
+        repository, row, token = attempt(context, response.json()["id"])
+        failed = context.client.post(
+            f"/workflow-runtime/v1/attempts/{row.id}/failure",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"reason": "The Agent session ended without a result"},
+        )
+        assert failed.status_code == 204, failed.text
+        assert repository.inspect(row.run_id)[0].state == "BLOCKED"
+        for _ in range(3):
+            assert repository.advance(row.run_id)[0] is None
+        assert repository.inspect(row.run_id)[0].generation == row.generation
 
 
 def test_approval_request_blocks_the_run_until_a_person_acts() -> None:
@@ -592,7 +587,7 @@ def test_broker_outage_preserves_a_committed_run_and_pending_wakeup(monkeypatch)
 
 
 @pytest.mark.parametrize("action", ["cancel", "failure"])
-def test_worker_wakeup_handles_cancellation_and_failed_session_retry(monkeypatch, action) -> None:
+def test_worker_wakeup_handles_cancellation_and_failed_session_block(monkeypatch, action) -> None:
     from api.domains.events.handlers import EventHandlerRegistry
     from api.domains.events.processor import EventDeliveryProcessor
     from api.domains.events.repository import OutboxMessageRepository
@@ -640,11 +635,11 @@ def test_worker_wakeup_handles_cancellation_and_failed_session_retry(monkeypatch
         if action == "cancel":
             assert run.state == "CANCELLED"
         else:
-            assert run.state == "RUNNING"
-            assert current.id != row.id and current.dispatched_at is not None
+            assert run.state == "BLOCKED"
+            assert current.id == row.id
 
 
-def test_step_timing_uses_first_attempt_and_completed_checkpoint_across_retries() -> None:
+def test_step_timing_uses_attempt_admission_and_completed_checkpoint() -> None:
     from api.domains.workflows.run_models import WorkflowAttempt
 
     with given(_RUN_GIVEN) as context:
@@ -660,15 +655,7 @@ def test_step_timing_uses_first_attempt_and_completed_checkpoint_across_retries(
             row.created_at = beginning
             session.add(row)
             session.commit()
-        repository.advance(run_id, stopped=True, lost=True)
-        second, _ = repository.advance(run_id)
-        assert second is not None
-        with Session(context.postgres_delegate.engine) as session:
-            row = session.get_one(WorkflowAttempt, second.id)
-            row.created_at = beginning + timedelta(seconds=60)
-            session.add(row)
-            session.commit()
-        repository.complete(second.id, repository.token(second.id), result())
+        repository.complete(first.id, repository.token(first.id), result())
         end = beginning + timedelta(seconds=114)
         with Session(context.postgres_delegate.engine) as session:
             checkpoint = session.exec(select(WorkflowCheckpoint).where(WorkflowCheckpoint.run_id == run_id)).one()

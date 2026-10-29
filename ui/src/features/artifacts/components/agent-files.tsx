@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { CircleAlert, CloudOff, Download, HardDrive, Loader2, Trash2, type LucideIcon } from "lucide-react";
+import { CircleAlert, CloudOff, HardDrive, Loader2, Trash2, type LucideIcon } from "lucide-react";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useArtifacts, useArtifactStorage } from "../hooks/use-artifacts";
 import type { Artifact } from "../schemas";
-import { FileTypeIcon, getFileKind } from "./file-type-icon";
+import { ArtifactCard } from "./artifact-card";
 
 function provenance(file: Artifact) {
   if (file.source === "workflow") return `Workflow run ${file.runId?.slice(0, 8)} · attempt ${file.attemptId?.slice(0, 8) ?? "unknown"}`;
@@ -37,12 +37,14 @@ function StorageStateCard({ title, description, icon: Icon, loading = false, fai
   );
 }
 
-export function AgentFiles({ agentId, runId, stepId, polling = false, canManageFiles = false }: {
+export function AgentFiles({ agentId, runId, stepId, polling = false, canManageFiles = false, fileLabels, showHeading = true }: {
   agentId: string;
   runId?: string;
   stepId?: string;
   polling?: boolean;
   canManageFiles?: boolean;
+  fileLabels?: Record<string, string>;
+  showHeading?: boolean;
 }) {
   const { storage, provision } = useArtifactStorage(agentId);
   const { files, download, deleteFile } = useArtifacts(agentId, runId, stepId, polling);
@@ -60,7 +62,7 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canManageF
   const label = stepId ? "Step artifacts" : runId ? "Run artifacts" : "Agent artifacts";
   return (
     <section aria-label={label} className="mt-4 space-y-4">
-      <h3 className="font-semibold">Artifacts</h3>
+      {showHeading && <h3 className="font-semibold">Artifacts</h3>}
       {storage.isPending && <StorageStateCard icon={Loader2} loading title="Checking artifact storage…" description="Checking whether this Agent is ready to share files." />}
       {storage.error && <AppErrorState error={storage.error} title="Storage status is unavailable" onRetry={() => void storage.refetch()} />}
       {storage.data?.state === "NOT_CONFIGURED" && <StorageStateCard icon={CloudOff} title="Artifact storage is unavailable" description="Storage needs to be configured by an administrator. Text conversations remain available." />}
@@ -89,59 +91,12 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canManageF
       )}
       <ul className="space-y-2">
         {items.map(file => (
-          <li key={file.id} className="group rounded-2xl border border-[var(--line)] p-4 transition-colors hover:border-[var(--line-strong)] sm:px-5">
-            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
-              <FileTypeIcon file={file} />
-              <div className="min-w-0 flex-1">
-                <p className="break-all text-sm font-medium leading-snug text-[var(--ink)]">{file.filename}</p>
-                <p className="mt-1 break-words text-xs leading-relaxed text-[var(--ink-3)]">
-                  {file.size.toLocaleString()} bytes · {getFileKind(file)?.label ?? "File"} · {provenance(file)}
-                </p>
-                <p className="mt-1 truncate font-mono text-[10px] leading-relaxed text-[var(--ink-3)]" title={`SHA-256: ${file.checksum}`}>
-                  SHA-256: {file.checksum}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="outline"
-                  className="gap-2 rounded-lg sm:px-3"
-                  disabled={download.isPending}
-                  onClick={() => download.mutate(file.id)}
-                  aria-label={`Download ${file.filename}`}
-                >
-                  {download.isPending && download.variables === file.id
-                    ? <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-                    : <Download aria-hidden="true" className="size-4" />}
-                  <span className="hidden sm:inline">Download</span>
-                </Button>
-                {canManageFiles && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-[var(--ink-3)] hover:bg-[var(--err-soft)] hover:text-[var(--err)]"
-                    aria-label={`Delete ${file.filename}`}
-                    title="Delete file"
-                    onClick={() => { deleteFile.reset(); setFileToDelete(file); }}
-                  >
-                    <Trash2 aria-hidden="true" className="size-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-            {download.error && download.variables === file.id && (
-              <Alert
-                variant="destructive"
-                aria-label={`Download error for ${file.filename}`}
-                className="mt-3 w-full rounded-xl px-4 py-3"
-                style={{ background: "var(--err-soft)", borderColor: "color-mix(in srgb, var(--err) 30%, transparent)", color: "var(--err)" }}
-              >
-                <CircleAlert aria-hidden="true" className="size-4" />
-                <AlertTitle className="text-[0.8125rem]">Download is unavailable</AlertTitle>
-                <AlertDescription className="text-[0.8125rem] leading-relaxed" style={{ color: "var(--err)" }}>
-                  {getErrorDisplay(download.error).description}
-                </AlertDescription>
-              </Alert>
-            )}
+          <li key={file.id}>
+            <ArtifactCard file={file} detail={fileLabels ? fileLabels[file.id] ?? "Other published file" : provenance(file)}
+              onDownload={() => download.mutate(file.id)} disabled={download.isPending}
+              downloading={download.isPending && download.variables === file.id}
+              onDelete={canManageFiles ? () => { deleteFile.reset(); setFileToDelete(file); } : undefined}
+              error={download.variables === file.id ? download.error : undefined} />
           </li>
         ))}
       </ul>

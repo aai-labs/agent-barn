@@ -36,7 +36,7 @@ export function WorkflowRunTiming({ run }: { run: WorkflowRun }) {
   return (
     <section
       aria-label="Run timing"
-      className="min-w-0 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] px-6 py-4 md:col-start-2"
+      className="min-w-0 border-t border-[var(--line)] px-6 py-4"
     >
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h4 className="text-sm font-semibold">Time taken</h4>

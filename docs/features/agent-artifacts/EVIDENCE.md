@@ -6,6 +6,137 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## Selected-view grouping and larger captures — 2026-10-29 (local, uncommitted)
+
+The selected summary/step/collection is now one continuous bordered panel. Detail,
+input/output files and timing are separated inside that panel. The right grid
+item stretches to at least the navigation height, so connectors meet a visible
+panel edge even with absent files, a short collection or a longer step list.
+The stacked mobile layout hides the connectors.
+
+- **45 artifact/workflow-run browser tests passed** (1.5 minutes), including new
+  geometry checks of connector endpoints against the grouped panel for summary,
+  step and collection views, with files and with empty file sections/a longer rail.
+- Removing the grouping surface reproduced the new regression at the intended
+  border assertion: **1px expected, 0px received**. Restoring it passed both
+  geometry cases again alongside the larger screenshot capture (**3 tests,
+  8.9 seconds**). Mobile checks verify hidden connectors and a fitting panel.
+- UI types, lint and whitespace passed. Larger captures use a 1600px browser
+  viewport and include the complete run/picker context. The screenshots retain
+  their fixture-data boundary; no live Agent/model execution is claimed.
+
+## shadcn Attachment picker — 2026-10-29 (local, uncommitted)
+
+The next user review identified the cramped selector and visible native file
+control. The file input now spans the form width, with explicit selection/upload
+actions and a separate selected attachment with download/removal. Mobile stacks
+the actions; upload state uses a pending attachment. Removing a selection does not
+delete its stored Agent artifact.
+
+Shared artifact/input/output cards now compose the actual shadcn Attachment
+primitives fetched from the official `radix-nova` registry, matching
+`ui/components.json`. Registry imports map to existing local `cn` and Button
+utilities; no package or lockfile changes were needed. File inputs remain hidden
+behind the labeled upload action, which opens the browser chooser normally.
+
+- **43 artifact/workflow-run browser tests passed** (1.5 minutes), including the
+  full-width attachment, selection removal and required-input validation, actual
+  upload-button/file-chooser interaction on mobile, upload failures, retry identity,
+  download errors, deletion permissions and shared file rendering.
+- Restoring the former half-width grid made the retained layout regression fail
+  at its intended width assertion: **255 px received, more than 427.2 px expected**.
+  The fixed layout passed again. A final focused run passed the width/removal
+  regression and desktop/mobile capture case (**2 tests, 6.3 seconds**).
+- UI types, lint and whitespace checks passed. The refreshed desktop/mobile
+  screenshots are actual current-interface captures with fixture file metadata,
+  not live workflow/model execution evidence. No API/runtime contract changed in
+  this picker follow-up; the earlier named verification below retains its scope.
+
+## Workflow file presentation revision — 2026-10-29 (local, uncommitted)
+
+The user review of the initial fixture screenshots identified duplicate output
+and attachment lists, inconsistent file presentation and an unnecessary author
+file-format switch. This revision supersedes those portions of the 2026-10-28
+local approach below; exact input pins and byte handoff are retained.
+
+- Step/result panes now display each checkpoint output once. **All artifacts**
+  navigation below the steps opens the separate run publication collection,
+  including unfinished work, with accepted step/final files labeled.
+- Agent Artifacts, workflow inputs and output lists reuse file summaries/cards
+  with type icons and download/error treatment. Visible SHA-256 is removed;
+  stored immutable references and integrity verification still use checksums.
+- The draft format flags and required-file completion gate were removed. Output
+  descriptions guide the Agent's format choice, and the runtime instruction
+  requires generated files to be published and publication failures reported
+  honestly. Text-only completion remains supported.
+- **87 affected API tests passed** (57.10 seconds), covering file inputs, runs and
+  saved workflow definitions against real PostgreSQL/Garage where applicable.
+- **74 fixture browser tests passed** (2.8 minutes), including one output list per
+  step/result pane, collection navigation and selection state, consistent icons,
+  absent checksum text, file inputs/uploads, output descriptions without format
+  switches, mobile layout, download errors, deletion and permission behavior.
+- **Both real runtime-image byte workflows passed again** (2 tests, 22.45 seconds),
+  with the removed format flags absent from workflow creation. This retains the
+  deterministic CLI/API/PostgreSQL/Garage evidence boundary described below.
+- API quality, migration-head validation, UI types and lint passed. Refreshed
+  fixture screenshots were captured from the current browser UI for review in
+  this thread; they do not prove live model/session execution or quiescence.
+
+## Workflow file integration — 2026-10-28 (local, uncommitted)
+
+This slice starts from local staging `a9e42ebe9`, including AF-389 and AF-415
+(PRs [#326](https://github.com/aai-labs/agent-barn/pull/326) and
+[#328](https://github.com/aai-labs/agent-barn/pull/328)). See the current
+[workflow file contract](../agent-workflows.md#file-workflow-inputs-and-results)
+and [epic log](../agent-workflows/CHANGELOG.md). Historical results below remain
+tied to their named revisions.
+
+- **160 API tests passed** across workflow files, run lifecycle, workflow
+  definitions, artifacts, review references and trigger behavior, using real
+  PostgreSQL/Garage where applicable. New cases prove canonical exact input
+  references, atomic rollback, checksum/READY/Agent rejection, deletion protection,
+  required-file completion, two accepted checkpoints, final output references,
+  settlement release and parked-run/access-revocation fencing. After ordering
+  settlement locks consistently with pin acquisition, all **8 workflow-file
+  integration cases passed again** (13.81 seconds).
+- The durable receipt regression first failed at the intended duplicate admission
+  assertion, then passed after persisting admission before execution. Additional
+  trigger tests prove retrieval failure, revocation after download and cancellation
+  before runtime start prevent execution and clean temporary inputs.
+- **Both real runtime-image contracts passed** (2 tests, 24.17 seconds), using
+  `hermes-base:0.2.10` and `openclaw-base:0.7.7`. Each image retrieves pinned source
+  bytes, transforms/publishes a first file, retrieves that checkpoint file for a
+  second transformation, publishes/completes the final checkpoint, and retrieves
+  the exact final bytes with checksum verification. This runs the real CLI and
+  materialization helper, API, PostgreSQL and private Garage. Deterministic Python
+  performs the steps; it does **not** prove native Agent sessions, model-selected
+  tools, provider messaging or stop/quiescence.
+- **73 fixture browser tests passed** across artifacts, run progress and workflow
+  authoring (3.0 minutes), including exact file selection, real browser upload
+  bodies, failed-upload recovery, idempotent start retry and accepted/final output
+  views. Fixture metadata and HTTP interception do not prove live storage or model
+  execution. A further browser authoring check passed (1 test, 5.0 seconds),
+  verifying saved file inputs, required step/final files and their saved-plan labels.
+- `make check-api check-migrations check-ui lint-ui` and `git diff --check`
+  passed after temporary browser configuration/build output was removed. Review
+  covered current Agent/Organization scope, immutable references, pin lock order,
+  uncertain-effect fencing and compatibility with text-only saved definitions.
+  No independent review or complete repository-suite pass is claimed.
+
+Failed and expired attempts now block rather than automatically replay uncertain
+external effects. Durable receipts refuse the same attempt after process restart;
+this is admission evidence, not proof that a previously started tool stopped.
+Text-only saved snapshots retain their defaults. No PostgreSQL migration, release
+bump, external deployment, merge, push, Jira mutation or Confluence update is part
+of this slice. Running Agents need their trigger/CLI configuration refreshed.
+
+Live model/session acceptance remains open: this worktree has no selected
+Kubernetes context (`kubectl config current-context` reports that it is not set).
+The existing shared Docker application was not changed to manufacture live evidence.
+OpenClaw quiescence and run-read-policy coordination remain separate acceptance
+requirements; cancellation and revocation do not retract already read bytes or
+issued bearer links.
+
 ## PR delivery and Artifacts navigation — 2026-10-26
 
 The final delivery follow-up renames the visible tab/heading to **Artifacts** and
@@ -904,8 +1035,9 @@ API/storage downloads. No full
 repository test-suite pass, external deployment, live messaging delivery or
 production Garage validation is claimed.
 
-AF-389's uncertain-effect automatic retry, session-stop/quiescence, live OpenClaw
-Agent-session acceptance and run-read-policy coordination remain dependencies.
+The local workflow integration above removes AF-389's uncertain-effect automatic
+retry. Session-stop/quiescence, live Agent-session acceptance on both runtimes and
+run-read-policy coordination remain dependencies.
 Artifact READY proves stored bytes, not external provider effects, safe replay
 or tool quiescence. AF-390 remains the approval integration follow-up; file-backed
 reviews must pin exact IDs/checksums and release their references explicitly.

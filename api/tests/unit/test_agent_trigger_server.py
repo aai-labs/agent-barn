@@ -8,11 +8,12 @@ _SCRIPT = Path(__file__).parents[2] / "domains" / "agents" / "scripts" / "agent-
 
 
 @pytest.fixture
-def trigger_server():
+def trigger_server(tmp_path):
     spec = importlib.util.spec_from_file_location("agent_trigger_server_under_test", _SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.__dict__["RECEIPT_PATH"] = tmp_path / "receipts.sqlite3"
     return module
 
 
@@ -357,3 +358,56 @@ def test_hermes_step_runs_a_new_session_and_reads_the_final_reply(trigger_server
     assert seen["session_header"] == "workflow-a"
     assert seen["events"] == "/v1/runs/run-1/events"
     assert trigger_server._STEPS["a"]["run_id"] == "run-1"
+
+
+def test_finished_attempt_is_not_dispatched_again_after_restart(monkeypatch, trigger_server, tmp_path):
+    trigger_server.RECEIPT_PATH = tmp_path / "receipts.sqlite3"
+    payload = {
+        "attempt_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e",
+        "token": "token",
+        "callback_url": "http://api/attempts/a",
+    }
+
+    class Thread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(trigger_server.threading, "Thread", Thread)
+    assert trigger_server.start_workflow_step(payload) is True
+    trigger_server._STEPS.clear()  # A callback loss or process restart cannot authorize another execution.
+    assert trigger_server.start_workflow_step(payload) is False
+
+
+@pytest.mark.parametrize("failure", ["download", "revoked", "cancelled"])
+def test_file_handoff_failure_never_starts_runtime(monkeypatch, trigger_server, tmp_path, failure):
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(tmp_path))
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    files = [{"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e", "checksum": "a" * 64}]
+    reads, reports, sessions = [], [], []
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            reads.append(url)
+            if len(reads) > 1 and failure == "revoked":
+                raise RuntimeError("Admission fenced")
+            return {"session_id": "s", "prompt": "p", "files": files}
+        reports.append(body)
+
+    def retrieve(files, directory, attempt_id):
+        if failure == "download":
+            raise RuntimeError("File unavailable")
+        if failure == "cancelled":
+            trigger_server._STEPS["a"]["stopped"] = True
+        return []
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_retrieve_workflow_files", retrieve)
+    monkeypatch.setattr(trigger_server, "_hermes_step", lambda *args: sessions.append(args))
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert sessions == []
+    assert len(reports) == (0 if failure == "cancelled" else 1)
+    assert list(tmp_path.iterdir()) == []

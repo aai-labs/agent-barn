@@ -31,8 +31,24 @@ export class WorkflowRunsPage {
       .click();
     await this.page.getByLabel("Reporting period (required)").fill(period);
   }
+  async openInputReview() {
+    await this.page.getByRole("button", { name: "Run workflow", exact: true }).click();
+  }
+  async selectFile(label: string, filename: string) {
+    await this.page.getByRole("combobox", { name: `Select file for ${label}` }).click();
+    await this.page.getByRole("option", { name: new RegExp(filename) }).click();
+  }
+  async uploadFile(label: string, bytes: Buffer) {
+    await this.page.getByLabel(`Upload file for ${label}`).setInputFiles({ name: "uploaded.csv", mimeType: "text/csv", buffer: bytes });
+  }
   async start() {
     await this.page.getByRole("button", { name: /^Start run/ }).click();
+  }
+  async selectedViewGeometry() {
+    return {
+      panel: await this.page.getByLabel("Selected run view", { exact: true }).boundingBox(),
+      connector: await this.page.getByTestId("run-view-connector").boundingBox(),
+    };
   }
   async stepConnectorGeometry() {
     const rail = this.page.getByLabel("Step progress");
@@ -41,6 +57,9 @@ export class WorkflowRunsPage {
       second: await rail.getByTestId("step-marker").nth(1).boundingBox(),
       connector: await rail.getByTestId("step-connector").first().boundingBox(),
     };
+  }
+  async showArtifacts() {
+    await this.page.getByRole("button", { name: "All artifacts", exact: true }).click();
   }
   async backToRuns() {
     await this.page

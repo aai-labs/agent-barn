@@ -22,7 +22,7 @@ class WorkflowInput(StrictDTO):
     key: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
     label: Name
     description: Text
-    type: Literal["text", "number", "boolean"] = "text"
+    type: Literal["text", "number", "boolean", "file"] = "text"
     required: bool = True
 
 

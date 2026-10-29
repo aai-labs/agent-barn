@@ -1,8 +1,9 @@
 "use client";
 
+import { WorkflowFiles } from "./workflow-files";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
-import { ChevronRight, FileCheck2, LayoutDashboard } from "lucide-react";
+import { ChevronRight, FileCheck2, Files, LayoutDashboard } from "lucide-react";
 import { useQueryState } from "nuqs";
 import { workflowPageParser } from "../url-state";
 import { AppErrorState } from "@/components/app-error-state";
@@ -12,7 +13,7 @@ import {
   useWorkflowRunActions,
   useWorkflowRuns,
 } from "../hooks/use-workflow-runs";
-import type { WorkflowRun } from "../run-schemas";
+import type { WorkflowFile, WorkflowRun } from "../run-schemas";
 import { WorkflowPager } from "./workflow-pager";
 import { WorkflowMarkdown } from "./workflow-markdown";
 import { WorkflowRunTiming, stepTiming } from "./workflow-run-timing";
@@ -135,10 +136,7 @@ function RunSummary({
   );
   if (run.state === "SUCCEEDED")
     return (
-      <section
-        aria-label="Run summary"
-        className="overflow-hidden rounded-2xl border border-[var(--ok-muted)] bg-[var(--bg-elev)]"
-      >
+      <section aria-label="Run summary" className="overflow-hidden">
         <div
           className="px-6 py-5"
           style={{ background: "var(--ok-soft)", color: "var(--ink)" }}
@@ -168,7 +166,7 @@ function RunSummary({
     );
   if (run.state === "CANCELLED")
     return (
-      <RunCard label="Run summary" title="Run cancelled">
+      <RunCard embedded label="Run summary" title="Run cancelled">
         <div className="space-y-4">
           {run.settledAt && (
             <p className="text-sm text-[var(--ink-3)]">
@@ -184,6 +182,7 @@ function RunSummary({
   if (run.state === "FAILED" || run.state === "BLOCKED")
     return (
       <RunCard
+        embedded
         label="Run summary"
         title={
           run.state === "FAILED" ? "Run failed" : "This run needs attention"
@@ -194,6 +193,7 @@ function RunSummary({
     );
   return (
     <RunCard
+      embedded
       label="Run summary"
       title={
         run.state === "QUEUED"
@@ -232,7 +232,7 @@ function StepDetail({
     run.state,
   );
   return (
-    <RunCard label="Step detail">
+    <RunCard embedded label="Step detail">
       <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-[var(--ink-3)]">
         Step {index + 1} of {run.steps.length}
       </p>
@@ -272,10 +272,11 @@ function RunContents({
   canManageFiles: boolean;
   run: WorkflowRun;
 }) {
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [selectedView, setSelectedView] = useState("summary");
+  const showArtifacts = selectedView === "artifacts";
   const actions = useWorkflowRunActions(agentId);
   const [confirm, setConfirm] = useState(false);
-  const selectedStep = run.steps.find((step) => step.id === selectedStepId);
+  const selectedStep = run.steps.find((step) => step.id === selectedView);
   const started = new Date(run.createdAt).toLocaleString();
   return (
     <section aria-label="Run detail">
@@ -309,10 +310,10 @@ function RunContents({
             aria-label={
               run.state === "SUCCEEDED" ? "Result ready" : "Run overview"
             }
-            aria-current={!selectedStep ? "page" : undefined}
+            aria-current={selectedView === "summary" ? "page" : undefined}
             aria-controls="workflow-run-panel"
-            onClick={() => setSelectedStepId(null)}
-            className={`relative mb-6 flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 ${!selectedStep ? "border-[var(--ok-muted)] bg-[var(--ok-soft)]" : "border-[var(--line)] bg-[var(--bg-elev)] hover:bg-[var(--bg-soft)]"}`}
+            onClick={() => setSelectedView("summary")}
+            className={`relative mb-6 flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 ${selectedView === "summary" ? "border-[var(--ok-muted)] bg-[var(--ok-soft)]" : "border-[var(--line)] bg-[var(--bg-elev)] hover:bg-[var(--bg-soft)]"}`}
           >
             <span
               aria-hidden="true"
@@ -339,26 +340,126 @@ function RunContents({
               size={16}
               className="shrink-0 text-[var(--ink-3)]"
             />
-            {!selectedStep && <RunViewConnector />}
+            {selectedView === "summary" && <RunViewConnector />}
           </button>
           <StepRail
             steps={run.steps}
             runState={run.state}
-            selectedStepId={selectedStepId}
-            onSelectStep={setSelectedStepId}
+            selectedStepId={selectedStep?.id}
+            onSelectStep={setSelectedView}
           />
+          <button
+            type="button"
+            aria-label="All artifacts"
+            aria-current={showArtifacts ? "page" : undefined}
+            aria-controls="workflow-run-panel"
+            onClick={() => setSelectedView("artifacts")}
+            className={`relative mt-6 flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 ${showArtifacts ? "border-[var(--ok-muted)] bg-[var(--ok-soft)]" : "border-[var(--line)] bg-[var(--bg-elev)] hover:bg-[var(--bg-soft)]"}`}
+          >
+            <span
+              aria-hidden="true"
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--bg-soft)] text-[var(--ink-3)]"
+            >
+              <Files size={18} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold">All artifacts</span>
+              <span className="mt-1 block text-xs text-[var(--ink-3)]">
+                Files from every step
+              </span>
+            </span>
+            <ChevronRight
+              aria-hidden="true"
+              size={16}
+              className="shrink-0 text-[var(--ink-3)]"
+            />
+            {showArtifacts && <RunViewConnector />}
+          </button>
         </nav>
-        <div className="min-w-0 space-y-4">
-          <div id="workflow-run-panel" className="min-w-0 [&>section]:h-full">
-            {selectedStep ? (
-              <StepDetail run={run} step={selectedStep} />
-            ) : (
-              <RunSummary run={run} agentName={agent.name} />
-            )}
-          </div>
-          <AgentFiles canManageFiles={canManageFiles} key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
-          <WorkflowRunTiming run={run} />
-        </div>
+        <section
+          id="workflow-run-panel"
+          aria-label="Selected run view"
+          className="min-w-0 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]"
+        >
+          {showArtifacts ? (
+            <div className="px-6 py-5">
+              <h3 className="text-lg font-semibold">All artifacts</h3>
+              <p className="mt-3 text-sm text-[var(--ink-3)]">
+                Files published during this run, including work from unfinished
+                steps. Step and final outputs are labeled below.
+              </p>
+              <AgentFiles
+                canManageFiles={canManageFiles}
+                key={run.id}
+                agentId={agentId}
+                runId={run.id}
+                showHeading={false}
+                fileLabels={Object.fromEntries(
+                  run.steps.flatMap((step, index) =>
+                    (step.artifacts ?? []).map((file) => [
+                      file.artifactId,
+                      run.finalArtifacts?.some(
+                        (final) => final.artifactId === file.artifactId,
+                      )
+                        ? "Final output"
+                        : `Step ${index + 1} · ${step.name}`,
+                    ]),
+                  ),
+                )}
+                polling={["QUEUED", "RUNNING", "CANCELLING"].includes(
+                  run.state,
+                )}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="min-w-0">
+                {selectedStep ? (
+                  <StepDetail run={run} step={selectedStep} />
+                ) : (
+                  <RunSummary run={run} agentName={agent.name} />
+                )}
+              </div>
+              <WorkflowFiles
+                agentId={agentId}
+                title={selectedStep ? "Step input files" : "Run input files"}
+                files={Array.from(
+                  new Map(
+                    [
+                      ...Object.values(run.inputs).filter(
+                        (value): value is WorkflowFile =>
+                          typeof value === "object",
+                      ),
+                      ...(selectedStep
+                        ? run.steps
+                            .slice(0, run.steps.indexOf(selectedStep))
+                            .flatMap((step) => step.artifacts ?? [])
+                        : []),
+                    ].map((file) => [file.artifactId, file]),
+                  ).values(),
+                )}
+              />
+              {selectedStep ? (
+                <WorkflowFiles
+                  agentId={agentId}
+                  title="Step outputs"
+                  description={selectedStep.outputDescription}
+                  files={selectedStep.artifacts ?? []}
+                />
+              ) : (
+                run.state === "SUCCEEDED" && (
+                  <WorkflowFiles
+                    agentId={agentId}
+                    title="Final outputs"
+                    description={run.finalOutputDescription}
+                    files={run.finalArtifacts ?? []}
+                  />
+                )
+              )}
+              <WorkflowRunTiming run={run} />
+            </>
+          )}
+        </section>
       </div>
       <ConfirmationDialog
         open={confirm}

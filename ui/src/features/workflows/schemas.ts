@@ -36,7 +36,7 @@ function draftSchema(authoring: boolean) {
       ? z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/, "Edit the input label")
       : z.string(),
     description: text,
-    type: z.enum(["text", "number", "boolean"]).default("text"),
+    type: z.enum(["text", "number", "boolean", "file"]).default("text"),
     required: z.boolean().default(true),
   });
   return z.object({

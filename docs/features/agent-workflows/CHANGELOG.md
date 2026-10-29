@@ -6,14 +6,28 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Current state
 
-- Delivered: AF-388 manual authoring is merged through PR #308.
-- Dependency: AF-389 [PR #326](https://github.com/aai-labs/agent-barn/pull/326) is included in fetched staging via merge `42ea3fc7`. AF-415 originally launched from its feature branch and is now locally rebased onto `origin/staging` at `e207a212`. The PR delivery is being refreshed against staging after the independent review.
-- Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
-- Reviewed: the complete local feature at `36096b17` was independently reviewed against staging `e207a212`; the two blocking findings were fixed in `ef802873`, and an independent focused recheck approved that correction with no new blockers. Full-review and recheck scope/verification are distinguished in the artifact evidence.
-- Next: finalize PR delivery and AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
-- Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
+- Delivered base: this worktree starts at local staging `a9e42ebe9`, including AF-389 and AF-415 (PRs [#326](https://github.com/aai-labs/agent-barn/pull/326) and [#328](https://github.com/aai-labs/agent-barn/pull/328)). Existing publication, checkpoint references and run/step attachments are retained.
+- Local integration: typed file inputs pin existing/uploaded Agent files; handoff retrieves verified bytes; Agent-chosen deliverables follow output descriptions. Step/final files use uniform cards, and a separate All artifacts view collects publications across the run. Failed/expired attempts block; durable trigger receipts prevent same-attempt replay after restart.
+- Verification: the current presentation/format revision passed 87 affected API tests, 74 fixture browser cases and both runtime-image byte pipelines. API/UI quality and migration checks passed. [Artifact evidence](../agent-artifacts/EVIDENCE.md#workflow-file-presentation-revision--2026-10-29-local-uncommitted) records this revision and earlier broader verification, distinguishing storage/image contracts from live acceptance.
+- Next: live Agent-session acceptance and review of this local slice, then AF-390 approval integration. Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
+- Blockers: live model/session execution on both runtimes, truthful OpenClaw stop/quiescence and run-read-policy acceptance remain open. Deployment/provisioning is separate operational work. Explicit recovery/reconciliation is not exposed by this slice.
 
 ## Changes
+
+### 2026-10-29 — AF-387 — workflow file presentation refinement (local, uncommitted)
+
+- Grouping follow-up: selected summary/step/collection views now share one continuous bordered panel, with internal file/timing separators and a height covering the navigation rail. Desktop connectors meet that panel's edge; stacked mobile views hide them. All 45 artifact/run browser cases passed; removing the grouping surface reproduced the new border regression, and restoration passed both geometry cases. Larger current-interface fixture captures accompany the change.
+- Picker follow-up: replaced the cramped half-width selector/native file chooser with full-width selection/upload actions and a removable selected attachment. Shared file cards now compose the actual shadcn Attachment primitives from the repository's `radix-nova` registry, with upload state and existing download/error behavior. All 43 artifact/run browser cases and UI types/lint passed; the layout regression failed with the old grid and passed after restoration. Refreshed fixture captures cover desktop and mobile.
+- Changed: shared icon cards for Agent artifacts and workflow file inputs/outputs; visible checksums removed. Each step/final result shows its output files once. All artifacts navigation below the steps opens the full run publication collection, including unfinished work, with accepted outputs labeled.
+- Behavior: removed the local draft's step/final file-format switches and completion gate. Output descriptions guide the Agent's format choice; every generated file must be published to become downloadable. Exact pinning, byte verification and text-only execution are retained.
+- Verification: 87 affected API tests, all 74 artifact/workflow browser cases, both deterministic runtime-image byte workflows and API/UI quality/migration checks passed. Refreshed fixture screenshots show the revised presentation in this thread. No live model/session acceptance is claimed.
+
+### 2026-10-28 — AF-387 — workflow/file integration (local, uncommitted)
+
+- Changed: additive schema-v1 file inputs and explicit file output types; transactional input pinning, canonical metadata and shared context bounds; verified byte materialization before runtime execution; accepted step and final output references in run reads and UI.
+- Lifecycle: failures and expired/uncertain sessions block automatic replay. PVC-backed trigger receipts prevent resubmitting a previously admitted attempt. Cancellation releases pins on settlement; parked runs retain them. Current access fences workflow reads, publication and completion.
+- Compatibility: existing text-only workflows and saved snapshots retain their text behavior; no PostgreSQL migration or release bump. Agent update/restart is required to load the trigger/CLI changes.
+- Verification: affected API/browser cases, both deterministic runtime-image byte workflows and quality/migration checks passed; see the linked evidence for counts and limits. No live model, provider messaging, independent review, merge, push, Jira mutation or Confluence update is claimed.
 
 ### 2026-10-27 — AF-415 — CI Garage bootstrap
 

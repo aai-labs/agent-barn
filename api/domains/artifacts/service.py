@@ -185,8 +185,19 @@ class ArtifactService:
         return row
 
     def link(
-        self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope, seconds: int = 900
+        self,
+        artifact_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        seconds: int = 900,
+        *,
+        attempt_id: UUID | None = None,
     ) -> ArtifactLinkRead:
+        if attempt_id is not None:
+            try:
+                self.repository.authorize_workflow_read(artifact_id, attempt_id, agent_id)
+            except WorkflowConflict as exc:
+                raise HTTPException(409, str(exc)) from exc
         self.enabled()
         row = self.ready(artifact_id, agent_id, scope)
         if not 1 <= seconds <= self.config.artifact_link_max_seconds:

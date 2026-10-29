@@ -13,8 +13,10 @@ import hmac
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -63,6 +65,7 @@ def _database() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS trigger_receipts ("
         "idempotency_key TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, native_job_id TEXT)"
     )
+    db.execute("CREATE TABLE IF NOT EXISTS workflow_step_receipts (attempt_id TEXT PRIMARY KEY)")
     db.commit()
     return db
 
@@ -248,7 +251,7 @@ _STEP_PATH = re.compile(r"^/agent-triggers/v1/workflow-steps/([0-9a-f-]{36})/sto
 _STEP_TIMEOUT_SECONDS = 900
 _SUMMARY_LIMIT = 4000
 # In-flight steps by attempt id. Process-local: a pod restart ends the session, and the
-# platform retries the step once the attempt expires.
+# platform blocks the run when the attempt expires.
 _STEPS_LOCK = threading.Lock()
 _STEPS: dict[str, dict] = {}
 
@@ -378,10 +381,50 @@ def _parse_step_reply(text: str) -> tuple[bool, str]:
     return True, text.strip()[:_SUMMARY_LIMIT]
 
 
+def _retrieve_workflow_files(files: list[dict], directory: str, attempt_id: str) -> list[dict]:
+    materialized = []
+    for item in files:
+        artifact_id = str(UUID(item["artifact_id"]))
+        destination = str(Path(directory) / artifact_id)
+        result = subprocess.run(
+            [
+                "/usr/local/bin/agentbarn-artifacts",
+                "retrieve",
+                artifact_id,
+                destination,
+                "--checksum",
+                item["checksum"],
+                "--attempt-id",
+                attempt_id,
+            ],
+            capture_output=True,
+            timeout=150,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError("Workflow input file retrieval failed; check access and storage availability")
+        materialized.append({**item, "path": destination})
+    return materialized
+
+
 def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
+    directory = None
     try:
         handoff = _post_json(f"{callback_url}/handoff", token, None, method="GET") or {}
         session_id, prompt = str(handoff["session_id"]), str(handoff["prompt"])
+        if handoff.get("files"):
+            workspace = os.environ.get("ARTIFACT_UPLOAD_ROOTS", "").split(":")[0]
+            if not workspace:
+                raise RuntimeError("Workflow file workspace is unavailable")
+            directory = tempfile.mkdtemp(prefix="workflow-files-", dir=workspace)
+            files = _retrieve_workflow_files(handoff["files"], directory, attempt_id)
+            _post_json(f"{callback_url}/handoff", token, None, method="GET")
+            prompt += "\nVerified input files (read these actual bytes): " + json.dumps(files)
+        with _STEPS_LOCK:
+            if _STEPS.get(attempt_id, {}).get("stopped"):
+                return
+        if len(prompt.encode()) > 64000:
+            raise RuntimeError("Workflow context exceeds the context limit")
         if RUNTIME_KIND == "hermes":
             text = _hermes_step(attempt_id, session_id, prompt)
         elif RUNTIME_KIND == "openclaw":
@@ -398,6 +441,8 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
     except Exception as exc:  # every failure is reported, never swallowed silently
         _report_failure(attempt_id, token, callback_url, str(exc) or exc.__class__.__name__)
     finally:
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
         with _STEPS_LOCK:
             _STEPS.pop(attempt_id, None)
 
@@ -415,7 +460,7 @@ def _report_failure(
             token,
             {"reason": reason[:2000].replace(token, "[redacted]"), "needs_attention": needs_attention},
         )
-    except Exception:  # the platform expires the attempt and retries
+    except Exception:  # the platform expires and blocks the uncertain attempt
         pass
 
 
@@ -429,6 +474,12 @@ def start_workflow_step(payload: dict) -> bool:
     with _STEPS_LOCK:
         if attempt_id in _STEPS:
             return False
+        # Persist admission before starting any I/O. An uncertain/crashed dispatch never replays tools.
+        with closing(_database()) as db:
+            cursor = db.execute("INSERT OR IGNORE INTO workflow_step_receipts(attempt_id) VALUES (?)", (attempt_id,))
+            db.commit()
+            if cursor.rowcount == 0:
+                return False
         _STEPS[attempt_id] = {"run_id": None, "stopped": False}
     threading.Thread(target=_run_workflow_step, args=(attempt_id, token, callback_url), daemon=True).start()
     return True

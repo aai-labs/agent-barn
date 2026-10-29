@@ -14,7 +14,9 @@ from sqlmodel.sql.expression import SelectOfScalar
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
-from api.domains.artifacts.references import attempt_files, release
+from api.domains.artifacts import config as artifact_config
+from api.domains.artifacts.models import Artifact
+from api.domains.artifacts.references import attempt_files, pin, release
 from api.domains.events.catalog import EVENT_REGISTRY, WORKFLOW_RUN_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
@@ -103,7 +105,9 @@ class WorkflowRunRepository:
             checkpoints = session.exec(select(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run_id))
             for checkpoint in checkpoints:
                 records.setdefault(checkpoint.step_index, {}).update(
-                    summary=checkpoint.result.get("summary"), completed_at=checkpoint.created_at
+                    summary=checkpoint.result.get("summary"),
+                    completed_at=checkpoint.created_at,
+                    artifacts=checkpoint.result.get("artifacts", []),
                 )
             return records
 
@@ -215,9 +219,26 @@ class WorkflowRunRepository:
                 initiating_membership_id=membership_id,
                 client_request_id=payload.client_request_id,
                 request_hash=request_hash,
-                inputs=payload.inputs,
+                inputs=payload.model_dump(mode="json")["inputs"],
                 runtime=runtime,
             )
+            file_inputs = [value for value in run.inputs.values() if isinstance(value, dict)]
+            if len(file_inputs) > artifact_config.MAX_FILES_PER_ATTEMPT:
+                raise WorkflowConflict("At most 16 file inputs are supported; combine files in an archive")
+            for value in sorted(file_inputs, key=lambda item: item["artifact_id"]):
+                pin(
+                    session,
+                    UUID(value["artifact_id"]),
+                    value["checksum"],
+                    agent_id,
+                    scope.organization_id,
+                    "run",
+                    run.id,
+                )
+                artifact = session.get_one(Artifact, UUID(value["artifact_id"]))
+                value.update(filename=artifact.filename, size=artifact.size)
+            if len(json.dumps(file_inputs, ensure_ascii=False).encode()) > artifact_config.MAX_RUN_FILE_CONTEXT_BYTES:
+                raise WorkflowConflict("Workflow file inputs exceed the file-reference context limit")
             session.add(run)
             session.flush()
             delivery_ids = self._event(session, run, "STARTED", f"Run started using version {version.number}")
@@ -340,6 +361,15 @@ class WorkflowRunRepository:
                     "output_description": version.snapshot["steps"][attempt.step_index].get("artifact_description"),
                 },
                 "completed_steps": [item.result for item in checkpoints],
+                "files": list(
+                    {
+                        item["artifact_id"]: item
+                        for item in [
+                            *[value for value in run.inputs.values() if isinstance(value, dict)],
+                            *[file for checkpoint in checkpoints for file in checkpoint.result.get("artifacts", [])],
+                        ]
+                    }.values()
+                ),
                 "final_output_description": version.snapshot.get("final_artifact_description")
                 if attempt.step_index == len(version.snapshot["steps"]) - 1
                 else None,
@@ -362,10 +392,12 @@ class WorkflowRunRepository:
             run, attempt = self._bound(session, attempt_id, token)
             version = session.get_one(WorkflowVersion, run.version_id)
             step = version.snapshot["steps"][attempt.step_index]
+            files = attempt_files(session, attempt.id)
             checkpoint = {
                 "summary": result.summary,
                 "step_id": step["id"],
-                "artifacts": attempt_files(session, attempt.id),
+                "artifacts": files,
+                "output_description": step.get("artifact_description"),
             }
             session.add(
                 WorkflowCheckpoint(
@@ -388,20 +420,14 @@ class WorkflowRunRepository:
         with Session(self.delegate.engine) as session:
             run, attempt = self._bound(session, attempt_id, token)
             run.revision += 1
-            if failure.needs_attention:
-                attempt.state = "STOPPED"
-                session.add(attempt)
-                run.state, run.reason = "BLOCKED", failure.reason
-                delivery_ids = self._event(session, run, "NEEDS_ATTENTION", failure.reason)
-            else:
-                delivery_ids = self._event(session, run, "ATTEMPT_FAILED", failure.reason)
+            attempt.state = "STOPPED"
+            session.add(attempt)
+            run.state, run.reason = "BLOCKED", failure.reason
+            delivery_ids = self._event(
+                session, run, "NEEDS_ATTENTION" if failure.needs_attention else "ATTEMPT_FAILED", failure.reason
+            )
             session.commit()
-            run_id = run.id
-        if not failure.needs_attention:
-            # The session already ended, so the step can retry within the attempt limit.
-            _, recovery_ids = self.advance(run_id, stopped=True, lost=True)
-            delivery_ids.extend(recovery_ids)
-        return delivery_ids
+            return delivery_ids
 
     def mark_dispatched(self, attempt_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
@@ -478,19 +504,10 @@ class WorkflowRunRepository:
                     run.state, run.reason = "CANCELLED", "Cancelled; completed step summaries are preserved"
                     self._settle(session, run)
                 elif expired and authorized and run.state != "PAUSED":
-                    # Reasoning-only work can retry after confirmed quiescence.
-                    retries = session.exec(
-                        select(sa.func.count())
-                        .select_from(WorkflowAttempt)
-                        .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
-                    ).one()
                     run.state, run.reason = (
-                        ("QUEUED", "Fresh attempt after runtime loss")
-                        if retries < 3
-                        else ("FAILED", "Attempt recovery limit reached")
+                        "BLOCKED",
+                        "Attempt outcome is uncertain; inspect external effects before starting another run",
                     )
-                    if run.state == "FAILED":
-                        self._settle(session, run)
                 run.revision += 1
                 delivery_ids = self._event(session, run, "FENCED", run.reason or "Attempt stopped")
                 session.commit()

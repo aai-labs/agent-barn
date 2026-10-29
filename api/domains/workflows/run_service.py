@@ -18,6 +18,7 @@ from api.domains.workflows.run_models import (
     AttemptFailure,
     AttemptResult,
     RunState,
+    WorkflowFileInput,
     WorkflowHistoryRead,
     WorkflowRun,
     WorkflowRunCreate,
@@ -38,7 +39,8 @@ def validate_inputs(draft: WorkflowDraft, values: dict) -> None:
             continue
         value = values[key]
         valid = (
-            (item.type == "text" and isinstance(value, str) and 0 < len(value.strip()) <= 16000)
+            (item.type == "file" and isinstance(value, WorkflowFileInput))
+            or (item.type == "text" and isinstance(value, str) and 0 < len(value.strip()) <= 16000)
             or (item.type == "boolean" and type(value) is bool)
             or (item.type == "number" and type(value) in {int, float} and math.isfinite(value))
         )
@@ -96,6 +98,8 @@ class WorkflowRunService:
                     else "RUNNING"
                     if index == run.next_step and run.state == "RUNNING"
                     else "PENDING",
+                    "output_description": step.get("artifact_description"),
+                    "artifacts": (step_records or {}).get(index, {}).get("artifacts", []),
                     "summary": (step_records or {}).get(index, {}).get("summary"),
                     "started_at": (step_records or {}).get(index, {}).get("started_at"),
                     "completed_at": (step_records or {}).get(index, {}).get("completed_at"),
@@ -106,6 +110,10 @@ class WorkflowRunService:
             final_summary=(step_records or {}).get(len(version.snapshot["steps"]) - 1, {}).get("summary")
             if run.state == "SUCCEEDED"
             else None,
+            final_output_description=version.snapshot.get("final_artifact_description"),
+            final_artifacts=(step_records or {}).get(len(version.snapshot["steps"]) - 1, {}).get("artifacts", [])
+            if run.state == "SUCCEEDED"
+            else [],
             created_at=run.created_at,
             settled_at=run.settled_at,
             allowed_actions=["cancel"] if can_cancel and run.state not in TERMINAL_STATES | {"CANCELLING"} else [],

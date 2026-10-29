@@ -103,16 +103,18 @@ export function RunCard({
   label,
   children,
   className = "",
+  embedded = false,
 }: {
   title?: string;
   label?: string;
   children: ReactNode;
   className?: string;
+  embedded?: boolean;
 }) {
   return (
     <section
       aria-label={label}
-      className={`rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-6 ${className}`}
+      className={`${embedded ? "px-6 py-5" : "rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-6"} ${className}`}
     >
       {title && <h4 className="mb-4 text-lg font-semibold">{title}</h4>}
       {children}
@@ -134,6 +136,7 @@ export function RunViewConnector() {
   return (
     <span
       aria-hidden="true"
+      data-testid="run-view-connector"
       className="pointer-events-none absolute -right-8 top-1/2 z-30 hidden h-px w-8 -translate-y-1/2 bg-gradient-to-r from-[var(--line-strong)] to-[var(--ok)] md:block"
     >
       <span className="absolute -right-[3px] top-1/2 size-1.5 -translate-y-1/2 rounded-full bg-[var(--ok)] ring-4 ring-[var(--bg-elev)]" />

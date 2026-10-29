@@ -6,6 +6,8 @@ import { useOrganizationContext } from "@/features/organizations/providers/organ
 import { api } from "@/shared/api";
 import { artifactsKey } from "@/shared/query-keys";
 import {
+  ArtifactSchema,
+  type Artifact,
   ArtifactStorageSchema,
   type ArtifactStorage,
   ArtifactListSchema,
@@ -36,12 +38,7 @@ export function useArtifacts(agentId: string, runId?: string, stepId?: string, p
     getNextPageParam: last => last.page * last.pageSize < last.total ? last.page + 1 : undefined,
 
   });
-  const download = useMutation({
-    mutationFn: async (artifactId: string) => (
-      await api.get<ArtifactLink>(`${base}/${artifactId}/download-link`, { schema: ArtifactLinkSchema })
-    ).data,
-    onSuccess: (link) => { window.location.assign(link.url); },
-  });
+  const download = useArtifactDownload(agentId);
   const deleteFile = useMutation({
     mutationFn: async (artifactId: string) => { await api.delete(`${base}/${artifactId}`); },
     onSuccess: async () => {
@@ -70,4 +67,59 @@ export function useArtifactStorage(agentId: string) {
     },
   });
   return { storage, provision };
+}
+
+export function useArtifactUpload(agentId: string) {
+  const base = `${useOrganizationApiBase()}/agents/${agentId}/artifacts`;
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      if (file.size > 100 * 1024 * 1024)
+        throw new Error("Files must be at most 100 MiB");
+      const bytes = await file.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      const checksum = Array.from(new Uint8Array(digest), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+      const staged = (
+        await api.post<Artifact>(
+          base,
+          {
+            filename: file.name,
+            contentType: file.type || "application/octet-stream",
+            size: file.size,
+            checksum,
+          },
+          { schema: ArtifactSchema },
+        )
+      ).data;
+      return (
+        await api.put<Artifact>(
+          `${base}/${staged.id}/content`,
+          new Blob([bytes]),
+          {
+            headers: { "Content-Type": "application/octet-stream" },
+            schema: ArtifactSchema,
+            timeout: 120000,
+          },
+        )
+      ).data;
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: artifactsKey.all }),
+  });
+}
+
+export function useArtifactDownload(agentId: string) {
+  const base = `${useOrganizationApiBase()}/agents/${agentId}/artifacts`;
+  return useMutation({
+    mutationFn: async (artifactId: string) =>
+      (
+        await api.get<ArtifactLink>(`${base}/${artifactId}/download-link`, {
+          schema: ArtifactLinkSchema,
+        })
+      ).data,
+    onSuccess: (link) => {
+      window.location.assign(link.url);
+    },
+  });
 }

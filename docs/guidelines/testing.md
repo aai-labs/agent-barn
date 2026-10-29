@@ -447,7 +447,10 @@ These tests require Docker, never installation storage credentials.
 `make test-artifact-runtime` is an explicit additional contract; set both
 `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` to already-built images. It executes
 the generated ConfigMap command as each image's normal user against real API,
-PostgreSQL and Garage, including verified retrieval. It uses Linux Docker host
+PostgreSQL and Garage, including verified retrieval and a two-step file workflow
+that transforms retrieved bytes and checkpoints/publishes each deliverable. The
+steps are deterministic Python inside each image; they do not exercise live model
+selection or native runtime session execution. It uses Linux Docker host
 networking for its disposable HTTP listener. It proves executable/byte behavior,
 not a live model's tool selection, provider messaging or workflow stop semantics.
 The regular `make test-api-runtime RUNTIME=...` pattern remains runtime-specific;

@@ -70,6 +70,11 @@ export class WorkflowsPage {
       .getByRole("button", { name, exact: true })
       .click();
   }
+  async useFileInput() {
+    await this.selectSection("Required inputs");
+    await this.page.getByRole("combobox", { name: "Input 1 type" }).click();
+    await this.page.getByRole("option", { name: "File", exact: true }).click();
+  }
   async history() {
     await this.page.getByRole("tab", { name: "Version history" }).click();
   }

@@ -15,7 +15,14 @@ from api.infrastructure.postgres.models import BaseModel
 
 TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 RunState = Literal["QUEUED", "RUNNING", "PAUSED", "BLOCKED", "CANCELLING", "CANCELLED", "SUCCEEDED", "FAILED"]
-InputValue = StrictStr | StrictInt | StrictFloat | StrictBool
+
+
+class WorkflowFileInput(StrictDTO):
+    artifact_id: UUID
+    checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+InputValue = StrictStr | StrictInt | StrictFloat | StrictBool | WorkflowFileInput
 
 
 class WorkflowRunCreate(StrictDTO):
@@ -129,6 +136,8 @@ class WorkflowRunRead(DTO):
     reason: str | None
     # The final step's reported summary; present only once the run has succeeded.
     final_summary: str | None = None
+    final_output_description: str | None = None
+    final_artifacts: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
     settled_at: datetime | None
     allowed_actions: list[Literal["cancel"]]
