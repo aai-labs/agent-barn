@@ -1,10 +1,56 @@
-# AF-415 verification evidence
+# Agent artifacts verification evidence
 
 Initial implementation verified 2026-10-22; independent-review corrections verified locally 2026-10-23 in the independent `feature/af-415-agent-artifacts` worktree,
-starting at local AF-389 head `6e109add`. AF-389 PR
-[#326](https://github.com/aai-labs/agent-barn/pull/326) remains open against staging.
+starting at local AF-389 head `6e109add`. At that initial verification, AF-389 PR
+[#326](https://github.com/aai-labs/agent-barn/pull/326) was open against staging; the
+current integration base includes both AF-389 and AF-415.
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
+
+## PR preparation and complete verification — 2026-10-29
+
+The feature is committed and rebased onto staging `57bbefd0f`; integration
+implementation is `390cd534a` and the AF-384 exclusion/evidence follow-up is
+`60164dcc0`. The screenshots retained in
+[workflow integration evidence](evidence/workflow-integration/README.md) were
+refreshed on that base and are embedded in the PR description with pinned links.
+
+| Check | Observed result |
+| --- | --- |
+| Complete API suite (`make test-api`) | **6,578 passed**, 383.36 seconds; eight xdist workers, local dotenv loading disabled |
+| Complete UI suite (`CI=true make test-ui`) | **1,053 passed, 5 skipped**, 11.6 minutes; includes the production Next build |
+| Kubernetes client integration | **19 passed**, 105.01 seconds; dedicated disposable k3d cluster created and deleted without changing the default context |
+| Hermes runtime-image suite | **16 passed**, 68.63 seconds, `hermes-base:0.2.10` |
+| OpenClaw runtime-image suite | **12 passed**, 43.66 seconds, `openclaw-base:0.7.7` |
+| Both two-step artifact byte workflows | **2 passed**, final recheck 29.96 seconds |
+| Persistent Garage/authenticated-browser deployment contract | **1 passed**, 40.25 seconds |
+| Trigger and file-sync helper suite after staging integration | **60 passed**, 26.07 seconds |
+| API/UI quality, migration-head, workflow/artifact/memory charts, monitoring rules/auth, whitespace | Passed |
+| API image build | Passed, local `workflow-artifacts-api:check`; no image push/deployment |
+
+The staging integration regression materializes input bytes and runs the actual
+file-sync scanner before the step returns. Both runtime cases failed when the
+visible temporary path entered the sync manifest, then passed with the hidden
+`.workflow-files-*` directory. The normal workspace file remains in the manifest,
+the Agent reads the pinned bytes, and temporary inputs are cleaned afterward.
+
+Harness failures were diagnosed before the successful full run: local `.env`
+values first failed configuration and contaminated subprocess settings. The
+final run uses `PYTHON_DOTENV_DISABLED=1`, retaining CI/test defaults and the
+existing safe test setup. Four later Compose failures were reproduced as Docker
+address-pool exhaustion: one probe network succeeded and the second failed with
+"all predefined address pools have been fully subnetted". Seventeen empty
+historical Garage test networks were removed after inspecting their lack of
+container endpoints; active networks, containers and volumes were preserved.
+All four previously failing cases passed in the final complete API run. Earlier
+failed/interrupted attempts are not counted as passing evidence.
+
+Self-review covered routed contracts, current scope/authority, lifecycle and lock
+order, sync exclusions, bounded contexts and uniform UI behavior. No independent
+review or current-head GitHub CI result is claimed by these local results. Live
+model-selected workflow sessions, provider delivery, OpenClaw quiescence and
+run-read-policy coordination remain acceptance follow-ups. No merge, external
+deployment, Jira mutation or Confluence update was performed.
 
 ## Selected-view grouping and larger captures — 2026-10-29 (local, uncommitted)
 
