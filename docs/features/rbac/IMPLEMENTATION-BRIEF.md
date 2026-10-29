@@ -95,6 +95,35 @@ Subordinate repositories must join or use an accessible-Agent query so alternate
 
 Agent-authenticated gateway traffic has no user Membership. The memory gateway instead resolves the hash of a per-start Agent credential to one undeleted, running, memory-enabled Agent and its existing Organization, then reads only that Agent's same-Organization Memory Grants. Client bank names and tags cannot choose a different tenant or identity. Organization Memory grants permit either read only or read and write; both add a strict `scope:team` scope to recall, and other-Agent grants add exact private scopes only. Shared authorship grants no private read access. The Agent Memory tab requires human `activity.read` and includes Organization records only with the viewed Agent's current Organization grant; revocation hides its own shared contributions too. The explicit writer endpoint requires a live write grant. User-facing memory settings and grants retain the Organization and Agent Permission checks above. See [`Agent Memory`](../agent-memory.md#use-the-memory-gateway) for the machine-request contract.
 
+Agent file sync traffic from the pod has no user Membership either.
+- **Authentication:** `/ingest/v1/agents/{agent_id}/file-sync/…` authenticates the Agent in the path by its per-start ingest key. A wrong key is refused before anything about the Agent is revealed.
+- **Tenant:** the Organization, connection and Agent Folder come only from that Agent's persisted rows. No request value can name another Agent, folder or Organization.
+- **Paths:** they are checked against the Agent's own runtime's sync rules.
+- **Not background work:** these methods are reachable from an Ingest router, so the background-work exception below does not cover them. See [Activity and Ingest](../activity-and-ingest.md).
+- **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
+
+Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
+A purpose-separated credential derived from the per-start Agent secret resolves one
+undeleted, running Agent and its Organization. Runtime callers cannot choose another
+owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
+against that owning Agent, current generation/state/deadline and initiating Membership
+authority. Completion credentials never enter model prompts or file-tool arguments.
+The entire owning Agent is the runtime trust boundary: all of its sessions share
+that identity and may publish into its current workflow attempts. Attempt IDs are
+non-secret provenance, not per-session capabilities; this is not session isolation.
+Human artifact reads require current `agent.read` and scoped visibility; publication
+and deletion require `agent.update`.
+The app-facing `/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+byte route instead uses the opaque provider-signed bearer authority issued after
+those checks. Its repository read still joins the exact persisted Organization,
+Agent and artifact; the private byte store then validates the capability against
+that canonical object before any file bytes/metadata are returned. It is neither
+an unscoped metadata endpoint nor the background-work exception. No user cookie or
+runtime credential substitutes for provider validation. Existing issued authority
+survives issuer-session/Membership revocation until provider expiry (subject to
+file/owner deletion); new issuance uses current permissions. See
+[Agent artifacts](../agent-artifacts.md).
+
 Playbook Extractions read one Agent's transcripts and write an Organization Skill, so they need Agent `activity.read` on the source Agent and Organization `skill.manage`; in practice Owners and Admins. Publishing the resulting Skill makes content derived from that Agent visible to every Member through `skill.read`; the reviewing Owner or Admin is the control. The worker runs a person's request, not background work: when a run starts it re-checks that the requesting Membership still holds both Permissions on the undeleted source Agent. See [`Playbooks`](../playbooks.md#authorization).
 
 Agent Barn Telegram traffic has no user Membership either. Two callers reach it: Telegram, through the shared bot the Communications process polls, and Agent pods, through the Bot API proxy. Neither carries a session, so there is no Active Organization to scope against. The tenant comes from persisted rows instead, and no caller-supplied value can choose it.
@@ -104,7 +133,7 @@ Agent Barn Telegram traffic has no user Membership either. Two callers reach it:
 
 These paths are not the background work described below: product users trigger them, so they keep explicit authority checks against the linking Membership rather than running unscoped.
 
-Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, and the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified` run unscoped. The exception holds only while all three of these do:
+Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified`, and the Sync Engine's `FileSyncRepository` reads and writes run unscoped. The Sync Engine's methods take the Organization and connection from persisted connection rows, never from a caller. The exception holds only while all three of these do:
 
 - the method is never reachable from a router
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged
@@ -117,6 +146,25 @@ durable deletion tombstones. It derives the bank and document namespace from per
 Agent/Organization IDs, refuses live or mismatched targets, and exposes no router.
 Only the authorized Agent deletion transaction stages new tombstones. See
 [Deletion cleanup](../agent-memory.md#deletion-cleanup).
+
+The artifact purge's `ArtifactRepository.cleanup_candidates` and `purge_target`
+methods use the same narrow operator-only background exception. They expose no router
+and only inspect persisted ownership, references, deadlines and canonical tenant keys.
+They preserve failed deletion records across owner deletion and refuse mismatched
+bucket/key targets with recorded retry backoff. Product paths retain their scoped Agent
+joins. Agent creation commits its server-generated storage request atomically with
+the authorized Agent/access/events transaction. `ArtifactBucketRepository.reserve`
+is invoked only after current `agent.update` authorization from the explicit
+Provision action, using the scoped Agent and current Organization. Status reads
+require current `agent.read` visibility. Neither endpoint accepts bucket/key IDs.
+`due` and `operation` use the operator exception from artifact maintenance for
+persisted provisioning requests and deleted owners. There is no Agent-discovery
+scan or separate privileged workload. API background provisioning and artifact
+maintenance receive Garage administrative authority; Agent runtimes and other
+workloads never do. Maintenance validates Organization/Agent/bucket identity and
+retains data keys until all bytes have been purged. Product paths retain current
+human/runtime checks. See
+[Artifact retention and recovery](../agent-artifacts.md#retention-deletion-and-recovery).
 
 HTTP semantics remain deliberate:
 

@@ -55,14 +55,16 @@ version with screenshots is at
 **Required software**
 
 - **Git** — used to clone the repository.
-- **Docker with Compose v2** — everything runs in containers, including the local Kubernetes cluster.
+- **Docker with Compose v2.24 or later** — everything runs in containers, including the local Kubernetes cluster.
 - **`bash`** — `run.sh` and `stop.sh` are shell scripts. On Windows, see [Windows](#windows).
 - **`kubectl`** — used to seed the cluster namespace and secret.
+- **[uv](https://docs.astral.sh/uv/)** — runs the host-side Garage bootstrap with Python 3.14; uv can download the managed interpreter.
 - **OpenSSL** — used below to generate local keys.
 - **curl** — used by the verification steps.
 
-Python and Node.js are **not** needed to run the app; they're only for the
-native `dev-*` targets, tests, and lint (see [Development](#development)).
+Containerized startup still needs uv/Python for storage bootstrap; installing uv
+lets it supply the managed Python interpreter. Node.js and pnpm are needed only
+for native UI development, tests and lint (see [Development](#development)).
 
 **Required credentials**
 
@@ -73,6 +75,7 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | Port    | Service                    |
 | ------- | -------------------------- |
 | `3000`  | UI                         |
+| `3900`  | Garage S3 (loopback only; configurable) |
 | `5432`  | PostgreSQL                 |
 | `7070`  | LiteLLM proxy              |
 | `8000`  | API                        |
@@ -138,9 +141,10 @@ the cluster is up.
 ./run.sh
 ```
 
-This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
-the agent base images, starts `db` and `redis`, runs database migrations, then
-starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and follows
+This validates `.env`, bootstraps persistent private Garage storage, brings up
+the k3d cluster and LiteLLM, builds and loads the agent base images, starts `db`
+and `redis`, runs database migrations, then starts `api`, `worker`, `sync-engine`,
+`communications`, `memory`, `artifact-purge`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
 
@@ -280,6 +284,7 @@ builders that turn an agent record into Kubernetes resources.
 
 | Area                    | What's there                                                                                                                                                                                                                                 | Docs                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Agent artifacts | Private file publication from chat/workflows, short-lived app download links, per-Agent storage provisioning, infinite artifact lists and permission-gated deletion | [`features/agent-artifacts.md`](docs/features/agent-artifacts.md) |
 | Agent lifecycle         | Start, stop, monitor; per-agent model within the organisation's default and allowlist; per-agent channel allowlist and DM policy                                                                                                             | [`features/agents.md`](docs/features/agents.md)                                         |
 | Communication           | Slack, Microsoft Teams, Telegram, Discord. An agent may own several connections, including more than one on the same platform. Slack apps are created by hand from a generated manifest; Teams connections export an installable app package | [`features/communications/`](docs/features/communications/)                             |
 | Templates and skills    | Versioned templates and skills, seeded on startup, forkable per organisation, with per-agent overrides; agents pin the skill version they run                                                                                                | [`features/templates-and-skills.md`](docs/features/templates-and-skills.md)             |
@@ -287,7 +292,7 @@ builders that turn an agent record into Kubernetes resources.
 | Costs                   | Per-agent and per-organisation token and spend attribution                                                                                                                                                                                   | [`features/costs.md`](docs/features/costs.md)                                           |
 | Identity and access     | Sign-up and sign-in with Google into a trial organization, login, logout, access + refresh tokens in an httpOnly cookie, password change and reset; organisations with fixed permission-backed roles, plus separate per-agent access roles and assignments                                     | [`features/identity-and-organizations.md`](docs/features/identity-and-organizations.md) |
 | Platform administration | User and organisation management, platform statistics, and the Event Delivery Monitor                                                                                                                                                        | [`features/platform-administration/`](docs/features/platform-administration/)           |
-| Integrations            | Per-agent provider credentials, organisation-scoped shared credentials, Google OAuth for Google Workspace (Gmail, Calendar, Drive, Sheets)                                                                                                   | [`features/integrations.md`](docs/features/integrations.md)                             |
+| Integrations            | Per-agent provider credentials, organisation-scoped shared credentials, Google OAuth for Google Workspace (Gmail, Calendar, Drive, Sheets), and Custom API connections to any public HTTPS API (API key, Bearer, Basic or OAuth2 client credentials) | [`features/integrations.md`](docs/features/integrations.md)                             |
 | Domain events           | Transactional outbox, a Dramatiq worker, event handlers, and a security-audit projection                                                                                                                                                     | [`features/domain-events.md`](docs/features/domain-events.md)                           |
 | Runtime and deployment  | Kubernetes agent resources, Helm + Helmfile, namespace-scoped Prometheus and Grafana                                                                                                                                                         | [`architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md) |
 
@@ -313,12 +318,20 @@ make migrate       # apply migrations
 make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003, Credentials :8004
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
+make dev-sync-engine  # Sync Engine: Agent file sync, one pass every 30 s
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
 make dev-gateway   # Credential gateway only (normally started by dev-api)
 make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
+
+The db/redis targets and `./stop.sh` work before Garage has been configured.
+For native file uploads/downloads, run `make garage-up` before `make dev-api`;
+this generates private API management settings and a loopback endpoint as well.
+Agent creation queues storage without waiting; Artifacts shows progress and lets
+existing Agents provision or retry. No separate provisioner service is needed. See [Garage operations](docs/guidelines/garage.md). The full `./run.sh` path starts
+Garage and the purge worker automatically, without a profile.
 
 `make db-down` stops PostgreSQL; `make db-logs` and `make db-restart` manage it.
 The worker and reconciliation command also need a Redis server reachable at the
@@ -347,6 +360,91 @@ Bring one up with `bash docker/k3d/k3d-up.sh` and
 export KUBECONFIG="$PWD/.k3d/kubeconfig-host.yaml"
 export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 ```
+
+### Agent artifacts in development
+
+Local artifacts use a private, single-node Garage container and persistent Docker
+volumes. **No AWS account, S3 credentials, GitHub Secrets, or manual Kubernetes
+bootstrap is needed locally.** Docker Compose 2.24+ and uv are required. The first
+startup generates local credentials in the ignored `.garage/` directory; later
+starts reuse them and the existing volumes.
+
+For the full-stack path, complete the `.env` setup above and start the stack:
+
+```bash
+./run.sh --detach
+```
+
+The launcher prepares Garage, applies the artifact migrations, and starts background
+maintenance automatically. After signing in, check storage with:
+
+```bash
+make garage-status
+# The application services and Garage should be running:
+docker compose ps garage api artifact-purge ui
+```
+
+Open an Agent's **Artifacts** tab. A new Agent queues private storage setup without
+waiting for Garage; the tab shows progress. On an existing Agent, click **Provision**
+if storage has not been prepared. Provisioning, retry and deletion require
+`agent.update`; users with current `agent.read` access can view and download.
+
+Start the Agent, or update/restart an Agent created before this feature so it gets
+the runtime file tool. Ask it to create a small CSV and provide the download link.
+The artifact should appear in **Artifacts**; downloading it requests a fresh link.
+The trash action opens a confirmation dialog, and files pinned by active runs or
+reviews remain protected. This is a developer smoke test; external messaging and
+model/tool selection still depend on the configured runtime and provider.
+
+For the native API/UI path, complete the native database/migration setup above,
+then prepare storage **before** starting the API:
+
+```bash
+make garage-up       # persistent storage + ignored API/native management settings
+make garage-status
+make dev-api         # terminal 1; loads generated storage settings
+# In terminal 2:
+make dev-ui
+# Recover pending requests / run one bounded cleanup pass when needed:
+make purge-artifacts
+```
+
+For an Agent running in k3d, `ARTIFACT_RUNTIME_BASE_URL` in `.env` must point to
+the native API address reachable from Agent containers. The default uses
+`host.docker.internal:8000`; if `API_DEV_PORT` differs, update that URL and restart
+the API and the Agent. The browser-facing download origin is `WEB_APP_URL`.
+
+Native post-response provisioning runs immediately, but unattended retry needs the
+maintenance worker; `make purge-artifacts` provides an explicit one-shot recovery
+pass. Restart the native API after re-running storage bootstrap. Garage management
+and per-Agent data credentials stay server-side. Generated private files live in
+ignored `.garage/`; keep that directory and the named data volumes intact. Backup,
+restore and cluster installation are documented in [Garage operations](docs/guidelines/garage.md).
+
+| Symptom | What to check |
+| --- | --- |
+| Storage unavailable / not configured | Confirm Docker is running, run `make garage-up`, then restart the API so it loads generated settings. Check `make garage-status`. |
+| Garage cannot start on port 3900 | Set `GARAGE_S3_PORT` in `.env` before the first `make garage-up`. Existing initialized stores keep their saved port; follow the operations guide to migrate or restore. |
+| Provisioning failed or stays pending | Check `docker compose logs --tail=100 api artifact-purge garage`; in native development run `make purge-artifacts` and retry from Artifacts. |
+| Download links use the wrong host/port | `WEB_APP_URL` must match the UI origin that download clients can reach. Adjust it for a second worktree and restart the API. |
+| A file uses the previous storage layout | This PR deliberately does not migrate old shared-bucket files. Re-upload or plan a verified migration; provisioning a new bucket does not move old bytes. |
+| Delete reports an active pin | The owning run or review must release its reference through its lifecycle before deletion. |
+
+Artifact checks use disposable PostgreSQL/Garage and never need installation
+storage credentials:
+
+```bash
+make check-api check-ui lint-ui check-migrations
+(cd api && uv run pytest tests/integration/test_artifacts.py tests/integration/test_artifact_review.py tests/integration/test_artifact_creation.py -q)
+(cd ui && pnpm exec playwright install chromium)
+(cd ui && pnpm exec playwright test tests/e2e/artifacts.spec.ts)
+```
+
+Helm chart checks and the opt-in real-image/storage/browser contracts have extra
+prerequisites. See [artifact test guidance](docs/guidelines/testing.md#agent-artifact-storage-and-runtime-contracts),
+[configuration and lifecycle](docs/features/agent-artifacts.md), and
+[verification evidence](docs/features/agent-artifacts/EVIDENCE.md) for exact limits,
+rollback, test boundaries and recorded results.
 
 ### Local Kubernetes (k3d)
 

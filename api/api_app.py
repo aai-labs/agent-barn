@@ -35,6 +35,7 @@ from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.api_keys.routes import router as api_keys_router
+from api.domains.artifacts.routing import router as agent_artifacts_router
 from api.domains.auth.routes import auth_router
 from api.domains.billing.routes import (
     billing_router,
@@ -52,6 +53,7 @@ from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.custom_api.routes import custom_api_router
 from api.domains.discovery.routes import router as discovery_router
+from api.domains.environment_health.routes import platform_environment_health_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
@@ -149,6 +151,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
+    subapi.include_router(agent_artifacts_router)
     subapi.include_router(workflows_router)
     subapi.include_router(workflow_runs_router)
     app_v1.include_router(workflow_runtime_router)
@@ -180,6 +183,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(discovery_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
+    subapi.include_router(platform_environment_health_router)
     subapi.include_router(org_router)
     subapi.include_router(platform_org_router)
     subapi.include_router(member_router)

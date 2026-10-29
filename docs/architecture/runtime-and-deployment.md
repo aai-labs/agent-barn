@@ -14,6 +14,30 @@ Agent's own tools, Integrations, approval mode and spend limits govern it. The
 owns admission and text-checkpoint invariants; [operations](../guidelines/operations.md#workflow-execution-wf02)
 owns installation prerequisites.
 
+Both runtime builders mount the shared `agentbarn-artifacts` CLI. They append its
+instructions to AGENTS.md when artifact storage is configured at Agent start.
+Enabling storage requires restarting existing Agents to load those instructions;
+the per-step workflow prompt checks current API storage configuration live. The runtime Secret contains a purpose-separated
+per-start Agent service capability and no bucket credentials. File publication
+and sharing follow the [artifact contract](../features/agent-artifacts.md), using
+existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
+supports text-only operation when storage is unavailable. Normal local startup
+requires Garage and the purge worker in the
+main Compose project, without a profile opt-in. The Garage chart owns persistent
+replicated storage; operator bootstrap owns layout and private control-plane
+configuration. Agent creation atomically queues per-Agent storage requests; post-response API work
+provisions them. The existing purge worker recovers persisted requests and reclaims
+deleted-owner buckets. Both receive the private
+management credential; other workloads and Agent runtimes do not. Neither uses a
+shared data key. Local Compose storage uses named volumes and ignored private
+configuration. Garage remains private: Compose publishes loopback-only S3 and native-management
+ports, while API/purge use service DNS; application Helmfile leaves Garage ingress
+disabled. Garage is an unconditional Helmfile release in all application deployments;
+initial operator bootstrap is required before deploying. Download links use the existing app origin and the API streams bytes,
+with opaque signed authority generated and validated by the storage adapter.
+There is no app-managed download token issuer or separate public storage URL.
+See [Garage operations](../guidelines/garage.md).
+
 Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.
@@ -51,6 +75,8 @@ A Hermes run stops at `agent.max_turns`. The builder writes the Agent's own `max
 Hermes uses `/workspace` as its terminal working directory while its managed state remains under `/opt/data`. Agent Barn materializes assigned Skills under `/workspace/skills` and declares that directory in Hermes' `skills.external_dirs`, because the runtime's native discovery root is `/opt/data/skills`.
 
 Opted-in Agent Memory configures each runtime's pinned Hindsight provider alongside native memory during assembly. Startup replaces stale provider settings and keeps the per-start credential in environment variables; a bounded authenticated health wait lets the API persist that credential before provider initialization. See [Agent Memory runtime integration](../features/agent-memory.md#runtime-integration) for plugin versions and behavior.
+
+Both runtimes ship `scripts/file-sync.py` and a `file-sync-rules.json` rendered from `api/domains/file_sync/rules.py`. As the last setup step before the ready file, `start.sh` runs `file-sync.py --once`, which always exits within 60 s and is never fatal, then starts it in the background. Because both files are part of the runtime configuration digest, running Agents show an update until they restart. See [Agent file sync](../features/sync-provider/README.md#agent-file-sync).
 
 ### Runtime configuration digest
 
@@ -188,6 +214,13 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 `../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. The API chart deploys separate product, Ingest, Communications, credential gateway, and optional Memory processes; the Communications Service is reachable internally by runtimes and exposes only the provider-webhook prefix through ingress. API deployment mounts Kubernetes access so the product service can manage Agent resources. An API Helm hook runs Alembic before installation or upgrade. Helmfile always enables the Memory gateway, which runs on port 8003 with its own Hindsight auth-key reference; Hindsight and its pgvector database have separate releases. CI supplies Hindsight's database, backend-authentication, and internal-settings credentials from environment-specific GitHub Secrets. Hindsight's pre-install/pre-upgrade Job generates its platform LiteLLM key without a key-level budget cap using the same delete/generate/Secret-update pattern as the API key hook; the backend loads the key from its own Secret. Deployment syncs Hindsight first and passes only the generated key hashes to the API release for cost attribution. Hindsight resolves its model and Organization team credential through the API workload's internal port-8004 listener with its separate settings credential; ingress routes no traffic to that listener; the gateway holds neither LiteLLM master access nor key-encryption credentials. Agent pods disable automatic ServiceAccount token mounting. See [Agent Memory](../features/agent-memory.md) for gateway contracts and [operations](../guidelines/operations.md#agent-memory-deployment) for configuration.
 
 The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. The same worker consumes the `playbook_extraction` queue, running each [Playbook Extraction](../features/playbooks.md) once with no automatic retry; it receives `LITELLM_BASE_URL` to call models with the source Agent's key. Communications uses PostgreSQL-backed leases and durable Communication Deliveries, distinct from Domain Event delivery.
+
+The Sync Engine is a separate Deployment of the API image (`api/sync_engine_main.py`, chart value `syncEngine`). Every 30 s it runs [Agent file sync](../features/sync-provider/README.md#agent-file-sync) for each active Sync Provider Connection whose provider supports it.
+- **Pod lifecycle:** it uses a non-overlapping rolling update like the worker, and has one replica. A per-connection PostgreSQL advisory lock still keeps two copies off the same connection during a rollout.
+- **Liveness:** the probe fails when the heartbeat file is older than `syncEngine.heartbeatMaxAgeSeconds` (600 s). The engine writes it after each page of changes, each connection and each completed pass, so a long pass stays alive.
+- **No Kubernetes access:** the engine never calls the Kubernetes API, so its pod sets `automountServiceAccountToken: false` and mounts no kubeconfig. It keeps the release's service account name, like every other Deployment in the chart, but receives no credential for it.
+- **What it needs:** the API Secret. It needs no Redis, no LiteLLM and no Kubernetes access.
+- **Local runs:** `make dev-sync-engine`, or the `sync-engine` Compose service.
 
 The k3s deploy workflow builds API and UI images under moving environment tags, passes those tags into Helmfile as `API_IMAGE_TAG` and `UI_IMAGE_TAG`, and applies Helmfile. The current convention is `latest` on `main` and `latest-staging` on the `staging` branch. The API image is the exception to "deploys the tag": it is pushed without a tag, deployed as `<tag>@sha256:<digest>` so the migration hook and rollout use exactly that image, and re-tagged only after the sync succeeds, so a failed migration cannot move the tag under running pods ([`../guidelines/operations.md`](../guidelines/operations.md#versioning-and-releases)). Component change detection compares the current commit with the latest successful deploy run for that branch; failed runs therefore leave their entire source range pending for the next attempt. Manual dispatches and missing or non-ancestor baselines rebuild all components. Manual and bundled release flows also pass explicit API/UI tags; chart metadata is not used as the source of truth for API/UI images.
 

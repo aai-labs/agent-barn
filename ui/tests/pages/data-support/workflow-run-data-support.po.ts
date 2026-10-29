@@ -21,6 +21,7 @@ export class WorkflowRunDataSupport {
   stepStates: string[] | null = null;
   constructor(private page: Page) {}
   async intercept(agentId: string) {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts?**`, route => route.fulfill({json: {items: [], total: 0, page: 1, page_size: 20}}));
     const fixture = workflowFixture(agentId);
     const base = `**/api/v1/organizations/*/agents/${agentId}`;
     const run = () => ({

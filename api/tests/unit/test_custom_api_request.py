@@ -1,5 +1,6 @@
 import json
 import socket
+from typing import ClassVar
 
 import pytest
 from hamcrest import assert_that, equal_to
@@ -209,3 +210,179 @@ def test_basic_auth_username_is_not_redacted_from_responses(monkeypatch):
         {"url": "https://api.example.com/v1/items"},
     )
     assert_that(result, equal_to({"status": 200, "body": {"user": "alice", "auth": "[REDACTED]"}}))
+
+
+_OAUTH2 = {
+    "type": "oauth2_client_credentials",
+    "token_url": "https://auth.example.com/oauth/token",
+    "client_id": "fixture-client-id",
+    "client_secret": "fixture-client-secret",
+}
+
+
+def test_oauth2_configuration_validates_without_producing_a_header():
+    headers, sensitive = credential_headers({"auth": _OAUTH2})
+    assert_that(headers, equal_to({}))
+    assert_that(sensitive, equal_to(["fixture-client-secret"]))
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        {**_OAUTH2, "token_url": "http://auth.example.com/oauth/token"},
+        {**_OAUTH2, "token_url": "https://user:pw@auth.example.com/oauth/token"},
+        {**_OAUTH2, "token_url": None},
+        {**_OAUTH2, "client_id": ""},
+        {**_OAUTH2, "client_secret": "line\nbreak"},
+        {**_OAUTH2, "scope": ""},
+        {k: v for k, v in _OAUTH2.items() if k != "client_secret"},
+    ],
+)
+def test_oauth2_configuration_refuses_bad_token_urls_and_missing_credentials(auth):
+    with pytest.raises(RequestRefused):
+        credential_headers({"auth": auth})
+
+
+def test_oauth2_request_needs_an_access_token_before_any_network_is_touched(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: pytest.fail("DNS must not run without a token"))
+    with pytest.raises(RequestRefused, match="credential gateway"):
+        engine.execute(
+            {"base_url": "https://api.example.com/v1", "auth": _OAUTH2}, {"url": "https://api.example.com/v1/items"}
+        )
+
+
+def test_access_token_applies_only_to_oauth2_connections():
+    with pytest.raises(RequestRefused):
+        credential_headers({"auth": {"type": "bearer", "token": "fixture"}}, access_token="minted")
+
+
+def test_oauth2_request_attaches_the_minted_bearer_and_redacts_token_and_secret(monkeypatch):
+    class Upstream(EchoUpstream):
+        def read(self, limit):
+            return json.dumps({"auth": self.headers["authorization"], "leak": "fixture-client-secret"}).encode()
+
+    monkeypatch.setattr(engine, "public_addresses", lambda *args: ["8.8.8.8"])
+    monkeypatch.setattr(engine, "PinnedHTTPSConnection", Upstream)
+    result = engine.execute(
+        {"base_url": "https://api.example.com/v1", "auth": _OAUTH2},
+        {"url": "https://api.example.com/v1/items"},
+        access_token="minted-token",
+    )
+    assert_that(result, equal_to({"status": 200, "body": {"auth": "[REDACTED]", "leak": "[REDACTED]"}}))
+
+
+class TokenEndpoint:
+    """A fake pinned connection standing in for an OAuth2 token endpoint."""
+
+    status = 200
+    payload: object = {"access_token": "minted-token", "token_type": "Bearer", "expires_in": 7200}
+    calls: ClassVar[list[dict]] = []
+
+    def __init__(self, host, address, port=443, timeout=30):
+        type(self).calls.append({"host": host, "address": address, "port": port, "timeout": timeout})
+
+    def request(self, method, path, body=None, headers=None):
+        type(self).calls[-1].update({"method": method, "path": path, "body": body, "headers": headers})
+
+    def getresponse(self):
+        return self
+
+    def read(self, limit):
+        payload = self.payload
+        return (payload if isinstance(payload, bytes) else json.dumps(payload).encode())[:limit]
+
+    def close(self):
+        pass
+
+
+def _token_endpoint(monkeypatch, status=200, payload=None):
+    endpoint = type("Endpoint", (TokenEndpoint,), {"status": status, "calls": []})
+    if payload is not None:
+        endpoint.payload = payload
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: ["8.8.8.8"])
+    monkeypatch.setattr(engine, "PinnedHTTPSConnection", endpoint)
+    return endpoint
+
+
+def test_token_exchange_posts_the_credentials_as_a_form_to_the_pinned_endpoint(monkeypatch):
+    endpoint = _token_endpoint(monkeypatch)
+    token, lifetime = engine.fetch_access_token({**_OAUTH2, "scope": "read write"})
+    assert_that((token, lifetime), equal_to(("minted-token", 7200)))
+    call = endpoint.calls[0]
+    assert_that(
+        (call["host"], call["address"], call["port"], call["timeout"]),
+        equal_to(("auth.example.com", "8.8.8.8", 443, 10)),
+    )
+    assert_that((call["method"], call["path"]), equal_to(("POST", "/oauth/token")))
+    assert_that(call["headers"]["content-type"], equal_to("application/x-www-form-urlencoded"))
+    assert_that(
+        call["body"].decode(),
+        equal_to(
+            "grant_type=client_credentials&client_id=fixture-client-id&client_secret=fixture-client-secret&scope=read+write"
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "status,payload,refused",
+    [
+        (401, {"error": "invalid_client"}, True),
+        (400, {"error": "invalid_request"}, True),
+        (403, {"error": "access_denied"}, True),
+        (429, {"error": "rate_limited"}, False),
+        (404, "not here", False),
+        (503, "down", False),
+        (302, "", False),
+        (200, b"<html>not json</html>", False),
+        (200, {"token_type": "Bearer"}, False),
+        (200, {"access_token": "", "token_type": "Bearer"}, False),
+        (200, {"access_token": "minted", "token_type": "MAC"}, False),
+        (200, {"access_token": "bad\ttoken"}, False),
+        (200, ["minted"], False),
+    ],
+)
+def test_token_exchange_reports_refusals_separately_from_unusable_answers(monkeypatch, status, payload, refused):
+    _token_endpoint(monkeypatch, status=status, payload=payload)
+    with pytest.raises(engine.TokenExchangeFailed) as failure:
+        engine.fetch_access_token(_OAUTH2)
+    assert_that(failure.value.refused, equal_to(refused))
+
+
+@pytest.mark.parametrize("error", [OSError("connection reset"), engine.http.client.BadStatusLine("garbage")])
+def test_token_exchange_treats_an_unreachable_or_garbled_endpoint_as_unavailable(monkeypatch, error):
+    endpoint = _token_endpoint(monkeypatch)
+
+    def request(self, *args, **kwargs):
+        raise error
+
+    endpoint.request = request
+    with pytest.raises(engine.TokenExchangeFailed) as failure:
+        engine.fetch_access_token(_OAUTH2)
+    assert_that(failure.value.refused, equal_to(False))
+
+
+def test_token_exchange_treats_a_dns_failure_as_unavailable_but_keeps_a_policy_refusal(monkeypatch):
+    _token_endpoint(monkeypatch)
+
+    def no_dns(host, port):
+        raise socket.gaierror("name or service not known")
+
+    monkeypatch.setattr(engine, "public_addresses", no_dns)
+    with pytest.raises(engine.TokenExchangeFailed) as failure:
+        engine.fetch_access_token(_OAUTH2)
+    assert_that(failure.value.refused, equal_to(False))
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: (_ for _ in ()).throw(RequestRefused("private")))
+    with pytest.raises(RequestRefused):
+        engine.fetch_access_token(_OAUTH2)
+
+
+@pytest.mark.parametrize(
+    "expires_in,lifetime",
+    [(None, 3600), ("soon", 3600), (10**9, 24 * 3600), (-5, 0), ("120", 120), (float("inf"), 3600)],
+)
+def test_token_lifetime_is_defaulted_and_bounded(monkeypatch, expires_in, lifetime):
+    payload = {"access_token": "minted-token", "token_type": "bearer"}
+    if expires_in is not None:
+        payload["expires_in"] = expires_in
+    _token_endpoint(monkeypatch, payload=payload)
+    assert_that(engine.fetch_access_token(_OAUTH2), equal_to(("minted-token", lifetime)))

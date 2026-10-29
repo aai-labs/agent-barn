@@ -18,7 +18,7 @@ function memberContext() {
   };
 }
 
-test.describe("Settings · Agents", () => {
+test.describe("Settings · Models", () => {
   test.describe.configure({ mode: "serial" });
 
   let dataSupport: DataSupport;
@@ -38,7 +38,7 @@ test.describe("Settings · Agents", () => {
     await dataSupport.agents.interceptGetModelsRequest();
   });
 
-  test("opens on Agents and reports the platform default", async ({ page }) => {
+  test("opens on Models and reports the platform default", async ({ page }) => {
     await settings.open();
 
     await expect(settings.heading).toBeVisible();
@@ -71,14 +71,37 @@ test.describe("Settings · Agents", () => {
     await expect(page.getByText("This organization", { exact: true })).toBeVisible();
   });
 
-  test("a member never sees the Agents tab", async ({ page }) => {
+  test("shows model cards with catalog information", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({ body: [
+      { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
+      { value: "litellm/openrouter/anthropic/claude-sonnet", label: "Claude Sonnet", context_length: 200000, pricing: { prompt: "0.000003", completion: "0.000015" } },
+      { value: "litellm/openrouter/google/gemini-pro", label: "Gemini Pro", context_length: 1000000, pricing: { prompt: "0.00000125", completion: "0.000005" } },
+      { value: "litellm/openrouter/deepseek/deepseek-chat", label: "DeepSeek Chat", context_length: 64000, pricing: { prompt: "0.0000002", completion: "0.0000004" } },
+    ] });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    await section.getByRole("button", { name: "Edit" }).click();
+    await expect(section.getByText("GPT-5 mini", { exact: true })).toBeVisible();
+    await section.getByRole("button", { name: "Remove Claude Sonnet" }).click();
+    await section.getByRole("button", { name: "Add models" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add models" });
+    await dialog.getByLabel("Search catalog").fill("claude");
+    await dialog.getByRole("checkbox", { name: "Claude Sonnet" }).check();
+    await dialog.getByRole("button", { name: "Add 1 model" }).click();
+    await expect(section.getByText("Claude Sonnet", { exact: true })).toBeVisible();
+    await expect(section.getByText("128,000 tokens context")).toBeVisible();
+    await expect(section.getByText("Input $2.5 / 1M tokens")).toBeVisible();
+    await expect(section.getByText("Output $10 / 1M tokens")).toBeVisible();
+  });
+
+  test("a member never sees the Models tab", async ({ page }) => {
     await dataSupport.users.interceptGetUserContextRequest({
       userContext: memberContext(),
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
 
-    await expect(page.getByRole("complementary").getByRole("link", { name: "Agents", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Models", exact: true })).toHaveCount(0);
     // It falls back to the first section a Member can actually see.
     await expect(page.getByRole("heading", { name: "Templates" })).toBeVisible();
   });

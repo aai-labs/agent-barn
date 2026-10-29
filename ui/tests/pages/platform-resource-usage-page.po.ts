@@ -7,6 +7,14 @@ export class PlatformResourceUsagePage {
     await this.page.goto(`/dashboard/platform/resource-usage${query}`);
   }
 
+  async gotoAgentResourceUsage(query = "") {
+    await this.page.goto(`/dashboard/platform/agents/resource-usage${query}`);
+  }
+
+  agentResourceUsageHeading(): Locator {
+    return this.page.getByRole("heading", { level: 1, name: "Agent Resource Usage" });
+  }
+
   heading(): Locator {
     return this.page.getByRole("heading", { level: 1, name: "Platform Resource Usage" });
   }
