@@ -23,6 +23,7 @@ from api.domains.agents.builders import (
 )
 from api.domains.agents.builders.openclaw import (
     LEGACY_WORKSPACE_MIGRATION_SH,
+    LISTEN_IN_SYSTEM_PROMPT,
     OPENCLAW_GATEWAY_PORT,
     OPENCLAW_PLUGINS_SH,
     OPENCLAW_WORKSPACE_DIR,
@@ -248,6 +249,42 @@ def test_native_channels_enable_installed_plugins_and_the_observer() -> None:
     assert not any("@openclaw" in path for path in config["plugins"]["load"]["paths"])
     assert config["plugins"]["entries"]["agentbarn-observer"]["enabled"] is True
     assert "agentbarn-observer" not in build_openclaw_gateway_config("litellm/gpt-5", "http://x")["plugins"]["allow"]
+
+
+def test_gateway_config_turns_unmentioned_chatter_into_room_events_on_listen_in_platforms() -> None:
+    for key in ("slack", "discord", "telegram"):
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {key: {"enabled": True}})
+
+        assert config["messages"] == {"groupChat": {"unmentionedInbound": "room_event"}}
+
+
+def test_gateway_config_writes_user_requests_explicitly_without_a_listen_in_platform() -> None:
+    for channels in (None, {"msteams": {"enabled": True}}):
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels)
+
+        assert config["messages"] == {"groupChat": {"unmentionedInbound": "user_request"}}
+
+
+def test_listen_in_prompt_says_when_to_stay_silent_and_when_to_speak() -> None:
+    assert "Stay silent" in LISTEN_IN_SYSTEM_PROMPT
+    assert "factual error" in LISTEN_IN_SYSTEM_PROMPT
+    assert "@mention" in LISTEN_IN_SYSTEM_PROMPT
+
+
+def test_native_slack_channel_listens_in_on_chosen_channels() -> None:
+    allowlisted = native_slack_channel({"channel_ids": ["C1", "C2"], "listen_in_channel_ids": ["C2"]})
+    assert allowlisted["requireMention"] is True
+    assert allowlisted["channels"] == {
+        "C1": {"enabled": True},
+        "C2": {"enabled": True, "requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT},
+    }
+
+    unlisted = native_slack_channel({"channel_ids": ["C1"], "listen_in_channel_ids": ["C2"]})
+    assert unlisted["channels"] == {"C1": {"enabled": True}}
+
+    open_ = native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C9"]})
+    assert open_["groupPolicy"] == "open"
+    assert open_["channels"] == {"C9": {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}}
 
 
 def test_native_slack_channel_maps_connection_policy() -> None:

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from hamcrest import assert_that, equal_to, has_key, not_
+from pydantic import ValidationError
 
 from api.domains.communications.models import OutboundTargetRequest
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin, DiscordSettings
@@ -30,6 +31,17 @@ def test_slack_settings_retire_announce_steps_and_discard_legacy_values():
     legacy_settings = SlackSettings.model_validate({"verbose_mode": True})
     assert_that(legacy_settings.model_dump(), not_(has_key("verbose_mode")))
     assert_that(SlackPlatformPlugin(CONFIG).descriptor.schema_version, equal_to(2))
+
+
+def test_slack_listen_in_channels_must_be_allowed_channels():
+    with pytest.raises(ValidationError, match="Listen-in channels"):
+        SlackSettings(channel_ids=["C1"], listen_in_channel_ids=["C2"])
+
+    allowed = SlackSettings(channel_ids=["C1", "C2"], listen_in_channel_ids=["C2"])
+    assert_that(allowed.listen_in_channel_ids, equal_to(["C2"]))
+    open_ = SlackSettings(group_policy="open", listen_in_channel_ids=["C9"])
+    assert_that(open_.listen_in_channel_ids, equal_to(["C9"]))
+    assert_that(SlackSettings().listen_in_channel_ids, equal_to([]))
 
 
 def test_discord_settings_retire_require_mention_and_discard_legacy_values():

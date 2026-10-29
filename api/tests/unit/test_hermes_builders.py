@@ -60,6 +60,15 @@ def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> N
     assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
 
 
+def test_native_slack_env_ignores_listen_in_channels() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
+    settings = {"group_policy": "allowlist", "channel_ids": ["C1"]}
+
+    assert native_slack_env({**settings, "listen_in_channel_ids": ["C1"]}, credentials) == native_slack_env(
+        settings, credentials
+    )
+
+
 def test_native_slack_env_maps_connection_policy() -> None:
     credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
 

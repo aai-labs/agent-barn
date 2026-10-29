@@ -8,12 +8,21 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`).
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
-- Next: PR 3, which adds the silent-listening switch and Slack listen-in channels. PR 2 (a telemetry fix) was dropped after the spike.
+- Next: PR 4, Discord Listen-in channels. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-10-29 — MDP-118 PR 3 — silent-listening switch and Slack listen-in channels
+
+- Delivered: Slack Connections list Listen-in channels. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; elsewhere it still answers only when mentioned. A listen-in ID outside an allowlist is rejected on save and never added by the builder.
+- Changed:
+  - Runtime: every OpenClaw config sets `messages.groupChat.unmentionedInbound` explicitly (`room_event` with Slack, Discord, or Telegram, otherwise `user_request`). Each Slack listen-in room gets `requireMention: false` and the shared `LISTEN_IN_SYSTEM_PROMPT`. The runtime configuration digest changes, so running OpenClaw Agents report an update.
+  - API: `SlackSettings.listen_in_channel_ids`. Hermes ignores it.
+  - Docs: [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating), [Agents](../agents.md), [business value](../business-value.md) (listen-in messages are Requests), `CONTEXT.md` (Listen-in channel), [communications](../communications/CHANGELOG.md).
+- Follow-up: PR 4 (Discord) and PR 5 (Telegram) reuse the same room shape.
 
 ### 2026-10-28 — MDP-118 PR 1 — retire Discord's Require @mention
 
