@@ -18,6 +18,9 @@ MESSAGES = [
     ("unlisted DM", "im", "D2", "U2", "hello"),
     ("channel mention", "channel", "C1", "U2", "<@UBOT> hello"),
     ("other channel mention", "channel", "C2", "U1", "<@UBOT> hello"),
+    ("group DM listed user", "mpim", "GMPIM", "U1", "<@UBOT> hello"),
+    ("group DM other user", "mpim", "GMPIM", "U2", "<@UBOT> hello"),
+    ("private channel mention", "group", "GPRIVATE", "U2", "<@UBOT> hello"),
     ("channel without mention", "channel", "C1", "U2", "hello"),
 ]
 
@@ -44,7 +47,7 @@ def host(image: str) -> None:
             elif dm_policy == "allowlist" and users:
                 expected.add("listed DM")
             if group_policy == "open":
-                expected.update(["channel mention", "other channel mention"])
+                expected.update(["channel mention", "other channel mention", "private channel mention"])
             elif channels:
                 expected.add("channel mention")
             config = build_hermes_gateway_config("m/m", "http://x", native_slack=True)
@@ -74,7 +77,7 @@ def check() -> None:
     import asyncio
     import tempfile
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, patch
 
     home = Path(tempfile.mkdtemp())
     os.environ["HERMES_HOME"] = str(home)
@@ -99,7 +102,20 @@ def check() -> None:
     adapter._client = AsyncMock()
     adapter._app = SimpleNamespace(client=adapter._client)
     adapter._client.users_info.return_value = {"user": {"name": "test", "is_bot": False}}
-    adapter._client.conversations_info.return_value = {"channel": {"name": "test"}}
+
+    async def channel_info(*, channel):
+        if channel == "GERROR":
+            raise RuntimeError("provider unavailable")
+        return {
+            "ok": True,
+            "channel": {
+                "name": "test",
+                "is_mpim": channel == "GMPIM",
+                "is_group": channel == "GPRIVATE",
+            },
+        }
+
+    adapter._client.conversations_info.side_effect = channel_info
     got = set()
 
     class AdmissionRunner(GatewayRunner):
@@ -135,20 +151,48 @@ def check() -> None:
                 {"user": "U2", "text": "more context", "ts": "101.0"},
             ],
         }
-        for channel in ("C1", "C2"):
+        for channel in ("C1", "C2", "GPRIVATE"):
             context = await adapter._fetch_thread_context(channel, "100.0", "102.0")
             settings = json.loads(os.environ["SLACK_CASE"])["settings"]
             allowed = settings["group_policy"] == "open" or channel in settings["channel_ids"]
             assert "earlier context" in context and "more context" in context, context
             assert ("[unverified]" not in context) == allowed, context
 
+    async def approval_buttons():
+        settings = json.loads(os.environ["SLACK_CASE"])["settings"]
+        for channel in ("GMPIM", "GPRIVATE", "GUNKNOWN", "GERROR"):
+            ack = AsyncMock()
+            adapter._approval_resolved["200.0"] = False
+            body = {"channel": {"id": channel}, "user": {"id": "U2"}, "message": {"ts": "200.0"}}
+            with patch("tools.approval.resolve_gateway_approval", return_value=1) as resolve:
+                await adapter._handle_approval_action(
+                    ack,
+                    body,
+                    {"action_id": "hermes_approve_once", "value": "test-session"},
+                )
+                allowed = channel == "GPRIVATE" and settings["group_policy"] == "open"
+                assert resolve.called == allowed, (channel, settings)
+            ack.assert_awaited_once()
+        # The other gated button handlers must also reject group DMs before
+        # interpreting action values or changing state, while acknowledging Slack.
+        for name in ("_handle_slash_confirm_action", "_handle_clarify_action"):
+            ack = AsyncMock()
+            await getattr(adapter, name)(ack, {"channel": {"id": "GMPIM"}}, {})
+            ack.assert_awaited_once()
+
     asyncio.run(replay())
     asyncio.run(thread_context())
+    asyncio.run(approval_buttons())
     case = json.loads(os.environ["SLACK_CASE"])
     if got != set(case["expected"]):
         raise SystemExit(
             f"Slack access broken for {case['settings']}: received {sorted(got)}, expected {case['expected']}"
         )
+    from gateway.session import SessionSource  # ty: ignore[unresolved-import]
+
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="123", chat_type="dm", user_id="123")
+    if runner._is_user_authorized(source):
+        raise SystemExit("Slack's startup allow-all signal widened another Platform's access")
     # Native/global grants must not widen the Connection policy. Buttons use
     # the same early authorization seam, even without ordinary message intake.
     os.environ["GATEWAY_ALLOW_ALL_USERS"] = "true"
@@ -160,9 +204,6 @@ def check() -> None:
         if actual != expected:
             raise SystemExit(f"Slack interactive access broken for {case['settings']}: {label} allowed={actual}")
     # Other Platforms retain Hermes' original authorization behavior.
-    from gateway.session import SessionSource  # ty: ignore[unresolved-import]
-
-    source = SessionSource(platform=Platform.TELEGRAM, chat_id="123", chat_type="dm", user_id="123")
     if not runner._is_user_authorized(source):
         raise SystemExit("Slack policy changed another Platform's authorization")
     print(f"PASS {case['settings']}")

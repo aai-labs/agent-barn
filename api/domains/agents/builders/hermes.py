@@ -287,6 +287,9 @@ def native_slack_env(
         "SLACK_REQUIRE_MENTION": "true",
         "SLACK_THREAD_REQUIRE_MENTION": "true" if settings.get("thread_mention_policy") != "start_only" else "false",
         "SLACK_DISABLE_DMS": "true" if settings.get("dm_policy", "off") == "off" else "false",
+        # Delegate Slack admission to the mandatory Connection-policy plugin.
+        # Also prevents Hermes' startup warning from claiming all senders are denied.
+        "SLACK_ALLOW_ALL_USERS": "true",
         "AGENTBARN_SLACK_DM_POLICY": settings.get("dm_policy", "off"),
         "AGENTBARN_SLACK_GROUP_POLICY": settings.get("group_policy", "allowlist"),
         "AGENTBARN_SLACK_DM_ALLOWED_USERS": ",".join(settings.get("dm_user_ids") or []),

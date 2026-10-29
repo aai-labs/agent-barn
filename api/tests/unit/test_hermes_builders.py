@@ -74,7 +74,7 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert locked["SLACK_APP_TOKEN"] == "xapp-1"
     assert locked["SLACK_ALLOWED_CHANNELS"] == "C1,C2"
     assert locked["SLACK_DISABLE_DMS"] == "true"
-    assert "SLACK_ALLOW_ALL_USERS" not in locked
+    assert locked["SLACK_ALLOW_ALL_USERS"] == "true"
     assert locked["AGENTBARN_SLACK_DM_POLICY"] == "off"
     assert locked["AGENTBARN_SLACK_GROUP_POLICY"] == "allowlist"
     assert locked["SLACK_THREAD_REQUIRE_MENTION"] == "true"
@@ -94,7 +94,7 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert "SLACK_ALLOWED_USERS" not in open_env
     assert open_env["AGENTBARN_SLACK_DM_POLICY"] == "allowlist"
     assert open_env["AGENTBARN_SLACK_GROUP_POLICY"] == "open"
-    assert "SLACK_ALLOW_ALL_USERS" not in open_env
+    assert open_env["SLACK_ALLOW_ALL_USERS"] == "true"
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
     assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 

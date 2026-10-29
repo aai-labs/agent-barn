@@ -15,7 +15,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
-### 2026-10-07 — Separate native Hermes Slack channel and DM access
+### 2026-10-29 — Separate native Hermes Slack channel and DM access — [PR #275](https://github.com/aai-labs/agent-barn/pull/275)
 
 - Fixed: a Slack Connection with open channel access and a DM sender allowlist
   no longer rejects channel mentions from users outside that DM list. An empty
@@ -28,8 +28,17 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Verified: the real-image regression fails on the previous projection and
   covers open, closed, populated, and empty allowlists through Slack message intake,
   and verifies thread-history trust tags against the channel policy.
+- Fixed: native Hermes Slack rejects group DMs for incoming messages and approval,
+  slash-confirm, and clarification buttons. Legacy private channels retain their
+  channel policy after Slack metadata confirms they are not group DMs; failed
+  or inconclusive metadata lookups deny access.
 - Fixed: the generated Slack manifest enables a writable Messages tab again.
-- Operations: deploy the API and restart affected Agents. Existing Slack apps
+- Operations: before restarting, review existing Slack Connections with Channel
+  access set to Allowlist and no allowed channels (the default). Hermes formerly
+  treated that empty list as unrestricted when the DM sender gate admitted the
+  user; after restart it admits no channel messages. Select Open to retain access
+  to every channel the bot is in, or populate the allowed channels to restrict it.
+  Deploy the API and restart affected Agents. Existing Slack apps
   must also enable Messages Tab and untick read-only under Slack app settings →
   App Home, or re-paste the updated manifest. Restarting does not update the
   installed Slack app. Apply the current migration head before deploying; no
