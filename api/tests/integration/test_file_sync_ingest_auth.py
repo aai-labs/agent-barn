@@ -237,6 +237,73 @@ def test_a_folder_with_sync_turned_off_is_a_conflict():
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
+def _switch_off(context, agent: Agent) -> None:
+    with Session(context.postgres_delegate.engine) as session:
+        row = session.get(Agent, agent.id)
+        assert row is not None
+        row.file_sync_enabled = False
+        session.add(row)
+        session.commit()
+
+
+def _folder_of(context, agent: Agent) -> SyncAgentFolder:
+    return next(
+        f for f in context.injector.get(FileSyncRepository).folders(context.connection.id) if f.agent_id == agent.id
+    )
+
+
+def test_an_agent_switched_off_is_refused_while_its_folder_is_still_active():
+    with given(_BASE) as context:
+        agent = _agent(context)
+        there_is_a_sync_connection()(context)
+        _synced(context)
+        _switch_off(context, agent)
+
+        response = _report(context, agent)
+
+        assert_that(_folder_of(context, agent).status, equal_to(SyncFolderStatus.ACTIVE))
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], equal_to("File sync is turned off for this Agent"))
+
+
+def test_an_agent_switched_off_before_it_has_a_folder_is_refused_not_missing():
+    with given(_BASE) as context:
+        agent = _agent(context)
+        there_is_a_sync_connection()(context)
+        _switch_off(context, agent)
+
+        response = _report(context, agent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], equal_to("File sync is turned off for this Agent"))
+
+
+def test_an_agent_switched_off_cannot_claim_its_jobs():
+    with given(_BASE) as context:
+        agent = _agent(context)
+        there_is_a_sync_connection()(context)
+        _synced(context)
+        _switch_off(context, agent)
+
+        response = context.ingest_client.get(
+            f"/ingest/v1/agents/{agent.id}/file-sync/operations", headers={"Authorization": f"Bearer {_KEY}"}
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_a_refused_call_from_an_agent_switched_off_is_not_counted_as_contact():
+    with given(_BASE) as context:
+        agent = _agent(context)
+        there_is_a_sync_connection()(context)
+        _synced(context)
+        _switch_off(context, agent)
+
+        _report(context, agent)
+
+        assert_that(_folder_of(context, agent).last_contact_at, equal_to(None))
+
+
 @pytest.mark.parametrize(
     "path",
     [
