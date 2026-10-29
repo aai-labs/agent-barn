@@ -16,6 +16,7 @@ const MAX_TRACKED = 1000;
 const buffer = [];
 const messages = [];
 const latestInbound = new Map(); // sessionKey -> correlationId
+const inboundRooms = new Map(); // sessionKey -> { channel_id, thread_id }
 let outboundSequence = 0;
 
 function nativeChannels() {
@@ -52,6 +53,16 @@ function channelId(event, ctx) {
 
 function correlated(sessionKey) {
   return (sessionKey && latestInbound.get(sessionKey)) || null;
+}
+
+function remember(map, key, value) {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > MAX_TRACKED) map.delete(map.keys().next().value);
+}
+
+function bareChannel(location) {
+  return String(location).replace(/^(channel|user):/, "");
 }
 
 function flush(url, apiKey) {
@@ -91,25 +102,25 @@ export default {
       const sessionKey = ctx.sessionKey || event.sessionKey;
       const content = event.content || event.text;
       const location = channelId(event, ctx);
+      const threadId = event.threadId || ctx.threadId || null;
       if (sessionKey && content && location) {
         emitMessage({
           platform,
           provider_message_id: String(messageId),
           session_key: sessionKey,
-          channel_id: String(location).replace(/^(channel|user):/, ""),
-          thread_id: event.threadId || ctx.threadId || null,
+          channel_id: bareChannel(location),
+          thread_id: threadId,
           direction: "INBOUND",
           conversation_type: conversationType(event.chatType || ctx.chatType),
           sender_id: event.senderId || ctx.senderId || null,
-          sender_name: event.senderName || ctx.senderName || null,
-          channel_name: event.channelName || ctx.channelName || null,
+          sender_name: event.senderName || event.metadata?.senderName || ctx.senderName || null,
+          channel_name: event.channelName || event.metadata?.channelName || ctx.channelName || null,
           content: String(content),
         });
       }
       if (!sessionKey) return;
-      latestInbound.delete(sessionKey);
-      latestInbound.set(sessionKey, correlationId);
-      if (latestInbound.size > MAX_TRACKED) latestInbound.delete(latestInbound.keys().next().value);
+      remember(latestInbound, sessionKey, correlationId);
+      if (location) remember(inboundRooms, sessionKey, { channel_id: bareChannel(location), thread_id: threadId });
     });
 
     // Cron, heartbeat, and API runs have no inbound message to report against.
@@ -136,12 +147,15 @@ export default {
       const location = channelId(event, ctx);
       if (sessionKey && content && location) {
         outboundSequence += 1;
+        const target = bareChannel(location);
+        const inbound = inboundRooms.get(sessionKey);
+        const sameRoom = inbound && inbound.channel_id.toLowerCase() === target.toLowerCase();
         emitMessage({
           platform,
           provider_message_id: String(event.messageId || `outbound:${sessionKey}:${outboundSequence}`),
           session_key: sessionKey,
-          channel_id: String(location).replace(/^(channel|user):/, ""),
-          thread_id: event.threadId || ctx.threadId || null,
+          channel_id: sameRoom ? inbound.channel_id : target,
+          thread_id: event.threadId || ctx.threadId || (sameRoom ? inbound.thread_id : null),
           direction: "OUTBOUND",
           conversation_type: conversationType(event.chatType || ctx.chatType),
           content: String(content),

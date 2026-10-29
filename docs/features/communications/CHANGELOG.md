@@ -15,6 +15,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-29 — MDP-118 — OpenClaw transcripts keep reply threads and names — PR pending
+
+- Fixed: OpenClaw transcripts now record sender and channel names, which OpenClaw reports under the message hook's `metadata`; they were always empty. A reply in the same session as an inbound message is recorded under that message's channel ID and thread, so Conversations shows it inside the thread. OpenClaw's `message_sent` hook carries no thread, and a message-tool send names the channel as the model typed it, so a listen-in reply previously opened a second channel such as `c0b3k981aak` beside `C0B3K981AAK`. A reply sent to another channel keeps its own target. Already-recorded rows are not repaired.
+
 ### 2026-10-29 — MDP-118 — Telegram listen-in groups — PR pending
 
 - Added: Telegram Connections offer **Listen-in groups**, numeric group IDs that must also be Allowed groups under an allowlist. On OpenClaw each gets its own `groups` entry next to `"*"` or the allowed groups; Hermes ignores the list. Setup guidance says listen-in groups need privacy mode disabled or the bot made an administrator, so it sees every message.

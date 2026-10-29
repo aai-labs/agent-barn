@@ -8,12 +8,20 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-10-29 — MDP-118 PR 5b — OpenClaw observer transcripts
+
+- Delivered: in a live test after PR 5, a Slack listen-in correction appeared as a separate Conversations channel outside its thread, and every OpenClaw message showed raw IDs. The observer now records a reply under its session's inbound channel ID and thread when the target matches that channel case-insensitively, and reads sender and channel names from the hook's `metadata`.
+- Found: two of the three gaps predate listen-in. OpenClaw outbound rows never carried a thread (0 of 17), and no OpenClaw row carried a name. Only the lowercase channel came from listen-in, because a message-tool send names the channel as the model typed it.
+- Changed: Runtime: the OpenClaw `agentbarn-observer` plugin only. The runtime configuration digest changes. Docs: [communications](../communications/CHANGELOG.md).
+- Also observed: the Agent stayed silent on "The moon is cheese" and "Python language is compiled" by choice (`mute`). The listen-in rule is kept as is.
+- Follow-up: PR 6.
 
 ### 2026-10-29 — MDP-118 PR 5 — Telegram listen-in groups
 
