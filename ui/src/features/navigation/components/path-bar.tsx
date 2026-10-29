@@ -56,7 +56,8 @@ export function PathBar() {
 
   // Where you are, below the Organization (and the Agent): the rail destination, then the
   // selected entries of the panel, deepest last. "Settings / Agents", "Spend / Costs",
-  // "System / Settings / Agent Memory"; inside an Agent "Chat", or "Agent settings / Profile".
+  // "Overview / Resource Usage", "Agents / Specs"; inside an Agent "Chat", or
+  // "Agent settings / Profile".
   // Every step but the last links to its own page.
   const selected = (panel?.groups ?? [])
     .flatMap((group) => group.items.flatMap((item) => [item, ...(item.children ?? [])]))

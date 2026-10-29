@@ -37,3 +37,4 @@ export const SyncLocationSchema = z.object({
 export type SyncLocation = z.infer<typeof SyncLocationSchema>;
 
 export const LOCATION_PICKER = "location_picker";
+export const FILE_SYNC = "file_sync";
