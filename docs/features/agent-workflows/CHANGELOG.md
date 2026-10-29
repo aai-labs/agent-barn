@@ -7,14 +7,14 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 ## Current state
 
 - Delivered base: this worktree started at local staging `a9e42ebe9`, including AF-389 and AF-415 (PRs [#326](https://github.com/aai-labs/agent-barn/pull/326) and [#328](https://github.com/aai-labs/agent-barn/pull/328)), and is rebased onto staging `57bbefd0f`, including AF-384 file sync. Existing publication, checkpoint references and run/step attachments are retained.
-- Local integration: typed file inputs pin existing/uploaded Agent files; handoff retrieves verified bytes; Agent-chosen deliverables follow output descriptions. Step/final files use uniform cards, and a separate All artifacts view collects publications across the run. Failed/expired attempts block; durable trigger receipts prevent same-attempt replay after restart.
+- [PR #346](https://github.com/aai-labs/agent-barn/pull/346): typed file inputs pin existing/uploaded Agent files; handoff retrieves verified bytes; Agent-chosen deliverables follow output descriptions. Step/final files use uniform cards, and a separate All artifacts view collects publications across the run. Failed/expired attempts block; durable trigger receipts prevent same-attempt replay after restart.
 - Verification: complete API suite **6,578 passed**, complete UI suite **1,053 passed / 5 skipped**, Kubernetes client **19 passed**, Hermes/OpenClaw runtime suites **16 / 12 passed**, both artifact byte workflows and the persistent deployment/browser contract passed. Quality, migration/chart/monitoring checks and API/production UI builds passed. [Artifact evidence](../agent-artifacts/EVIDENCE.md#pr-preparation-and-complete-verification--2026-10-29) records the final results, harness corrections, screenshot provenance and live-acceptance limits.
 - Next: live Agent-session acceptance and review of this local slice, then AF-390 approval integration. Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
 - Blockers: live model/session execution on both runtimes, truthful OpenClaw stop/quiescence and run-read-policy acceptance remain open. Deployment/provisioning is separate operational work. Explicit recovery/reconciliation is not exposed by this slice.
 
 ## Changes
 
-### 2026-10-29 — AF-387 — PR preparation and staging integration
+### 2026-10-29 — AF-387 — [PR #346](https://github.com/aai-labs/agent-barn/pull/346) — preparation and staging integration
 
 - Committed the integration and rebased without conflicts onto staging `57bbefd0f`.
 - AF-384 interaction: temporary pinned inputs now use a hidden workspace directory, following the existing sync exclusions. A regression runs the real sync scanner while each runtime reads materialized input bytes; it failed with the original visible directory and passed for both runtimes after correction. All 60 trigger/sync-helper cases passed.
