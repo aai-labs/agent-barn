@@ -163,6 +163,14 @@ releases:
         value: {{ env "POSTGRES_FIRECRAWL_PASSWORD" | required "POSTGRES_FIRECRAWL_PASSWORD is required" | quote }}
       - name: postgres.db
         value: {{ env "POSTGRES_FIRECRAWL_DB" | required "POSTGRES_FIRECRAWL_DB is required" | quote }}
+{{ if env "FIRECRAWL_API_MEMORY_LIMIT" }}
+      - name: resources.api.limits.memory
+        value: {{ env "FIRECRAWL_API_MEMORY_LIMIT" | quote }}
+{{ end }}
+{{ if env "FIRECRAWL_RABBITMQ_MEMORY_LIMIT" }}
+      - name: resources.rabbitmq.limits.memory
+        value: {{ env "FIRECRAWL_RABBITMQ_MEMORY_LIMIT" | quote }}
+{{ end }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis

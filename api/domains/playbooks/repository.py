@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
-from sqlalchemy import func, or_, update
+from sqlalchemy import exists, func, or_, update
 from sqlalchemy import select as sql_select
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
@@ -15,7 +15,10 @@ from api.domains.conversations.models import AgentChatMessage
 from api.domains.events.catalog import EVENT_REGISTRY, PLAYBOOK_EXTRACTION_REQUESTED
 from api.domains.events.models import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.playbooks.constants import PLAYBOOK_EXTRACTION_STALE_AFTER_SECONDS
+from api.domains.playbooks.constants import (
+    PLAYBOOK_EXTRACTION_QUEUED_STALE_AFTER_SECONDS,
+    PLAYBOOK_EXTRACTION_STALE_AFTER_SECONDS,
+)
 from api.domains.playbooks.models import (
     ACTIVE_AGENT_INDEX,
     ACTIVE_STATUSES,
@@ -34,6 +37,7 @@ from api.domains.playbooks.transcripts import (
     ToolSessionSpan,
 )
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.skills.models import SkillDraft
 from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -151,7 +155,11 @@ class PlaybookExtractionRepository:
                 or 0
             )
             rows = session.exec(
-                select(PlaybookExtraction, Agent.name)
+                select(
+                    PlaybookExtraction,
+                    Agent.name,
+                    exists().where(col(SkillDraft.skill_id) == col(PlaybookExtraction.skill_id)),
+                )
                 .join(Agent, col(Agent.id) == col(PlaybookExtraction.source_agent_id))
                 .where(*scoped)
                 .order_by(col(PlaybookExtraction.created_at).desc(), col(PlaybookExtraction.id).desc())
@@ -162,7 +170,9 @@ class PlaybookExtractionRepository:
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=[PlaybookExtractionRead.from_row(row, agent_name) for row, agent_name in rows],
+            items=[
+                PlaybookExtractionRead.from_row(row, agent_name, bool(has_draft)) for row, agent_name, has_draft in rows
+            ],
         )
 
     def get_in_scope(
@@ -199,23 +209,55 @@ class PlaybookExtractionRepository:
         )
 
     def claim(self, extraction_id: UUID) -> PlaybookExtraction | None:
-        """Move a queued run, or one abandoned by a dead worker, to RUNNING.
+        """Move a queued run to RUNNING.
 
-        Returns None when the run was cancelled, finished, or is still owned by a
-        live worker, so a redelivered message does not process it twice.
+        Returns None for any other state. A redelivered message for a run that already
+        started never runs it again, because its model calls were billed.
         """
-        now = datetime.now(UTC)
-        stale_before = now - timedelta(seconds=PLAYBOOK_EXTRACTION_STALE_AFTER_SECONDS)
         return self._transition(
             extraction_id,
-            or_(
-                col(PlaybookExtraction.status) == PlaybookExtractionStatus.QUEUED,
-                (col(PlaybookExtraction.status) == PlaybookExtractionStatus.RUNNING)
-                & (col(PlaybookExtraction.started_at) < stale_before),
-            ),
+            col(PlaybookExtraction.status) == PlaybookExtractionStatus.QUEUED,
             status=PlaybookExtractionStatus.RUNNING,
-            started_at=now,
+            started_at=datetime.now(UTC),
         )
+
+    def expire_abandoned(self, *, source_agent_id: UUID | None = None, extraction_id: UUID | None = None) -> int:
+        """Fail runs no worker will finish, so they stop blocking their Agent's next run.
+
+        A RUNNING run older than the stale window outlived the time limit, so its worker
+        died; a QUEUED run older than its window lost its message. Returns how many failed.
+        """
+        if source_agent_id is None and extraction_id is None:
+            raise ValueError("Name a source Agent or a run")
+        now = datetime.now(UTC)
+        target = (
+            col(PlaybookExtraction.id) == extraction_id
+            if extraction_id is not None
+            else col(PlaybookExtraction.source_agent_id) == source_agent_id
+        )
+        abandoned = or_(
+            (col(PlaybookExtraction.status) == PlaybookExtractionStatus.RUNNING)
+            & (col(PlaybookExtraction.started_at) < now - timedelta(seconds=PLAYBOOK_EXTRACTION_STALE_AFTER_SECONDS)),
+            (col(PlaybookExtraction.status) == PlaybookExtractionStatus.QUEUED)
+            & (
+                col(PlaybookExtraction.created_at)
+                < now - timedelta(seconds=PLAYBOOK_EXTRACTION_QUEUED_STALE_AFTER_SECONDS)
+            ),
+        )
+        with Session(self.delegate.engine) as session:
+            expired = session.scalars(
+                update(PlaybookExtraction)
+                .where(target, abandoned)
+                .values(
+                    status=PlaybookExtractionStatus.FAILED,
+                    error_code=PlaybookExtractionError.INTERRUPTED.value,
+                    finished_at=now,
+                    updated_at=now,
+                )
+                .returning(col(PlaybookExtraction.id))
+            ).all()
+            session.commit()
+            return len(expired)
 
     def record_progress(self, extraction_id: UUID, **values: Any) -> bool:
         """Store intermediate figures while the run is still RUNNING; False once cancelled."""
