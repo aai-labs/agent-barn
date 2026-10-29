@@ -51,5 +51,7 @@ fi
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   python3 /app/config/memory-gateway-ready.py || true
 fi
+python3 /app/config/file-sync.py --once || true
+python3 /app/config/file-sync.py &
 touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 exec openclaw gateway --allow-unconfigured
