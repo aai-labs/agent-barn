@@ -130,22 +130,24 @@ test.describe("App navigation", () => {
       await expect(page.getByRole("heading", { name: "Settings", exact: true })).toHaveCount(0);
     });
 
-    test("lists Platform settings' sections from anywhere in System", async ({ page }) => {
+    test("keeps Settings sections flat and orders the Agents panel", async ({ page }) => {
       await new DataSupport(page).platformMemory.intercept();
-      await navigation.gotoPlatform("/event-deliveries");
-
-      await expect(navigation.panelLink("Event deliveries")).toHaveAttribute("aria-current", "page");
-      await expect(navigation.panelLink("Agent Memory")).toBeVisible();
-      await expect(navigation.panelLink("Agent Memory")).not.toHaveAttribute("aria-current", "page");
-
-      await expect(navigation.panelLink("Agent Memory")).toHaveAttribute(
-        "href",
-        "/dashboard/platform/settings?section=agent-memory",
-      );
-
       await navigation.gotoPlatform("/settings?section=agent-memory");
-      await expect(navigation.breadcrumb()).toContainText("System/Settings/Agent Memory");
+
+      await expect(navigation.mainLink("Settings")).toHaveAttribute("aria-current", "page");
       await expect(navigation.panelLink("Agent Memory")).toHaveAttribute("aria-current", "page");
+      await expect(navigation.panelLink("Agent sizes")).toBeVisible();
+      await expect(navigation.panelLink("Signup & trials")).toBeVisible();
+      await expect(navigation.breadcrumb()).toContainText("Settings/Agent Memory");
+      await expect(navigation.panelSections()).toHaveCount(7);
+      await expect(navigation.panelSections().nth(0)).toHaveText("Agent Memory");
+
+      await navigation.gotoPlatform("/agents");
+      const agentPanel = page.getByRole("navigation", { name: "Agents" });
+      await expect(agentPanel.getByRole("link").nth(0)).toHaveText("Resource Usage");
+      await expect(agentPanel.getByRole("link").nth(1)).toHaveText("Specs");
+      await expect(navigation.mainLink("Agents")).toHaveAttribute("href", "/dashboard/platform/agents");
+      await expect(navigation.panelLink("Specs")).toHaveAttribute("aria-current", "page");
     });
 
     test("keeps Platform View around your Account when you open it from there", async ({ page }) => {
@@ -255,14 +257,24 @@ test.describe("App navigation", () => {
       await expect(page.locator('main a[href^="/dashboard/platform"]')).toHaveCount(0);
     });
 
-    test("shows a panel only for a Platform area with more than one page", async () => {
+    test("shows each Platform area panel and keeps Resource Usage out of Spend", async () => {
       await navigation.gotoPlatform("/users");
       await expect(navigation.breadcrumbCurrent()).toHaveText("Users");
       await expect(navigation.panels()).toHaveCount(0);
 
       await navigation.gotoPlatform("/costs");
       await expect(navigation.panelLink("Costs")).toHaveAttribute("aria-current", "page");
-      await expect(navigation.panelLink("Resources")).toBeVisible();
+      await expect(navigation.panelLink("Billing")).toBeVisible();
+      await expect(navigation.panelLink("Resource Usage")).toHaveCount(0);
+
+      await navigation.gotoPlatform();
+      await expect(navigation.panelSections()).toHaveText(["Overview", "Health", "Resource Usage", "Events"]);
+
+      await navigation.gotoPlatform("/agents/resource-usage");
+      await expect(navigation.mainLink("Agents")).toHaveAttribute("aria-current", "page");
+      await expect(navigation.panelLink("Resource Usage")).toHaveAttribute("aria-current", "page");
+      await expect(navigation.panelLink("Specs")).toBeVisible();
+      await expect(navigation.breadcrumb()).toContainText("Agents/Resource Usage");
     });
 
     test("opens an Agent on its Overview, listed first among its sections", async () => {

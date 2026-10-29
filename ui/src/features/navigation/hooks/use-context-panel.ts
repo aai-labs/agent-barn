@@ -192,6 +192,28 @@ function platformPanel(pathname: string, requestedSection: string | null): Conte
     requestedSection && Object.hasOwn(PLATFORM_SETTINGS_SECTIONS, requestedSection)
       ? (requestedSection as PlatformSettingsSectionKey)
       : "agent-memory";
+  if (pathname === `${PLATFORM_BASE}/settings`) {
+    const sections = Object.entries(PLATFORM_SETTINGS_SECTIONS) as [
+      PlatformSettingsSectionKey,
+      (typeof PLATFORM_SETTINGS_SECTIONS)[PlatformSettingsSectionKey],
+    ][];
+    return {
+      title: "Settings",
+      subtitle: "Platform",
+      groups: [
+        {
+          key: "settings",
+          items: sections.map(([key, section]) => ({
+            key,
+            label: section.label,
+            href: `${PLATFORM_BASE}/settings?section=${key}`,
+            icon: section.Icon,
+            active: key === settingsSection,
+          })),
+        },
+      ],
+    };
+  }
   const toItem = (page: (typeof PLATFORM_AREAS)[number]["pages"][number]): NavItem => {
     const active = isPlatformPageActive(pathname, page.href);
     return {
