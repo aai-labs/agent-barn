@@ -16,7 +16,6 @@ import {
   MessagesSquare,
   Receipt,
   Send,
-  Server,
   Settings2,
   Sparkles,
   SquareTerminal,
@@ -25,6 +24,7 @@ import {
   Wrench,
   type LucideIcon,
   Workflow,
+  HeartPulse,
 } from "lucide-react";
 
 import type { AgentPageTab } from "@/features/agents/agent-page-tabs";
@@ -55,7 +55,7 @@ export const PLATFORM_BASE = "/dashboard/platform";
 /** An Agent's page or one of its sub-pages: `/dashboard/{orgId}/agents/{agentId}[/{rest}]`. */
 export type AgentRoute = { orgId: string; agentId: string; rest?: string };
 
-const AGENT_ROUTE = /^\/dashboard\/([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
+const AGENT_ROUTE = /^\/dashboard\/(?!platform(?:\/|$))([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
 
 export function parseAgentRoute(pathname: string): AgentRoute | null {
   const match = AGENT_ROUTE.exec(pathname);
@@ -92,6 +92,9 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         href: PLATFORM_BASE,
         icon: LayoutGrid,
       },
+      { key: "environment-health", label: "Health", href: `${PLATFORM_BASE}/environment-health`, icon: HeartPulse },
+      { key: "resources", label: "Resource Usage", href: `${PLATFORM_BASE}/resource-usage`, icon: Cpu },
+      { key: "event-deliveries", label: "Events", href: `${PLATFORM_BASE}/event-deliveries`, icon: Send },
     ],
   },
   {
@@ -125,9 +128,10 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     label: "Agents",
     icon: Bot,
     pages: [
+      { key: "agent-resources", label: "Resource Usage", href: `${PLATFORM_BASE}/agents/resource-usage`, icon: Cpu },
       {
         key: "agents",
-        label: "Agents",
+        label: "Specs",
         href: `${PLATFORM_BASE}/agents`,
         icon: Bot,
       },
@@ -149,12 +153,6 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Billing",
         href: `${PLATFORM_BASE}/billing`,
         icon: CreditCard,
-      },
-      {
-        key: "resources",
-        label: "Resources",
-        href: `${PLATFORM_BASE}/resource-usage`,
-        icon: Cpu,
       },
     ],
   },
@@ -178,29 +176,21 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     ],
   },
   {
-    key: "system",
-    label: "System",
-    icon: Server,
+    key: "settings",
+    label: "Settings",
+    icon: Settings2,
     pages: [
-      {
-        key: "event-deliveries",
-        label: "Event deliveries",
-        href: `${PLATFORM_BASE}/event-deliveries`,
-        icon: Send,
-      },
-      {
-        key: "settings",
-        label: "Settings",
-        href: `${PLATFORM_BASE}/settings`,
-        icon: Settings2,
-      },
+      { key: "settings", label: "Settings", href: `${PLATFORM_BASE}/settings`, icon: Settings2 },
     ],
   },
 ];
 
 /** Overview is the prefix of every other Platform page, so it matches exactly. */
 export function isPlatformPageActive(pathname: string, href: string) {
-  return href === PLATFORM_BASE ? pathname === PLATFORM_BASE : pathname.startsWith(href);
+  if (href === PLATFORM_BASE || href === `${PLATFORM_BASE}/agents`) {
+    return pathname === href;
+  }
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {

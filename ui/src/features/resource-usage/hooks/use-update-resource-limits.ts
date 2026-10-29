@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { environmentHealthKey } from "@/features/environment-health/utils";
 import { api } from "@/shared/api";
 
 import { ResourceLimitsSchema, type ResourceLimits, type ResourceLimitsUpdate } from "../schemas";
@@ -25,6 +26,8 @@ export function useUpdateResourceLimits() {
     onSuccess: () => {
       // The ceilings arrive inside the usage response, whatever range or filter it is for.
       void queryClient.invalidateQueries({ queryKey: resourceUsageKey.platformAll });
+      // The environment health page compares the same ceilings, storage and pods included.
+      void queryClient.invalidateQueries({ queryKey: environmentHealthKey.all });
       toast.success("Namespace quota saved");
     },
   });

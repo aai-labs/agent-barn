@@ -801,6 +801,11 @@
   ],
   [
     "GET",
+    "/platform/environment-health",
+    "get_environment_health_platform_environment_health_get"
+  ],
+  [
+    "GET",
     "/platform/event-deliveries",
     "get_event_deliveries_platform_event_deliveries_get"
   ],

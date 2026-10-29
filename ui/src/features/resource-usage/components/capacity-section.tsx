@@ -202,7 +202,18 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
         })}
       </div>
 
-      <CapacityLimitsDialog key={openings} capacity={capacity} open={open} onOpenChange={setOpen} />
+      <CapacityLimitsDialog
+        key={openings}
+        ceilings={{
+          limitsMemoryBytes: capacity.limitsMemoryBytes,
+          limitsCpuCores: capacity.limitsCpuCores,
+          requestsMemoryBytes: capacity.requestsMemoryBytes,
+          requestsCpuCores: capacity.requestsCpuCores,
+          updatedAt: capacity.ceilingsUpdatedAt,
+        }}
+        open={open}
+        onOpenChange={setOpen}
+      />
     </section>
   );
 }

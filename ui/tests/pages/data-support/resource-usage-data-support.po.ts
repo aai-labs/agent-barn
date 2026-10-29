@@ -384,6 +384,8 @@ export class ResourceUsageDataSupport {
                 limits_cpu_cores: body.limits_cpu_cores ?? null,
                 requests_memory_bytes: body.requests_memory_bytes ?? null,
                 requests_cpu_cores: body.requests_cpu_cores ?? null,
+                requests_storage_bytes: body.requests_storage_bytes ?? null,
+                pods: body.pods ?? null,
                 updated_at: "2026-10-01T12:00:00Z",
               },
         ),

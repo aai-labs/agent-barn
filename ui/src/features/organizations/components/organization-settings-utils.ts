@@ -27,9 +27,9 @@ export type OrganizationSettingsSection = {
 export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
   {
     key: "agents",
-    label: "Agents",
+    label: "Models",
     description:
-      "Defaults every Agent in this organization follows unless it has been given its own setting.",
+      "Choose the default model and the models available to Agents in this organization.",
     adminOnly: true,
   },
   {
