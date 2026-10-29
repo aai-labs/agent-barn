@@ -837,6 +837,7 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                         "allowed_role_ids": [],
                         "allow_all_users": False,
                         "home_channel_id": None,
+                        "listen_in_channel_ids": [],
                     },
                     external_identity="validation-skipped",
                     revision=2,
