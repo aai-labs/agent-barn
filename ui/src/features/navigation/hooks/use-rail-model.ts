@@ -51,7 +51,7 @@ export function useRailModel(): RailModel {
       items: PLATFORM_AREAS.map((area) => ({
         key: area.key,
         label: area.label,
-        href: area.pages[0].href,
+        href: area.pages.find((page) => page.key === area.key)?.href ?? area.pages[0].href,
         icon: area.icon,
         active: area.pages.some((page) => isPlatformPageActive(pathname, page.href)),
       })),

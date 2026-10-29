@@ -305,3 +305,23 @@ test("going back keeps the edited rules and chosen Templates", async ({ page }) 
 
   await expect(dialog.getByRole("checkbox", { name: "Code Reviewer V2 v13" })).toBeChecked();
 });
+
+test("a playbook with an unpublished draft cannot take the next draft until it is published", async ({ page }) => {
+  const { mock, playbooks } = await open(page, {
+    runs: [
+      mockSucceededRun({ skill_name: "Refunds playbook", skill_has_draft: true }),
+      mockSucceededRun({ skill_id: "dddddddd-0000-4000-8000-0000000000d2", skill_name: "Billing playbook" }),
+    ],
+  });
+
+  await playbooks.writeToExistingPlaybook();
+  await expect(playbooks.form().getByRole("combobox", { name: "Playbook" })).toContainText("Billing playbook");
+  await playbooks.form().getByRole("combobox", { name: "Playbook" }).click();
+  await expect(page.getByRole("option", { name: /Refunds playbook \(publish or discard its draft first\)/ })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await playbooks.create();
+
+  await expect
+    .poll(() => mock.requests.find((request) => request.method === "POST")?.body)
+    .toEqual({ skill_id: "dddddddd-0000-4000-8000-0000000000d2", window_days: 30, max_sessions: 20 });
+});

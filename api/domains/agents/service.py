@@ -1011,22 +1011,7 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            try:
-                shared_content = decrypt_content(
-                    shared_cred.provider,
-                    shared_cred.content,
-                    self.config.agent_token_encryption_key,
-                )
-            except ValidationError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Shared credential {shared_cred.name!r} has stored "
-                        f"{PROVIDER_DISPLAY_NAMES[shared_cred.provider]} settings that are no longer valid "
-                        f"({_validation_problems(exc)}). Edit the shared credential and save it again."
-                    ),
-                ) from exc
-            live_validation_contents.append((shared_cred.provider, shared_content))
+            live_validation_contents.append((shared_cred.provider, self._decrypt_shared_credential(shared_cred)))
             prepared_secrets.append(
                 AgentSecret(
                     agent_id=agent.id,
@@ -1852,6 +1837,19 @@ class AgentService:
             items=items,
         )
 
+    def _decrypt_shared_credential(self, credential: SharedCredential) -> Any:
+        try:
+            return decrypt_content(credential.provider, credential.content, self.config.agent_token_encryption_key)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Shared credential {credential.name!r} has stored "
+                    f"{PROVIDER_DISPLAY_NAMES[credential.provider]} settings that are no longer valid "
+                    f"({_validation_problems(exc)}). Edit the shared credential and save it again."
+                ),
+            ) from exc
+
     def _shared_credentials_for_update(self, agent: Agent, data: AgentUpdate) -> list[SharedCredential]:
         """Validate source replacements before deleting the old credential binding."""
         removed = set(data.removed_secret_providers or [])
@@ -2031,21 +2029,26 @@ class AgentService:
         shared_upserts = self._shared_credentials_for_update(agent, data) if data.shared_credentials else []
         replaced_by_shared = {credential.provider for credential in shared_upserts}
 
+        # Validate every added or replaced credential before touching the DB, so a
+        # validation failure never leaves already-deleted secrets permanently gone.
+        # Credentials set here are live-validated the same way as on create: an
+        # Agent's credential settings save through this path, and a key that only
+        # passes the schema would otherwise first fail in the Agent's conversation.
+        manual_upserts = [
+            (item, _enrich_atlassian_content(validate_content(item.provider, item.content)))
+            for item in data.secrets or []
+        ]
+        for item, content in manual_upserts:
+            self._validate_live_integration(item.provider, content)
+        for credential in shared_upserts:
+            self._validate_live_integration(credential.provider, self._decrypt_shared_credential(credential))
+
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
-        # Validate and encrypt all upserts before touching the DB so that a
-        # validation failure never leaves already-deleted secrets permanently gone.
         if "removed_secret_providers" in updated or "secrets" in updated:
             key = self.config.agent_token_encryption_key
             upserts: list[tuple[AgentSecretCreate, str]] = [
-                (
-                    item,
-                    encrypt_content(
-                        _enrich_atlassian_content(validate_content(item.provider, item.content)),
-                        key,
-                    ),
-                )
-                for item in data.secrets or []
+                (item, encrypt_content(content, key)) for item, content in manual_upserts
             ]
             for provider in updated.get("removed_secret_providers") or []:
                 if provider in replaced_by_shared:
@@ -3493,7 +3496,8 @@ class AgentService:
         The browser can be modified, so any client-side preflight is advisory only. This
         method receives the exact content from the current request and runs the provider
         validator before Agent creation allocates a LiteLLM key or opens its persistence
-        transaction. Providers without a live validator still receive schema validation;
+        transaction, and before an Agent update changes any credential. Providers without
+        a live validator still receive schema validation;
         their credentials remain eligible for the existing on-demand validation endpoint.
         """
         validator = PROVIDER_VALIDATORS.get(provider)

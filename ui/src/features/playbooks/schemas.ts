@@ -11,6 +11,7 @@ export const PlaybookExtractionErrorSchema = z.enum([
   "spend_limit_reached",
   "model_error",
   "answer_truncated",
+  "interrupted",
   "draft_conflict",
   "skill_unavailable",
   "internal_error",
@@ -41,6 +42,8 @@ export const PlaybookExtractionSchema = z.object({
   costUsd: z.coerce.number().nullable(),
   requestedByUserId: z.string().uuid().nullable(),
   conventionCount: z.number().int().default(0),
+  // Whether the target Skill has an unpublished draft now; set on run lists.
+  skillHasDraft: z.boolean().default(false),
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),

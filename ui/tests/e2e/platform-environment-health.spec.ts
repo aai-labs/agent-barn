@@ -148,19 +148,19 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(page.getByText("Namespace quota saved")).toBeVisible();
   });
 
-  test("is where the System area opens, listed first in its panel", async ({ page }) => {
+  test("is listed under Overview, which opens the existing overview", async ({ page }) => {
     await data.environmentHealth.interceptEnvironmentHealth();
 
     await page.goto("/dashboard/platform/event-deliveries");
-    const system = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "System", exact: true });
-    await expect(system).toHaveAttribute("href", "/dashboard/platform/environment-health");
+    const overview = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Overview", exact: true });
+    await expect(overview).toHaveAttribute("href", "/dashboard/platform");
     await expect(
       page.getByRole("complementary").getByRole("link").first(),
-    ).toHaveText("Environment health");
+    ).toHaveText("Overview");
 
     await healthPage.goto();
     await expect(healthPage.heading()).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("System/Environment health");
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Overview/Health");
   });
 
   test("a failed load can be retried", async ({ page }) => {

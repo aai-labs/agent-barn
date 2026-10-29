@@ -4,12 +4,14 @@ from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.agents.restore_point_job import RUNTIME_OPENCLAW
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import (
     RUNTIME_WEBHOOK_PATH,
     RUNTIME_WEBHOOK_PORT,
     AgentBarnTelegramRuntime,
 )
+from api.domains.file_sync.rules import rules_manifest
 
 from .artifacts import (
     ARTIFACT_COMMAND,
@@ -73,6 +75,7 @@ OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
 def _openclaw_config_core(
@@ -431,6 +434,8 @@ def build_config_map(
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["retire-messaging.py"] = RETIRE_MESSAGING_PY
+        data["file-sync.py"] = FILE_SYNC_PY
+        data["file-sync-rules.json"] = json.dumps(rules_manifest(RUNTIME_OPENCLAW))
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:

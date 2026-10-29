@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from injector import Module, provider, singleton
 
 from api.core.config import Config
+from api.domains.agents.microsoft_graph_files import MicrosoftGraphFiles
 from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
-from api.domains.agents.microsoft_identity import MicrosoftIdentityClient
+from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
 from api.domains.sync_provider.plugins.base import (
     Provisioned,
     SignedIn,
@@ -78,9 +79,13 @@ class OtherDriveModule(Module):
         config: Config,
         identity: MicrosoftIdentityClient,
         graph_sites: MicrosoftGraphSites,
+        graph_files: MicrosoftGraphFiles,
+        app_tokens: MicrosoftAppTokens,
         other_drive: OtherDrivePlugin,
     ) -> SyncProviderPluginRegistry:
-        return SyncProviderPluginRegistry([*shipped_plugins(config, identity, graph_sites), other_drive])
+        return SyncProviderPluginRegistry(
+            [*shipped_plugins(config, identity, graph_sites, graph_files, app_tokens), other_drive]
+        )
 
 
 def other_drive(context) -> OtherDrivePlugin:
