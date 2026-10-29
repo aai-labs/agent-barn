@@ -224,7 +224,11 @@ test.describe("WF02 run progress and text results", () => {
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
     await expect(page.getByText("Couldn’t load run activity")).toBeVisible();
     support.failHistory = false;
-    await page.getByRole("button", { name: "Try again" }).click();
+    await page
+      .getByText("Couldn’t load run activity")
+      .locator("xpath=ancestor::*[.//button][1]")
+      .getByRole("button", { name: "Try again" })
+      .click();
     await expect(page.getByLabel("Run activity")).toBeVisible();
   });
 
