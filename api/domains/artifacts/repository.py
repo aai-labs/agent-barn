@@ -104,6 +104,20 @@ class ArtifactRepository:
             ).all()
             return list(rows), total
 
+    def authorize_workflow_read(self, artifact_id: UUID, attempt_id: UUID, agent_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            run, _ = self.workflows.artifact_attempt(session, attempt_id, agent_id)
+            reference = session.exec(
+                select(ArtifactReference).where(
+                    col(ArtifactReference.artifact_id) == artifact_id,
+                    col(ArtifactReference.kind) == "run",
+                    col(ArtifactReference.owner_id) == run.id,
+                    col(ArtifactReference.released_at).is_(None),
+                )
+            ).first()
+            if reference is None:
+                raise HTTPException(404, "Workflow file not found")
+
     def create(
         self,
         agent_id: UUID,
@@ -137,6 +151,7 @@ class ArtifactRepository:
                     }
                     for item in files
                 ]
+                entries.extend(value for value in run.inputs.values() if isinstance(value, dict))
                 entries.append(
                     {
                         "artifact_id": str(agent_id),

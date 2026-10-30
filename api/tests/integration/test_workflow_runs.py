@@ -22,6 +22,21 @@ from api.tests.integration.test_workflows import _GIVEN, auth, base, create, swi
 _RUN_GIVEN = _GIVEN
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_final_output_description_follows_last_step(reverse: bool) -> None:
+    from api.tests.helpers.workflows import draft
+
+    with given(_RUN_GIVEN) as context:
+        body = draft()
+        body["steps"].append({**body["steps"][0], "id": str(uuid4()), "artifact_description": "Second output"})
+        if reverse:
+            body["steps"].reverse()
+        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        response, _, _ = start(context, saved)
+        assert response.status_code == 202, response.text
+        assert response.json()["final_output_description"] == body["steps"][-1]["artifact_description"]
+
+
 def start(context, saved=None, **changes):
     context.agent.status = AgentStatus.RUNNING
     context.injector.get(AgentRepository).save(context.agent)
@@ -223,7 +238,7 @@ def test_duplicate_wakeups_do_not_reemit_pause_after_a_completed_step() -> None:
             assert_that(len(session.exec(select(OutboxMessage)).all()), equal_to(events_before))
 
 
-def test_lost_attempt_restarts_fresh_without_replaying_checkpoint() -> None:
+def test_lost_attempt_blocks_without_replaying_checkpoint() -> None:
     from api.tests.helpers.workflows import draft
 
     with given(_RUN_GIVEN) as context:
@@ -242,12 +257,14 @@ def test_lost_attempt_restarts_fresh_without_replaying_checkpoint() -> None:
         repository.advance(first.run_id, lost=True)
         repository.advance(first.run_id, stopped=True)
         fresh, _ = repository.advance(first.run_id)
-        assert_that((fresh.step_index, fresh.generation), equal_to((1, 3)))
-        assert_that(fresh.id != second.id, is_(True))
+        assert fresh is None
+        run, stopped = repository.inspect(first.run_id)
+        assert (run.state, run.next_step, run.generation) == ("BLOCKED", 1, 2)
+        assert stopped.id == second.id
         with pytest.raises(WorkflowConflict, match="fenced"):
             repository.admit(second.id, repository.token(second.id))
-        _, _, packet = repository.admit(fresh.id, repository.token(fresh.id))
-        assert_that(packet["completed_steps"], has_length(1))
+        with Session(context.postgres_delegate.engine) as session:
+            assert len(session.exec(select(WorkflowCheckpoint).where(WorkflowCheckpoint.run_id == run.id)).all()) == 1
 
 
 def test_tenant_hidden_reader_cannot_read_run_or_history() -> None:
@@ -679,56 +696,20 @@ def test_cancel_stops_the_agent_session_and_settles() -> None:
         assert_that(context.injector.get(WorkflowRunRepository).inspect(run_id)[0].state, equal_to("CANCELLED"))
 
 
-def test_agent_reported_failure_retries_then_fails_the_run() -> None:
+def test_agent_reported_failure_blocks_without_replay() -> None:
     with given(_RUN_GIVEN) as context:
         response, _, _ = start(context)
-        repository = context.injector.get(WorkflowRunRepository)
-        run_id = UUID(response.json()["id"])
-        for expected in ("QUEUED", "QUEUED", "FAILED"):
-            row, _ = repository.advance(run_id)
-            failed = context.client.post(
-                f"/workflow-runtime/v1/attempts/{row.id}/failure",
-                headers={"Authorization": f"Bearer {repository.token(row.id)}"},
-                json={"reason": "The Agent session ended without a result"},
-            )
-            assert_that(failed.status_code, equal_to(204), failed.text)
-            assert_that(repository.inspect(run_id)[0].state, equal_to(expected))
-        kinds = [
-            event["kind"]
-            for event in context.client.get(
-                base(context) + f"/workflow-runs/{run_id}/history?page_size=50", headers=auth(context)
-            ).json()["items"]
-        ]
-        assert_that(kinds.count("ATTEMPT_FAILED"), equal_to(3))
-        assert_that(
-            repository.inspect(run_id)[0].reason,
-            equal_to("Attempt recovery limit reached: The Agent session ended without a result"),
+        repository, row, token = attempt(context, response.json()["id"])
+        failed = context.client.post(
+            f"/workflow-runtime/v1/attempts/{row.id}/failure",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"reason": "The Agent session ended without a result"},
         )
-
-
-def test_retry_shows_the_reported_reason_and_unmet_criteria_fail_immediately() -> None:
-    with given(_RUN_GIVEN) as context:
-        response, _, _ = start(context)
-        repository = context.injector.get(WorkflowRunRepository)
-        run_id = UUID(response.json()["id"])
-
-        def report(**body):
-            row, _ = repository.advance(run_id)
-            failed = context.client.post(
-                f"/workflow-runtime/v1/attempts/{row.id}/failure",
-                headers={"Authorization": f"Bearer {repository.token(row.id)}"},
-                json=body,
-            )
-            assert_that(failed.status_code, equal_to(204), failed.text)
-            return repository.inspect(run_id)[0]
-
-        run = report(reason="Pipedrive is not connected")
-        assert_that((run.state, run.reason), equal_to(("QUEUED", "Step failed, retrying: Pipedrive is not connected")))
-        repository.advance(run_id)
-        assert_that(repository.inspect(run_id)[0].reason, equal_to(run.reason))
-        run = report(reason="Pipedrive is not connected", retryable=False)
-        assert_that((run.state, run.reason), equal_to(("FAILED", "Pipedrive is not connected")))
-        assert_that(run.settled_at is not None, equal_to(True))
+        assert failed.status_code == 204, failed.text
+        assert repository.inspect(row.run_id)[0].state == "BLOCKED"
+        for _ in range(3):
+            assert repository.advance(row.run_id)[0] is None
+        assert repository.inspect(row.run_id)[0].generation == row.generation
 
 
 def test_approval_request_blocks_the_run_until_a_person_acts() -> None:
@@ -812,7 +793,7 @@ def test_broker_outage_preserves_a_committed_run_and_pending_wakeup(monkeypatch)
 
 
 @pytest.mark.parametrize("action", ["cancel", "failure"])
-def test_worker_wakeup_handles_cancellation_and_failed_session_retry(monkeypatch, action) -> None:
+def test_worker_wakeup_handles_cancellation_and_failed_session_block(monkeypatch, action) -> None:
     from api.domains.events.handlers import EventHandlerRegistry
     from api.domains.events.processor import EventDeliveryProcessor
     from api.domains.events.repository import OutboxMessageRepository
@@ -860,11 +841,11 @@ def test_worker_wakeup_handles_cancellation_and_failed_session_retry(monkeypatch
         if action == "cancel":
             assert run.state == "CANCELLED"
         else:
-            assert run.state == "RUNNING"
-            assert current.id != row.id and current.dispatched_at is not None
+            assert run.state == "BLOCKED"
+            assert current.id == row.id
 
 
-def test_step_timing_uses_first_attempt_and_completed_checkpoint_across_retries() -> None:
+def test_step_timing_uses_attempt_admission_and_completed_checkpoint() -> None:
     from api.domains.workflows.run_models import WorkflowAttempt
 
     with given(_RUN_GIVEN) as context:
@@ -880,15 +861,7 @@ def test_step_timing_uses_first_attempt_and_completed_checkpoint_across_retries(
             row.created_at = beginning
             session.add(row)
             session.commit()
-        repository.advance(run_id, stopped=True, lost=True)
-        second, _ = repository.advance(run_id)
-        assert second is not None
-        with Session(context.postgres_delegate.engine) as session:
-            row = session.get_one(WorkflowAttempt, second.id)
-            row.created_at = beginning + timedelta(seconds=60)
-            session.add(row)
-            session.commit()
-        repository.complete(second.id, repository.token(second.id), result())
+        repository.complete(first.id, repository.token(first.id), result())
         end = beginning + timedelta(seconds=114)
         with Session(context.postgres_delegate.engine) as session:
             checkpoint = session.exec(select(WorkflowCheckpoint).where(WorkflowCheckpoint.run_id == run_id)).one()
@@ -912,7 +885,7 @@ def test_running_step_reports_its_attempt_and_an_unresponsive_agent() -> None:
         assert context.client.get(url, headers=auth(context)).json()["attempt"] is None
         repository, row, _ = attempt(context, run_id)
         live = context.client.get(url, headers=auth(context)).json()["attempt"]
-        assert (live["number"], live["limit"], live["agent_unresponsive"]) == (1, 3, False)
+        assert (live["number"], live["limit"], live["agent_unresponsive"]) == (1, 1, False)
         with Session(context.postgres_delegate.engine) as session:
             stored = session.get_one(WorkflowAttempt, row.id)
             stored.created_at = datetime.now(UTC) - timedelta(minutes=2)
@@ -923,46 +896,27 @@ def test_running_step_reports_its_attempt_and_an_unresponsive_agent() -> None:
         assert context.client.get(url, headers=auth(context)).json()["attempt"]["agent_unresponsive"] is False
 
 
-def test_timeouts_keep_the_reported_failure_and_name_an_agent_that_never_accepted() -> None:
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_timeout_blocks_without_replaying_an_uncertain_attempt(dispatched: bool) -> None:
     from api.domains.workflows.run_models import WorkflowAttempt
 
     with given(_RUN_GIVEN) as context:
         response, _, _ = start(context)
-        repository = context.injector.get(WorkflowRunRepository)
-        run_id = UUID(response.json()["id"])
-
-        def expire(row) -> str | None:
-            with Session(context.postgres_delegate.engine) as session:
-                stored = session.get_one(WorkflowAttempt, row.id)
-                stored.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-                session.add(stored)
-                session.commit()
-            repository.advance(run_id)
-            repository.advance(run_id, stopped=True)
-            return repository.inspect(run_id)[0].reason
-
-        row, _ = repository.advance(run_id)
-        context.client.post(
-            f"/workflow-runtime/v1/attempts/{row.id}/failure",
-            headers={"Authorization": f"Bearer {repository.token(row.id)}"},
-            json={"reason": "Pipedrive is not configured (last attempt: odd)"},
-        )
-        row, _ = repository.advance(run_id)
-        repository.mark_dispatched(row.id)
-        assert_that(
-            expire(row),
-            equal_to(
-                "Step failed, retrying: Pipedrive is not configured (last attempt: odd) (last attempt: The attempt timed out)"
-            ),
-        )
-        row, _ = repository.advance(run_id)
-        assert_that(
-            expire(row),
-            equal_to(
-                "Attempt recovery limit reached: Pipedrive is not configured (last attempt: odd) "
-                "(last attempt: The Agent did not accept the step)"
-            ),
-        )
+        repository, row, _ = attempt(context, response.json()["id"])
+        if dispatched:
+            repository.mark_dispatched(row.id)
+        with Session(context.postgres_delegate.engine) as session:
+            stored = session.get_one(WorkflowAttempt, row.id)
+            stored.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.add(stored)
+            session.commit()
+        repository.advance(row.run_id)
+        repository.advance(row.run_id, stopped=True)
+        run, _ = repository.inspect(row.run_id)
+        assert_that(run.state, equal_to("BLOCKED"))
+        assert ("timed out" if dispatched else "did not accept") in run.reason
+        assert repository.advance(row.run_id)[0] is None
+        assert repository.inspect(row.run_id)[0].generation == row.generation
 
 
 def test_agent_that_keeps_rejecting_the_step_fails_the_run_after_the_grace_period() -> None:
@@ -989,7 +943,7 @@ def test_agent_that_keeps_rejecting_the_step_fails_the_run_after_the_grace_perio
         assert_that((run.state, run.reason), equal_to(("FAILED", "The Agent did not accept the step (HTTP 404)")))
 
 
-def test_a_retry_records_the_reported_reason_once() -> None:
+def test_blocked_failure_records_the_reported_reason_once() -> None:
     with given(_RUN_GIVEN) as context:
         response, _, _ = start(context)
         repository = context.injector.get(WorkflowRunRepository)
@@ -1007,7 +961,7 @@ def test_a_retry_records_the_reported_reason_once() -> None:
             ).json()["items"]
         ]
         assert_that(details.count("Pipedrive is not connected"), equal_to(1))
-        assert_that(details[-1], equal_to("Fresh attempt queued"))
+        assert_that(details[-1], equal_to("Pipedrive is not connected"))
 
 
 def test_history_can_be_read_newest_first_and_the_attempt_carries_server_time() -> None:
@@ -1015,16 +969,10 @@ def test_history_can_be_read_newest_first_and_the_attempt_carries_server_time() 
         response, _, _ = start(context)
         run_id = response.json()["id"]
         url = base(context) + f"/workflow-runs/{run_id}"
-        repository, row, _ = attempt(context, run_id)
-        context.client.post(
-            f"/workflow-runtime/v1/attempts/{row.id}/failure",
-            headers={"Authorization": f"Bearer {repository.token(row.id)}"},
-            json={"reason": "Pipedrive is not connected"},
-        )
+        attempt(context, run_id)
         oldest = context.client.get(url + "/history?page_size=50", headers=auth(context)).json()["items"]
         newest = context.client.get(url + "/history?page_size=50&newest_first=true", headers=auth(context)).json()
         assert_that([item["id"] for item in newest["items"]], equal_to([item["id"] for item in reversed(oldest)]))
         assert_that(newest["total"], equal_to(len(oldest)))
-        repository.advance(UUID(run_id))
         live = context.client.get(url, headers=auth(context)).json()["attempt"]
         assert_that(live["server_time"] is not None, is_(True))

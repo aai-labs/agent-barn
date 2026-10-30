@@ -75,7 +75,7 @@ export function AttemptStatus({
   );
 }
 
-/** Newest-first run history, so failed attempts stay visible while the run retries or after it ends. */
+/** Newest-first run history keeps failed attempts visible after they end. */
 export function WorkflowRunActivity({
   agentId,
   run,

@@ -24,6 +24,7 @@ test.describe("Agent artifacts", () => {
     const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
     await expect(files.files).toContainText("pipeline.csv");
     await expect(files.files).toContainText("24 bytes");
+    await expect(files.files).not.toContainText("SHA-256");
     for (let i = 0; i < 2; i++) {
       const download = page.waitForEvent("download"); await files.download("pipeline.csv");
       expect((await download).suggestedFilename()).toBe("pipeline.csv");
@@ -46,28 +47,29 @@ test.describe("Agent artifacts", () => {
     await expect(page.getByText("Download is unavailable", {exact: true})).toBeVisible();
     await expect(page).toHaveURL(/tab=files/);
   });
-  test("run and selected step retain attachments alongside text summaries", async ({page}) => {
+  test("run artifacts live in their own view alongside step results", async ({page}) => {
     await new WorkflowDataSupport(page).intercept(MOCK_AGENT_ID, {saved: true});
     const runs = new WorkflowRunDataSupport(page); runs.state = "SUCCEEDED"; await runs.intercept(MOCK_AGENT_ID);
     await support.intercept(MOCK_AGENT_ID);
     const stepId = workflowFixture(MOCK_AGENT_ID).version.draft.steps[0].id;
     support.files = [{...artifactFixture, source: "workflow", run_id: RUN_ID, step_id: stepId, attempt_id: "a4150000-0000-4000-8000-000000000002"}];
-    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const workflow = new WorkflowRunsPage(page);
+    await workflow.goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run artifacts", {exact: true})).toHaveCount(0);
+    await workflow.showArtifacts();
     await expect(page.getByLabel("Run artifacts", {exact: true})).toContainText("pipeline.csv");
+    await expect(page.getByText("SHA-256:", {exact: false})).toHaveCount(0);
     const rail = await page.getByRole("navigation", {name: "Run views"}).boundingBox();
-    const summary = await page.getByLabel("Run summary", {exact: true}).boundingBox();
     const artifacts = await page.getByLabel("Run artifacts", {exact: true}).boundingBox();
-    expect(rail && summary && artifacts).toBeTruthy();
+    expect(rail && artifacts).toBeTruthy();
     expect(artifacts!.x).toBeGreaterThanOrEqual(rail!.x + rail!.width);
-    expect(artifacts!.width).toBeGreaterThan(rail!.width);
-    expect(artifacts!.y).toBeGreaterThanOrEqual(summary!.y + summary!.height);
-    await page.getByRole("button", {name: "Step 1: Read pipeline"}).click();
-    await expect(page.getByLabel("Step artifacts", {exact: true})).toContainText("pipeline.csv");
+    await workflow.selectStep("Step 1: Read pipeline");
     await expect(page.getByText("Finished read pipeline.", {exact: true})).toBeVisible();
-    await expect(page.getByLabel("Step artifacts", {exact: true})).toContainText("attempt a4150000");
+    await expect(page.getByLabel("Run artifacts", {exact: true})).toHaveCount(0);
+    await workflow.showArtifacts();
     await page.setViewportSize({width: 390, height: 844});
     const mobileRail = await page.getByRole("navigation", {name: "Run views"}).boundingBox();
-    const mobileArtifacts = await page.getByLabel("Step artifacts", {exact: true}).boundingBox();
+    const mobileArtifacts = await page.getByLabel("Run artifacts", {exact: true}).boundingBox();
     expect(mobileRail && mobileArtifacts).toBeTruthy();
     expect(mobileArtifacts!.y).toBeGreaterThanOrEqual(mobileRail!.y + mobileRail!.height);
     expect(mobileArtifacts!.width).toBeGreaterThan(250);

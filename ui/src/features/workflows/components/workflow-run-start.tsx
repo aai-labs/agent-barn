@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import type { WorkflowInputValue } from "../run-schemas";
+import { WorkflowFileInput } from "./workflow-file-input";
 import type { WorkflowVersion } from "../schemas";
 import { useWorkflowRunActions } from "../hooks/use-workflow-runs";
 import {
@@ -32,9 +34,7 @@ export function WorkflowRunStart({
   onBack: () => void;
 }) {
   const actions = useWorkflowRunActions(agentId);
-  const [values, setValues] = useState<
-    Record<string, string | number | boolean>
-  >(() =>
+  const [values, setValues] = useState<Record<string, WorkflowInputValue>>(() =>
     Object.fromEntries(
       version.draft.inputs
         .filter((input) => input.type === "boolean")
@@ -43,10 +43,12 @@ export function WorkflowRunStart({
   );
   // Retain this identity through transport retries. Edits create a fresh request identity.
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
-  const setValue = (key: string, value: string | number | boolean) => {
+  const setValue = (key: string, value: WorkflowInputValue) => {
     setValues((previous) => ({ ...previous, [key]: value }));
     setRequestId(crypto.randomUUID());
   };
+  const [uploads, setUploads] = useState<Record<string, boolean>>({});
+  const uploading = Object.values(uploads).some(Boolean);
   const [validation, setValidation] = useState("");
   return (
     <>
@@ -80,7 +82,8 @@ export function WorkflowRunStart({
             className="space-y-6"
             onSubmit={async (event) => {
               event.preventDefault();
-              const inputs: Record<string, string | number | boolean> = {};
+              if (uploading) return;
+              const inputs: Record<string, WorkflowInputValue> = {};
               for (const input of version.draft.inputs) {
                 const value = values[input.key];
                 if (value === undefined || value === "") {
@@ -121,7 +124,7 @@ export function WorkflowRunStart({
               {version.draft.inputs.map((input) => (
                 <div
                   key={input.key}
-                  className={`space-y-2 ${input.type === "text" ? "lg:col-span-2" : ""}`}
+                  className={`space-y-2 ${["text", "file"].includes(input.type) ? "lg:col-span-2" : ""}`}
                 >
                   <Label
                     htmlFor={`run-input-${input.key}`}
@@ -133,7 +136,22 @@ export function WorkflowRunStart({
                   <p className="text-sm text-[var(--ink-3)]">
                     {input.description}
                   </p>
-                  {input.type === "boolean" ? (
+                  {input.type === "file" ? (
+                    <WorkflowFileInput
+                      id={`run-input-${input.key}`}
+                      agentId={agentId}
+                      label={input.label}
+                      value={values[input.key]}
+                      disabled={actions.start.isPending}
+                      onUploadingChange={(busy) =>
+                        setUploads((previous) => ({
+                          ...previous,
+                          [input.key]: busy,
+                        }))
+                      }
+                      onChange={(value) => setValue(input.key, value)}
+                    />
+                  ) : input.type === "boolean" ? (
                     <Checkbox
                       id={`run-input-${input.key}`}
                       checked={values[input.key] === true}
@@ -210,7 +228,7 @@ export function WorkflowRunStart({
               </button>
               <button
                 className="af-btn af-btn-primary"
-                disabled={actions.start.isPending}
+                disabled={actions.start.isPending || uploading}
                 type="submit"
               >
                 {actions.start.isPending ? "Starting…" : "Start run →"}

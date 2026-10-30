@@ -75,6 +75,7 @@ export function WorkflowInputsEditor({
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="text">Text</SelectItem>
+                <SelectItem value="file">File</SelectItem>
                 <SelectItem value="number">Number</SelectItem>
                 <SelectItem value="boolean">Yes / no</SelectItem>
               </SelectGroup>

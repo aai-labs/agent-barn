@@ -214,6 +214,14 @@ bytes of file-reference metadata across a run. These checks serialize on the run
 excess staging returns 409 before accepting bytes. Use an archive for larger file sets.
 The overall workflow context bound still applies to combined text and file references.
 
+Run start can pin existing same-Agent files as typed workflow inputs.
+[Workflow file inputs and results](agent-workflows.md#file-workflow-inputs-and-results)
+owns selection, byte materialization and accepted/final-output behavior. Input
+metadata shares the run file-reference budget with published outputs. Workflow
+retrieval uses `retrieve <id> <new-path> --checksum <sha256> --attempt-id <id>`;
+the runtime link request validates current attempt authority and an active run pin.
+Ordinary retrieval remains Agent-scoped.
+
 Publication pins an exact artifact ID/checksum to its active run. Completion
 records published files in the step checkpoint, so later sessions receive immutable
 references alongside earlier text summaries. Workspace paths and signed URLs are
@@ -275,8 +283,12 @@ The Agent Artifacts view shows READY chat, human and workflow files with names,
 sizes, types, provenance and download actions. File rows use recognizable type
 icons with a generic fallback, based on the filename extension or MIME type.
 Download controls include an icon and retain an accessible filename label on small
-screens; SHA-256 remains available in the quieter checksum line. Run/step attachments use the same
-service alongside existing text summaries. Each click requests a fresh link;
+screens. File cards are shared with workflow inputs and outputs; SHA-256 remains
+in stored references and byte verification, and is not displayed in file cards.
+The shared cards compose the [shadcn Attachment](https://ui.shadcn.com/docs/components/base/attachment)
+primitives using the repository's Radix registry variant and existing dependencies.
+Run-wide attachments live in the workflow's All artifacts view, while step/final
+result views display their checkpoint files once. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
 People with current `agent.update` access can delete from Agent Artifacts using the
 trash action and the shared destructive confirmation dialog. The dialog identifies

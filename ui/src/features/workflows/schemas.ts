@@ -20,7 +20,10 @@ function draftSchema(authoring: boolean) {
     id: authoring ? z.guid() : z.string(),
     name,
     goal: text,
-    completionCriteria: text,
+    // Drafts opened before this field was removed can still contain an empty value.
+    completionCriteria: z.string().nullable().transform((value) =>
+      value?.trim() ? value : undefined,
+    ).optional(),
     artifactDescription: text.nullable().default(null),
     requiredCapabilities: z
       .array(z.enum(["reasoning", "business_action", "native_command"]))
@@ -36,18 +39,19 @@ function draftSchema(authoring: boolean) {
       ? z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/, "Edit the input label")
       : z.string(),
     description: text,
-    type: z.enum(["text", "number", "boolean"]).default("text"),
+    type: z.enum(["text", "number", "boolean", "file"]).default("text"),
     required: z.boolean().default(true),
   });
   return z.object({
     schemaVersion: z.literal(1).default(1),
     name,
-    description: text,
+    description: authoring
+      ? z.string().trim().refine((value) => [...value].length <= 4000, "Use 4000 characters or fewer")
+      : z.string(),
     steps: authoring
       ? z.array(step).min(1, "Add at least one step before saving").max(50)
       : z.array(step),
     inputs: (authoring ? z.array(input).max(30) : z.array(input)).default([]),
-    finalArtifactDescription: text.nullable().default(null),
     reviewDestination: z.literal("web").default("web"),
   });
 }

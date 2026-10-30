@@ -17,6 +17,7 @@ import {
   type WorkflowRun,
   type WorkflowRunHistory,
   type WorkflowRunList,
+  type WorkflowInputValue,
 } from "../run-schemas";
 import { workflowsKey } from "./use-workflows";
 
@@ -108,7 +109,7 @@ export function useWorkflowRunActions(agentId: string) {
       workflowId: string;
       versionId: string;
       clientRequestId: string;
-      inputs: Record<string, string | number | boolean>;
+      inputs: Record<string, WorkflowInputValue>;
     }) =>
       (
         await api.post<WorkflowRun>(

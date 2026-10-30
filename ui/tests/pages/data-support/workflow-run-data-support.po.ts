@@ -1,5 +1,6 @@
 import { type Page } from "@playwright/test";
 import { workflowFixture, WORKFLOW_ID } from "../../fixtures/workflows";
+import { artifactFixture } from "../../fixtures/artifacts";
 import { TEST_ORG_ID } from "../../constants";
 
 export const RUN_ID = "12345678-1234-4234-8234-123456789abc";
@@ -9,6 +10,10 @@ const stepTimes = [
   { started_at: "2026-10-17T10:01:54Z", completed_at: "2026-10-17T10:02:18Z" },
 ];
 export class WorkflowRunDataSupport {
+  fileInputs = false;
+  failUpload = false;
+  uploadedBytes: Buffer | null = null;
+  uploaded = { ...artifactFixture };
   starts: Record<string, unknown>[] = [];
   reads = 0;
   failStart = false;
@@ -25,7 +30,16 @@ export class WorkflowRunDataSupport {
   stepStates: string[] | null = null;
   constructor(private page: Page) {}
   async intercept(agentId: string) {
-    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts?**`, route => route.fulfill({json: {items: [], total: 0, page: 1, page_size: 20}}));
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts?**`, route => route.fulfill({json: {items: this.fileInputs ? [this.uploaded] : [], total: this.fileInputs ? 1 : 0, page: 1, page_size: 20}}));
+    const filesBase = `**/api/v1/organizations/*/agents/${agentId}/artifacts`;
+    await this.page.route(filesBase, async route => {
+      this.uploaded = { ...artifactFixture, ...route.request().postDataJSON() };
+      await route.fulfill({ status: 201, json: { ...this.uploaded, state: "UPLOADING" } });
+    });
+    await this.page.route(`${filesBase}/*/content`, async route => {
+      this.uploadedBytes = route.request().postDataBuffer();
+      await route.fulfill({ status: this.failUpload ? 503 : 200, json: this.failUpload ? { detail: "Storage unavailable" } : this.uploaded });
+    });
     const fixture = workflowFixture(agentId);
     const base = `**/api/v1/organizations/*/agents/${agentId}`;
     const run = (over: Record<string, unknown> = {}) => ({
@@ -35,7 +49,7 @@ export class WorkflowRunDataSupport {
       version_number: 1,
       name: fixture.version.draft.name,
       initiating_user_id: null,
-      inputs: { period: "This week" },
+      inputs: this.fileInputs ? { period: { artifact_id: this.uploaded.id, checksum: this.uploaded.checksum, filename: this.uploaded.filename, size: this.uploaded.size } } : { period: "This week" },
       state: this.state,
       revision: this.state === "RUNNING" ? 2 : 3,
       next_step: this.stepStates
@@ -72,11 +86,13 @@ export class WorkflowRunDataSupport {
             name: step.name,
             ...(this.state === "SUCCEEDED" ? stepTimes[index] : {}),
             state: this.state === "SUCCEEDED" ? "COMPLETED" : "PENDING",
+            artifacts: this.fileInputs && this.state === "SUCCEEDED" ? [{ artifact_id: artifactFixture.id, checksum: artifactFixture.checksum, filename: artifactFixture.filename, size: artifactFixture.size }] : [],
             summary:
               this.state === "SUCCEEDED"
                 ? `Finished ${step.name.toLowerCase()}.`
                 : null,
           })),
+      final_artifacts: this.fileInputs && this.state === "SUCCEEDED" ? [{ artifact_id: artifactFixture.id, checksum: artifactFixture.checksum, filename: artifactFixture.filename, size: artifactFixture.size }] : [],
       final_summary:
         this.state === "SUCCEEDED"
           ? "Prepared the **weekly pipeline report** from the supplied period. 2 steps completed."
@@ -132,6 +148,7 @@ export class WorkflowRunDataSupport {
       route.fulfill({
         json: {
           ...fixture,
+          version: { ...fixture.version, draft: { ...fixture.version.draft, inputs: this.fileInputs ? fixture.version.draft.inputs.map(input => ({ ...input, type: "file" })) : fixture.version.draft.inputs } },
           execution_available: true,
           allowed_actions: this.viewer ? [] : fixture.allowed_actions,
         },

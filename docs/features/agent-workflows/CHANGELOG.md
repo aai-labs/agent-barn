@@ -6,14 +6,47 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Current state
 
-- Delivered: AF-388 manual authoring is merged through PR #308.
-- Dependency: AF-389 [PR #326](https://github.com/aai-labs/agent-barn/pull/326) is included in fetched staging via merge `42ea3fc7`. AF-415 originally launched from its feature branch and is now locally rebased onto `origin/staging` at `e207a212`. The PR delivery is being refreshed against staging after the independent review.
-- Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
-- Reviewed: the complete local feature at `36096b17` was independently reviewed against staging `e207a212`; the two blocking findings were fixed in `ef802873`, and an independent focused recheck approved that correction with no new blockers. Full-review and recheck scope/verification are distinguished in the artifact evidence.
-- Next: finalize PR delivery and AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
-- Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
+- Delivered base: this worktree started at local staging `a9e42ebe9`, including AF-389 and AF-415 (PRs [#326](https://github.com/aai-labs/agent-barn/pull/326) and [#328](https://github.com/aai-labs/agent-barn/pull/328)), and is rebased onto staging `57bbefd0f`, including AF-384 file sync. Existing publication, checkpoint references and run/step attachments are retained.
+- [PR #346](https://github.com/aai-labs/agent-barn/pull/346): typed file inputs pin existing/uploaded Agent files; handoff retrieves verified bytes; Agent-chosen deliverables follow output descriptions. Step/final files use uniform cards, and a separate All artifacts view collects publications across the run. Failed/expired attempts block; durable trigger receipts prevent same-attempt replay after restart.
+- Verification: complete API suite **6,578 passed**, complete UI suite **1,053 passed / 5 skipped**, Kubernetes client **19 passed**, Hermes/OpenClaw runtime suites **16 / 12 passed**, both artifact byte workflows and the persistent deployment/browser contract passed. Quality, migration/chart/monitoring checks and API/production UI builds passed. [Artifact evidence](../agent-artifacts/EVIDENCE.md#pr-preparation-and-complete-verification--2026-10-29) records the final results, harness corrections, screenshot provenance and live-acceptance limits.
+- Next: live Agent-session acceptance and review of this local slice, then AF-390 approval integration. Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
+- Blockers: live model/session execution on both runtimes, truthful OpenClaw stop/quiescence and run-read-policy acceptance remain open. Deployment/provisioning is separate operational work. Explicit recovery/reconciliation is not exposed by this slice.
 
 ## Changes
+
+### 2026-10-30 — AF-387 — staging integration
+
+- Re-runs retain the source version and revalidate and pin its file inputs. Uncertain attempts remain blocked rather than replayed; explicit non-retryable failures settle and release pins.
+- Agent result formatting gets one bounded correction turn; local workflow maintenance recovers missed wakeups and expired attempts.
+
+
+### 2026-10-29 — AF-387 — simplify step authoring
+
+- New steps no longer require separate completion criteria; the editor prompts authors to include success criteria in the step instructions. Existing saved criteria remain visible and are passed to the Agent.
+- The last step's output description is the workflow's final output description; authoring no longer asks for a separate final description. Reordering steps changes which output is final.
+- The workflow description is optional and labelled accordingly.
+
+### 2026-10-29 — AF-387 — [PR #346](https://github.com/aai-labs/agent-barn/pull/346) — preparation and staging integration
+
+- Committed the integration and rebased without conflicts onto staging `57bbefd0f`.
+- AF-384 interaction: temporary pinned inputs now use a hidden workspace directory, following the existing sync exclusions. A regression runs the real sync scanner while each runtime reads materialized input bytes; it failed with the original visible directory and passed for both runtimes after correction. All 60 trigger/sync-helper cases passed.
+- Complete verification: all local checks passed, including 6,578 API and 1,053 browser tests (5 browser skips); see the evidence for Kubernetes, runtime, storage, build and chart results.
+- Delivery evidence: refreshed fixture screenshots on updated staging are retained under the artifact evidence directory and embedded with commit-pinned image links in the PR description. Full-suite/CI outcomes are recorded in artifact verification evidence; live model/session and OpenClaw quiescence acceptance remain open.
+
+### 2026-10-29 — AF-387 — workflow file presentation refinement (local, uncommitted)
+
+- Grouping follow-up: selected summary/step/collection views now share one continuous bordered panel, with internal file/timing separators and a height covering the navigation rail. Desktop connectors meet that panel's edge; stacked mobile views hide them. All 45 artifact/run browser cases passed; removing the grouping surface reproduced the new border regression, and restoration passed both geometry cases. Larger current-interface fixture captures accompany the change.
+- Picker follow-up: replaced the cramped half-width selector/native file chooser with full-width selection/upload actions and a removable selected attachment. Shared file cards now compose the actual shadcn Attachment primitives from the repository's `radix-nova` registry, with upload state and existing download/error behavior. All 43 artifact/run browser cases and UI types/lint passed; the layout regression failed with the old grid and passed after restoration. Refreshed fixture captures cover desktop and mobile.
+- Changed: shared icon cards for Agent artifacts and workflow file inputs/outputs; visible checksums removed. Each step/final result shows its output files once. All artifacts navigation below the steps opens the full run publication collection, including unfinished work, with accepted outputs labeled.
+- Behavior: removed the local draft's step/final file-format switches and completion gate. Output descriptions guide the Agent's format choice; every generated file must be published to become downloadable. Exact pinning, byte verification and text-only execution are retained.
+- Verification: 87 affected API tests, all 74 artifact/workflow browser cases, both deterministic runtime-image byte workflows and API/UI quality/migration checks passed. Refreshed fixture screenshots show the revised presentation in this thread. No live model/session acceptance is claimed.
+
+### 2026-10-28 — AF-387 — workflow/file integration (local, uncommitted)
+
+- Changed: additive schema-v1 file inputs and explicit file output types; transactional input pinning, canonical metadata and shared context bounds; verified byte materialization before runtime execution; accepted step and final output references in run reads and UI.
+- Lifecycle: failures and expired/uncertain sessions block automatic replay. PVC-backed trigger receipts prevent resubmitting a previously admitted attempt. Cancellation releases pins on settlement; parked runs retain them. Current access fences workflow reads, publication and completion.
+- Compatibility: existing text-only workflows and saved snapshots retain their text behavior; no PostgreSQL migration or release bump. Agent update/restart is required to load the trigger/CLI changes.
+- Verification: affected API/browser cases, both deterministic runtime-image byte workflows and quality/migration checks passed; see the linked evidence for counts and limits. No live model, provider messaging, independent review, merge, push, Jira mutation or Confluence update is claimed.
 
 ### 2026-10-27 — AF-415 — CI Garage bootstrap
 

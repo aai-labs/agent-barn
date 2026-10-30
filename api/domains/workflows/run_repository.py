@@ -15,7 +15,9 @@ from sqlmodel.sql.expression import SelectOfScalar
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
-from api.domains.artifacts.references import attempt_files, release
+from api.domains.artifacts import config as artifact_config
+from api.domains.artifacts.models import Artifact
+from api.domains.artifacts.references import attempt_files, pin, release
 from api.domains.events.catalog import EVENT_REGISTRY, WORKFLOW_RUN_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
@@ -38,8 +40,6 @@ from api.domains.workflows.run_models import (
     WorkflowRunCreate,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
-
-RETRY_PREFIX = "Step failed, retrying: "
 
 
 def _timeout_cause(accepted: bool, earlier: str | None) -> str:
@@ -147,7 +147,9 @@ class WorkflowRunRepository:
                 records.setdefault(attempt.step_index, {"started_at": attempt.created_at})
             for checkpoint in checkpoints:
                 records.setdefault(checkpoint.step_index, {}).update(
-                    summary=checkpoint.result.get("summary"), completed_at=checkpoint.created_at
+                    summary=checkpoint.result.get("summary"),
+                    completed_at=checkpoint.created_at,
+                    artifacts=checkpoint.result.get("artifacts", []),
                 )
         step_attempts = [attempt for attempt in attempts if attempt.step_index == run.next_step]
         if run.state != "RUNNING" or not step_attempts or step_attempts[-1].state != "REASONING":
@@ -157,7 +159,7 @@ class WorkflowRunRepository:
         grace = timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
         return records, AttemptRead(
             number=len(step_attempts),
-            limit=workflow_config.MAX_ATTEMPTS,
+            limit=max(1, len(step_attempts)),
             started_at=current.created_at,
             expires_at=current.expires_at,
             server_time=now,
@@ -277,10 +279,27 @@ class WorkflowRunRepository:
                 initiating_membership_id=membership_id,
                 client_request_id=payload.client_request_id,
                 request_hash=request_hash,
-                inputs=payload.inputs,
+                inputs=payload.model_dump(mode="json")["inputs"],
                 runtime=runtime,
                 rerun_of_run_id=rerun_of_run_id,
             )
+            file_inputs = [value for value in run.inputs.values() if isinstance(value, dict)]
+            if len(file_inputs) > artifact_config.MAX_FILES_PER_ATTEMPT:
+                raise WorkflowConflict("At most 16 file inputs are supported; combine files in an archive")
+            for value in sorted(file_inputs, key=lambda item: item["artifact_id"]):
+                pin(
+                    session,
+                    UUID(value["artifact_id"]),
+                    value["checksum"],
+                    agent_id,
+                    scope.organization_id,
+                    "run",
+                    run.id,
+                )
+                artifact = session.get_one(Artifact, UUID(value["artifact_id"]))
+                value.update(filename=artifact.filename, size=artifact.size)
+            if len(json.dumps(file_inputs, ensure_ascii=False).encode()) > artifact_config.MAX_RUN_FILE_CONTEXT_BYTES:
+                raise WorkflowConflict("Workflow file inputs exceed the file-reference context limit")
             session.add(run)
             session.flush()
             delivery_ids = (
@@ -407,12 +426,21 @@ class WorkflowRunRepository:
                     **{
                         key: value
                         for key, value in version.snapshot["steps"][attempt.step_index].items()
-                        if key != "artifact_description"
+                        if key != "artifact_description" and not (key == "completion_criteria" and value is None)
                     },
                     "output_description": version.snapshot["steps"][attempt.step_index].get("artifact_description"),
                 },
                 "completed_steps": [item.result for item in checkpoints],
-                "final_output_description": version.snapshot.get("final_artifact_description")
+                "files": list(
+                    {
+                        item["artifact_id"]: item
+                        for item in [
+                            *[value for value in run.inputs.values() if isinstance(value, dict)],
+                            *[file for checkpoint in checkpoints for file in checkpoint.result.get("artifacts", [])],
+                        ]
+                    }.values()
+                ),
+                "final_output_description": version.snapshot["steps"][-1].get("artifact_description")
                 if attempt.step_index == len(version.snapshot["steps"]) - 1
                 else None,
             }
@@ -434,10 +462,12 @@ class WorkflowRunRepository:
             run, attempt = self._bound(session, attempt_id, token)
             version = session.get_one(WorkflowVersion, run.version_id)
             step = version.snapshot["steps"][attempt.step_index]
+            files = attempt_files(session, attempt.id)
             checkpoint = {
                 "summary": result.summary,
                 "step_id": step["id"],
-                "artifacts": attempt_files(session, attempt.id),
+                "artifacts": files,
+                "output_description": step.get("artifact_description"),
             }
             session.add(
                 WorkflowCheckpoint(
@@ -461,39 +491,17 @@ class WorkflowRunRepository:
         with Session(self.delegate.engine) as session:
             run, attempt = self._bound(session, attempt_id, token)
             run.revision += 1
-            if failure.needs_attention:
-                attempt.state = "STOPPED"
-                session.add(attempt)
-                run.state, run.reason = "BLOCKED", failure.reason
-                delivery_ids = self._event(session, run, "NEEDS_ATTENTION", failure.reason)
-            elif not failure.retryable:
-                attempt.state = "STOPPED"
-                session.add(attempt)
-                run.state, run.reason = "FAILED", failure.reason
+            attempt.state = "STOPPED"
+            session.add(attempt)
+            run.state = "BLOCKED" if failure.needs_attention or failure.retryable else "FAILED"
+            run.reason = failure.reason
+            if run.state == "FAILED":
                 self._settle(session, run)
-                delivery_ids = self._event(session, run, "ATTEMPT_FAILED", failure.reason)
-            else:
-                delivery_ids = self._event(session, run, "ATTEMPT_FAILED", failure.reason)
-            session.commit()
-            run_id = run.id
-        if not failure.needs_attention and failure.retryable:
-            # The session already ended, so the step can retry within the attempt limit.
-            _, recovery_ids = self.advance(run_id, stopped=True, lost=True, cause=failure.reason)
-            delivery_ids.extend(recovery_ids)
-        return delivery_ids
-
-    def _reported_failure(self, session: Session, run: WorkflowRun) -> str | None:
-        """The Agent's reason from this step's latest failed attempt, if one was reported."""
-        latest = session.exec(
-            select(WorkflowHistory)
-            .where(
-                col(WorkflowHistory.run_id) == run.id,
-                col(WorkflowHistory.kind).in_(("ATTEMPT_FAILED", "STEP_COMPLETED")),
+            delivery_ids = self._event(
+                session, run, "NEEDS_ATTENTION" if failure.needs_attention else "ATTEMPT_FAILED", failure.reason
             )
-            .order_by(col(WorkflowHistory.revision).desc())
-            .limit(1)
-        ).first()
-        return latest.detail if latest is not None and latest.kind == "ATTEMPT_FAILED" else None
+            session.commit()
+            return delivery_ids
 
     def mark_dispatched(self, attempt_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
@@ -558,7 +566,6 @@ class WorkflowRunRepository:
                 and attempt.state in {"REASONING", "STOPPING"}
                 and (attempt.expires_at <= datetime.now(UTC) or lost or attempt.state == "STOPPING")
             )
-            reported = cause is not None
             if run.state in {"CANCELLING", "PAUSED"} or expired:
                 if attempt and attempt.state in {"REASONING", "STOPPING"}:
                     attempt.state = "STOPPED" if stopped else "STOPPING"
@@ -570,34 +577,16 @@ class WorkflowRunRepository:
                 if run.state == "CANCELLING":
                     run.state, run.reason = "CANCELLED", "Cancelled; completed step summaries are preserved"
                     self._settle(session, run)
-                elif expired and authorized and run.state != "PAUSED":
-                    # Reasoning-only work can retry after confirmed quiescence.
-                    retries = session.exec(
-                        select(sa.func.count())
-                        .select_from(WorkflowAttempt)
-                        .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
-                    ).one()
-                    # A reported cause stays visible through the retry and into the final failure.
-                    # A timeout reports nothing, so it names why and keeps any earlier reported cause.
-                    if cause is None:
-                        cause = _timeout_cause(
-                            attempt is not None and attempt.dispatched_at is not None,
-                            self._reported_failure(session, run),
-                        )
+                elif expired and attempt is not None and authorized and run.state != "PAUSED":
                     run.state, run.reason = (
-                        ("QUEUED", f"{RETRY_PREFIX}{cause}")
-                        if retries < workflow_config.MAX_ATTEMPTS
-                        else (
-                            "FAILED",
-                            f"Attempt recovery limit reached: {cause}",
-                        )
+                        "BLOCKED",
+                        (
+                            f"{_timeout_cause(attempt.dispatched_at is not None, None)}; "
+                            "outcome is uncertain; inspect external effects before starting another run"
+                        ),
                     )
-                    if run.state == "FAILED":
-                        self._settle(session, run)
                 run.revision += 1
-                # fail() already recorded a reported cause, so the fence row says only what happened next.
-                fenced = "Fresh attempt queued" if reported and run.state == "QUEUED" else run.reason
-                delivery_ids = self._event(session, run, "FENCED", fenced or "Attempt stopped")
+                delivery_ids = self._event(session, run, "FENCED", run.reason or "Attempt stopped")
                 session.commit()
                 return None, delivery_ids
             if run.state != "QUEUED":

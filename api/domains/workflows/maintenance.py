@@ -19,3 +19,7 @@ def main() -> None:
         except Exception:
             logger.warning("Workflow reconciliation failed for run %s", run_id)
     repository.expire_content()
+
+
+if __name__ == "__main__":
+    main()

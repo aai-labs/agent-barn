@@ -8,11 +8,12 @@ _SCRIPT = Path(__file__).parents[2] / "domains" / "agents" / "scripts" / "agent-
 
 
 @pytest.fixture
-def trigger_server():
+def trigger_server(tmp_path):
     spec = importlib.util.spec_from_file_location("agent_trigger_server_under_test", _SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.__dict__["RECEIPT_PATH"] = tmp_path / "receipts.sqlite3"
     return module
 
 
@@ -32,6 +33,26 @@ def test_explicit_failure_survives_surrounding_braces(trigger_server, reply) -> 
     met, summary = trigger_server._parse_step_reply(reply)
     assert met is False
     assert summary.startswith("CRM")
+
+
+def test_extra_quote_before_criteria_key_preserves_failure(trigger_server) -> None:
+    met, summary = trigger_server._parse_step_reply(r'{"summary":"## Problem\n\nNo file", " "criteria_met": false}')
+    assert met is False
+    assert summary == "## Problem\n\nNo file"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"summary": "Completed", "criteria_met": false',
+        '{"summary": "Completed", "criteria_met": "false"}',
+        '{"summary": "Completed"}',
+        '{"summary": "", "criteria_met": true}',
+    ],
+)
+def test_invalid_result_envelopes_need_attention(trigger_server, reply) -> None:
+    with pytest.raises(trigger_server.InvalidWorkflowResult, match="workflow result"):
+        trigger_server._parse_step_reply(reply)
 
 
 def test_hermes_stop_uses_the_original_session_header(monkeypatch, trigger_server) -> None:
@@ -268,6 +289,36 @@ def test_plain_prose_still_counts_as_the_step_summary(monkeypatch, trigger_serve
     assert reports == [("result", {"summary": "Found 3 leads in HubSpot.", "criteria_met": True})]
 
 
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_malformed_result_is_corrected_without_repeating_work(monkeypatch, trigger_server, runtime) -> None:
+    trigger_server.RUNTIME_KIND = runtime
+    reports = []
+    prompts = []
+    replies = iter(['{"summary": "Done", "criteria_met": false', '{"summary": "Not done", "criteria_met": false}'])
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            return {"session_id": "workflow-a", "prompt": "Do the step"}
+        reports.append((url.rsplit("/", 1)[1], body))
+
+    def run(*args):
+        prompts.append(args[-1])
+        return next(replies)
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_hermes_step", run)
+    monkeypatch.setattr(trigger_server, "_openclaw_step", run)
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert len(prompts) == 2 and "Do not use tools or repeat any work" in prompts[1]
+    assert reports == [("failure", {"reason": "Not done", "retryable": False})]
+
+
+def test_uncorrectable_result_fails_without_another_attempt(monkeypatch, trigger_server) -> None:
+    reports = _step_reports(monkeypatch, trigger_server, reply='{"summary": "Done", "criteria_met": false')
+    assert reports == [("failure", {"reason": "The Agent returned a malformed workflow result", "retryable": False})]
+
+
 def test_unmet_criteria_are_reported_as_a_failure(monkeypatch, trigger_server) -> None:
     reply = '{"summary": "HubSpot is not connected", "criteria_met": false}'
     reports = _step_reports(monkeypatch, trigger_server, reply=reply)
@@ -357,3 +408,108 @@ def test_hermes_step_runs_a_new_session_and_reads_the_final_reply(trigger_server
     assert seen["session_header"] == "workflow-a"
     assert seen["events"] == "/v1/runs/run-1/events"
     assert trigger_server._STEPS["a"]["run_id"] == "run-1"
+
+
+def test_finished_attempt_is_not_dispatched_again_after_restart(monkeypatch, trigger_server, tmp_path):
+    trigger_server.RECEIPT_PATH = tmp_path / "receipts.sqlite3"
+    payload = {
+        "attempt_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e",
+        "token": "token",
+        "callback_url": "http://api/attempts/a",
+    }
+
+    class Thread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(trigger_server.threading, "Thread", Thread)
+    assert trigger_server.start_workflow_step(payload) is True
+    trigger_server._STEPS.clear()  # A callback loss or process restart cannot authorize another execution.
+    assert trigger_server.start_workflow_step(payload) is False
+
+
+@pytest.mark.parametrize("failure", ["download", "revoked", "cancelled"])
+def test_file_handoff_failure_never_starts_runtime(monkeypatch, trigger_server, tmp_path, failure):
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(tmp_path))
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    files = [{"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e", "checksum": "a" * 64}]
+    reads, reports, sessions = [], [], []
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            reads.append(url)
+            if len(reads) > 1 and failure == "revoked":
+                raise RuntimeError("Admission fenced")
+            return {"session_id": "s", "prompt": "p", "files": files}
+        reports.append(body)
+
+    def retrieve(files, directory, attempt_id):
+        if failure == "download":
+            raise RuntimeError("File unavailable")
+        if failure == "cancelled":
+            trigger_server._STEPS["a"]["stopped"] = True
+        return []
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_retrieve_workflow_files", retrieve)
+    monkeypatch.setattr(trigger_server, "_hermes_step", lambda *args: sessions.append(args))
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert sessions == []
+    assert len(reports) == (0 if failure == "cancelled" else 1)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_verified_workflow_inputs_are_readable_but_not_offered_to_file_sync(
+    monkeypatch, trigger_server, tmp_path, runtime
+):
+    import json
+
+    from api.domains.file_sync.rules import rules_manifest
+
+    spec = importlib.util.spec_from_file_location("workflow_file_sync_probe", _SCRIPT.with_name("file-sync.py"))
+    assert spec is not None and spec.loader is not None
+    sync = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sync)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ordinary = workspace / "ordinary.csv"
+    ordinary.write_bytes(b"normal shared work\n")
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(workspace))
+    trigger_server.RUNTIME_KIND = runtime
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    files = [{"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e", "checksum": "a" * 64}]
+    seen, outcomes = {}, []
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            return {"session_id": "s", "prompt": "Read the input", "files": files}
+        outcomes.append(url)
+
+    def retrieve(files, directory, attempt_id):
+        destination = Path(directory) / files[0]["artifact_id"]
+        destination.write_bytes(b"private pinned input\n")
+        return [{**files[0], "path": str(destination)}]
+
+    def step(*arguments):
+        prompt = arguments[-1]
+        manifest = json.loads(prompt.split("Verified input files (read these actual bytes): ")[1])
+        seen["bytes"] = Path(manifest[0]["path"]).read_bytes()
+        entries, complete, _ = sync.scan({**rules_manifest(runtime), "root": str(tmp_path)}, {}, settle_seconds=0)
+        seen["paths"] = [entry["path"] for entry in entries]
+        seen["complete"] = complete
+        return '{"summary":"Read the verified input", "criteria_met":true}'
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_retrieve_workflow_files", retrieve)
+    monkeypatch.setattr(trigger_server, "_hermes_step" if runtime == "hermes" else "_openclaw_step", step)
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert seen["bytes"] == b"private pinned input\n"
+    assert seen["complete"] is True
+    assert seen["paths"] == ["workspace/ordinary.csv"]
+    assert outcomes == ["http://api/attempts/a/result"]
+    assert list(workspace.iterdir()) == [ordinary]

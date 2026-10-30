@@ -841,7 +841,13 @@ runs it.
 
 ## Workflow execution (WF02)
 
-Execution has no environment feature flag and does not require object storage.
+Text execution has no environment feature flag and does not require object storage.
+File inputs and published outputs need READY Agent artifact storage. Update
+and restart existing Agents to load the current trigger and artifact CLI. Workflow
+attempt receipts are added lazily to the existing PVC SQLite journal; retain that
+journal to preserve dispatch deduplication across restarts. Failed/expired attempts
+block for inspection rather than replaying possible external effects. Parked runs
+keep file pins until cancellation; see the [file workflow contract](../features/agent-workflows.md#file-workflow-inputs-and-results).
 The Platform Admin authoring setting controls definition changes only. Before
 running saved workflows, apply the migration. The owning Agent must be running,
 and Agents started before this release must be restarted once so their trigger

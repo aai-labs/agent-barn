@@ -109,7 +109,10 @@ A purpose-separated credential derived from the per-start Agent secret resolves 
 undeleted, running Agent and its Organization. Runtime callers cannot choose another
 owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
 against that owning Agent, current generation/state/deadline and initiating Membership
-authority. Completion credentials never enter model prompts or file-tool arguments.
+authority. Workflow retrieval with an attempt ID uses those same fences and
+requires an active reference owned by that run. Human run start resolves and pins
+only READY files of the authorized Agent and Organization under `agent.update`.
+Completion credentials never enter model prompts or file-tool arguments.
 The entire owning Agent is the runtime trust boundary: all of its sessions share
 that identity and may publish into its current workflow attempts. Attempt IDs are
 non-secret provenance, not per-session capabilities; this is not session isolation.

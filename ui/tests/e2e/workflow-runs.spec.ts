@@ -13,6 +13,7 @@ import {
 } from "../pages/data-support/workflow-run-data-support.po";
 import { WorkflowRunsPage } from "../pages/workflow-runs-page.po";
 import { WorkflowsPage } from "../pages/workflows-page.po";
+import { artifactFixture } from "../fixtures/artifacts";
 import { WORKFLOW_ID } from "../fixtures/workflows";
 
 test.describe("WF02 run progress and text results", () => {
@@ -30,6 +31,144 @@ test.describe("WF02 run progress and text results", () => {
     support = new WorkflowRunDataSupport(page);
     await support.intercept(MOCK_AGENT_ID);
   });
+  test("selects an existing file and retains exact references across start retries", async ({ page }) => {
+    support.fileInputs = true;
+    support.failStart = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openInputReview();
+    await runs.selectFile("Reporting period", "pipeline.csv");
+    await runs.start();
+    await expect(page.getByText("The run could not be started. Your inputs are retained.")).toBeVisible();
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts).toHaveLength(2);
+    expect(support.starts[1]).toEqual(support.starts[0]);
+    expect(support.starts[0]).toMatchObject({ inputs: { period: { artifact_id: artifactFixture.id, checksum: artifactFixture.checksum } } });
+    await expect(page.getByLabel("Run input files")).toContainText("pipeline.csv");
+  });
+
+  test("attachment picker uses the form width and clears a selection", async ({ page }) => {
+    support.fileInputs = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openInputReview();
+    await runs.selectFile("Reporting period", "pipeline.csv");
+    const attachment = page.locator('[data-slot="attachment"]');
+    await expect(attachment).toContainText("Selected input");
+    const card = await attachment.boundingBox();
+    const form = await page.locator("form").boundingBox();
+    expect(card!.width).toBeGreaterThan(form!.width * 0.8);
+    await expect(page.getByLabel("Upload file for Reporting period")).not.toBeVisible();
+    await page.getByRole("button", { name: "Remove pipeline.csv", exact: true }).click();
+    await expect(attachment).toHaveCount(0);
+    await runs.start();
+    await expect(page.getByText("Reporting period is required", { exact: true })).toBeVisible();
+    expect(support.starts).toHaveLength(0);
+  });
+
+  test("upload action opens the chooser and displays a removable attachment on mobile", async ({ page }) => {
+    support.fileInputs = true;
+    await page.setViewportSize({ width: 390, height: 844 });
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openInputReview();
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Upload file", exact: true }).click();
+    await (await chooser).setFiles({ name: "uploaded.csv", mimeType: "text/csv", buffer: Buffer.from("product,quantity\napples,3\n") });
+    await expect(page.getByRole("button", { name: "Remove uploaded.csv", exact: true })).toBeVisible();
+    const attachment = await page.locator('[data-slot="attachment"]').boundingBox();
+    expect(attachment!.x + attachment!.width).toBeLessThanOrEqual(390);
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts).toHaveLength(1);
+  });
+
+  test("uploads actual input bytes before starting", async ({ page }) => {
+    support.fileInputs = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openInputReview();
+    const bytes = Buffer.from("product,quantity\napples,3\n");
+    await runs.uploadFile("Reporting period", bytes);
+    await expect(page.getByRole("button", { name: "Remove uploaded.csv", exact: true })).toBeVisible();
+    expect(support.uploadedBytes).toEqual(bytes);
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({ inputs: { period: { artifact_id: artifactFixture.id, checksum: support.uploaded.checksum } } });
+  });
+
+  test("failed upload preserves the prior selection", async ({ page }) => {
+    support.fileInputs = true;
+    support.failUpload = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openInputReview();
+    await runs.selectFile("Reporting period", "pipeline.csv");
+    await runs.uploadFile("Reporting period", Buffer.from("failed upload"));
+    await expect(page.getByText("Storage unavailable", { exact: true })).toBeVisible();
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({ inputs: { period: { checksum: artifactFixture.checksum } } });
+  });
+
+  test("presents final outputs and the selected step's file handoff", async ({ page }) => {
+    support.fileInputs = true;
+    support.state = "SUCCEEDED";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Final outputs", { exact: true })).toContainText("pipeline.csv");
+    await expect(page.getByLabel("Final outputs", { exact: true }).getByRole("img", { name: "Spreadsheet file" })).toBeVisible();
+    await expect(page.getByLabel("Run artifacts", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("SHA-256:", { exact: false })).toHaveCount(0);
+    await runs.selectStep("Step 2: Prepare summary");
+    await expect(page.getByLabel("Step input files")).toContainText("pipeline.csv");
+    await expect(page.getByLabel("Step outputs")).toContainText("pipeline.csv");
+    await expect(page.getByLabel("Final outputs", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Step artifacts", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Step outputs").getByRole("button", { name: "Download pipeline.csv" })).toHaveCount(1);
+    const all = page.getByRole("button", { name: "All artifacts", exact: true });
+    const rail = await page.getByLabel("Step progress").boundingBox();
+    const navigation = await all.boundingBox();
+    expect(navigation!.y).toBeGreaterThan(rail!.y + rail!.height);
+    await runs.showArtifacts();
+    await expect(all).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("button", { name: "Result ready", exact: true })).not.toHaveAttribute("aria-current", "page");
+    await expect(page.getByLabel("Run artifacts", { exact: true })).toContainText("pipeline.csv");
+    await expect(page.getByLabel("Step outputs")).toHaveCount(0);
+    await runs.showSummary();
+    await expect(page.getByLabel("Final outputs", { exact: true })).toBeVisible();
+  });
+
+  for (const fileInputs of [false, true]) {
+    test(`selected-view connector meets the grouped panel with ${fileInputs ? "files" : "empty file sections and a long rail"}`, async ({ page }) => {
+      support.fileInputs = fileInputs;
+      support.state = "SUCCEEDED";
+      if (!fileInputs) support.stepStates = Array(5).fill("COMPLETED");
+      const runs = new WorkflowRunsPage(page);
+      await runs.goto(MOCK_AGENT_ID, true);
+      const panel = page.getByLabel("Selected run view", { exact: true });
+      await expect(panel).toHaveCSS("border-left-width", "1px");
+      for (const view of ["summary", "step", "artifacts"]) {
+        if (view === "summary") await runs.showSummary();
+        else if (view === "step") await runs.selectStep(fileInputs ? "Step 2: Prepare summary" : "Step 5: Post summary");
+        else await runs.showArtifacts();
+        const geometry = await runs.selectedViewGeometry();
+        expect(geometry.panel).not.toBeNull();
+        expect(geometry.connector).not.toBeNull();
+        const endpointX = geometry.connector!.x + geometry.connector!.width;
+        const endpointY = geometry.connector!.y + geometry.connector!.height / 2;
+        expect(Math.abs(endpointX - geometry.panel!.x)).toBeLessThan(2);
+        expect(endpointY).toBeGreaterThan(geometry.panel!.y);
+        expect(endpointY).toBeLessThan(geometry.panel!.y + geometry.panel!.height);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(page.getByTestId("run-view-connector")).not.toBeVisible();
+      const mobilePanel = await panel.boundingBox();
+      expect(mobilePanel!.x + mobilePanel!.width).toBeLessThanOrEqual(390);
+    });
+  }
+
   test("explicit inputs start the pinned version and show actual run progress", async ({
     page,
   }) => {
@@ -100,6 +239,16 @@ test.describe("WF02 run progress and text results", () => {
       });
     }
   }
+
+  test("blocked runs explain how to proceed", async ({ page }) => {
+    support.state = "BLOCKED";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const summary = page.getByLabel("Run summary");
+    await expect(summary.getByText("What to do next")).toBeVisible();
+    await expect(summary.getByText(/step will not resume automatically/)).toBeVisible();
+    await expect(summary.getByText(/Starting again may repeat actions/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel run" })).toBeVisible();
+  });
 
   test("running detail keeps polling and displays completion", async ({ page }) => {
     await page.clock.install();
