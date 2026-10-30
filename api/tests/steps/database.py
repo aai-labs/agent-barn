@@ -9,6 +9,7 @@ from api.domains.agent_sizes.models import (
     STANDARD_MEMORY_REQUEST_BYTES,
     STANDARD_SIZE_ID,
     STANDARD_SIZE_NAME,
+    STANDARD_STORAGE_BYTES,
 )
 from api.domains.auth.models import PasswordResetToken, RefreshToken
 from api.domains.auth.repository import (
@@ -73,9 +74,9 @@ def database_is_clean():
             conn.execute(
                 text(
                     "INSERT INTO agent_sizes (id, created_at, updated_at, name, cpu_request_millicores,"
-                    " cpu_limit_millicores, memory_request_bytes, memory_limit_bytes, enabled, is_default,"
-                    " sort_order) VALUES (:id, now(), now(), :name, :cpu_request, :cpu_limit, :memory_request,"
-                    " :memory_limit, true, true, 0)"
+                    " cpu_limit_millicores, memory_request_bytes, memory_limit_bytes, storage_bytes, enabled,"
+                    " is_default, sort_order) VALUES (:id, now(), now(), :name, :cpu_request, :cpu_limit,"
+                    " :memory_request, :memory_limit, :storage, true, true, 0)"
                 ),
                 {
                     "id": STANDARD_SIZE_ID,
@@ -84,6 +85,7 @@ def database_is_clean():
                     "cpu_limit": STANDARD_CPU_LIMIT_MILLICORES,
                     "memory_request": STANDARD_MEMORY_REQUEST_BYTES,
                     "memory_limit": STANDARD_MEMORY_LIMIT_BYTES,
+                    "storage": STANDARD_STORAGE_BYTES,
                 },
             )
             conn.commit()

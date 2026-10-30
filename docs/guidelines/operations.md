@@ -764,7 +764,7 @@ Documentation-only changes do not change a service image and do not require a se
   `agent-farm` is labelled `privileged` by `k8s/agent-farm-user.yaml`; namespaces created
   out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
 - **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
-  its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
+  its own PVC, the Agent's volume plus a tenth and 512MiB and never below `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
   volume. They do not survive loss of that node, and they consume real node disk — the only
   bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
 - Restore point rows resolve from live Job status when they are read, and a
@@ -796,6 +796,36 @@ Documentation-only changes do not change a service image and do not require a se
   `RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS` is left alone, deletions are capped at
   `RESTORE_POINT_ORPHAN_DELETE_LIMIT` per run, and a failed or empty PVC listing fails no rows at
   all. A large backlog therefore drains over several runs rather than one.
+
+### Agent specs: cluster readiness
+
+Before offering an [Agent spec](../features/agent-sizes.md) with more CPU, memory or storage on a
+cluster, check that the cluster can run it and grow existing Agent volumes. Both scripts need only
+Python 3 and `kubectl`, take your own kubeconfig, and run against one namespace:
+
+```bash
+python3 k8s/agent-specs-check.py --kubeconfig <kubeconfig> --namespace <namespace> \
+  --cpu-request 500m --cpu-limit 2 --memory-request 1Gi --memory-limit 4Gi --storage 10Gi
+python3 k8s/agent-specs-expansion-test.py --kubeconfig <kubeconfig> --namespace <namespace>
+```
+
+- **`agent-specs-check.py`** changes nothing. It lists the StorageClass of every Agent volume and
+  whether it allows expansion, whether the identity may create, read and patch claims and
+  Deployments and create Jobs, the ResourceQuota headroom for the spec (its volume plus one
+  restore point's archive volume per Agent, `--agents`), LimitRange maxima, whether a node can
+  fit the spec's requests, and free storage where the driver publishes it. Pass
+  `--pod-kubeconfig` with the API pod's kubeconfig (`POD_KUBECONFIG_B64`) to check the identity
+  that actually grows volumes. A namespace-scoped kubeconfig cannot read StorageClasses or Nodes,
+  and may not read quotas or LimitRanges; those lines say UNKNOWN. It exits 1 on any FAIL.
+- **`agent-specs-expansion-test.py`** creates a 1Gi claim on the Agent volumes' StorageClass and a
+  small pod that mounts it, grows the claim to 2Gi, and waits until Kubernetes reports the new
+  capacity and the mounted filesystem sees it. It always deletes both (`--keep` leaves them). It
+  needs to create claims and pods, briefly holds 2Gi of storage quota, and its `--image`
+  (default `busybox:1.36`) must be pullable.
+- **Staging and production** (one cluster, namespaces `agent-farm-staging` and `agent-farm`) keep
+  Agent volumes on `local-path`, which refuses to grow a claim and does not enforce a claim's
+  size. Checked on 2026-10-27. There a bigger spec's storage reaches new volumes only; an existing
+  Agent's volume is counted as at its spec's storage, so it is not left pending.
 
 ### Business Action backfill
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** One size in the Agent Size catalog. CPU in millicores, memory in bytes, as the API keeps them. */
+/** One size in the Agent Size catalog. CPU in millicores, memory and storage in bytes, as the API keeps them. */
 export const AgentSizeSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -8,6 +8,8 @@ export const AgentSizeSchema = z.object({
   cpuLimitMillicores: z.number().int(),
   memoryRequestBytes: z.number().int(),
   memoryLimitBytes: z.number().int(),
+  /** The Agent's volume: a new one is created at this size and an older one grows to it at start. */
+  storageBytes: z.number().int(),
   enabled: z.boolean(),
   isDefault: z.boolean(),
   sortOrder: z.number().int(),
@@ -25,7 +27,7 @@ export const AgentSizeListSchema = z.array(AgentSizeSchema);
 /** What a size is made of; the dialog edits these. */
 export type AgentSizeValues = Pick<
   AgentSize,
-  "name" | "cpuRequestMillicores" | "cpuLimitMillicores" | "memoryRequestBytes" | "memoryLimitBytes"
+  "name" | "cpuRequestMillicores" | "cpuLimitMillicores" | "memoryRequestBytes" | "memoryLimitBytes" | "storageBytes"
 >;
 
 export type AgentSizeCreate = AgentSizeValues & { enabled?: boolean };
@@ -41,6 +43,7 @@ export const AgentSizeOptionSchema = z.object({
   cpuLimitMillicores: z.number().int(),
   memoryRequestBytes: z.number().int(),
   memoryLimitBytes: z.number().int(),
+  storageBytes: z.number().int(),
   isDefault: z.boolean(),
 });
 export type AgentSizeOption = z.infer<typeof AgentSizeOptionSchema>;

@@ -39,7 +39,7 @@ export function AgentSizeSelect({
         if (size) onChange(size);
       }}
     >
-      <SelectTrigger aria-label="CPU & memory" className="w-full">
+      <SelectTrigger aria-label="Agent spec" className="w-full">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

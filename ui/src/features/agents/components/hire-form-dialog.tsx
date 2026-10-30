@@ -106,7 +106,7 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
           <RuntimeChoice value={agentType} onChange={setAgentType} disabled={pending} />
         </FormField>
         {sizeChoices && (
-          <FormField label="CPU & memory" hint="You can change it later; a change applies when the agent restarts.">
+          <FormField label="Agent spec" hint="You can change it later; a change applies when the agent restarts.">
             <AgentSizeSelect
               sizes={sizeChoices}
               value={agentSizeId ?? sizeChoices.find((size) => size.isDefault)?.id ?? ""}

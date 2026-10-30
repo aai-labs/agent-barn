@@ -505,6 +505,7 @@ def test_a_running_agent_keeps_its_resources_until_it_restarts_on_the_new_size()
                         "cpu_limit_millicores": 500,
                         "memory_request_bytes": 320 * MIB,
                         "memory_limit_bytes": 1 * GIB,
+                        "storage_bytes": 1 * GIB,
                     }
                 ),
             )

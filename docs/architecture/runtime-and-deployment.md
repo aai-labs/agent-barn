@@ -48,7 +48,7 @@ Starting an agent is an API-orchestrated deployment flow:
 6. Resolve per-binding isolation and materialize aai-cli, gog and Firecrawl artifacts through the tool adapters.
 7. Append tool pointers, integration policy, and unconditional runtime behaviour policies to rendered Markdown.
 8. Generate fresh Ingest and Communications protocol credentials, and an Agent Memory credential when opted in.
-9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration. The agent container's CPU and memory come from the Agent's [Agent Size](../features/agent-sizes.md), resolved at this start.
+9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration. The agent container's CPU and memory, and the size of its volume, come from the Agent's [Agent Size](../features/agent-sizes.md), resolved at this start. A volume that already exists is reused and, when the size asks for more storage than it has, grown first (never shrunk).
 10. Apply resources through the Kubernetes client and mark the Agent running.
 11. Record the runtime configuration digest the pod was built from.
 
@@ -242,7 +242,7 @@ API that scheduled them — `API_IMAGE` is rendered from the same chart expressi
 container's `image`. Nothing new is built or published.
 
 Both mount the Agent's `agent-<uuid>` PVC, which is why they require a stopped Agent. ReadWriteOnce is not the guarantee it looks like here: it is enforced per node for attachable volumes, and the default `local-path` provisioner is a bind mount with nothing to attach, so two pods on one node can hold the same directory. The API therefore waits for the Agent's pod to disappear before creating either Job, rather than trusting the Agent's stored status — stopping deletes the Deployment and returns immediately while the pod lives out its termination grace period. Capture
-mounts the Agent volume read-only alongside a fresh per-restore-point PVC. Restore mounts
+mounts the Agent volume read-only alongside a fresh per-restore-point PVC, as large as the Agent's volume and never below `RESTORE_POINT_SIZE`, so a compressed copy always fits. Restore mounts
 three — the Agent volume writable, the new Pre-Restore destination, and the chosen archive
 read-only — and performs the safety-net capture and the extraction in one process, so the
 backup is on disk before anything is wiped.

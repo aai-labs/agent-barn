@@ -2,6 +2,7 @@ import re
 from uuid import UUID
 
 from kubernetes import client
+from kubernetes.utils import parse_quantity
 
 from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOOK_PORT
 
@@ -29,6 +30,30 @@ def _memory_quantity(value: int) -> str:
     if value % _MIB == 0:
         return f"{value // _MIB}Mi"
     return str(value)
+
+
+def storage_quantity(value: int) -> str:
+    """A volume size as a PVC request, in the units the manifests used: `1Gi` for Standard."""
+    return _memory_quantity(value)
+
+
+def pvc_storage_bytes(pvc: object) -> int | None:
+    """The storage a PVC requests, in bytes; None when the object carries none to read."""
+    if not isinstance(pvc, client.V1PersistentVolumeClaim) or pvc.spec is None or pvc.spec.resources is None:
+        return None
+    requests = pvc.spec.resources.requests
+    storage = requests.get("storage") if isinstance(requests, dict) else None
+    return int(parse_quantity(storage)) if isinstance(storage, str) else None
+
+
+def pvc_capacity_bytes(pvc: object) -> int | None:
+    """The storage a PVC actually has, in bytes, which trails its request until a resize
+    finishes; None while the claim is unbound or the object carries none to read."""
+    if not isinstance(pvc, client.V1PersistentVolumeClaim) or pvc.status is None:
+        return None
+    capacity = pvc.status.capacity
+    storage = capacity.get("storage") if isinstance(capacity, dict) else None
+    return int(parse_quantity(storage)) if isinstance(storage, str) else None
 
 
 def container_resources(
@@ -93,7 +118,11 @@ def build_pvc(
     namespace: str,
     storage_class: str | None = None,
     runtime: str = "",
+    *,
+    storage_bytes: int = _GIB,
 ) -> client.V1PersistentVolumeClaim:
+    """The Agent's volume at its size's storage, which only applies when the volume is new;
+    an existing one is grown at start instead (see AgentService._ensure_volume)."""
     return client.V1PersistentVolumeClaim(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -105,7 +134,7 @@ def build_pvc(
             # None omits the field so the cluster default StorageClass applies.
             storage_class_name=storage_class or None,
             resources=client.V1ResourceRequirements(
-                requests={"storage": "1Gi"},
+                requests={"storage": storage_quantity(storage_bytes)},
             ),
         ),
     )

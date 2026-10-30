@@ -42,7 +42,7 @@ export function AgentSizeTile({ agent }: { agent: Agent }) {
       style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}
     >
       <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
-        CPU &amp; memory
+        Agent spec
       </div>
       {choices ? (
         <div className="mt-1.5">

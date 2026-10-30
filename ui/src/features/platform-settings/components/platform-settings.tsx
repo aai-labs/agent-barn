@@ -19,9 +19,9 @@ export const PLATFORM_SETTINGS_SECTIONS = {
     description: "Long-term memory settings shared by every Agent and Organization.",
   },
   "agent-sizes": {
-    label: "Agent sizes",
+    label: "Agent specs",
     Icon: Gauge,
-    description: "The CPU and memory Agents run with. Every Agent runs on the default size.",
+    description: "The CPU, memory and storage Agents run with. Every Agent runs on the default spec.",
   },
   organizations: {
     label: "Organizations",
