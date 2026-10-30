@@ -1,8 +1,10 @@
 import enum
 import json
 import logging
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
@@ -10,6 +12,7 @@ from uuid import UUID, uuid7
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from kubernetes.client import V1Job
+from sqlalchemy.exc import IntegrityError
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
@@ -50,6 +53,9 @@ from api.domains.restore_points.constants import (
     RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS,
 )
 from api.domains.restore_points.models import (
+    ACTIVE_CAPTURE_STATUSES,
+    AUTOMATIC_BACKUP_ORIGINS,
+    MANUAL_GROUP_ORIGINS,
     NON_TERMINAL_STATUSES,
     TERMINAL_STATUSES,
     AgentRestorePointCreate,
@@ -83,6 +89,16 @@ PRE_RESTORE_LABEL = "Automatic backup before restore"
 NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
 STILL_SHUTTING_DOWN_DETAIL = "The Agent is still shutting down. Try again in a moment."
 MANAGED_UPDATE_IN_FLIGHT_DETAIL = "A managed update is in progress for this Agent. Wait for it to finish."
+SCHEDULED_LABEL = "Scheduled snapshot"
+SCHEDULED_DID_NOT_RUN_DETAIL = (
+    "The scheduled snapshot did not finish in time. The Agent may have stopped before it could run, "
+    f"or its files need longer to archive: raise {CAPTURE_TIMEOUT_SETTING}."
+)
+SYSTEM_ACTOR_DISPLAY = "Agent Barn"
+
+
+def _display(context: CurrentUserContext) -> str:
+    return context.user.full_name or context.user.email
 
 
 def _selection_type(agent: Agent) -> str:
@@ -125,6 +141,10 @@ def _parse_manifest(logs: str) -> dict:
     return {}
 
 
+def _without_module_path(line: str) -> str:
+    return re.sub(r"^(?:\w+\.)+(?=\w*(?:Error|Exception):)", "", line)
+
+
 def _deadline_exceeded(job: V1Job) -> bool:
     conditions = job.status.conditions if job.status is not None else None
     return any(c.type == "Failed" and c.status == "True" and c.reason == "DeadlineExceeded" for c in conditions or [])
@@ -161,7 +181,9 @@ class RestorePointService:
         self,
         agent: Agent,
         restore_point: AgentRestorePoint,
-        context: CurrentUserContext,
+        actor_display: str,
+        *,
+        backup_skipped: bool = False,
     ) -> dict:
         return {
             "organization_id": agent.organization_id,
@@ -170,8 +192,9 @@ class RestorePointService:
             "restore_point_id": restore_point.id,
             "origin": restore_point.origin,
             "label": restore_point.label,
-            "actor_display": context.user.full_name or context.user.email,
+            "actor_display": actor_display,
             "subject_display": agent.name,
+            "backup_skipped": backup_skipped,
         }
 
     def list_restore_points(
@@ -190,6 +213,8 @@ class RestorePointService:
             items=page.items,
             cap=self.config.restore_point_max_per_agent,
             manual_count=self.repository.count_manual_for_agent(agent_id),
+            scheduled_cap=self.config.restore_point_scheduled_max_per_agent,
+            schedule_interval_minutes=self.config.restore_point_schedule_interval_minutes,
         )
 
     def reconcile_agent(self, agent_id: UUID) -> None:
@@ -277,6 +302,10 @@ class RestorePointService:
             # archive it is still holding.
             return
 
+        if row.status == RestorePointStatus.DELETING:
+            self._finish_interrupted_prune(row, respect_grace)
+            return
+
         if not row.job_name:
             self._resolve_untracked(row, "The restore point has no job to track.", respect_grace)
             return
@@ -316,12 +345,19 @@ class RestorePointService:
         A row is committed before its Job is created, so a read landing in that
         window would otherwise fail a healthy operation. Past the grace window a
         missing Job is genuine. A restore target keeps its volume; a capture
-        releases the one it never finished writing.
+        releases the one it never finished writing. The target of a restore the
+        user ran without a backup stays restorable, since nothing else can undo it.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
         if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
-        if row.status == RestorePointStatus.RESTORING:
+        if row.status == RestorePointStatus.RESTORING and row.backup_skipped_by_user:
+            if row.reapply_configuration:
+                self.repository.mark_configuration_failed(
+                    row.id, "Nothing says the restore finished, so the recorded configuration was not applied."
+                )
+            self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
+        elif row.status == RestorePointStatus.RESTORING:
             self._fail(row, reason)
         else:
             self._fail_capture(row, reason)
@@ -352,6 +388,8 @@ class RestorePointService:
                 )
             if outcome == _RestoreOutcome.BACKUP_FAILED:
                 self.repository.mark_restored(row.id)
+            elif row.backup_skipped_by_user:
+                self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
             else:
                 self._fail(row, reason)
             return
@@ -385,6 +423,8 @@ class RestorePointService:
         return _RestoreOutcome.BACKUP_FAILED
 
     def _failure_reason(self, row: AgentRestorePoint, job: V1Job, namespace: str) -> str:
+        if _deadline_exceeded(job) and row.origin == RestorePointOrigin.SCHEDULED:
+            return SCHEDULED_DID_NOT_RUN_DETAIL
         if _deadline_exceeded(job):
             is_restore = row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESTORE
             setting = RESTORE_TIMEOUT_SETTING if is_restore else CAPTURE_TIMEOUT_SETTING
@@ -428,7 +468,7 @@ class RestorePointService:
         if logs:
             lines = [line.strip() for line in logs.splitlines() if line.strip() and _manifest_from_line(line) is None]
             if lines:
-                return lines[-1]
+                return _without_module_path(lines[-1])
         return "The operation failed. Check the cluster logs for details."
 
     def get_restore_point(
@@ -462,47 +502,266 @@ class RestorePointService:
         while that update runs.
         """
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        origin = RestorePointOrigin.PRE_UPGRADE if managed_update else RestorePointOrigin.MANUAL
 
         self._await_agent_volume_release(agent.id)
 
-        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
-            if not acquired:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
-
-            current = self.agent_repository.get_by_id(agent.id)
-            if current is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Agent {agent_id} not found",
-                )
+        with self._locked_agent(agent.id) as current:
             if not managed_update:
                 self._refuse_during_managed_update(current)
-            self._assert_capturable(current)
-
-            restore_point_id = uuid7()
-            restore_point = AgentRestorePoint(
-                id=restore_point_id,
-                agent_id=current.id,
-                created_by_user_id=context.user.id,
+            self._assert_capturable(current, origin)
+            restore_point, delivery_ids = self._begin_backup(
+                current,
+                origin=origin,
                 label=payload.label,
-                status=RestorePointStatus.PENDING,
-                origin=RestorePointOrigin.PRE_UPGRADE if managed_update else RestorePointOrigin.MANUAL,
-                agent_type=current.agent_type,
-                pvc_name=restore_point_resource_name(restore_point_id),
-                job_name=capture_job_name(restore_point_id),
-                config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
-            )
-            result = self.repository.save_with_event(
-                restore_point,
-                event_name=AGENT_RESTORE_POINT_CREATED,
+                created_by_user_id=context.user.id,
                 actor=resolve_actor_identity(context, current.organization_id),
-                payload=self._event_payload(current, restore_point, context),
+                actor_display=_display(context),
             )
 
-            self._provision_capture(current, restore_point)
-
-        self._dispatch(result.delivery_ids)
+        self._dispatch(delivery_ids)
         return AgentRestorePointRead.model_validate(restore_point)
+
+    def capture_scheduled(self, agent_id: UUID) -> AgentRestorePoint | None:
+        """Take a scheduled snapshot of a running Agent, or None when now is not the moment.
+
+        The capture reads the volume while the Agent keeps writing to it, so a file
+        changing mid-capture is caught as it was then. Anything that would make this
+        wait or refuse — another operation, a managed update, the lifecycle lock — is a
+        skip: the schedule tries again on its next run.
+
+        The cluster reads happen before the lock, so a user's start, stop or delete only
+        meets the lock while the capture's volume and Job are created.
+        """
+        if not self._is_snapshot_candidate(self.agent_repository.get_by_id(agent_id)):
+            return None
+        if self.k8s.get_pvc(f"agent-{agent_id}", self.config.k8s_namespace) is None:
+            return None
+        # The capture is placed beside the Agent's running pod. With none (an Agent stuck
+        # on quota, or whose pod is still Pending, reads RUNNING) it could never be
+        # scheduled, and would hold a concurrency slot until its deadline.
+        if self.k8s.get_pod_name_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace) is None:
+            return None
+
+        with self.agent_repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                return None
+            current = self.agent_repository.get_by_id(agent_id)
+            if current is None or not self._is_snapshot_candidate(current):
+                return None
+            try:
+                restore_point, delivery_ids = self._begin_backup(
+                    current,
+                    origin=RestorePointOrigin.SCHEDULED,
+                    label=SCHEDULED_LABEL,
+                    created_by_user_id=None,
+                    actor=self._system_actor(current),
+                    actor_display=SYSTEM_ACTOR_DISPLAY,
+                    beside_running_agent=True,
+                )
+            except IntegrityError:
+                # Another capture became active between the check and the insert.
+                return None
+
+        self._dispatch(delivery_ids)
+        return restore_point
+
+    def _is_snapshot_candidate(self, agent: Agent | None) -> bool:
+        return (
+            agent is not None
+            and agent.status == AgentStatus.RUNNING
+            and agent.deleted_at is None
+            and not managed_update_in_flight(agent)
+            and not self.repository.has_agent_volume_operation(agent.id)
+            and not self.repository.find_owing_replay_for_agent(agent.id)
+        )
+
+    @contextmanager
+    def _locked_agent(self, agent_id: UUID) -> Iterator[Agent]:
+        """Hold the Agent's lifecycle lock and yield the Agent, read again under it.
+
+        Every operation that starts a Job on the Agent's volume checks the Agent's state and
+        starts the Job inside this lock, so a start, a stop or a delete cannot land between the
+        two. It refuses rather than waits when something else holds the lock.
+        """
+        with self.agent_repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+            current = self.agent_repository.get_by_id(agent_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            yield current
+
+    def _begin_backup(
+        self,
+        agent: Agent,
+        *,
+        origin: RestorePointOrigin,
+        label: str | None,
+        created_by_user_id: UUID | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        beside_running_agent: bool = False,
+    ) -> tuple[AgentRestorePoint, list[UUID]]:
+        """Record a capture with its event, then start the Job that writes it.
+
+        The caller dispatches the returned deliveries once it has released the lock.
+        """
+        restore_point_id = uuid7()
+        restore_point = AgentRestorePoint(
+            id=restore_point_id,
+            agent_id=agent.id,
+            created_by_user_id=created_by_user_id,
+            label=label,
+            status=RestorePointStatus.PENDING,
+            origin=origin,
+            agent_type=agent.agent_type,
+            pvc_name=restore_point_resource_name(restore_point_id),
+            job_name=capture_job_name(restore_point_id),
+            config_manifest=self._build_config_manifest(agent).model_dump(mode="json"),
+        )
+        result = self.repository.save_with_event(
+            restore_point,
+            event_name=AGENT_RESTORE_POINT_CREATED,
+            actor=actor,
+            payload=self._event_payload(agent, restore_point, actor_display),
+        )
+        self._provision_backup(agent, restore_point, self._capture_job(agent, restore_point, beside_running_agent))
+        return restore_point, result.delivery_ids
+
+    def _system_actor(self, agent: Agent) -> ActorIdentity:
+        return ActorIdentity(
+            type=ActorIdentityType.SYSTEM, id="restore-point-schedule", organization_id=agent.organization_id
+        )
+
+    def _cancel_scheduled_captures(self, agent: Agent) -> None:
+        """Stop a scheduled snapshot in progress, so the operation asking for the volume can run.
+
+        One capture runs per Agent at a time, and a restore must not wipe the volume a snapshot
+        is reading. A scheduled snapshot is the one operation that is cheaper to drop than to
+        wait for. It is removed rather than failed: being replaced says nothing about whether
+        the schedule works, and with no row left the next run takes a snapshot again.
+        """
+        for row in self.repository.find_non_terminal_for_agent(agent.id):
+            if row.origin != RestorePointOrigin.SCHEDULED:
+                continue
+            self._reconcile_row(row)
+            current = self.repository.get_by_id(row.id)
+            if current is None or current.status not in NON_TERMINAL_STATUSES:
+                continue
+            if self.repository.mark_deleting(current.id, from_statuses=ACTIVE_CAPTURE_STATUSES):
+                self._remove(agent, current)
+
+    def trim_over_retention(self) -> int:
+        """Apply retention to every Agent past a limit, and say how many lost a restore point.
+
+        Runs from the reconciliation CronJob, which is on whether or not scheduled snapshots
+        are, and never from a request: removing restore points deletes Jobs and volumes.
+        """
+        agent_ids = self.repository.find_agent_ids_over_retention(
+            scheduled_cap=self.config.restore_point_scheduled_max_per_agent,
+            manual_cap=self.config.restore_point_max_per_agent,
+        )
+        trimmed = 0
+        for agent_id in agent_ids:
+            try:
+                trimmed += self.enforce_retention(agent_id) > 0
+            except Exception:
+                logger.warning("Could not apply restore point retention for agent %s", agent_id, exc_info=True)
+        return trimmed
+
+    def enforce_retention(self, agent_id: UUID) -> int:
+        """Remove the restore points an Agent keeps beyond its limits, and say how many went.
+        Safe to run again.
+
+        Scheduled snapshots keep the newest `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, and only
+        the newest failed attempt, which is what tells the user the schedule is failing.
+        Restore points a user took share `RESTORE_POINT_MAX_PER_AGENT` with the backups taken
+        before an update or a restore; past it the oldest of those backups goes, but never the
+        newest one and never one a user took. Only READY rows count, so a capture in progress
+        never pushes out the snapshot it may yet fail to replace.
+
+        Nothing is removed while a managed update runs: its own backup is its way back. The
+        next reconciliation pass removes it once the update is over.
+        """
+        agent = self.agent_repository.get_by_id(agent_id)
+        if agent is None or managed_update_in_flight(agent):
+            return 0
+        removed = self._prune_oldest(
+            agent,
+            counted=(RestorePointOrigin.SCHEDULED,),
+            removable=(RestorePointOrigin.SCHEDULED,),
+            keep=self.config.restore_point_scheduled_max_per_agent,
+        )
+        removed += self._prune_oldest(
+            agent,
+            counted=MANUAL_GROUP_ORIGINS,
+            removable=AUTOMATIC_BACKUP_ORIGINS,
+            keep=self.config.restore_point_max_per_agent,
+            spare_newest_removable=True,
+        )
+        failed = self.repository.find_for_agent_by_origin(
+            agent.id, (RestorePointOrigin.SCHEDULED,), (RestorePointStatus.FAILED,)
+        )
+        for row in failed[:-1]:
+            if self.repository.mark_deleting(row.id, from_statuses=(RestorePointStatus.FAILED,)):
+                self._remove(agent, row)
+                removed += 1
+        return removed
+
+    def _prune_oldest(
+        self,
+        agent: Agent,
+        *,
+        counted: tuple[RestorePointOrigin, ...],
+        removable: tuple[RestorePointOrigin, ...],
+        keep: int,
+        spare_newest_removable: bool = False,
+    ) -> int:
+        ready = self.repository.find_for_agent_by_origin(agent.id, counted, (RestorePointStatus.READY,))
+        excess = len(ready) - keep
+        if excess <= 0:
+            return 0
+        candidates = [row for row in ready if row.origin in removable and not row.reapply_configuration]
+        if spare_newest_removable:
+            candidates = candidates[:-1]
+        removed = 0
+        for row in candidates[:excess]:
+            if self.repository.mark_deleting(row.id, from_statuses=(RestorePointStatus.READY,)):
+                self._remove(agent, row)
+                removed += 1
+        return removed
+
+    def _remove(self, agent: Agent, row: AgentRestorePoint) -> None:
+        """Delete a DELETING restore point's Job and volume, then its row with its event."""
+        self._release(row)
+        delivery_ids = self.repository.delete_with_event(
+            row,
+            event_name=AGENT_RESTORE_POINT_DELETED,
+            actor=self._system_actor(agent),
+            payload=self._event_payload(agent, row, SYSTEM_ACTOR_DISPLAY),
+        )
+        self._dispatch(delivery_ids)
+
+    def _release(self, row: AgentRestorePoint) -> None:
+        """Delete a restore point's Job and volume. The row goes after, so a removal cut short
+        stays DELETING and reconciliation finishes it."""
+        namespace = self.config.k8s_namespace
+        if row.job_name:
+            self.k8s.delete_job(row.job_name, namespace)
+        if row.pvc_name:
+            self.k8s.delete_pvc(row.pvc_name, namespace)
+
+    def _finish_interrupted_prune(self, row: AgentRestorePoint, respect_grace: bool) -> None:
+        grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
+        if respect_grace and row.updated_at > datetime.now(UTC) - grace:
+            return
+        agent = self.agent_repository.get_by_id(row.agent_id)
+        if agent is None:
+            self._release(row)
+            self.repository.delete(row.id)
+            return
+        self._remove(agent, row)
 
     def restore_restore_point(
         self,
@@ -543,9 +802,7 @@ class RestorePointService:
                 )
             if target.status != RestorePointStatus.READY:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
-            if self.repository.has_non_terminal_operation(agent_id) or self.repository.find_owing_replay_for_agent(
-                agent_id
-            ):
+            if self.repository.find_owing_replay_for_agent(agent_id):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
 
             if payload.reapply_configuration:
@@ -557,6 +814,11 @@ class RestorePointService:
                 # must not cost the Agent its files first.
                 self._validate_recorded_configuration(current, target)
 
+            # Last, once nothing else refuses: a refused restore never costs the schedule a snapshot.
+            self._cancel_scheduled_captures(current)
+            if self.repository.has_agent_volume_operation(agent_id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
             job_name = restore_job_name(target.id)
             # The safety copy of the volume exists for restores whose source
             # archive may be worse than what is on the volume now. A managed-update
@@ -566,7 +828,8 @@ class RestorePointService:
             # Without the copy a failed extraction has nothing to fall back to;
             # the caller keeps the target restorable instead (see
             # `reopen_failed_restore`).
-            backup = None if managed_update else self._create_pre_restore_row(current, job_name)
+            skip_backup = managed_update or payload.skip_backup
+            backup = None if skip_backup else self._create_pre_restore_row(current, job_name)
             result = self.repository.update_status_with_event(
                 target.id,
                 RestorePointStatus.RESTORING,
@@ -574,8 +837,9 @@ class RestorePointService:
                 job_name=job_name,
                 event_name=AGENT_RESTORE_POINT_RESTORED,
                 actor=resolve_actor_identity(context, current.organization_id),
-                payload=self._event_payload(current, target, context),
+                payload=self._event_payload(current, target, _display(context), backup_skipped=payload.skip_backup),
                 reapply_configuration=payload.reapply_configuration,
+                backup_skipped_by_user=payload.skip_backup and not managed_update,
                 restored_by_user_id=context.user.id,
                 restored_by_display=context.user.full_name or context.user.email,
             )
@@ -702,7 +966,7 @@ class RestorePointService:
                     detail=f"Restore point {restore_point_id} not found",
                 )
 
-            if self.repository.has_non_terminal_operation(agent_id) or self.repository.find_owing_replay_for_agent(
+            if self.repository.has_agent_volume_operation(agent_id) or self.repository.find_owing_replay_for_agent(
                 agent_id
             ):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
@@ -822,7 +1086,7 @@ class RestorePointService:
             restore_point,
             event_name=AGENT_RESTORE_POINT_DELETED,
             actor=resolve_actor_identity(context, agent.organization_id),
-            payload=self._event_payload(agent, restore_point, context),
+            payload=self._event_payload(agent, restore_point, _display(context)),
         )
         self._dispatch(delivery_ids)
 
@@ -838,10 +1102,12 @@ class RestorePointService:
         """True while volume work or its requested configuration replay is pending.
 
         Reconciles first so a finished or ttl-reaped Job resolves to terminal
-        rather than blocking the Agent — and its Organization — forever.
+        rather than blocking the Agent — and its Organization — forever. A
+        scheduled snapshot blocks nothing: it only reads the volume, beside the
+        running Agent, and whatever needs the volume to itself cancels it.
         """
         self.reconcile_agent(agent_id)
-        return self.repository.has_non_terminal_operation(agent_id) or bool(
+        return self.repository.has_agent_volume_operation(agent_id, ignoring=(RestorePointOrigin.SCHEDULED,)) or bool(
             self.repository.find_owing_replay_for_agent(agent_id)
         )
 
@@ -888,18 +1154,17 @@ class RestorePointService:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STILL_SHUTTING_DOWN_DETAIL)
             time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
 
-    def _assert_capturable(self, agent: Agent) -> None:
+    def _assert_capturable(self, agent: Agent, origin: RestorePointOrigin) -> None:
+        """Refuse a capture, or make room for it. A scheduled snapshot in progress is stopped
+        last, once nothing else refuses, so a refused capture never costs the schedule one."""
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_DETAIL)
 
-        if self.repository.has_non_terminal_operation(agent.id) or self.repository.find_owing_replay_for_agent(
-            agent.id
-        ):
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
-
+        # Only what a user takes is refused at the limit. A backup taken before an update makes
+        # room for itself afterwards (see enforce_retention), so an update is never blocked by it.
         cap = self.config.restore_point_max_per_agent
         count = self.repository.count_manual_for_agent(agent.id)
-        if count >= cap:
+        if origin == RestorePointOrigin.MANUAL and count >= cap:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"This Agent has reached its limit of {cap} restore points ({count} of {cap}). Delete one first.",
@@ -908,7 +1173,30 @@ class RestorePointService:
         if self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace) is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_CAPTURE_DETAIL)
 
-    def _provision_capture(self, agent: Agent, restore_point: AgentRestorePoint) -> None:
+        if self.repository.find_owing_replay_for_agent(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+        self._cancel_scheduled_captures(agent)
+        if self.repository.has_agent_volume_operation(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
+    def _capture_job(self, agent: Agent, restore_point: AgentRestorePoint, beside_running_agent: bool) -> V1Job:
+        return build_capture_job(
+            job_name=restore_point.job_name or capture_job_name(restore_point.id),
+            restore_point_id=restore_point.id,
+            agent_id=agent.id,
+            org_id=agent.organization_id,
+            namespace=self.config.k8s_namespace,
+            image=self.config.api_image,
+            runtime=agent.agent_type,
+            agent_pvc=f"agent-{agent.id}",
+            dest_pvc=restore_point.pvc_name,
+            timeout_seconds=self.config.restore_point_capture_timeout_seconds,
+            image_pull_secret=self.config.agent_image_pull_secret or None,
+            beside_running_agent=beside_running_agent,
+        )
+
+    def _provision_backup(self, agent: Agent, restore_point: AgentRestorePoint, job: V1Job) -> None:
+        """Create the volume a capture is written to, then the Job that writes it."""
         namespace = self.config.k8s_namespace
         try:
             self.k8s.create_pvc(
@@ -922,22 +1210,7 @@ class RestorePointService:
                     self.config.storage_class or None,
                 ),
             )
-            self.k8s.create_job(
-                namespace,
-                build_capture_job(
-                    job_name=restore_point.job_name or capture_job_name(restore_point.id),
-                    restore_point_id=restore_point.id,
-                    agent_id=agent.id,
-                    org_id=agent.organization_id,
-                    namespace=namespace,
-                    image=self.config.api_image,
-                    runtime=agent.agent_type,
-                    agent_pvc=f"agent-{agent.id}",
-                    dest_pvc=restore_point.pvc_name,
-                    timeout_seconds=self.config.restore_point_capture_timeout_seconds,
-                    image_pull_secret=self.config.agent_image_pull_secret or None,
-                ),
-            )
+            self.k8s.create_job(namespace, job)
         except Exception as exc:
             # friendly_k8s_error drops the cluster's own text, and RESOURCE_REJECTED
             # carries no detail, so which field the apiserver refused survives only here.

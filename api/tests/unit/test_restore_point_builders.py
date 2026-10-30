@@ -282,3 +282,15 @@ def test_every_generated_resource_name_round_trips_back_to_its_restore_point():
 def test_a_name_we_did_not_generate_yields_no_restore_point():
     for name in ("agent-22222222-2222-2222-2222-222222222222", "restore-point-nope", "rp-cap-", "litellm", ""):
         assert_that(restore_point_id_from_name(name), none())
+
+
+def test_a_capture_beside_the_running_agent_is_placed_on_the_agent_pods_node():
+    job = _capture_job(beside_running_agent=True)
+
+    [term] = job.spec.template.spec.affinity.pod_affinity.required_during_scheduling_ignored_during_execution
+    assert_that(term.label_selector.match_labels, equal_to({"app": _AGENT_PVC}))
+    assert_that(term.topology_key, equal_to("kubernetes.io/hostname"))
+
+
+def test_an_ordinary_capture_has_no_placement_rule():
+    assert_that(_capture_job().spec.template.spec.affinity, none())

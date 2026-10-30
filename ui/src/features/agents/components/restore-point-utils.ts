@@ -22,6 +22,7 @@ export const RESTORE_POINT_ORIGIN_BADGE: Record<RestorePoint["origin"], string |
   PRE_RESTORE: "Before restore",
   PRE_RESET: "Before reset",
   PRE_UPGRADE: "Before upgrade",
+  SCHEDULED: "Scheduled",
 };
 
 /**
@@ -38,7 +39,16 @@ export function nameSkillsInMessage(message: string, skills: RestorePointSkill[]
 
 export function restorePointLabel(restorePoint: RestorePoint): string {
   if (restorePoint.label) return restorePoint.label;
+  if (restorePoint.origin === "SCHEDULED") return "Scheduled snapshot";
   return restorePoint.origin === "MANUAL" ? "Untitled restore point" : "Automatic backup";
+}
+
+/** "6 hours", "30 minutes", "1 day": how often a scheduled snapshot is taken. */
+export function scheduleIntervalText(minutes: number): string {
+  const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? "" : "s"}`;
+  if (minutes % 1440 === 0) return plural(minutes / 1440, "day");
+  if (minutes % 60 === 0) return plural(minutes / 60, "hour");
+  return plural(minutes, "minute");
 }
 
 /** When the archive was written, falling back to when it was asked for. */

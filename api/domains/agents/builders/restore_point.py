@@ -124,6 +124,7 @@ def _build_job(
     timeout_seconds: int,
     backoff_limit: int,
     image_pull_secret: str | None,
+    affinity: client.V1Affinity | None = None,
 ) -> client.V1Job:
     labels = _labels(restore_point_id, agent_id, org_id)
     return client.V1Job(
@@ -136,6 +137,7 @@ def _build_job(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
                     restart_policy="Never",
+                    affinity=affinity,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
@@ -173,7 +175,10 @@ def build_capture_job(
     dest_pvc: str,
     timeout_seconds: int,
     image_pull_secret: str | None = None,
+    beside_running_agent: bool = False,
 ) -> client.V1Job:
+    """`beside_running_agent` captures while the Agent runs. The Job is placed on the Agent
+    pod's node, since a ReadWriteOnce volume can only be mounted by pods on one node."""
     return _build_job(
         job_name=job_name,
         restore_point_id=restore_point_id,
@@ -194,6 +199,20 @@ def build_capture_job(
         timeout_seconds=timeout_seconds,
         backoff_limit=_CAPTURE_BACKOFF_LIMIT,
         image_pull_secret=image_pull_secret,
+        affinity=_on_agent_node(agent_id) if beside_running_agent else None,
+    )
+
+
+def _on_agent_node(agent_id: UUID) -> client.V1Affinity:
+    return client.V1Affinity(
+        pod_affinity=client.V1PodAffinity(
+            required_during_scheduling_ignored_during_execution=[
+                client.V1PodAffinityTerm(
+                    label_selector=client.V1LabelSelector(match_labels={"app": f"agent-{agent_id}"}),
+                    topology_key="kubernetes.io/hostname",
+                )
+            ]
+        )
     )
 
 

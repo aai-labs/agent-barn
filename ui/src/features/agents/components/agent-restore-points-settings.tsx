@@ -13,6 +13,7 @@ import {
   useApplyRecordedConfiguration,
   useCreateRestorePoint,
   useDeleteRestorePoint,
+  useRestoreRestorePoint,
 } from "../hooks/use-restore-point-actions";
 import { isRestorePointBusy, useRestorePoints } from "../hooks/use-restore-points";
 import type { Agent, AgentConfigurationVersion, RestorePoint } from "../schemas";
@@ -26,6 +27,7 @@ import {
   nameSkillsInMessage,
   restorePointLabel,
   restorePointTime,
+  scheduleIntervalText,
 } from "./restore-point-utils";
 
 function StatusPill({ restorePoint }: { restorePoint: RestorePoint }) {
@@ -92,6 +94,8 @@ export function AgentRestorePointsSettings({
     restorePoints,
     cap,
     manualCount,
+    scheduledCap,
+    scheduleIntervalMinutes,
     hasCapacityData,
     hasMore,
     loadMore,
@@ -106,10 +110,23 @@ export function AgentRestorePointsSettings({
   const [label, setLabel] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestorePoint | null>(null);
+  const [backupIdsWhenOpened, setBackupIdsWhenOpened] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<RestorePoint | null>(null);
+  const restoreWithoutBackup = useRestoreRestorePoint(agent.id);
+  const [startedRestore, setStartedRestore] = useState<{
+    restorePointId: string;
+    reapplyConfiguration: boolean;
+    knownBackupIds: string[];
+  } | null>(null);
 
   const isRunning = agent.status === "RUNNING";
-  const hasWorkInFlight = restorePoints.some(isRestorePointBusy);
+  // A scheduled snapshot in progress blocks nothing: the server stops it for a capture or a restore.
+  // Nor does a restore point being deleted, which never touches the Agent's own volume.
+  const hasWorkInFlight = restorePoints.some(
+    (item) => isRestorePointBusy(item) && item.origin !== "SCHEDULED" && item.status !== "DELETING",
+  );
+  const scheduledSnapshots = restorePoints.filter((item) => item.origin === "SCHEDULED");
+  const otherRestorePoints = restorePoints.filter((item) => item.origin !== "SCHEDULED");
   const atCap = cap > 0 && manualCount >= cap;
 
   // Stated up front rather than discovered through a 409.
@@ -137,6 +154,33 @@ export function AgentRestorePointsSettings({
 
   const captureBlockedReason = captureBlockedBecause();
 
+  // A failed backup leaves its target READY again. Backups that already existed when this restore
+  // started are ignored, so an older failure is never taken for this one.
+  const startedTarget = restorePoints.find((item) => item.id === startedRestore?.restorePointId);
+  const failedBackup =
+    startedRestore && startedTarget?.status === "READY" && !hasWorkInFlight
+      ? restorePoints.find(
+          (item) =>
+            item.origin === "PRE_RESTORE" &&
+            item.status === "FAILED" &&
+            !startedRestore.knownBackupIds.includes(item.id),
+        )
+      : undefined;
+
+  async function restoreWithoutBackupSnapshot() {
+    if (!startedRestore) return;
+    try {
+      await restoreWithoutBackup.mutateAsync({
+        restorePointId: startedRestore.restorePointId,
+        reapplyConfiguration: startedRestore.reapplyConfiguration,
+        skipBackup: true,
+      });
+      setStartedRestore(null);
+    } catch (caught) {
+      toastError(caught);
+    }
+  }
+
   async function capture() {
     try {
       await createRestorePoint.mutateAsync(label);
@@ -154,6 +198,134 @@ export function AgentRestorePointsSettings({
     } catch (caught) {
       toastError(caught);
     }
+  }
+
+  function renderRow(restorePoint: RestorePoint) {
+    const isExpanded = expandedId === restorePoint.id;
+    const originBadge = RESTORE_POINT_ORIGIN_BADGE[restorePoint.origin];
+    const timestamp = restorePointTime(restorePoint);
+    return (
+      <div
+        key={restorePoint.id}
+        className="rounded-xl p-3"
+        style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
+        data-testid="restore-point-row"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[0.88rem] font-medium" style={{ color: "var(--ink)" }}>
+                {restorePointLabel(restorePoint)}
+              </span>
+              {originBadge && (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
+                  style={{
+                    background: "var(--accent-soft)",
+                    color: "var(--accent-ink)",
+                  }}
+                >
+                  {originBadge}
+                </span>
+              )}
+              <StatusPill restorePoint={restorePoint} />
+            </div>
+            <div className="mt-1 text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
+              {formatDate(timestamp.value)}
+              {!timestamp.isCaptureTime && " (requested)"}
+              {" · "}
+              {formatArchiveSize(restorePoint.archiveBytes)}
+              {restorePoint.fileCount !== null &&
+                ` · ${restorePoint.fileCount} ${restorePoint.fileCount === 1 ? "file" : "files"}`}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="af-btn af-btn-sm"
+              aria-expanded={isExpanded}
+              onClick={() => setExpandedId(isExpanded ? null : restorePoint.id)}
+            >
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              Configuration
+            </button>
+            {canManage && (
+              <>
+                <RestoreAction
+                  reason={restoreBlockedReason(restorePoint)}
+                  onClick={() => {
+                    setBackupIdsWhenOpened(
+                      restorePoints.filter((item) => item.origin === "PRE_RESTORE").map((item) => item.id),
+                    );
+                    setRestoreTarget(restorePoint);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="af-btn af-btn-sm"
+                  style={{ color: "var(--err)" }}
+                  disabled={isRestorePointBusy(restorePoint)}
+                  aria-label={`Delete ${restorePointLabel(restorePoint)}`}
+                  onClick={() => setDeleteTarget(restorePoint)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {restorePoint.reapplyConfiguration && (
+          <p className="mb-0 mt-2 text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
+            The recorded configuration will be re-applied once the files are back.
+          </p>
+        )}
+
+        {restorePoint.configurationError && (
+          <div className="mt-2 text-[0.78rem]" role="alert">
+            <p className="mb-0" style={{ color: "var(--err)" }}>
+              The recorded configuration was not re-applied: {nameSkillsInMessage(restorePoint.configurationError, restorePoint.configManifest.skills)}
+            </p>
+            {canManage && canEditConfiguration && (
+              <button
+                type="button"
+                className="af-btn af-btn-sm mt-1.5"
+                disabled={applyConfiguration.isPending || isRunning}
+                onClick={() => {
+                  applyConfiguration.mutateAsync(restorePoint.id).catch(toastError);
+                }}
+              >
+                Re-apply configuration
+              </button>
+            )}
+          </div>
+        )}
+
+        {restorePoint.failureReason &&
+          (restorePoint.status === "FAILED" || restorePoint.status === "READY") && (
+            <p
+              className="mb-0 mt-2 text-[0.78rem]"
+              style={{ color: "var(--err)" }}
+              role="alert"
+            >
+              {/* A READY row keeps a reason only when a restore from it, run without a
+                  backup, failed: the Agent's files may not be what this point holds. */}
+              {restorePoint.status === "READY"
+                ? `The last restore from this point did not finish: ${restorePoint.failureReason}`
+                : restorePoint.failureReason}
+            </p>
+          )}
+
+        {isExpanded && (
+          <RestorePointConfigDiff
+            manifest={restorePoint.configManifest}
+            agent={agent}
+            active={active}
+          />
+        )}
+      </div>
+    );
   }
 
   const captureButton = (
@@ -174,12 +346,49 @@ export function AgentRestorePointsSettings({
         description="Capture the Agent's working files before a risky change, and roll back to them if it goes wrong."
       >
         {hasCapacityData && (
-          <p className="mb-3 text-[0.8rem]" style={{ color: "var(--ink-3)" }} data-testid="restore-point-capacity">
-            {manualCount} of {cap} captures used.{" "}
-            <span style={{ color: "var(--ink-4)" }}>
-              Automatic backups taken before a restore don&apos;t count towards this.
-            </span>
-          </p>
+          <div className="mb-6" data-testid="scheduled-snapshots">
+            <h3 className="m-0 text-[0.88rem] font-semibold" style={{ color: "var(--ink)" }}>
+              Scheduled snapshots
+            </h3>
+            <p
+              className="mb-3 mt-1 text-[0.8rem]"
+              style={{ color: "var(--ink-3)" }}
+              data-testid="restore-point-schedule"
+            >
+              {scheduleIntervalMinutes > 0
+                ? `A snapshot is taken every ${scheduleIntervalText(scheduleIntervalMinutes)} while the Agent runs, and the newest ${scheduledCap} are kept. To undo a change, restore the snapshot taken just before it.`
+                : "Scheduled snapshots are turned off."}
+            </p>
+            {scheduledSnapshots.length > 0 ? (
+              <div className="flex flex-col gap-2">{scheduledSnapshots.map(renderRow)}</div>
+            ) : (
+              scheduleIntervalMinutes > 0 && (
+                <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+                  No scheduled snapshot yet. The first is taken while the Agent runs.
+                </p>
+              )
+            )}
+          </div>
+        )}
+
+        {hasCapacityData && (
+          <>
+            <h3 className="m-0 text-[0.88rem] font-semibold" style={{ color: "var(--ink)" }}>
+              Your restore points
+            </h3>
+            <p
+              className="mb-3 mt-1 text-[0.8rem]"
+              style={{ color: "var(--ink-3)" }}
+              data-testid="restore-point-capacity"
+            >
+              {manualCount} of {cap} captures used.{" "}
+              <span style={{ color: "var(--ink-4)" }}>
+                Backups taken before an update or a restore do not count here. Once they and your
+                captures pass {cap}, the oldest backup is removed, but never the newest one. Your
+                own captures are never removed.
+              </span>
+            </p>
+          </>
         )}
 
         {canManage && (
@@ -209,6 +418,42 @@ export function AgentRestorePointsSettings({
           </div>
         )}
 
+        {canManage && failedBackup && (
+          <div
+            className="mb-5 rounded-xl p-3 text-[0.8rem]"
+            style={{
+              background: "color-mix(in srgb, var(--err) 5%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))",
+              color: "var(--ink-2)",
+            }}
+            role="alert"
+            data-testid="restore-backup-failed"
+          >
+            <div className="font-medium">The backup snapshot failed, so nothing was restored</div>
+            <p className="mb-0 mt-1" style={{ color: "var(--ink-3)" }}>
+              {failedBackup.failureReason ?? "No reason was given."}
+            </p>
+            <p className="mb-0 mt-1" style={{ color: "var(--ink-3)" }}>
+              You can restore without it, but the current files cannot be brought back afterwards.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                className="af-btn af-btn-sm"
+                style={{ borderColor: "var(--err)", color: "var(--err)" }}
+                disabled={isRunning || restoreWithoutBackup.isPending}
+                data-testid="restore-without-backup-button"
+                onClick={() => void restoreWithoutBackupSnapshot()}
+              >
+                {restoreWithoutBackup.isPending ? "Starting…" : "Restore without backup snapshot"}
+              </button>
+              <button type="button" className="af-btn af-btn-sm" onClick={() => setStartedRestore(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         {isLoading && (
           <div className="h-24 animate-pulse rounded-xl" style={{ background: "var(--bg-soft)" }} />
         )}
@@ -221,7 +466,7 @@ export function AgentRestorePointsSettings({
           />
         )}
 
-        {!isLoading && !error && restorePoints.length === 0 && (
+        {!isLoading && !error && otherRestorePoints.length === 0 && (
           <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
             No restore points yet.
             {canManage
@@ -231,123 +476,7 @@ export function AgentRestorePointsSettings({
         )}
 
         <div className="flex flex-col gap-2">
-          {restorePoints.map((restorePoint) => {
-            const isExpanded = expandedId === restorePoint.id;
-            const originBadge = RESTORE_POINT_ORIGIN_BADGE[restorePoint.origin];
-            const timestamp = restorePointTime(restorePoint);
-            return (
-              <div
-                key={restorePoint.id}
-                className="rounded-xl p-3"
-                style={{ border: "1px solid var(--line)", background: "var(--bg-elev)" }}
-                data-testid="restore-point-row"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[0.88rem] font-medium" style={{ color: "var(--ink)" }}>
-                        {restorePointLabel(restorePoint)}
-                      </span>
-                      {originBadge && (
-                        <span
-                          className="rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
-                          style={{
-                            background: "var(--accent-soft)",
-                            color: "var(--accent-ink)",
-                          }}
-                        >
-                          {originBadge}
-                        </span>
-                      )}
-                      <StatusPill restorePoint={restorePoint} />
-                    </div>
-                    <div className="mt-1 text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
-                      {formatDate(timestamp.value)}
-                      {!timestamp.isCaptureTime && " (requested)"}
-                      {" · "}
-                      {formatArchiveSize(restorePoint.archiveBytes)}
-                      {restorePoint.fileCount !== null &&
-                        ` · ${restorePoint.fileCount} ${restorePoint.fileCount === 1 ? "file" : "files"}`}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm"
-                      aria-expanded={isExpanded}
-                      onClick={() => setExpandedId(isExpanded ? null : restorePoint.id)}
-                    >
-                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      Configuration
-                    </button>
-                    {canManage && (
-                      <>
-                        <RestoreAction
-                          reason={restoreBlockedReason(restorePoint)}
-                          onClick={() => setRestoreTarget(restorePoint)}
-                        />
-                        <button
-                          type="button"
-                          className="af-btn af-btn-sm"
-                          style={{ color: "var(--err)" }}
-                          disabled={isRestorePointBusy(restorePoint)}
-                          aria-label={`Delete ${restorePointLabel(restorePoint)}`}
-                          onClick={() => setDeleteTarget(restorePoint)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {restorePoint.reapplyConfiguration && (
-                  <p className="mb-0 mt-2 text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
-                    The recorded configuration will be re-applied once the files are back.
-                  </p>
-                )}
-
-                {restorePoint.configurationError && (
-                  <div className="mt-2 text-[0.78rem]" role="alert">
-                    <p className="mb-0" style={{ color: "var(--err)" }}>
-                      The recorded configuration was not re-applied: {nameSkillsInMessage(restorePoint.configurationError, restorePoint.configManifest.skills)}
-                    </p>
-                    {canManage && canEditConfiguration && (
-                      <button
-                        type="button"
-                        className="af-btn af-btn-sm mt-1.5"
-                        disabled={applyConfiguration.isPending || isRunning}
-                        onClick={() => {
-                          applyConfiguration.mutateAsync(restorePoint.id).catch(toastError);
-                        }}
-                      >
-                        Re-apply configuration
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {restorePoint.status === "FAILED" && restorePoint.failureReason && (
-                  <p
-                    className="mb-0 mt-2 text-[0.78rem]"
-                    style={{ color: "var(--err)" }}
-                    role="alert"
-                  >
-                    {restorePoint.failureReason}
-                  </p>
-                )}
-
-                {isExpanded && (
-                  <RestorePointConfigDiff
-                    manifest={restorePoint.configManifest}
-                    agent={agent}
-                    active={active}
-                  />
-                )}
-              </div>
-            );
-          })}
+          {otherRestorePoints.map(renderRow)}
         </div>
 
         {hasMore && (
@@ -370,7 +499,10 @@ export function AgentRestorePointsSettings({
         onOpenChange={(open) => {
           if (!open) setRestoreTarget(null);
         }}
-        onRestoreStarted={() => setRestoreTarget(null)}
+        onRestoreStarted={(started) => {
+          setStartedRestore({ ...started, knownBackupIds: backupIdsWhenOpened });
+          setRestoreTarget(null);
+        }}
       />
 
       <ConfirmationDialog

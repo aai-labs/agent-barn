@@ -298,6 +298,48 @@ services:
       - ./api:/app/api
       - ./.k3d:/app/.k3d:ro
 
+  restore-point-scheduler:
+    profiles: [k3d]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-c", "from api.domains.restore_points.scheduling import main; main()", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+      - ./.k3d:/app/.k3d:ro
+
+  restore-point-reconciler:
+    profiles: [k3d]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-c", "from api.domains.restore_points.reconciliation import main; main()", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+      - ./.k3d:/app/.k3d:ro
+
   budget-snapshots:
     profiles: [k3d]
     build:

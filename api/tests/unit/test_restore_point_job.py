@@ -1,6 +1,8 @@
 import gzip
 import io
+import os
 import re
+import stat
 import tarfile
 from pathlib import Path
 from uuid import uuid4
@@ -8,6 +10,7 @@ from uuid import uuid4
 import pytest
 from hamcrest import assert_that, calling, empty, equal_to, greater_than, has_item, is_not, raises
 
+from api.domains.agents import restore_point_job
 from api.domains.agents.builders.openclaw import build_config_map
 from api.domains.agents.restore_point_job import (
     ARCHIVE_NAME,
@@ -670,3 +673,46 @@ def test_capture_reports_nothing_skipped_for_an_ordinary_volume(tmp_path):
     _write(source, "workspace/notes.md", "work")
 
     assert_that(capture(source, dest, _HERMES)["skipped"], equal_to(0))
+
+
+def test_a_file_deleted_during_a_live_capture_is_skipped_and_the_archive_stays_valid(tmp_path, monkeypatch):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "memories/USER.md", "profile")
+    walk = restore_point_job._walk_included_files
+
+    def walk_that_lists_a_file_already_gone(root, runtime):
+        yield root / "sessions" / "gone.jsonl", "sessions/gone.jsonl"
+        yield from walk(root, runtime)
+
+    monkeypatch.setattr(restore_point_job, "_walk_included_files", walk_that_lists_a_file_already_gone)
+
+    manifest = capture(source, dest, _HERMES)
+
+    assert_that(manifest["skipped"], equal_to(1))
+    assert_that(_all_member_names(dest), has_item("memories/USER.md"))
+    validate_archive(dest / ARCHIVE_NAME, tmp_path / "target")
+
+
+def test_a_file_that_shrinks_during_a_live_capture_is_padded_and_the_archive_stays_valid(tmp_path, monkeypatch):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _write(source, "state/log.jsonl", "short")
+    real_fstat = os.fstat
+
+    def fstat_from_before_the_file_shrank(fd):
+        result = real_fstat(fd)
+        if not stat.S_ISREG(result.st_mode):
+            return result
+        fields = list(result)
+        fields[stat.ST_SIZE] = result.st_size + 100
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(restore_point_job.os, "fstat", fstat_from_before_the_file_shrank)
+
+    manifest = capture(source, dest, _HERMES)
+
+    assert_that(manifest["changed"], equal_to(1))
+    validate_archive(dest / ARCHIVE_NAME, tmp_path / "target")

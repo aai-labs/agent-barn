@@ -38,6 +38,7 @@ class RestorePointReconciliationResult:
     volumes_missing: int = 0
     orphans_deleted: int = 0
     orphans_unidentified: int = 0
+    trimmed_agents: int = 0
     failed: int = 0
 
 
@@ -67,6 +68,8 @@ class RestorePointReconciliationService(Protocol):
     def reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None: ...
 
     def apply_owed_replay(self, row: AgentRestorePoint) -> None: ...
+
+    def trim_over_retention(self) -> int: ...
 
 
 class RestorePointReconciliationCluster(Protocol):
@@ -121,6 +124,7 @@ class RestorePointReconciler:
     def run_once(self) -> RestorePointReconciliationResult:
         started = time.monotonic()
         result = self._resolve_claimed(started)
+        result = self._trim(started, result)
         objects = self._list_objects()
         if objects is not None:
             result = self._fail_rows_without_volumes(objects, started, result)
@@ -172,6 +176,15 @@ class RestorePointReconciler:
             replays_attempted=replays_attempted,
             failed=failed,
         )
+
+    def _trim(self, started: float, result: RestorePointReconciliationResult) -> RestorePointReconciliationResult:
+        if self._expired(started):
+            return result
+        try:
+            return replace(result, trimmed_agents=self.service.trim_over_retention())
+        except Exception:
+            logger.warning("Could not apply restore point retention", exc_info=True)
+            return replace(result, failed=result.failed + 1)
 
     def _list_objects(self) -> _ClusterObjects | None:
         try:
@@ -271,13 +284,14 @@ class RestorePointReconciler:
     def _log_summary(self, result: RestorePointReconciliationResult) -> None:
         logger.info(
             "Restore point reconciliation summary: claimed=%s resolved=%s replays_attempted=%s "
-            "volumes_missing=%s orphans_deleted=%s orphans_unidentified=%s failed=%s",
+            "volumes_missing=%s orphans_deleted=%s orphans_unidentified=%s trimmed_agents=%s failed=%s",
             result.claimed,
             result.resolved,
             result.replays_attempted,
             result.volumes_missing,
             result.orphans_deleted,
             result.orphans_unidentified,
+            result.trimmed_agents,
             result.failed,
         )
 
@@ -289,11 +303,27 @@ def build_reconciler() -> RestorePointReconciler:
     return injector.get(RestorePointReconciler)
 
 
+WATCH_INTERVAL_SECONDS = 600
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Resolve stranded restore points and reclaim orphaned resources.")
-    parser.parse_args()
+    parser.add_argument(
+        "--watch", action="store_true", help="Run immediately and every 10 minutes for local development."
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    build_reconciler().run_once()
+    while True:
+        started = time.monotonic()
+        try:
+            build_reconciler().run_once()
+        except Exception:
+            if not args.watch:
+                raise
+            logger.exception("Restore point reconciliation failed; retrying on the next interval.")
+        if not args.watch:
+            return
+        time.sleep(max(0, WATCH_INTERVAL_SECONDS - (time.monotonic() - started)))
 
 
 if __name__ == "__main__":

@@ -765,8 +765,18 @@ Documentation-only changes do not change a service image and do not require a se
   out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
 - **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
   its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
-  volume. They do not survive loss of that node, and they consume real node disk — the only
-  bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
+  volume. They do not survive loss of that node, and they consume real node disk — the bounds
+  are `RESTORE_POINT_MAX_PER_AGENT` and `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, which are per
+  Agent and not per Organization. With scheduled snapshots on, plan for up to
+  `scheduled max + max + 1` restore point volumes per Agent.
+- **Scheduled snapshots** come from a `<release>-restore-point-schedule` CronJob
+  (`restorePoints.schedule.*`: `cron` every 5 minutes, `intervalMinutes` 360 with 0 to turn
+  snapshots off, `maxPerAgent` 4, `maxConcurrent` 2; disable the CronJob with
+  `restorePoints.schedule.enabled=false`). It uses the API's kubeconfig and needs the same Job and
+  PVC permissions. Each run logs `Scheduled snapshot summary: in_flight started failed`. The
+  oldest snapshots past each Agent's limits are deleted by the reconciliation CronJob below.
+  `maxConcurrent` exists because each capture Job's 512Mi memory limit counts against the
+  namespace's `limits.memory` quota. Run one pass by hand with `make snapshot-restore-points`.
 - Restore point rows resolve from live Job status when they are read, and a
   `<release>-restore-point-reconciliation` CronJob resolves the ones nobody reads. It runs every
   10 minutes (`restorePoints.reconciliation.schedule`, disable with
@@ -777,7 +787,9 @@ Documentation-only changes do not change a service image and do not require a se
   against a shared cluster.
 - **The reconciler deletes storage**, so watch its first few runs in staging before trusting the
   schedule. Each run logs a one-line summary: `claimed`, `resolved`, `replays_attempted`,
-  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `failed`. A non-zero
+  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `trimmed_agents`, `failed`. It
+  also applies restore point retention, deleting the oldest snapshots and automatic backups past
+  each Agent's limits, which is why it must stay enabled even with scheduled snapshots off. A non-zero
   `orphans_unidentified` means resources carrying the component label that match neither route
   below, which the sweep refuses to touch — investigate rather than ignore, because nothing will
   ever reclaim them. A climbing `failed` means rows are being claimed and not resolved, which is

@@ -12,16 +12,83 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Delivered: reconciliation on a schedule (AF-297), so a row's status no longer depends on
   somebody reading it and restore point volumes no row owns are reclaimed.
 - In transition: nothing. Tickets 1, 2 and 3 are complete.
-- Next: nothing planned. Storage remains unmetered per Organization — the only bound is
-  `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent.
+- Delivered: scheduled snapshots of every running Agent (AF-401), kept on a rolling window.
+- Next: nothing planned. Storage remains unmetered per Organization — the bounds are
+  `RESTORE_POINT_MAX_PER_AGENT` and `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, both per Agent.
 - Blockers: **no capture or restore has yet run end to end in a cluster with a rebuilt API
   image.** Every check so far is unit tests, mocked services, and the Kubernetes client against
   k3d. The `pods/log` grant is also unverified on staging and prod; without it a capture still
   runs but records no archive measurements and a generic failure reason. Watch the reconciler's
   first runs in staging before trusting the schedule — it is the one path here that deletes
-  storage.
+  storage. The same goes for the scheduled snapshot CronJob, which now also deletes the oldest
+  snapshots, and **no live capture has run against a real running Agent yet.**
 
 ## Changes
+
+### 2026-10-27 — AF-401 — Scheduled snapshots replace the reset
+
+- Replaced: the "reset" built for AF-401 (back up, then empty the volume) was never merged. The
+  requirement became scheduled snapshots a user can restore from.
+- Delivered: a `<release>-restore-point-schedule` CronJob (`scheduling.py`, every 5 minutes) takes
+  a `SCHEDULED` restore point of each running Agent whose newest one is older than
+  `RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES` (default 360; 0 turns it off). At most
+  `RESTORE_POINT_SCHEDULE_MAX_CONCURRENT` (default 2) run at once across the namespace, because
+  each capture Job's memory limit counts against the namespace quota. Stopped Agents are skipped:
+  their files do not change, and so are Agents with no running pod, since the capture is placed
+  beside it. A skipped Agent does not take a slot from the next one in line. A failed attempt
+  waits a full interval before the next one.
+- Delivered: the snapshot is captured live, beside the running Agent, on the Agent pod's node.
+  Capture now skips files that vanish mid-walk and pads files that shrink, counting them as
+  `skipped` and `changed`. See [`../../adr/2026-10-27-scheduled-snapshots-capture-live.md`](../../adr/2026-10-27-scheduled-snapshots-capture-live.md).
+- Delivered: retention, applied by the reconciliation CronJob every 10 minutes, so it runs
+  whether or not scheduled snapshots are on, and never inside a request. An Agent keeps its newest `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT` (default 4) scheduled snapshots and only
+  its newest failed one. Backups taken before an update or a restore now share
+  `RESTORE_POINT_MAX_PER_AGENT` with the user's own captures: past it the oldest of those backups
+  is deleted, but never the newest and never one a user took. Only ready rows count, and nothing
+  is deleted while a managed update runs; the next pass after it removes the excess. Only Agents
+  that would actually lose a row are picked, so an Agent over the limit by rows retention keeps
+  is not revisited every run. A removal is `READY → DELETING`, then Job and volume, then the row;
+  a row left `DELETING` is finished by reconciliation.
+- Changed: the limit no longer refuses an update's own backup. A user's capture is still refused
+  when their own captures reach the limit.
+- Changed: a scheduled snapshot in progress blocks nothing (`has_blocking_operation` ignores it).
+  A capture or a restore of the same Agent stops it first and removes it, so it neither reads as
+  a schedule failure nor pushes the next snapshot a full interval out.
+- Changed: the restore points section lists scheduled snapshots apart, with how often they are
+  taken and how many are kept. The list response adds `scheduled_cap` and `schedule_interval_minutes`.
+- Decision: reversed — `PRE_UPGRADE` backups are no longer kept forever; see retention above.
+- Changed: `agent.restore_point.created` and `agent.restore_point.deleted` now reach the security
+  audit trail, like `restored`. Scheduled snapshots and retention removals show the system actor
+  "Agent Barn"; a user's own captures and deletes show the user.
+- Changed: a restore point being removed (`DELETING`) blocks nothing. It never touches the
+  Agent's volume, so start, stop, update, delete, capture and restore all go ahead beside it.
+- Changed: a scheduled snapshot reads the Agent's volume and pod before it takes the lifecycle
+  lock. It holds the lock only while it creates its volume and Job, so a user's start, stop or
+  delete can still meet a 409 in that short window. Moving those two calls outside the lock
+  would let a stop or delete land between the check and the Job.
+
+### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails
+
+- Delivered: `skip_backup` on the restore request and on `POST .../managed-update`. The UI offers
+  it after the automatic backup fails ("Restore without backup snapshot" / "Update without backup
+  snapshot"). The restore offer lives only in the browser. The update offer sits in the note that
+  says the backup failed, and is shown at every screen width for as long as the Agent stays stopped
+  with outcome `BACKUP_FAILED`, so it survives a reload. It was first placed in the update banner,
+  which the navigation rework had made phone-only, so desktop never saw it.
+- Delivered: the update accepts `skip_backup` only for a `STOPPED` Agent whose last outcome is
+  `BACKUP_FAILED`. If the new image fails there is no rollback: the Agent is stopped and the
+  outcome is the new `UPDATE_FAILED`.
+- Delivered: a backup that fails before an update pins the Agent to the image its pod ran. The
+  platform pin already names the new version, so before this a plain start ran it with no backup,
+  and a failed update without a backup put back an empty pin and so started the new version again.
+  Reverses "a capture that fails leaves the pin alone". The image comes from the pod or an existing
+  pin only; when neither has it, no pin is set, since the platform's may already be the new one.
+- Delivered: a restore that skipped its backup and then fails during extraction returns its target
+  to `READY` with the reason on the row, so it can be tried again.
+- Delivered: audit — `agent.managed_update.backup_skipped` and `backup_skipped` on
+  `agent.restore_point.restored`.
+- Not changed: a restore with `skip_backup` is not checked against a failed backup, because a
+  restore already replaces the volume.
 
 ### 2026-10-07 — AF-201 — Managed update review fixes
 

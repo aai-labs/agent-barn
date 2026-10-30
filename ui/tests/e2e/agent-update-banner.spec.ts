@@ -177,6 +177,41 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.updateOutcome()).toHaveCount(0);
   });
 
+  test("after a reload, still offers to update without the failed backup", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        update_available: false,
+        last_managed_update: { outcome: "BACKUP_FAILED", restore_point_id: null, failure_reason: "disk full" },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.updateOutcome()).toContainText(/nothing to roll back to/i);
+    await expect(agentDetailPage.updateSkipBackupButton()).toBeEnabled();
+    await expect(agentDetailPage.updateButton()).toHaveCount(0);
+  });
+
+  test("once the Agent is started again, no longer offers to skip the backup", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "RUNNING",
+        update_available: true,
+        last_managed_update: { outcome: "BACKUP_FAILED", restore_point_id: null, failure_reason: "disk full" },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.updateOutcome()).toContainText(/backup could not be taken/i);
+    await expect(agentDetailPage.updateSkipBackupButton()).toHaveCount(0);
+    await expect(agentDetailPage.updateButton()).toBeEnabled();
+  });
+
   test("after a rollback, offers the update again and says why", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: {
@@ -213,6 +248,24 @@ test.describe("Agent update banner", () => {
     await expect(note).toContainText(/backup could not be taken/i);
     await expect(note).toContainText(/still shutting down/i);
     await expect(note).toContainText(/not changed/i);
+  });
+
+  test("when the update without a backup failed, says starting goes back to the old version", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        last_managed_update: { outcome: "UPDATE_FAILED", restore_point_id: null, failure_reason: null },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    const note = agentDetailPage.updateOutcome();
+    await expect(note).toContainText(/nothing to roll back to/i);
+    await expect(note).toContainText(/version it ran before the update/i);
+    await expect(agentDetailPage.updateSkipBackupButton()).toHaveCount(0);
   });
 
   test("when the rollback failed, points at the restore points", async () => {
@@ -252,6 +305,25 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
     await expect(agentDetailPage.updateReleasesLink()).toHaveCount(0);
+  });
+
+  test("a reader without lifecycle permission is never offered to skip a failed backup", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        last_managed_update: { outcome: "BACKUP_FAILED", restore_point_id: null, failure_reason: "disk full" },
+        allowed_actions: mockAgentAllowedActions.filter(
+          (action) => action !== "agent.lifecycle.manage",
+        ),
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(agentDetailPage.updateSkipBackupButton()).toHaveCount(0);
   });
 });
 
@@ -317,5 +389,50 @@ test.describe("Agent update notice in the path bar", () => {
     );
     await details.getByRole("button", { name: "Update", exact: true }).click();
     await requested;
+  });
+
+  test("when the backup fails, offers to update without it and sends skip_backup", async ({ page }) => {
+    let current: Record<string, unknown> = { ...mockAgent, status: "RUNNING", update_available: true };
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
+    });
+    const posts: unknown[] = [];
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      posts.push(route.request().postDataJSON());
+      current = {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        update_available: false,
+        last_managed_update: {
+          outcome: "BACKUP_FAILED",
+          restore_point_id: null,
+          failure_reason: "pre-restore capture failed: disk full",
+        },
+      };
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: true, update_in_progress: true }),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.updateNotice().click();
+    await agentDetailPage.updateNoticeDetails().getByRole("button", { name: "Update", exact: true }).click();
+
+    // A stopped Agent reports no update, so the path bar's notice goes and the note offers the skip.
+    await expect(agentDetailPage.updateSkipBackupButton()).toBeVisible({ timeout: 15_000 });
+    await expect(agentDetailPage.updateNotice()).toHaveCount(0);
+    await expect(agentDetailPage.updateOutcome()).toContainText(/disk full/i);
+
+    await agentDetailPage.updateSkipBackupButton().click();
+    await expect.poll(() => posts.length).toBe(2);
+    expect(posts[0]).toBeNull();
+    expect(posts[1]).toEqual({ skip_backup: true });
   });
 });

@@ -25,6 +25,14 @@ NON_TERMINAL_STATUSES = (
     RestorePointStatus.DELETING,
 )
 ACTIVE_CAPTURE_STATUSES = (RestorePointStatus.PENDING, RestorePointStatus.CAPTURING)
+# DELETING is left out: retention removing a restore point touches only that restore
+# point's own volume, never the Agent's.
+AGENT_VOLUME_BUSY_STATUSES = (*ACTIVE_CAPTURE_STATUSES, RestorePointStatus.RESTORING)
+
+# Backups taken before an update or a restore. They share the manual limit with the
+# restore points users take, and are the ones removed when that limit is passed.
+AUTOMATIC_BACKUP_ORIGINS = (RestorePointOrigin.PRE_UPGRADE, RestorePointOrigin.PRE_RESTORE)
+MANUAL_GROUP_ORIGINS = (RestorePointOrigin.MANUAL, *AUTOMATIC_BACKUP_ORIGINS)
 
 
 class RestorePointSkill(PydanticBaseModel):
@@ -76,6 +84,7 @@ class AgentRestorePointRestore(PydanticBaseModel):
     # back. Refusing up front is the point: a configuration that cannot be applied
     # must not cost the Agent its files first.
     reapply_configuration: bool = False
+    skip_backup: bool = False
 
 
 def selection_from_manifest(
@@ -152,10 +161,14 @@ class AgentRestorePointRead(PydanticBaseModel):
 class AgentRestorePointList(PaginatedItems[AgentRestorePointRead]):
     """The page, plus what the caller needs to decide whether capture is offered.
 
-    ``total`` counts every row an Agent has, including PRE_RESTORE backups and
-    failed captures. The cap counts neither, so a client cannot derive its
-    remaining headroom from the page alone.
+    ``total`` counts every row an Agent has, including scheduled snapshots and
+    failed captures. ``manual_count`` counts only the ones a user took, which is
+    what ``cap`` refuses a capture on, so a client cannot derive its remaining
+    headroom from the page alone.
     """
 
     cap: int
     manual_count: int
+    scheduled_cap: int
+    # 0 when scheduled snapshots are off.
+    schedule_interval_minutes: int

@@ -59,6 +59,8 @@ spec:
                   value: {{ .Release.Namespace }}
                 - name: K8S_KUBECONFIG_PATH
                   value: /etc/kubeconfig/kubeconfig
+                # A resolved capture applies retention, which reads the restore point limits.
+                {{- include "agentbarn-api.restorePointEnv" . | nindent 16 }}
               volumeMounts:
                 - name: kubeconfig
                   mountPath: /etc/kubeconfig

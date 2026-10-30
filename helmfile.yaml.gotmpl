@@ -286,6 +286,12 @@ releases:
         value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
       - name: restorePoints.maxPerAgent
         value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
+      - name: restorePoints.schedule.intervalMinutes
+        value: {{ env "RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES" | default "360" | quote }}
+      - name: restorePoints.schedule.maxPerAgent
+        value: {{ env "RESTORE_POINT_SCHEDULED_MAX_PER_AGENT" | default "4" | quote }}
+      - name: restorePoints.schedule.maxConcurrent
+        value: {{ env "RESTORE_POINT_SCHEDULE_MAX_CONCURRENT" | default "2" | quote }}
       - name: workflows.runtimeBaseUrl
         value: {{ env "WORKFLOW_RUNTIME_BASE_URL" | default "" | quote }}
       - name: agentDefaultModel

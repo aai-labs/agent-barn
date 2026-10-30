@@ -162,6 +162,11 @@ RESTORE_POINT_SIZE=1Gi
 # Manual restore points retained per Agent. The Job image is not configured here
 # — the chart derives it from the API image so both are always the same build.
 RESTORE_POINT_MAX_PER_AGENT=5
+# Scheduled snapshots of running Agents: one every this many minutes (0 turns them
+# off), this many kept per Agent, and at most this many running at once.
+RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES=360
+RESTORE_POINT_SCHEDULED_MAX_PER_AGENT=4
+RESTORE_POINT_SCHEDULE_MAX_CONCURRENT=2
 
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
