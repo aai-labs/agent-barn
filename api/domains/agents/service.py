@@ -958,6 +958,7 @@ class AgentService:
             approval_mode=data.approval_mode,
             verbose_mode=data.verbose_mode,
             max_turns=data.max_turns,
+            file_sync_enabled=data.file_sync_enabled,
             agent_size_id=agent_size_id,
         )
         self._set_pin(agent, template)

@@ -376,6 +376,16 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync",
+    "get_agent_file_sync_organizations__organization_id__agents__agent_id__file_sync_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync/activity",
+    "list_agent_file_sync_activity_organizations__organization_id__agents__agent_id__file_sync_activity_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/healthz",
     "get_agent_healthz_organizations__organization_id__agents__agent_id__healthz_get"
   ],
@@ -1296,6 +1306,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/re-run",
+    "rerun_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
   ],
@@ -1488,6 +1503,11 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/content",
     "publish_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__content_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync",
+    "set_agent_file_sync_organizations__organization_id__agents__agent_id__file_sync_put"
   ],
   [
     "PUT",

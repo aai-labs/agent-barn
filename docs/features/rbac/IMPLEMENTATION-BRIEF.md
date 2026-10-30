@@ -100,6 +100,8 @@ Agent file sync traffic from the pod has no user Membership either.
 - **Tenant:** the Organization, connection and Agent Folder come only from that Agent's persisted rows. No request value can name another Agent, folder or Organization.
 - **Paths:** they are checked against the Agent's own runtime's sync rules.
 - **Not background work:** these methods are reachable from an Ingest router, so the background-work exception below does not cover them. See [Activity and Ingest](../activity-and-ingest.md).
+- **Turning File Sync off or on** is a user request, not background work: `PUT …/agents/{agent_id}/file-sync` requires `agent.update` through `AgentAuthorization.require_action`, and `AgentFileSyncRepository` changes only that Agent and its own folder, inside the caller's Organization. It is a separate repository from the Sync Engine's `FileSyncRepository`, so the exception below keeps covering only engine work ([Sync providers](../sync-provider/README.md#turning-sync-off)).
+- **Reading an Agent's File Sync status and history** (`GET …/agents/{agent_id}/file-sync` and `…/file-sync/activity`) requires `activity.read`. `AgentFileSyncRepository.status_inputs` reads the Agent through `agent_scope_predicates` and then only that Agent's Organization's active connection and that Agent's own folder ([Sync providers](../sync-provider/README.md#status)). `activity_page` joins `sync_activity` to the Agent under the same predicates before counting, ordering and paging.
 - **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
 
 Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
@@ -138,6 +140,8 @@ Background work is the one exception, and it is narrow. It covers scheduled work
 - the method is never reachable from a router
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged
 - the work is driven by a schedule, a deploy, or an operator with cluster access, never by anything a product user can trigger
+
+One bounded case: turning an Agent's File Sync back on (an authorized `agent.update` request) leaves a request, `sync_agent_folder.resync_requested_at`, on that Agent's own folder. The Sync Engine reads it on its next scheduled pass and re-lists the whole connection, as it already does when the provider expires the change cursor. The request chooses only *when* that re-list happens, never what it may touch: the re-list keys by the connection's own persisted rows, and changes any folder or file only by the same rules as every other pass. So the user's input reaches the engine as a timing hint, and the exception still holds.
 
 A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
 

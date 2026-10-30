@@ -636,6 +636,10 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    file_sync_enabled: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
     # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
     # Organization's default Agent limit. Never above the Organization's own limit.
     llm_budget_usd: float | None = SqlField(default=None, nullable=True)
@@ -1166,6 +1170,7 @@ class AgentCreate(PydanticBaseModel):
     verbose_mode: bool = False
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
+    file_sync_enabled: bool = True
     # None, or the default's id, follows the platform default. Anything else needs
     # agent.size.manage and a size the Organization may choose.
     agent_size_id: UUID | None = None

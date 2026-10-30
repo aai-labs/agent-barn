@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from injector import inject, singleton
@@ -12,7 +12,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentType
+from api.domains.agents.repository import agent_scope_predicates
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import AGENT_FILE_SYNC_DISABLED, AGENT_FILE_SYNC_ENABLED, EVENT_REGISTRY
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.file_sync.models import (
+    AgentFileSyncActivityRead,
     SyncActivity,
     SyncActivityKind,
     SyncAgentFolder,
@@ -20,9 +25,11 @@ from api.domains.file_sync.models import (
     SyncFolderStatus,
     SyncPendingAction,
 )
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
 from api.domains.sync_provider.plugins.base import RemoteItem
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 LOCK_POLL_SECONDS = 0.1
 
@@ -340,14 +347,14 @@ class FileSyncRepository:
             )
             session.commit()
 
-    def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str]]:
+    def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str, bool]]:
         with Session(self.delegate.engine) as session:
             rows = session.exec(
-                select(Agent.id, Agent.name)
+                select(Agent.id, Agent.name, Agent.file_sync_enabled)
                 .where(col(Agent.organization_id) == organization_id, col(Agent.deleted_at).is_(None))
                 .order_by(col(Agent.created_at), col(Agent.id))
             )
-            return [(agent_id, name) for agent_id, name in rows]
+            return [(agent_id, name, sync_enabled) for agent_id, name, sync_enabled in rows]
 
     def folders(self, connection_id: UUID) -> list[SyncAgentFolder]:
         with Session(self.delegate.engine) as session:
@@ -400,6 +407,37 @@ class FileSyncRepository:
             session.exec(sa.delete(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id))
             session.commit()
 
+    def clear_resync(self, requested: dict[UUID, datetime]) -> None:
+        if not requested:
+            return
+        with Session(self.delegate.engine) as session:
+            for folder_id, requested_at in requested.items():
+                session.exec(
+                    sa.update(SyncAgentFolder)
+                    .where(
+                        col(SyncAgentFolder.id) == folder_id,
+                        col(SyncAgentFolder.resync_requested_at) == requested_at,
+                    )
+                    .values(resync_requested_at=None)
+                )
+            session.commit()
+
+    def set_folder_status(self, folder_id: UUID, folder_status: SyncFolderStatus) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id).values(status=folder_status)
+            )
+            session.commit()
+
+    def resume_folder(self, folder_id: UUID, now: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncAgentFolder)
+                .where(col(SyncAgentFolder.id) == folder_id)
+                .values(status=SyncFolderStatus.ACTIVE, resync_requested_at=now)
+            )
+            session.commit()
+
     def retire_folders(self, folder_ids: list[UUID]) -> None:
         if not folder_ids:
             return
@@ -410,3 +448,137 @@ class FileSyncRepository:
                 .values(status=SyncFolderStatus.RETIRED)
             )
             session.commit()
+
+
+@inject
+@singleton
+@dataclass
+class AgentFileSyncRepository:
+    delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
+
+    def set_enabled_with_event(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        enabled: bool,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+        now: datetime,
+    ) -> list[UUID] | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).one_or_none()
+            if agent is None:
+                return None
+            if agent.file_sync_enabled == enabled:
+                return []
+            agent.file_sync_enabled = enabled
+            session.add(agent)
+            folder_state = (
+                {"status": SyncFolderStatus.ACTIVE, "resync_requested_at": now}
+                if enabled
+                else {"status": SyncFolderStatus.DISABLED}
+            )
+            session.exec(
+                sa.update(SyncAgentFolder)
+                .where(
+                    col(SyncAgentFolder.agent_id) == agent_id,
+                    col(SyncAgentFolder.connection_id).in_(
+                        select(SyncProviderConnection.id).where(
+                            col(SyncProviderConnection.organization_id) == organization_id,
+                            col(SyncProviderConnection.status) == SyncProviderStatus.ACTIVE,
+                        )
+                    ),
+                )
+                .values(**folder_state)
+            )
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_FILE_SYNC_ENABLED if enabled else AGENT_FILE_SYNC_DISABLED,
+                schema_version=1,
+                occurred_at=now,
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "agent_id": agent_id,
+                    "actor_display": actor_display,
+                    "subject_display": agent.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
+
+    def status_inputs(
+        self, agent_id: UUID, scope: AuthorizationScope
+    ) -> tuple[Agent, SyncProviderConnection | None, SyncAgentFolder | None] | None:
+        with Session(self.delegate.engine) as session:
+            agent = session.exec(select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope))).first()
+            if agent is None:
+                return None
+            connection = session.exec(
+                select(SyncProviderConnection).where(
+                    col(SyncProviderConnection.organization_id) == agent.organization_id,
+                    col(SyncProviderConnection.status) == SyncProviderStatus.ACTIVE,
+                )
+            ).first()
+            folder = (
+                session.exec(
+                    select(SyncAgentFolder).where(
+                        col(SyncAgentFolder.connection_id) == connection.id,
+                        col(SyncAgentFolder.agent_id) == agent.id,
+                    )
+                ).first()
+                if connection is not None
+                else None
+            )
+            return agent, connection, folder
+
+    def activity_page(
+        self, agent_id: UUID, pagination: Pagination, scope: AuthorizationScope
+    ) -> PaginatedItems[AgentFileSyncActivityRead]:
+        predicates = (
+            col(SyncActivity.agent_id) == agent_id,
+            col(SyncActivity.kind) != SyncActivityKind.DELETED_BY_AGENT,
+            *agent_scope_predicates(scope),
+        )
+        with Session(self.delegate.engine) as session:
+            total = (
+                session.scalar(
+                    select(sa.func.count())
+                    .select_from(SyncActivity)
+                    .join(Agent, col(Agent.id) == col(SyncActivity.agent_id))
+                    .where(*predicates)
+                )
+                or 0
+            )
+            rows = session.exec(
+                select(SyncActivity)
+                .join(Agent, col(Agent.id) == col(SyncActivity.agent_id))
+                .where(*predicates)
+                .order_by(col(SyncActivity.occurred_at).desc(), col(SyncActivity.id).desc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
+            ).all()
+        return PaginatedItems[AgentFileSyncActivityRead](
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[
+                AgentFileSyncActivityRead(id=row.id, kind=row.kind, path=row.path, occurred_at=row.occurred_at)
+                for row in rows
+            ],
+        )

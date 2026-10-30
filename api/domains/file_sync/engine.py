@@ -28,6 +28,7 @@ from api.domains.sync_provider.models import FOLDER_NAME, SyncProviderCapability
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
     RemoteItem,
+    RemoteItemLocked,
     RemoteItemMissing,
     RemoteNameTaken,
     RemoteResyncRequired,
@@ -99,6 +100,10 @@ def _locate(changes: _Changes, path: str | None) -> _Target | None:
     return _Target(folder=entry[0], runtime=entry[1], rel_path=rel_path)
 
 
+def _changed_since(row: SyncFile, moment: datetime) -> bool:
+    return any(at is not None and at >= moment for at in (row.synced_at, row.upload_started_at))
+
+
 def delete_agent_folder(
     plugin: SyncProviderPlugin, root: SyncRoot | None, repository: FileSyncRepository, folder: SyncAgentFolder
 ) -> None:
@@ -149,6 +154,10 @@ class FileSyncEngine:
                     wait = exc.retry_after or THROTTLE_FALLBACK_SECONDS
                     self.repository.postpone(connection.id, now + timedelta(seconds=wait))
                     logger.info("File sync for connection %s throttled for %ss", connection.id, wait)
+                except RemoteItemLocked:
+                    logger.info(
+                        "File sync for connection %s found an item open for editing; retrying next pass", connection.id
+                    )
                 except Exception:
                     logger.exception("File sync pass failed for connection %s", connection.id)
             tick()
@@ -174,10 +183,17 @@ class FileSyncEngine:
             by_item={folder.folder_item_id: folder for folder, _ in active if folder.folder_item_id is not None},
             progress=progress or _no_progress,
         )
+        requested = {
+            folder.id: folder.resync_requested_at for folder, _ in active if folder.resync_requested_at is not None
+        }
         try:
-            self._follow(changes, connection.sync_cursor)
+            if requested:
+                self._relist(changes)
+            else:
+                self._follow(changes, connection.sync_cursor)
         except RemoteResyncRequired:
             self._relist(changes)
+        self.repository.clear_resync(requested)
 
     def _follow(self, changes: _Changes, cursor: str) -> None:
         while True:
@@ -191,6 +207,7 @@ class FileSyncEngine:
                 return
 
     def _relist(self, changes: _Changes) -> None:
+        started = datetime.now(UTC)
         seen: set[str] = set()
         cursor: str | None = None
         while True:
@@ -208,6 +225,8 @@ class FileSyncEngine:
             if folder_item_id not in seen:
                 self._rebuild_folder(folder, now)
         for row, folder in self.repository.synced_files_in_connection(changes.connection.id):
+            if _changed_since(row, started):
+                continue
             if row.item_id not in seen and folder.folder_item_id in changes.by_item and folder.folder_item_id in seen:
                 self.repository.restore_from_agent(row.id)
         self.repository.save_cursor(changes.connection.id, cursor)
@@ -330,6 +349,8 @@ class FileSyncEngine:
                 break
             except RemoteNameTaken:
                 continue
+            except RemoteItemMissing:
+                return
         self.repository.record_activity(
             target.folder, SyncActivityKind.MOVED_NOT_SYNCED, target.rel_path, datetime.now(UTC)
         )
@@ -374,7 +395,7 @@ class FileSyncEngine:
         if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
             return
         agents = self.repository.live_agent_names(connection.organization_id)
-        live = {agent_id for agent_id, _ in agents}
+        live = {agent_id for agent_id, _, _ in agents}
         folders = self.repository.folders(connection.id)
         retired = [folder for folder in folders if folder.agent_id not in live]
         self.repository.retire_folders([folder.id for folder in retired if folder.status != SyncFolderStatus.RETIRED])
@@ -391,10 +412,20 @@ class FileSyncEngine:
         folders = [folder for folder in folders if folder.id not in gone]
         by_agent = {folder.agent_id: folder for folder in folders}
         taken = {folder.folder_name.lower() for folder in folders}
-        for agent_id, agent_name in agents:
+        for agent_id, agent_name, sync_enabled in agents:
             base = folder_base_name(agent_name)
-            folder = by_agent.get(agent_id) or self._reserve(connection, agent_id, base, taken)
-            if folder is None or folder.status != SyncFolderStatus.ACTIVE:
+            folder = by_agent.get(agent_id)
+            if folder is None and sync_enabled:
+                folder = self._reserve(connection, agent_id, base, taken)
+            if folder is None:
+                continue
+            if not sync_enabled and folder.status == SyncFolderStatus.ACTIVE:
+                self.repository.set_folder_status(folder.id, SyncFolderStatus.DISABLED)
+                continue
+            if sync_enabled and folder.status == SyncFolderStatus.DISABLED:
+                self.repository.resume_folder(folder.id, datetime.now(UTC))
+                folder.status = SyncFolderStatus.ACTIVE
+            if folder.status != SyncFolderStatus.ACTIVE:
                 continue
             if folder.folder_item_id is None:
                 self._create(plugin, root, folder, base, taken)

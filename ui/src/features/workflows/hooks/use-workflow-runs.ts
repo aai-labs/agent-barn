@@ -1,17 +1,26 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
 import {
+  WorkflowRunHistorySchema,
   WorkflowRunListSchema,
   WorkflowRunSchema,
   isRunProgressing,
   type WorkflowRun,
+  type WorkflowRunHistory,
   type WorkflowRunList,
 } from "../run-schemas";
 import { workflowsKey } from "./use-workflows";
+
+const HISTORY_PAGE = 100;
 
 function useRunScope(agentId: string) {
   const organizationId =
@@ -69,6 +78,27 @@ export function useWorkflowRun(agentId: string, runId: string) {
   });
 }
 
+export function useWorkflowRunHistory(
+  agentId: string,
+  runId: string,
+  revision: number,
+) {
+  const scope = useRunScope(agentId);
+  return useQuery({
+    // Every history event bumps the run revision, so the key refetches exactly when it changes.
+    queryKey: [...scope.key, runId, "history", revision],
+    enabled: scope.enabled && Boolean(runId),
+    placeholderData: keepPreviousData,
+    queryFn: async () =>
+      (
+        await api.get<WorkflowRunHistory>(
+          `${scope.base}/workflow-runs/${runId}/history?page_size=${HISTORY_PAGE}&newest_first=true`,
+          { schema: WorkflowRunHistorySchema },
+        )
+      ).data,
+  });
+}
+
 export function useWorkflowRunActions(agentId: string) {
   const scope = useRunScope(agentId);
   const client = useQueryClient();
@@ -107,5 +137,25 @@ export function useWorkflowRunActions(agentId: string) {
       ).data,
     onSettled: invalidate,
   });
-  return { start, cancel };
+  // The server copies the version and inputs from the original run.
+  const rerun = useMutation({
+    mutationFn: async ({
+      run,
+      clientRequestId,
+    }: {
+      run: WorkflowRun;
+      clientRequestId: string;
+    }) =>
+      (
+        await api.post<WorkflowRun>(
+          `${scope.base}/workflow-runs/${run.id}/re-run`,
+          { clientRequestId },
+          { schema: WorkflowRunSchema },
+        )
+      ).data,
+    onSuccess: (run) => client.setQueryData([...scope.key, run.id], run),
+    // A refused re-run may mean access was lost: refetch so errors replace cached content.
+    onSettled: invalidate,
+  });
+  return { start, cancel, rerun };
 }
