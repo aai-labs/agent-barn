@@ -138,7 +138,7 @@ def test_invalid_file_input_rolls_back_run_and_all_pins(storage, invalid):
             assert session.exec(select(ArtifactReference)).all() == []
 
 
-@pytest.mark.parametrize("transition", ["cancel", "failure", "revoke"])
+@pytest.mark.parametrize("transition", ["cancel", "failure", "terminal_failure", "revoke"])
 def test_input_pins_follow_settlement_and_parked_run_lifecycle(storage, transition):
     from sqlalchemy import text
 
@@ -161,8 +161,14 @@ def test_input_pins_follow_settlement_and_parked_run_lifecycle(storage, transiti
             )
             assert response.status_code == 200, response.text
             repository.advance(run.id, stopped=True)
-        elif transition == "failure":
-            repository.fail(current.id, token, AttemptFailure(reason="Upload failed after possible external effects"))
+        elif transition in {"failure", "terminal_failure"}:
+            repository.fail(
+                current.id,
+                token,
+                AttemptFailure(
+                    reason="Upload failed after possible external effects", retryable=transition == "failure"
+                ),
+            )
         else:
             with context.postgres_delegate.engine.begin() as connection:
                 connection.execute(text("DELETE FROM user_organization WHERE user_id=:user"), {"user": context.user.id})
@@ -172,6 +178,11 @@ def test_input_pins_follow_settlement_and_parked_run_lifecycle(storage, transiti
             repository.admit(current.id, token)
         with Session(context.postgres_delegate.engine) as session:
             ref = session.exec(select(ArtifactReference).where(ArtifactReference.owner_id == current.run_id)).one()
-            assert (ref.released_at is not None) == (transition == "cancel")
+            assert (ref.released_at is not None) == (transition in {"cancel", "terminal_failure"})
         run = repository.inspect(current.run_id)[0]
-        assert run.state == {"cancel": "CANCELLED", "failure": "BLOCKED", "revoke": "PAUSED"}[transition]
+        assert (
+            run.state
+            == {"cancel": "CANCELLED", "failure": "BLOCKED", "terminal_failure": "FAILED", "revoke": "PAUSED"}[
+                transition
+            ]
+        )

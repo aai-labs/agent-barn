@@ -41,6 +41,7 @@ from api.domains.workflows.run_models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
+
 def _timeout_cause(accepted: bool, earlier: str | None) -> str:
     """Why an attempt expired unreported, keeping the failure an earlier attempt reported."""
     timeout = "The attempt timed out" if accepted else "The Agent did not accept the step"
