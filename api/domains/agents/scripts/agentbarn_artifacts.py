@@ -89,8 +89,9 @@ def main() -> int:
                 ).encode(),
                 headers,
             )
-            headers["Content-Type"] = "application/octet-stream"
-            artifact = request("/artifacts/" + artifact["id"] + "/content", "PUT", content, headers)
+            if artifact["state"] != "READY":
+                headers["Content-Type"] = "application/octet-stream"
+                artifact = request("/artifacts/" + artifact["id"] + "/content", "PUT", content, headers)
             print(json.dumps(request("/artifacts/" + artifact["id"] + "/download-link")))
         elif args.command == "list":
             print(json.dumps(request("/artifacts?" + urlencode({"page": args.page}))))

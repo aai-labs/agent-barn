@@ -169,13 +169,15 @@ class ArtifactRepository:
                 existing = session.exec(
                     self.scoped(agent_id, scope)
                     .where(
-                        col(Artifact.source) == "chat",
                         col(Artifact.bucket) == bucket,
                         col(Artifact.filename) == payload.filename,
                         col(Artifact.size) == payload.size,
                         col(Artifact.checksum) == payload.checksum,
                         col(Artifact.expires_at) > datetime.now(UTC),
-                        col(Artifact.state).in_(["UPLOADING", "READY"]),
+                        sa.or_(
+                            col(Artifact.state) == "READY",
+                            sa.and_(col(Artifact.source) == "chat", col(Artifact.state) == "UPLOADING"),
+                        ),
                     )
                     .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
                 ).first()

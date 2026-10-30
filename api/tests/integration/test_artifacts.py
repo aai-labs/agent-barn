@@ -250,6 +250,20 @@ def test_runtime_reuses_matching_chat_artifact(storage):
         assert_that(context.client.get(path, headers=headers).json()["items"], has_length(1))
 
 
+def test_runtime_reuses_human_published_file(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        original = publish(context)
+        headers = runtime_auth(context)
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        reused = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(reused["id"], equal_to(original["id"]))
+        assert_that(
+            context.client.put(path + f"/{reused['id']}/content", headers=headers, content=CONTENT).status_code,
+            equal_to(200),
+        )
+
+
 def test_runtime_matching_uploads_converge_concurrently(storage):
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
@@ -299,7 +313,13 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
         assert_that(len({chat["id"], row["id"], other["id"]}), equal_to(3))
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
         assert_that(response.status_code, equal_to(200), response.text)
+        reused = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(reused["id"], equal_to(row["id"]))
         repo.complete(current.id, token, AttemptResult(summary="File prepared", criteria_met=True))
+        assert_that(
+            context.client.put(path + f"/{reused['id']}/content", headers=headers, content=CONTENT).status_code,
+            equal_to(200),
+        )
         _, next_attempt, next_token = attempt(context, run_id)
         packet = context.injector.get(WorkflowRuntimeService).handoff(next_attempt.id, next_token)
         assert_that(row["id"] in packet["prompt"] and row["checksum"] in packet["prompt"], is_(True))
