@@ -138,6 +138,16 @@ class ArtifactService:
                         raise HTTPException(403, "Publication authority was revoked")
                     self.repository.get(artifact_id, agent_id, current_scope)
 
+        # A runtime may reuse a READY workflow file after its attempt has ended.
+        # This is a read of immutable bytes, not publication into that attempt.
+        if runtime_token is not None:
+            existing = self.repository.get(artifact_id, agent_id, scope)
+            if existing.state == "READY":
+                if len(content) != existing.size or hashlib.sha256(content).hexdigest() != existing.checksum:
+                    raise HTTPException(422, "File bytes do not match the declared size and SHA-256")
+                revalidate()
+                return ArtifactRead.model_validate(existing)
+
         admitted = False
         try:
             with self.repository.publication(

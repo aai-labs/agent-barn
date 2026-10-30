@@ -159,6 +159,40 @@ class ArtifactRepository:
                 bucket = self.buckets.ready_name(agent.id, agent.organization_id, session)
             except ValueError:
                 raise HTTPException(503, "Agent file storage is initializing; retry shortly") from None
+            if source == "chat":
+                # Serialize admission for this Agent so simultaneous identical uploads
+                # share one staging identity before either has finished publishing.
+                session.connection().execute(
+                    sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": f"chat-artifact:{agent.organization_id}:{agent.id}"},
+                )
+                existing = session.exec(
+                    self.scoped(agent_id, scope)
+                    .where(
+                        col(Artifact.bucket) == bucket,
+                        col(Artifact.filename) == payload.filename,
+                        col(Artifact.size) == payload.size,
+                        col(Artifact.checksum) == payload.checksum,
+                        col(Artifact.expires_at) > datetime.now(UTC),
+                        sa.or_(
+                            col(Artifact.state) == "READY",
+                            sa.and_(col(Artifact.source) == "chat", col(Artifact.state) == "UPLOADING"),
+                        ),
+                    )
+                    .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
+                    .limit(1)
+                    .with_for_update(of=Artifact)
+                ).first()
+                if existing is not None:
+                    retention = (
+                        timedelta(days=self.config.artifact_retention_days)
+                        if existing.state == "READY"
+                        else timedelta(hours=1)
+                    )
+                    existing.expires_at = max(existing.expires_at, datetime.now(UTC) + retention)
+                    session.add(existing)
+                    session.commit()
+                    return existing
             row = Artifact(
                 **payload.model_dump(),
                 organization_id=agent.organization_id,

@@ -7,6 +7,7 @@ import mimetypes
 import os
 import stat
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -74,23 +75,34 @@ def main() -> int:
                 content = stream.read(limit + 1)
             if len(content) > limit:
                 raise ValueError("File exceeds the configured upload limit")
-            headers = {"Content-Type": "application/json"}
             query = "?" + urlencode({"attempt_id": args.attempt_id}) if args.attempt_id else ""
-            artifact = request(
-                "/artifacts" + query,
-                "POST",
-                json.dumps(
-                    {
-                        "filename": resolved.name,
-                        "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
-                        "size": len(content),
-                        "checksum": hashlib.sha256(content).hexdigest(),
-                    }
-                ).encode(),
-                headers,
-            )
-            headers["Content-Type"] = "application/octet-stream"
-            artifact = request("/artifacts/" + artifact["id"] + "/content", "PUT", content, headers)
+            metadata = json.dumps(
+                {
+                    "filename": resolved.name,
+                    "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
+                    "size": len(content),
+                    "checksum": hashlib.sha256(content).hexdigest(),
+                }
+            ).encode()
+            deadline = time.monotonic() + 30
+            while True:
+                artifact = request("/artifacts" + query, "POST", metadata, {"Content-Type": "application/json"})
+                if artifact["state"] == "READY":
+                    break
+                try:
+                    artifact = request(
+                        "/artifacts/" + artifact["id"] + "/content",
+                        "PUT",
+                        content,
+                        {"Content-Type": "application/octet-stream"},
+                    )
+                    break
+                except urllib.error.HTTPError as exc:
+                    # A shared chat staging row can be busy or invalidated by a
+                    # failed publisher. Restage so another attempt can recover.
+                    if args.attempt_id or exc.code not in {404, 409, 503} or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
             print(json.dumps(request("/artifacts/" + artifact["id"] + "/download-link")))
         elif args.command == "list":
             print(json.dumps(request("/artifacts?" + urlencode({"page": args.page}))))
