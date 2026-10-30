@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,6 +31,7 @@ from api.domains.workflows.repository import WorkflowConflict
 from api.domains.workflows.run_models import (
     TERMINAL_STATES,
     AttemptFailure,
+    AttemptRead,
     AttemptResult,
     WorkflowAttempt,
     WorkflowCheckpoint,
@@ -38,6 +40,25 @@ from api.domains.workflows.run_models import (
     WorkflowRunCreate,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+def _timeout_cause(accepted: bool, earlier: str | None) -> str:
+    """Why an attempt expired unreported, keeping the failure an earlier attempt reported."""
+    timeout = "The attempt timed out" if accepted else "The Agent did not accept the step"
+    return f"{earlier} (last attempt: {timeout})" if earlier else timeout
+
+
+def start_hash(payload: WorkflowRunCreate, user_id: UUID, rerun_of_run_id: UUID | None) -> str:
+    if rerun_of_run_id:
+        # The source run determines version and inputs, which retention may later remove,
+        # so a retry's identity is the source run and actor alone.
+        return digest(
+            {
+                "client_request_id": str(payload.client_request_id),
+                "user_id": str(user_id),
+                "rerun_of_run_id": str(rerun_of_run_id),
+            }
+        )
+    return digest({**payload.model_dump(mode="json"), "user_id": str(user_id)})
 
 
 def digest(value: object) -> str:
@@ -55,7 +76,13 @@ class WorkflowRunRepository:
     config: Config
 
     def existing_start(
-        self, workflow_id: UUID, agent_id: UUID, scope: AuthorizationScope, payload: WorkflowRunCreate, user_id: UUID
+        self,
+        workflow_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        payload: WorkflowRunCreate,
+        user_id: UUID,
+        rerun_of_run_id: UUID | None = None,
     ) -> UUID | None:
         with Session(self.delegate.engine) as session:
             run = session.exec(
@@ -66,9 +93,19 @@ class WorkflowRunRepository:
             ).one_or_none()
             if run is None:
                 return None
-            if run.request_hash != digest({**payload.model_dump(mode="json"), "user_id": str(user_id)}):
+            if run.request_hash != start_hash(payload, user_id, rerun_of_run_id):
                 raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
             return run.id
+
+    def archived_workflow_ids(self, workflow_ids: Iterable[UUID]) -> set[UUID]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(Workflow.id).where(
+                        col(Workflow.id).in_(set(workflow_ids)), col(Workflow.archived_at).is_not(None)
+                    )
+                )
+            )
 
     def owning_agent_id(self, workflow_id: UUID) -> UUID:
         with Session(self.delegate.engine) as session:
@@ -91,25 +128,42 @@ class WorkflowRunRepository:
             version = session.get(WorkflowVersion, run.version_id) if run else None
             return (run, version) if run and version else None
 
-    def step_records(self, run_id: UUID) -> dict[int, dict[str, Any]]:
-        """Results and wall-clock timing. Callers must already have authorized the run."""
+    def progress(self, run: WorkflowRun) -> tuple[dict[int, dict[str, Any]], AttemptRead | None]:
+        """Step results and wall-clock timing plus the running step's live attempt.
+
+        Callers must already have authorized the run."""
         with Session(self.delegate.engine) as session:
-            records: dict[int, dict[str, Any]] = {}
-            attempts = session.exec(
-                select(WorkflowAttempt)
-                .where(col(WorkflowAttempt.run_id) == run_id)
-                .order_by(col(WorkflowAttempt.created_at))
+            attempts = list(
+                session.exec(
+                    select(WorkflowAttempt)
+                    .where(col(WorkflowAttempt.run_id) == run.id)
+                    .order_by(col(WorkflowAttempt.created_at))
+                )
             )
+            checkpoints = session.exec(select(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run.id))
+            records: dict[int, dict[str, Any]] = {}
             for attempt in attempts:
                 records.setdefault(attempt.step_index, {"started_at": attempt.created_at})
-            checkpoints = session.exec(select(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run_id))
             for checkpoint in checkpoints:
                 records.setdefault(checkpoint.step_index, {}).update(
                     summary=checkpoint.result.get("summary"),
                     completed_at=checkpoint.created_at,
                     artifacts=checkpoint.result.get("artifacts", []),
                 )
-            return records
+        step_attempts = [attempt for attempt in attempts if attempt.step_index == run.next_step]
+        if run.state != "RUNNING" or not step_attempts or step_attempts[-1].state != "REASONING":
+            return records, None
+        current = step_attempts[-1]
+        now = datetime.now(UTC)
+        grace = timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
+        return records, AttemptRead(
+            number=len(step_attempts),
+            limit=1,
+            started_at=current.created_at,
+            expires_at=current.expires_at,
+            server_time=now,
+            agent_unresponsive=current.dispatched_at is None and now - current.created_at > grace,
+        )
 
     def list_runs(
         self, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, workflow_id: UUID | None
@@ -130,7 +184,7 @@ class WorkflowRunRepository:
             return [(run, version) for run, version in rows], total
 
     def history(
-        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, page: int, size: int
+        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, newest_first: bool = False
     ) -> tuple[list[WorkflowHistory], int]:
         with Session(self.delegate.engine) as session:
             query = select(WorkflowHistory).where(
@@ -138,13 +192,10 @@ class WorkflowRunRepository:
                 col(WorkflowHistory.run_id) == run_id,
             )
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
-            return list(
-                session.exec(
-                    query.order_by(col(WorkflowHistory.created_at), col(WorkflowHistory.id))
-                    .offset((page - 1) * size)
-                    .limit(size)
-                )
-            ), total
+            order = (col(WorkflowHistory.created_at), col(WorkflowHistory.id))
+            if newest_first:
+                order = tuple(column.desc() for column in order)
+            return list(session.exec(query.order_by(*order).offset((page - 1) * size).limit(size))), total
 
     def _event(self, session: Session, run: WorkflowRun, kind: str, detail: str) -> list[UUID]:
         now = datetime.now(UTC)
@@ -180,8 +231,9 @@ class WorkflowRunRepository:
         user_id: UUID,
         membership_id: UUID,
         runtime: str,
+        rerun_of_run_id: UUID | None = None,
     ) -> tuple[WorkflowRun, list[UUID]]:
-        request_hash = digest({**payload.model_dump(mode="json"), "user_id": str(user_id)})
+        request_hash = start_hash(payload, user_id, rerun_of_run_id)
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             # Serialize starts across this Agent's definitions, including its first run.
             agent = session.exec(
@@ -209,6 +261,13 @@ class WorkflowRunRepository:
                 if existing.request_hash != request_hash:
                     raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
                 return existing, []
+            if rerun_of_run_id:
+                # Retention may have removed the source's inputs since the caller read them.
+                source = session.exec(
+                    select(WorkflowRun).where(col(WorkflowRun.id) == rerun_of_run_id).with_for_update(of=WorkflowRun)
+                ).one_or_none()
+                if source is None or source.content_expired:
+                    raise WorkflowConflict("The source run's inputs are no longer available")
             version = session.get(WorkflowVersion, payload.version_id)
             if workflow.archived_at or version is None or version.workflow_id != workflow_id:
                 raise WorkflowConflict("The saved version is unavailable or the workflow is archived")
@@ -221,6 +280,7 @@ class WorkflowRunRepository:
                 request_hash=request_hash,
                 inputs=payload.model_dump(mode="json")["inputs"],
                 runtime=runtime,
+                rerun_of_run_id=rerun_of_run_id,
             )
             file_inputs = [value for value in run.inputs.values() if isinstance(value, dict)]
             if len(file_inputs) > artifact_config.MAX_FILES_PER_ATTEMPT:
@@ -241,7 +301,16 @@ class WorkflowRunRepository:
                 raise WorkflowConflict("Workflow file inputs exceed the file-reference context limit")
             session.add(run)
             session.flush()
-            delivery_ids = self._event(session, run, "STARTED", f"Run started using version {version.number}")
+            delivery_ids = (
+                self._event(
+                    session,
+                    run,
+                    "RERUN_STARTED",
+                    f"Re-run of run {str(rerun_of_run_id)[:8]} using version {version.number}",
+                )
+                if rerun_of_run_id
+                else self._event(session, run, "STARTED", f"Run started using version {version.number}")
+            )
             session.commit()
             return run, delivery_ids
 
@@ -408,6 +477,7 @@ class WorkflowRunRepository:
             session.add(attempt)
             run.next_step += 1
             run.revision += 1
+            run.reason = None
             run.state = "SUCCEEDED" if run.next_step == len(version.snapshot["steps"]) else "QUEUED"
             if run.state == "SUCCEEDED":
                 self._settle(session, run)
@@ -422,7 +492,10 @@ class WorkflowRunRepository:
             run.revision += 1
             attempt.state = "STOPPED"
             session.add(attempt)
-            run.state, run.reason = "BLOCKED", failure.reason
+            run.state = "BLOCKED" if failure.needs_attention or failure.retryable else "FAILED"
+            run.reason = failure.reason
+            if run.state == "FAILED":
+                self._settle(session, run)
             delivery_ids = self._event(
                 session, run, "NEEDS_ATTENTION" if failure.needs_attention else "ATTEMPT_FAILED", failure.reason
             )
@@ -466,7 +539,7 @@ class WorkflowRunRepository:
             return run, attempt
 
     def advance(
-        self, run_id: UUID, *, stopped: bool = False, lost: bool = False
+        self, run_id: UUID, *, stopped: bool = False, lost: bool = False, cause: str | None = None
     ) -> tuple[WorkflowAttempt | None, list[UUID]]:
         """Serialize all progression. Recovery never replays completed checkpoints."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -503,10 +576,13 @@ class WorkflowRunRepository:
                 if run.state == "CANCELLING":
                     run.state, run.reason = "CANCELLED", "Cancelled; completed step summaries are preserved"
                     self._settle(session, run)
-                elif expired and authorized and run.state != "PAUSED":
+                elif expired and attempt is not None and authorized and run.state != "PAUSED":
                     run.state, run.reason = (
                         "BLOCKED",
-                        "Attempt outcome is uncertain; inspect external effects before starting another run",
+                        (
+                            f"{_timeout_cause(attempt.dispatched_at is not None, None)}; "
+                            "outcome is uncertain; inspect external effects before starting another run"
+                        ),
                     )
                 run.revision += 1
                 delivery_ids = self._event(session, run, "FENCED", run.reason or "Attempt stopped")
@@ -515,7 +591,7 @@ class WorkflowRunRepository:
             if run.state != "QUEUED":
                 return (attempt if attempt and attempt.state == "REASONING" else None), []
             run.generation += 1
-            run.state, run.reason = "RUNNING", None
+            run.state = "RUNNING"
             run.revision += 1
             attempt_id = uuid4()
             attempt = WorkflowAttempt(

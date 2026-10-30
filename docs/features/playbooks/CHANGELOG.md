@@ -32,6 +32,14 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 
 ## Changes
 
+### 2026-10-21 — review fixes after merge
+
+- Fixed: runs interrupted by Dramatiq's time limit or a worker shutdown (both `BaseException` in Dramatiq 2.2) stayed `RUNNING` and blocked the Agent's next run. They now fail with `interrupted`; the worker claims only `QUEUED` runs; runs `RUNNING` past 30 minutes or `QUEUED` past an hour are failed as `interrupted` when the Agent's runs are listed or started, or when a redelivered message finds them.
+- Fixed: a failed notes step recorded the token totals from the moment of the first failure, missing calls still in flight; it now records them after the pool finishes.
+- Fixed: a new playbook Skill was saved before its `SKILL.md` was rendered and validated, so a failed write left an empty Skill; the Skill and its draft are now saved together after validation.
+- Fixed: a backslash in the playbook description broke the frontmatter's double-quoted YAML; the next-draft picker offered playbooks that still had a draft. Run lists now report `skill_has_draft`.
+- Follow-up: a separate worker or concurrency cap for extractions, which share the event-delivery worker's threads; a lock for concurrent conventions merges; flagging truncated notes answers.
+
 ### 2026-10-19 — staging integration
 
 - Found: staging moved past the branch's merge revision `82d7f9074830`, so merging the PR would have left two Alembic heads (`82d7f9074830` and staging's `a78bcde4b918`).

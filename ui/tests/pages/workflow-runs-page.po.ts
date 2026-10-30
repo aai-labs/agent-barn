@@ -41,6 +41,17 @@ export class WorkflowRunsPage {
   async uploadFile(label: string, bytes: Buffer) {
     await this.page.getByLabel(`Upload file for ${label}`).setInputFiles({ name: "uploaded.csv", mimeType: "text/csv", buffer: bytes });
   }
+  async runAgain() {
+    await this.page
+      .getByRole("button", { name: "Run again", exact: true })
+      .click();
+  }
+  async confirmRunAgain() {
+    await this.page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Run again", exact: true })
+      .click();
+  }
   async start() {
     await this.page.getByRole("button", { name: /^Start run/ }).click();
   }

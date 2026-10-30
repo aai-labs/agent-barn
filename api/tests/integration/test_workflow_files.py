@@ -88,6 +88,32 @@ def test_exact_inputs_and_checkpoint_files_are_pinned_and_exposed_separately(sto
         assert context.client.delete(path, headers=auth(context)).status_code == 204
 
 
+def test_rerun_repins_original_file_input(storage):
+    with given([set_env_variable(storage), *_GIVEN]) as context:
+        source = publish(context)
+        response, _, _ = start(context, file_workflow(context), inputs={"period": file_value(source)})
+        repository, current, token = attempt(context, response.json()["id"])
+        repository.complete(current.id, token, result())
+        second, _ = repository.advance(current.run_id)
+        repository.complete(second.id, repository.token(second.id), result())
+        response = context.client.post(
+            base(context) + f"/workflow-runs/{current.run_id}/re-run",
+            headers=auth(context),
+            json={"client_request_id": str(uuid4())},
+        )
+        assert response.status_code == 202, response.text
+        assert response.json()["inputs"]["period"] == {
+            **file_value(source),
+            "filename": source["filename"],
+            "size": source["size"],
+        }
+        with Session(context.postgres_delegate.engine) as session:
+            refs = session.exec(
+                select(ArtifactReference).where(ArtifactReference.owner_id == UUID(response.json()["id"]))
+            ).all()
+            assert len(refs) == 1 and refs[0].released_at is None
+
+
 @pytest.mark.parametrize("invalid", ["checksum", "missing", "uploading", "other_agent"])
 def test_invalid_file_input_rolls_back_run_and_all_pins(storage, invalid):
     from api.domains.artifacts.models import Artifact

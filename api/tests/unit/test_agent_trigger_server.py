@@ -35,6 +35,26 @@ def test_explicit_failure_survives_surrounding_braces(trigger_server, reply) -> 
     assert summary.startswith("CRM")
 
 
+def test_extra_quote_before_criteria_key_preserves_failure(trigger_server) -> None:
+    met, summary = trigger_server._parse_step_reply(r'{"summary":"## Problem\n\nNo file", " "criteria_met": false}')
+    assert met is False
+    assert summary == "## Problem\n\nNo file"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"summary": "Completed", "criteria_met": false',
+        '{"summary": "Completed", "criteria_met": "false"}',
+        '{"summary": "Completed"}',
+        '{"summary": "", "criteria_met": true}',
+    ],
+)
+def test_invalid_result_envelopes_need_attention(trigger_server, reply) -> None:
+    with pytest.raises(trigger_server.InvalidWorkflowResult, match="workflow result"):
+        trigger_server._parse_step_reply(reply)
+
+
 def test_hermes_stop_uses_the_original_session_header(monkeypatch, trigger_server) -> None:
     requests = []
 
@@ -269,10 +289,40 @@ def test_plain_prose_still_counts_as_the_step_summary(monkeypatch, trigger_serve
     assert reports == [("result", {"summary": "Found 3 leads in HubSpot.", "criteria_met": True})]
 
 
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_malformed_result_is_corrected_without_repeating_work(monkeypatch, trigger_server, runtime) -> None:
+    trigger_server.RUNTIME_KIND = runtime
+    reports = []
+    prompts = []
+    replies = iter(['{"summary": "Done", "criteria_met": false', '{"summary": "Not done", "criteria_met": false}'])
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            return {"session_id": "workflow-a", "prompt": "Do the step"}
+        reports.append((url.rsplit("/", 1)[1], body))
+
+    def run(*args):
+        prompts.append(args[-1])
+        return next(replies)
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_hermes_step", run)
+    monkeypatch.setattr(trigger_server, "_openclaw_step", run)
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert len(prompts) == 2 and "Do not use tools or repeat any work" in prompts[1]
+    assert reports == [("failure", {"reason": "Not done", "retryable": False})]
+
+
+def test_uncorrectable_result_fails_without_another_attempt(monkeypatch, trigger_server) -> None:
+    reports = _step_reports(monkeypatch, trigger_server, reply='{"summary": "Done", "criteria_met": false')
+    assert reports == [("failure", {"reason": "The Agent returned a malformed workflow result", "retryable": False})]
+
+
 def test_unmet_criteria_are_reported_as_a_failure(monkeypatch, trigger_server) -> None:
     reply = '{"summary": "HubSpot is not connected", "criteria_met": false}'
     reports = _step_reports(monkeypatch, trigger_server, reply=reply)
-    assert reports == [("failure", {"reason": "HubSpot is not connected"})]
+    assert reports == [("failure", {"reason": "HubSpot is not connected", "retryable": False})]
 
 
 def test_an_approval_request_is_reported_as_needing_attention(monkeypatch, trigger_server) -> None:

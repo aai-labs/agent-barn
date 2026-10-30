@@ -117,7 +117,7 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 3. **Capabilities.** Declare only what it implements:
    - `location_picker` needs `search_locations`, `resolve_location` and a `location_noun`;
    - `admin_approval` needs `approval_url` and `is_approval_callback`;
-   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `delete_item_with`, `changes`, `list_files`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, except `delete_item_with`, which acts with a person's own sign-in token (disconnect uses it after Agent Barn's access is revoked). `list_files` returns every file below a folder, with its path, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
+   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `delete_item_with`, `changes`, `list_files`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, except `delete_item_with`, which acts with a person's own sign-in token (disconnect uses it after Agent Barn's access is revoked). `list_files` returns every file below a folder, with its path, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, `RemoteItemLocked` (an item open for editing elsewhere), or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
 
    The registry refuses a plugin that declares a capability without its methods.
 4. **Guards.** A check owned by another domain is declared as a `SyncLocationGuard` member and bound in `SyncProviderService._guard`. The plugin never imports that domain.
@@ -173,7 +173,7 @@ Paths are relative to the runtime's root: `/opt/data` for Hermes, whose `workspa
 Every Hermes and OpenClaw ConfigMap carries `file-sync.py` and `file-sync-rules.json`, which is `rules_manifest` for that runtime. After the Template files and skills are written, `start.sh` runs the helper once, bounded at 60 s and never failing the start, then keeps it running every 15 s while the runtime starts.
 - **Each round:** it scans the synced paths, reports them, uploads what the server asks for, and applies its download and re-upload jobs.
 - **Files being written:** in the background loop, a file changed within the last 5 s keeps its last reported version, or is left out and the report marked incomplete. The run before start skips this wait, because the runtime is not yet writing, so the files `start.sh` has just written are offered at once.
-- **When it stops:** a refused key (401) stops it. An Agent without an active folder gets 409 and keeps asking, so sync starts once a connection is made.
+- **When it stops:** a refused key (401) stops it. An Agent without an active folder gets 409 and keeps asking, so sync starts once a connection is made. An Agent whose File Sync switch is off gets 409 on every round, so its Logs show `[file-sync] ingest answered 409` every 15 s until the switch is turned on.
 - **Slow or failed answers:** it waits up to 120 s for Ingest. A confirmation or job that times out or is refused is logged and retried next round, and the rest of the round still runs.
 - **No provider credentials:** the pod only ever holds per-file upload and download links.
 
@@ -182,6 +182,7 @@ Every Hermes and OpenClaw ConfigMap carries `file-sync.py` and `file-sync-rules.
 The Sync Engine (`api/sync_engine_main.py`, `make dev-sync-engine`, chart value `syncEngine`) runs one pass every 30 s. A pass handles each active connection that has a root folder, whose provider declares `file_sync`, and that is not waiting out throttling.
 - **Locking:** it holds that connection's advisory lock, and skips a connection another copy holds.
 - **Throttling:** when the provider throttles (429, or 503 Service Unavailable), the connection waits until now plus the provider's `Retry-After` (`sync_retry_at`), or 60 s when none is given. Other connections go on.
+- **Locked items:** when the provider refuses a change because an item is open for editing (`RemoteItemLocked`; OneDrive's 423, for example Word still saving a new file), the pass stops with one INFO line and the next pass, 30 s later, tries again from the same point. The connection is not postponed and the status doesn't change.
 - **Failures:** any other failure is logged, and the other connections still sync.
 - **Heartbeat:** the liveness heartbeat is refreshed after each page of changes, each connection and each completed pass, so a long first sync isn't mistaken for a hung engine. The probe allows 600 s (`syncEngine.heartbeatMaxAgeSeconds`).
 
@@ -189,7 +190,7 @@ Its reads and writes are background work under the [RBAC brief](../rbac/IMPLEMEN
 
 ### Agent Folders
 
-Every live Agent of the Organization gets a folder directly under "Agent Barn", recorded in `sync_agent_folder`.
+Every live Agent of the Organization whose [File Sync switch](#turning-sync-off) is on gets a folder directly under "Agent Barn", recorded in `sync_agent_folder`.
 - **New Agents:** the row is reserved first, oldest Agent first, and the database's unique name index decides ties. The folder is then created at the provider. A failed create is finished on the next pass.
 - **Renamed Agents:** their folder is renamed.
 - **Retired (deleted) Agents:** their folder is marked `retired` and deleted at the provider (to its recycle bin), then its row is removed. Its `sync_file` rows go with it, and `sync_activity` keeps its history with `folder_id` cleared. Retiring has no undo in Agent Barn, so the provider's recycle bin is the only way back.
@@ -198,7 +199,8 @@ Every live Agent of the Organization gets a folder directly under "Agent Barn", 
   - **Other failures:** any other provider failure is logged, and the next pass tries again. Other Agents' folders are not held up.
   - **The change feed** later reports the deletion, which matches no row, so nothing is rebuilt.
 - **Stopped Agents** (Stop, not Retire) keep their folder `active` and its files. Their jobs wait for the next start.
-- **Disabled folders** are left alone. When no folder needs changing, this part of the pass makes no provider call.
+- **The File Sync switch:** an Agent whose switch is off gets no folder. Each pass also brings the folder in line with the switch, for the cases the switch's own request could not reach (the folder didn't exist yet when it was changed): an `active` folder whose switch is off becomes `disabled`, and a `disabled` folder whose switch is on becomes `active` with a re-check requested.
+- **Disabled folders** are otherwise left alone: not renamed, and their files not synced. When no folder needs changing, this part of the pass makes no provider call.
 
 Folder names follow the Agent's name:
 - `: " * < > ? | \ /` and control characters become `-`;
@@ -215,9 +217,10 @@ Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`
 After the folders, each pass reads the provider's changes under "Agent Barn" since the connection's `sync_cursor`. That is one provider call per page, and normally one per pass.
 - **Starting point:** a connection's first pass only records a cursor starting now, so files already there are not treated as edits.
 - **Saving progress:** the cursor is saved after each page. A page interrupted by throttling or a failure is read again on the next pass; handling the same change twice does nothing more.
+- **Sync turned back on:** a folder with `resync_requested_at` set ([Turning sync off](#turning-sync-off)) makes the pass re-list everything, exactly as for an expired cursor below, instead of reading the feed. Changes made at the provider while sync was off were skipped by earlier passes, so this is how they are found: edits become downloads or undos, new files are parked, deleted files are restored, a deleted folder is rebuilt. Afterwards each request is cleared only if it still holds the value the pass read, so turning sync on again during the re-list asks for another one. Several turn-ons before a pass make one re-list.
 - **Expired cursor:** when the provider says the cursor is no longer valid (`RemoteResyncRequired`), the pass lists everything under "Agent Barn" from the start and handles each item as a change. Matching content versions mean no edit is invented. Afterwards:
   - an active Agent folder that was not listed is rebuilt;
-  - a synced file not listed, in a folder that was, is restored from the Agent;
+  - a synced file not listed, in a folder that was, is restored from the Agent, unless the pod uploaded or confirmed it after the listing began (the pod keeps syncing while the engine lists, so such a file is simply newer than the listing);
   - the cursor from the end of the listing is saved, but only then, so an interrupted listing starts again.
 - **Stopped Agents:** their jobs wait in `sync_file` until the pod asks for them.
 
@@ -226,7 +229,7 @@ A changed item is matched to its Agent Folder by its first path segment, and to 
 - **Inactive folders:** files in a folder that is not active are ignored.
 
 Files a person adds, removes or moves:
-- **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension.
+- **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension. A file already gone by the time it is moved is left alone, and nothing is recorded.
 - **A new file at a synced path,** such as one deleted and added again, is taken as an edit of that file, unless the Agent's own upload of that path is under way.
 - **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared). `restored` is recorded when the Agent's copy is back. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
 - **A synced file renamed or moved within its folder,** including a rename that changes only the case: it is moved back to its path, and `renamed_back` is recorded. Whether an edit to it is applied or undone follows the name on record, never the new name. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`. Folders missing on the way back are created again.
@@ -254,9 +257,60 @@ The pod reports its full file list, and Ingest answers with upload links. The [I
 
 The helper never deletes a file on the volume.
 
+### Turning sync off
+
+Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It can be set when the Agent is created ([Agents](../agents.md#create)): the hire form offers a "Sync files with {provider}" toggle, on by default and shown only while the Organization has an active provider that declares `file_sync`; turning it off sends `file_sync_enabled: false`, and Quick start and the API leave it on. It can be changed at any time with `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}`:
+- **Permission:** `agent.update`. An invisible, other-Organization or deleted Agent is 404; a visible one without the permission is 403; a read-only API key is refused.
+- **Answer:** 200 `{agent_id, enabled}`. Setting the value it already has changes nothing and records nothing.
+- **In the same transaction:**
+  - the Agent's folder on the Organization's active connection, if there is one, becomes `disabled` (off), or `active` with `resync_requested_at` set (on);
+  - `agent.file_sync.disabled` or `agent.file_sync.enabled` is recorded for the security audit ([Domain Events](../domain-events.md)).
+- **While the switch is off:** the pod is refused (409) on every route, even before the folder is `disabled` and even when there is no folder. An Agent without a folder doesn't get one, and the Sync Engine marks a folder it still finds `active` as `disabled` on its next pass ([Agent Folders](#agent-folders)).
+- **While the folder is `disabled`:** the pod is refused (409), the Sync Engine leaves the folder and its files alone, and the folder and everything in it stay at the provider. The folder's name stays taken.
+- **A restore** of an Agent Restore Point doesn't change the switch.
+
+### Status
+
+`GET /organizations/{organization_id}/agents/{agent_id}/file-sync` tells a person how an Agent's File Sync stands.
+- **Permission:** `activity.read`. An invisible, other-Organization or deleted Agent is 404; a visible one without the permission is 403. A read-only API key may read it.
+- **Answer:** `{enabled, state, provider {key, display_name}, folder_url, last_contact_at, retry_at}`. `enabled` is the Agent's switch in every state. `provider` and `folder_url` are null while not connected; `folder_url` is null until the folder exists at the provider. `last_contact_at` is the last time the Agent's pod got through to the [Ingest file sync routes](../activity-and-ingest.md). `retry_at` is set only while throttled.
+
+The state is the first of these that holds:
+
+| State | When |
+|---|---|
+| `not_connected` | The Organization has no active connection, or its provider is not registered on this server or doesn't declare `file_sync`. A pending connection counts as not connected. |
+| `turned_off` | The Agent's switch is off. |
+| `setting_up` | The engine hasn't made the folder yet, hasn't created it at the provider yet, or hasn't yet resumed it after the switch was turned on. |
+| `throttled` | The provider asked Agent Barn to wait; the Sync Engine resumes this connection at `retry_at`. |
+| `waiting_for_restart` | The pod has never got through. A pod started before AF-384 has no helper, so this lasts until the Agent's next restart or managed update; a pod with the helper gets through within one round (15 s). |
+| `not_syncing` | The Agent is running, or in error, and its pod last got through more than 10 minutes ago. |
+| `synced` | Otherwise. A stopped Agent whose pod has got through before reads as synced. |
+
+The 10 minutes outlast an Agent's start and a managed update's readiness wait (600 s, [Agents](../agents.md)), so a restart alone doesn't read as an error. Nothing about provider failures is stored, so the status can't report them; they are in the Sync Engine's log.
+
+### Agent page
+
+An Agent's **File sync** tab (`?tab=file-sync`, in the panel's Work group) shows [the status](#status) to anyone with `activity.read` on the Agent; without it the tab isn't offered (`ui/src/features/file-sync/`).
+- **The card** names the state in plain words, with the provider's name from the status:
+  - "Synced", with the last check time; for a stopped Agent, also that edits made at the provider are applied when it starts;
+  - "Starts syncing after the next restart";
+  - "Turned off", and that the folder at the provider is kept;
+  - "Setting up the folder in {provider}…";
+  - "{provider} asked Agent Barn to slow down", with when edits are picked up again;
+  - "This agent hasn't checked in with sync since {time}", with what to try;
+  - "Not connected": Owners and Admins get a link to Organization settings → Sync, and everyone else is told an Owner or Admin can connect one.
+- **Open in {provider}** opens the folder in a new tab, whenever the folder exists.
+- **The switch,** a "Sync this agent's files" toggle on the right of the card, shows the switch's position in every state, including while not connected. It appears only with `agent.update`, and calls [the switch's request](#turning-sync-off) at once, then reads the status again.
+- **Changes that didn't sync:** below the card, [the history](#activity) in plain sentences, newest first, each with its time, 20 at a time with Load more: every change that didn't go through as made (undone, restored, moved back, moved to `_Not synced/`, folder put back, the Agent's version kept, skipped). One sentence per kind, naming the path and the provider; a folder entry names the folder instead. With no entries it says "Every change synced as made." Changes that did sync, a person's applied edit or the Agent's own change or delete, are not listed.
+- **Refreshing:** the status is read again every 30 s while the tab is open; the history is read when the tab opens and after the switch changes. A failed read of either is shown in place with Retry, and the other part still shows.
+- **Caching:** the query is keyed by Organization and Agent id, so switching Organization never shows another one's status.
+
 ### Activity
 
-Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.
+Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever.
+
+`GET /organizations/{organization_id}/agents/{agent_id}/file-sync/activity?page&page_size` lists one Agent's rows, newest first (ties by id), with `page`, `page_size`, `total` and `items` of `{id, kind, path, occurred_at}`. `page_size` is 1 to 100, 20 by default. It needs `activity.read`, with the same 404 and 403 as [the status](#status). Rows from before a disconnect are included. `deleted_by_agent` rows are left out of the list and its `total`, because the Agent's delete synced; they stay recorded. `detail` is internal (a content hash or provider version that makes a skip recorded once) and is never returned; `path` is null for `folder_restored`.
 
 | Kind | Meaning |
 |---|---|
@@ -285,6 +339,7 @@ Everything File Sync does that a person should be able to see is stored in `sync
 - **Conflicts keep the Agent's version.** The person's edit survives only in the provider's version history.
 - **Running Agents** start syncing after their next restart or managed update.
 - **Pods ask Ingest every 15 s** even when their Organization has no connection, so that sync starts as soon as one is made.
+- **Turning sync on re-lists the whole connection,** every Agent's folder, not only the one turned on: one provider call per page of the whole "Agent Barn" folder, and one database read per item. Nothing limits how often a user with `agent.update` can turn sync off and on; each turn-on that a pass sees costs one re-list, and frequent toggling across many Agents could lead the provider to throttle the Organization's connection.
 
 ## OneDrive provider
 
@@ -348,7 +403,7 @@ When either setting is blank, OneDrive is listed as "OneDrive is not configured 
 | Folder location for other domains | `../../../api/domains/sync_provider/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
 | UI | `../../../ui/src/features/sync-provider/`, registered as `sync` in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
-| Agent file sync: rules, models, engine pass, Ingest service and routes, folder removal on disconnect | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`, `service.py`, `routes.py`); Ingest routes registered in `../../../api/ingest_app.py` |
+| Agent file sync: rules, models, engine pass, Ingest service and routes, folder removal on disconnect, the per-Agent switch | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`; `ingest_service.py` and `ingest_routes.py` for the pod, registered in `../../../api/ingest_app.py`; `service.py` and `routes.py` for folder removal and the switch, registered in `../../../api/api_app.py`) |
 | Pod helper and its start | `../../../api/domains/agents/scripts/file-sync.py`, shipped by `../../../api/domains/agents/builders/hermes.py` and `openclaw.py`, started by both runtimes' `start.sh` |
 | Sync Engine process and deployment | `../../../api/sync_engine_main.py`, `../../../helm/agentbarn-api/templates/sync-engine-deployment.yaml` |
 | Microsoft file calls and app-only tokens | `../../../api/domains/agents/microsoft_graph_files.py`, `MicrosoftAppTokens` in `microsoft_identity.py` |

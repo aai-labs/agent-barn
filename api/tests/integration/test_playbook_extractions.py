@@ -6,13 +6,18 @@ needs the Agent Permission ``activity.read`` and the Organization Permission
 """
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
+import pytest
+from dramatiq.middleware.time_limit import TimeLimitExceeded
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_length, is_, none, not_none
 from sqlmodel import Session, select
 
 from api.domains.events.models import OutboxMessage
 from api.domains.playbooks.models import PlaybookExtraction, PlaybookExtractionStatus
+from api.domains.playbooks.pipeline import PlaybookPipeline
+from api.domains.playbooks.processor import PlaybookExtractionProcessor
 from api.domains.rbac.catalog import AGENT_OWNER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
 from api.tests.core.givenpy import given, then, when
@@ -401,17 +406,89 @@ def test_the_worker_does_not_take_over_a_run_another_worker_is_processing():
             assert_that(processed.finished_at, none())
 
 
-def test_the_worker_reclaims_a_run_abandoned_by_a_dead_worker():
+def test_a_redelivered_message_fails_a_run_abandoned_by_a_dead_worker_instead_of_rerunning_it():
+    started = datetime.now(UTC) - timedelta(hours=1)
     with given(
         playbooks_api_setup(
             there_is_an_agent(),
-            there_is_a_playbook_extraction(
-                status=PlaybookExtractionStatus.RUNNING, started_at=datetime.now(UTC) - timedelta(hours=1)
-            ),
+            there_is_a_playbook_extraction(status=PlaybookExtractionStatus.RUNNING, started_at=started),
         )
     ) as context:
         with when("a redelivered message arrives an hour after the run started"):
             processed = process_extraction(context)
 
-        with then("the run is processed again and finishes"):
+        with then("the run is failed as interrupted, and not started again so nothing is billed twice"):
+            assert_that(
+                (processed.status, processed.error_code), equal_to((PlaybookExtractionStatus.FAILED, "interrupted"))
+            )
+            assert_that(processed.started_at, equal_to(started))
             assert_that(processed.finished_at, not_none())
+
+
+def test_a_run_interrupted_by_the_time_limit_is_failed_and_the_interruption_reaches_the_worker():
+    with given(playbooks_api_setup(there_is_an_agent(), there_is_a_playbook_extraction())) as context:
+        context.injector.get(PlaybookPipeline).run = Mock(side_effect=TimeLimitExceeded())
+        with when("Dramatiq's time limit interrupts the run"):
+            with pytest.raises(TimeLimitExceeded):
+                context.injector.get(PlaybookExtractionProcessor).process(context.extraction.id)
+
+        with then("the run is failed as interrupted instead of staying RUNNING"):
+            run = _row(context, context.extraction.id)
+            assert_that((run.status, run.error_code), equal_to((PlaybookExtractionStatus.FAILED, "interrupted")))
+
+
+@pytest.mark.parametrize(
+    "run_status,age,stamp",
+    [
+        (PlaybookExtractionStatus.RUNNING, timedelta(minutes=45), "started_at"),
+        (PlaybookExtractionStatus.QUEUED, timedelta(hours=2), "created_at"),
+    ],
+)
+def test_listing_an_agents_runs_fails_runs_no_worker_will_finish(run_status, age, stamp):
+    with given(
+        playbooks_api_setup(
+            there_is_an_agent(),
+            there_is_a_playbook_extraction(status=run_status, **{stamp: datetime.now(UTC) - age}),
+        )
+    ) as context:
+        with when("the Owner lists the Agent's runs"):
+            response = context.client.get(_runs(context), headers=_auth(context))
+
+        with then("a run past the time limit, or queued far longer than normal, is failed as interrupted"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["items"][0], has_entries(status="FAILED", error_code="interrupted"))
+            assert_that(_row(context, context.extraction.id).finished_at, not_none())
+
+
+def test_listing_leaves_runs_a_live_worker_may_still_finish():
+    now = datetime.now(UTC)
+    with given(
+        playbooks_api_setup(
+            there_is_an_agent(),
+            there_is_a_playbook_extraction(
+                status=PlaybookExtractionStatus.RUNNING, started_at=now - timedelta(minutes=20)
+            ),
+        )
+    ) as context:
+        with when("the Owner lists the Agent's runs while a run is 20 minutes in"):
+            response = context.client.get(_runs(context), headers=_auth(context))
+
+        with then("the run is still running"):
+            assert_that(response.json()["items"][0], has_entries(status="RUNNING", error_code=None))
+
+
+def test_an_abandoned_run_does_not_block_the_next_one():
+    with given(
+        playbooks_api_setup(
+            there_is_an_agent(),
+            there_is_a_playbook_extraction(
+                status=PlaybookExtractionStatus.RUNNING, started_at=datetime.now(UTC) - timedelta(hours=2)
+            ),
+        )
+    ) as context:
+        with when("the Owner starts a new run while an abandoned one is still marked RUNNING"):
+            response = _start(context, skill_name="Fresh playbook")
+
+        with then("the abandoned run is failed and the new one is accepted"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(_row(context, context.extraction.id).error_code, equal_to("interrupted"))

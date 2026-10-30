@@ -3,7 +3,7 @@
 import { WorkflowFiles } from "./workflow-files";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
-import { ChevronRight, FileCheck2, Files, LayoutDashboard } from "lucide-react";
+import { ChevronRight, Clock3, FileCheck2, Files, LayoutDashboard } from "lucide-react";
 import { useQueryState } from "nuqs";
 import { workflowPageParser } from "../url-state";
 import { AppErrorState } from "@/components/app-error-state";
@@ -17,6 +17,7 @@ import type { WorkflowFile, WorkflowRun } from "../run-schemas";
 import { WorkflowPager } from "./workflow-pager";
 import { WorkflowMarkdown } from "./workflow-markdown";
 import { WorkflowRunTiming, stepTiming } from "./workflow-run-timing";
+import { AttemptStatus, WorkflowRunActivity } from "./workflow-run-activity";
 import {
   RunCard,
   RunPageHeader,
@@ -67,6 +68,7 @@ export function WorkflowRuns({
             <span className="block text-sm text-[var(--ink-3)]">
               Version {run.versionNumber} ·{" "}
               {new Date(run.createdAt).toLocaleString()}
+              {run.rerunOfRunId && " · Re-run"}
             </span>
           </span>
           <span className="flex items-center gap-3 text-sm text-[var(--ink-3)]">
@@ -94,12 +96,17 @@ export function WorkflowRunDetail({
   agentHref,
   canManageFiles,
   runId,
+  canRunAgain,
+  onOpenRun,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
   canManageFiles: boolean;
   runId: string;
+  /** Whether this actor may start runs of the workflow; the server decides per run. */
+  canRunAgain: boolean;
+  onOpenRun: (id: string) => void;
 }) {
   const run = useWorkflowRun(agentId, runId);
   if (run.error)
@@ -119,6 +126,8 @@ export function WorkflowRunDetail({
       agentHref={agentHref}
       canManageFiles={canManageFiles}
       run={run.data}
+      canRunAgain={canRunAgain}
+      onOpenRun={onOpenRun}
     />
   );
 }
@@ -126,9 +135,11 @@ export function WorkflowRunDetail({
 function RunSummary({
   run,
   agentName,
+  agentHref,
 }: {
   run: WorkflowRun;
   agentName: string;
+  agentHref: string;
 }) {
   const current = run.steps.find((step) => step.state === "RUNNING");
   const note = (text: string) => (
@@ -188,7 +199,17 @@ function RunSummary({
           run.state === "FAILED" ? "Run failed" : "This run needs attention"
         }
       >
-        {note(run.reason ?? "Completed step summaries are retained.")}
+        <div className="space-y-4">
+          {note(run.reason ?? "Completed step summaries are retained.")}
+          {run.state === "BLOCKED" && (
+            <div className="space-y-2 text-sm">
+              <p className="font-semibold">What to do next</p>
+              <p>Check the Agent’s chat and any connected systems for work the step may have already done. The step will not resume automatically.</p>
+              <p>After checking, cancel this run to close it. If you still need the result, start a new run from the workflow page. Starting again may repeat actions.</p>
+              {!run.allowedActions.includes("cancel") && <p>Ask someone with permission to manage this Agent to cancel or start a run.</p>}
+            </div>
+          )}
+        </div>
       </RunCard>
     );
   return (
@@ -214,7 +235,7 @@ function RunSummary({
             <p className="mt-1 text-sm">{current.name}</p>
           </div>
         )}
-        {run.reason && <p className="text-sm">{run.reason}</p>}
+        <AttemptStatus run={run} agentName={agentName} agentHref={agentHref} />
       </div>
     </RunCard>
   );
@@ -231,6 +252,23 @@ function StepDetail({
   const stopped = ["CANCELLED", "FAILED", "BLOCKED", "PAUSED"].includes(
     run.state,
   );
+  if (step.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state))
+    return (
+      <RunCard embedded label="Step detail">
+        <div className="flex flex-col items-center py-12 text-center">
+          <span className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-[var(--bg-soft)] text-[var(--ink-3)]">
+            <Clock3 aria-hidden="true" size={24} />
+          </span>
+          <p className="text-xs font-semibold uppercase tracking-widest text-[var(--ink-3)]">
+            Step {index + 1} of {run.steps.length}
+          </p>
+          <h4 className="mt-2 text-lg font-semibold">{step.name}</h4>
+          <p className="mt-2 max-w-sm text-sm text-[var(--ink-3)]">
+            Waiting for earlier work to finish. Results and files will appear here when this step runs.
+          </p>
+        </div>
+      </RunCard>
+    );
   return (
     <RunCard embedded label="Step detail">
       <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-[var(--ink-3)]">
@@ -265,17 +303,23 @@ function RunContents({
   agentHref,
   canManageFiles,
   run,
+  canRunAgain,
+  onOpenRun,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
   canManageFiles: boolean;
   run: WorkflowRun;
+  canRunAgain: boolean;
+  onOpenRun: (id: string) => void;
 }) {
   const [selectedView, setSelectedView] = useState("summary");
   const showArtifacts = selectedView === "artifacts";
   const actions = useWorkflowRunActions(agentId);
   const [confirm, setConfirm] = useState(false);
+  const [confirmRerun, setConfirmRerun] = useState(false);
+  const [rerunRequestId] = useState(() => crypto.randomUUID());
   const selectedStep = run.steps.find((step) => step.id === selectedView);
   const started = new Date(run.createdAt).toLocaleString();
   return (
@@ -294,9 +338,36 @@ function RunContents({
                 Cancel run
               </button>
             )}
+            {canRunAgain && run.allowedActions.includes("rerun") && (
+              <button
+                className="af-btn af-btn-primary"
+                onClick={() => setConfirmRerun(true)}
+              >
+                Run again
+              </button>
+            )}
           </>
         }
       />
+      {run.rerunOfRunId && (
+        <p className="-mt-4 mb-6 text-sm text-[var(--ink-3)]">
+          Re-run of{" "}
+          <button
+            type="button"
+            className="underline hover:text-[var(--ink)]"
+            onClick={() => onOpenRun(run.rerunOfRunId!)}
+          >
+            run {run.rerunOfRunId.slice(0, 8)}
+          </button>
+          , with the same version and inputs.
+        </p>
+      )}
+      {actions.rerun.error && (
+        <AppErrorState
+          error={actions.rerun.error}
+          title="This run could not be run again"
+        />
+      )}
       {actions.cancel.error && (
         <AppErrorState
           error={actions.cancel.error}
@@ -345,6 +416,7 @@ function RunContents({
           <StepRail
             steps={run.steps}
             runState={run.state}
+            attempt={run.attempt}
             selectedStepId={selectedStep?.id}
             onSelectStep={setSelectedView}
           />
@@ -417,9 +489,10 @@ function RunContents({
                 {selectedStep ? (
                   <StepDetail run={run} step={selectedStep} />
                 ) : (
-                  <RunSummary run={run} agentName={agent.name} />
+                  <RunSummary run={run} agentName={agent.name} agentHref={agentHref} />
                 )}
               </div>
+              {!(selectedStep?.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state)) && <>
               <WorkflowFiles
                 agentId={agentId}
                 title={selectedStep ? "Step input files" : "Run input files"}
@@ -457,10 +530,38 @@ function RunContents({
                 )
               )}
               <WorkflowRunTiming run={run} />
+              <WorkflowRunActivity agentId={agentId} run={run} />
+              </>}
             </>
           )}
         </section>
       </div>
+      <ConfirmationDialog
+        open={confirmRerun}
+        onOpenChange={setConfirmRerun}
+        title="Run this workflow again?"
+        description={
+          <span className="block">
+            This starts a new run of version {run.versionNumber} with the same
+            inputs as this one. This run and its results stay in the history. Earlier actions may be repeated.
+          </span>
+        }
+        cancelLabel="Not now"
+        confirmLabel="Run again"
+        isPending={actions.rerun.isPending}
+        onConfirm={async () => {
+          try {
+            const started = await actions.rerun.mutateAsync({
+              run,
+              clientRequestId: rerunRequestId,
+            });
+            setConfirmRerun(false);
+            onOpenRun(started.id);
+          } catch {
+            setConfirmRerun(false);
+          }
+        }}
+      />
       <ConfirmationDialog
         open={confirm}
         onOpenChange={setConfirm}

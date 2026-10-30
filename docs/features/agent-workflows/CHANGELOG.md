@@ -14,6 +14,12 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-30 — AF-387 — staging integration
+
+- Re-runs retain the source version and revalidate and pin its file inputs. Uncertain attempts remain blocked rather than replayed; explicit non-retryable failures settle and release pins.
+- Agent result formatting gets one bounded correction turn; local workflow maintenance recovers missed wakeups and expired attempts.
+
+
 ### 2026-10-29 — AF-387 — simplify step authoring
 
 - New steps no longer require separate completion criteria; the editor prompts authors to include success criteria in the step instructions. Existing saved criteria remain visible and are passed to the Agent.
@@ -46,6 +52,11 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 - Changed: deployment initializes private Garage from environment-specific GitHub Secrets before waiting for the release; Kubernetes Secret names are fixed.
 - Follow-up: staging rollout requires CI verification; existing PVCs without their RPC Secret require operator recovery.
+
+### 2026-10-26 — AF-389 — run again from a settled run
+
+- Added: `POST /workflow-runs/{id}/re-run` starts a new run of a settled run's own version and inputs, copied by the server (the body carries only a client request identity). Migration `c7d4e2a91b58` adds nullable `workflow_run.rerun_of_run_id`; the API exposes it and a `rerun` allowed action, and the new run's first history entry is `RERUN_STARTED` ("Re-run of run …"). The run page offers **Run again** with confirmation and a link back to the original. See [Run again](../agent-workflows.md#run-again).
+- Verification: API integration tests cover the copied version and inputs, a newer saved version, rejected inputs, unsettled and retention-expired sources, retries and identity reuse, a stopped Agent, Viewer and tenant concealment; Playwright covers visibility by state, confirmation, request identity and the marked re-run. Downgrade of the migration was not exercised.
 
 ### 2026-10-26 — AF-415 — Artifacts navigation and PR delivery evidence
 

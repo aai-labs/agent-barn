@@ -4,7 +4,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy import Column
 from sqlmodel import Field as SqlField
 
@@ -69,6 +69,9 @@ class SyncAgentFolder(BaseModel, table=True):
     last_contact_at: datetime | None = SqlField(
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
+    resync_requested_at: datetime | None = SqlField(
+        default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
+    )
 
 
 class SyncFile(BaseModel, table=True):
@@ -122,6 +125,48 @@ class SyncActivity(BaseModel, table=True):
     path: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text)
     detail: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text)
     occurred_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
+
+class AgentFileSyncState(StrEnum):
+    NOT_CONNECTED = "not_connected"
+    TURNED_OFF = "turned_off"
+    SETTING_UP = "setting_up"
+    THROTTLED = "throttled"
+    WAITING_FOR_RESTART = "waiting_for_restart"
+    NOT_SYNCING = "not_syncing"
+    SYNCED = "synced"
+
+
+class AgentFileSyncProviderRead(PydanticBaseModel):
+    key: str
+    display_name: str
+
+
+class AgentFileSyncRead(PydanticBaseModel):
+    enabled: bool
+    state: AgentFileSyncState
+    provider: AgentFileSyncProviderRead | None
+    folder_url: str | None
+    last_contact_at: datetime | None
+    retry_at: datetime | None
+
+
+class AgentFileSyncActivityRead(PydanticBaseModel):
+    id: UUID
+    kind: SyncActivityKind
+    path: str | None
+    occurred_at: datetime
+
+
+class AgentFileSyncUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class AgentFileSyncSettingRead(PydanticBaseModel):
+    agent_id: UUID
+    enabled: bool
 
 
 class FileSyncEntryCreate(PydanticBaseModel):

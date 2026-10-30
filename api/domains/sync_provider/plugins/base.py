@@ -151,6 +151,10 @@ class RemoteResyncRequired(SyncProviderError):
     pass
 
 
+class RemoteItemLocked(SyncProviderError):
+    pass
+
+
 class SyncProviderPlugin(ABC):
     """One storage provider an Organization can connect. Talks to the provider only; storage,
     permissions, state and the connection lifecycle belong to the sync provider service."""

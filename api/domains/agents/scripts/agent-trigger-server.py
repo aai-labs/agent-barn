@@ -256,6 +256,10 @@ _STEPS_LOCK = threading.Lock()
 _STEPS: dict[str, dict] = {}
 
 
+class InvalidWorkflowResult(RuntimeError):
+    """The model response cannot be safely admitted as a result."""
+
+
 class NeedsAttention(RuntimeError):
     """The session stopped for something only a person can resolve, such as an approval."""
 
@@ -366,18 +370,29 @@ def _openclaw_step(session_id: str, prompt: str) -> str:
         return str(json.loads(response.read())["choices"][0]["message"]["content"] or "")
 
 
-def _parse_step_reply(text: str) -> tuple[bool, str]:
+def _parse_step_reply(text: str, *, require_envelope: bool = False) -> tuple[bool, str]:
     """The Agent is asked for {"summary", "criteria_met"}; plain prose still counts as the summary."""
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\{", text):
-        try:
-            reply, _ = decoder.raw_decode(text, match.start())
-        except ValueError:
-            continue
-        if isinstance(reply, dict) and isinstance(reply.get("summary"), str) and reply["summary"].strip():
-            return reply.get("criteria_met") is not False, reply["summary"].strip()[:_SUMMARY_LIMIT]
     if not text.strip():
         raise RuntimeError("The Agent returned an empty reply")
+    decoder = json.JSONDecoder()
+    # Repair the specific extra quote observed in a model response.
+    candidate = re.sub(r',\s*"\s*"criteria_met"\s*:', ', "criteria_met":', text)
+    looks_like_envelope = bool(re.search(r'"(?:summary|criteria_met)"\s*:', candidate))
+    for match in re.finditer(r"\{", candidate):
+        try:
+            reply, _ = decoder.raw_decode(candidate, match.start())
+        except ValueError:
+            continue
+        if isinstance(reply, dict) and ("summary" in reply or "criteria_met" in reply):
+            if (
+                isinstance(reply.get("summary"), str)
+                and reply["summary"].strip()
+                and isinstance(reply.get("criteria_met"), bool)
+            ):
+                return reply["criteria_met"], reply["summary"].strip()[:_SUMMARY_LIMIT]
+            raise InvalidWorkflowResult("The Agent returned an invalid workflow result")
+    if looks_like_envelope or require_envelope:
+        raise InvalidWorkflowResult("The Agent returned a malformed workflow result")
     return True, text.strip()[:_SUMMARY_LIMIT]
 
 
@@ -431,11 +446,31 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
             text = _openclaw_step(session_id, prompt)
         else:
             raise RuntimeError("Unsupported Agent runtime")
-        met, summary = _parse_step_reply(text)
+        try:
+            met, summary = _parse_step_reply(text)
+        except InvalidWorkflowResult:
+            # Revalidate admission before another model turn; never repeat the step's work.
+            _post_json(f"{callback_url}/handoff", token, None, method="GET")
+            with _STEPS_LOCK:
+                if _STEPS.get(attempt_id, {}).get("stopped"):
+                    return
+            correction = (
+                "Your previous workflow result was malformed. Do not use tools or repeat any work. "
+                "Correct only the response format, preserving the actual result and whether the criteria were met. "
+                'Reply with ONLY valid JSON: {"summary": string, "criteria_met": boolean}. '
+                "Previous response:\n" + text[:8000]
+            )
+            if RUNTIME_KIND == "hermes":
+                corrected = _hermes_step(attempt_id, session_id, correction)
+            else:
+                corrected = _openclaw_step(session_id, correction)
+            met, summary = _parse_step_reply(corrected, require_envelope=True)
         if met:
             _post_json(f"{callback_url}/result", token, {"summary": summary, "criteria_met": True})
         else:
-            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000]})
+            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000], "retryable": False})
+    except InvalidWorkflowResult as exc:
+        _post_json(f"{callback_url}/failure", token, {"reason": str(exc), "retryable": False})
     except NeedsAttention as exc:
         _report_failure(attempt_id, token, callback_url, str(exc), needs_attention=True)
     except Exception as exc:  # every failure is reported, never swallowed silently

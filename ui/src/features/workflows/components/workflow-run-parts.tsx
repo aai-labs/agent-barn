@@ -156,11 +156,13 @@ export function StepRail({
   runState,
   selectedStepId,
   onSelectStep,
+  attempt,
 }: {
   steps: WorkflowRun["steps"];
   runState: WorkflowRun["state"];
   selectedStepId?: string | null;
   onSelectStep?: (stepId: string) => void;
+  attempt?: WorkflowRun["attempt"];
 }) {
   const stopped = runState === "CANCELLED" || runState === "FAILED";
   return (
@@ -209,7 +211,11 @@ export function StepRail({
                 <p className="text-sm font-semibold">{step.name}</p>
                 <p className="mt-1 text-xs text-[var(--ink-3)]">
                   <span className="sr-only">Step {index + 1}: </span>
-                  {interrupted ? "Needs attention" : stepLabel[step.state]}
+                  {interrupted
+                    ? "Needs attention"
+                    : step.state === "RUNNING" && attempt
+                      ? `${stepLabel[step.state]} · attempt ${attempt.number} of ${attempt.limit}`
+                      : stepLabel[step.state]}
                 </p>
               </div>
             </>

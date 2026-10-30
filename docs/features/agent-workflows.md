@@ -232,7 +232,7 @@ publication, immutable ID/checksum handoff, attachments and retention. The saved
 step `artifact_description` fields guide the requested
 output; text-only results remain supported without storage. Every completed step
 reports its actual result in its summary, bounded to 4,000 characters, including
-facts later steps need. The last step's summary also serves as the final result.
+facts later steps need. Summaries are requested as readable Markdown without expiring artifact download links; users download published files from the attachments. The last step's summary also serves as the final result.
 
 Execution is independent of the authoring setting. An Editor explicitly reviews
 a saved version's typed inputs and starts it. The Agent must be running. A run
@@ -244,7 +244,7 @@ archive, while changed actor/version/inputs return 409. Starts serialize per Age
 Workflow admission does not impose an active-run concurrency cap; multiple runs
 can execute as separate sessions in the owning Agent.
 Declared step capabilities do not gate admission. All subordinate reads use current Agent visibility before
-totals/pagination; start/cancel require `agent.update`, including custom and
+totals/pagination; start/re-run/cancel require `agent.update`, including custom and
 general Agent Access. Read-only keys cannot mutate. Viewers can inspect run
 progress, summaries and history. Run detail defaults to the overall run view,
 labelled Result ready after success and Run overview otherwise. The navigation card
@@ -254,14 +254,23 @@ in the numbered rail replaces the main panel with that step’s persisted Markdo
 result, or its current waiting/in-progress/no-result state. The overall-view
 control stays visible so users can return to the final summary. Selection stays
 within the current run; changing runs resets to the overall view. Results use the
-shared chat Markdown viewer. A compact Time taken card replaces the activity log. Each completed step shows
+shared chat Markdown viewer. A compact Time taken card shows durations. Each completed step shows
 wall-clock time from its first attempt admission to its persisted checkpoint,
 including dispatch waiting and retries. The API exposes nullable `started_at` and
 `completed_at` fields derived from existing attempts/checkpoints; no migration is
 needed. Unfinished steps show their status, and missing timestamps are unavailable
 rather than zero. Total run time spans run creation through settlement and includes
 queueing and retries. Selecting a completed step also shows its duration. The
-history API remains available, but the run screen no longer fetches the event log. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
+run screen also lists the run's history newest first as Activity (one `history?newest_first=true` read,
+refreshed when the run's revision changes), so a failed attempt's
+reason stays visible while the run retries or after it ends; a completed step shows only
+"Step completed" there, since its summary belongs to the step. While a step runs, the
+single-run read includes `attempt` (number, the three-attempt limit, start, deadline and
+`server_time` (the API's clock, which the screen uses for elapsed and remaining time so a
+skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
+not accepted the step after 60 seconds). The
+rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
+shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
 Runs control clears only the selected run and selects the owning workflow’s Runs
 view. Overview, Runs and Version history use `workflowView=overview|runs|history`
 as their source of truth; an absent or invalid view falls back to Overview. Tab
@@ -272,6 +281,36 @@ workflow. The legacy workflow URL redirects preserve these parameters. The focus
 workflow layout stays consistent across its overview, list, history and run detail
 so returning to Runs does not reintroduce the surrounding Agent header.
 
+
+### Run again
+
+`POST /workflow-runs/{id}/re-run` takes only a `client_request_id` (a body with
+anything else is rejected with 422) and returns 202 with a new run. The server
+copies the original run's pinned version and inputs, so a caller cannot change
+either; the run's own version is used even when a newer one has been saved. It
+follows the start path: `agent.update`, a running Agent, a non-archived workflow
+and the same admission, ledger and wakeup. Only a settled run (Completed, Failed
+or Cancelled) can be repeated (409 otherwise), and not one whose inputs retention
+has already removed (409). The original run, its history and its revision are not
+touched.
+
+The new run is a separate run with its own history. `workflow_run.rerun_of_run_id`
+(nullable, self-referencing, `ON DELETE SET NULL`) records the original, exposed as
+`rerun_of_run_id`; its first history entry has kind `RERUN_STARTED` and reads
+"Re-run of run 12345678 using version N", where the id is the original's first
+eight characters. The initiating User is whoever requests the re-run. A request
+identity is unique per definition as for starts, and for a re-run it is bound to the
+original run and the actor rather than to inputs: a retry with the same identity and
+original returns the same run, even after retention has removed the original's inputs;
+reusing it for another run or by another actor returns 409. The server advertises `rerun` in `allowed_actions` for a settled run
+whose inputs remain, while its Agent is running and its workflow is not archived. A
+BLOCKED or PAUSED run is still live and has no re-run; cancel it first.
+
+In the UI, settled runs with `rerun` in `allowed_actions` show **Run again** in the
+header when the overview's Run workflow would also be enabled (execution enabled and
+available, and `agent.update`). It asks for confirmation, keeps one request identity
+across retries from that run page, then opens the new run. A re-run shows "Re-run of
+run …" linking to the original, and the Runs list marks it "Re-run".
 
 The PostgreSQL ledger comprises `workflow_run`, `workflow_attempt`,
 `workflow_checkpoint` and `workflow_history`. Each transition stages a safe
@@ -295,11 +334,11 @@ rejected rather than silently truncated.
 The trigger server starts a new runtime session (`workflow-<attempt id>`): Hermes
 through `/v1/runs` with its event stream, OpenClaw through
 `/v1/chat/completions`. The Agent replies with a JSON summary; plain prose is
-accepted as the summary. Machine routes at `/workflow-runtime/v1/attempts/{id}`
+accepted as the summary. Malformed result envelopes receive one correction turn in the same session, instructing the Agent not to repeat work or use tools. If correction fails, the attempt reports a non-retryable failure rather than recording malformed output as successful prose. Machine routes at `/workflow-runtime/v1/attempts/{id}`
 (`handoff`, `result`, `failure`) are outside the product API and public discovery.
 A derived capability binds one attempt/generation. Handoff and outcome admission
 check current initiator authority, Agent lifecycle, generation, attempt state and
-deadline under the run lock. A reported failure or unmet criteria blocks the run.
+deadline under the run lock. An explicit non-retryable failure fails and settles the run; an approval request or retryable failure blocks it for inspection.
 An attempt exceeding its 15-minute deadline is fenced, a stop is requested and
 the run blocks with an uncertain-outcome reason. No unfinished step is automatically
 replayed: session end, callback loss and stop acknowledgement do not prove absence
@@ -330,9 +369,10 @@ and metadata remain. File retention and purge are independent and follow the
 
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
 `workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
-`POST /workflow-runs/{id}/cancel` with `expected_revision`. Collections retain the
-standard 20/100 pagination bounds. Server-derived `allowed_actions` controls
-cancellation with independent backend authorization. Artifact routes, generic
+`POST /workflow-runs/{id}/cancel` with `expected_revision`, and
+`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)). Collections retain the
+standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`) controls
+those actions with independent backend authorization. Artifact routes, generic
 resume and approvals are not exposed in WF02.
 
 The Workflows UI includes explicit input review, a Runs view, durable step

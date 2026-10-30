@@ -55,8 +55,33 @@ export const WorkflowRunSchema = z.object({
   finalSummary: z.string().nullable().optional(),
   createdAt: z.string(),
   settledAt: z.string().nullable(),
-  allowedActions: z.array(z.literal("cancel")),
+  allowedActions: z.array(z.enum(["cancel", "rerun"])),
+  /** The run this one repeats, when it was started with Run again. */
+  rerunOfRunId: z.uuid().nullable().optional(),
+  attempt: z
+    .object({
+      number: z.number(),
+      limit: z.number(),
+      startedAt: z.string(),
+      expiresAt: z.string(),
+      serverTime: z.string(),
+      agentUnresponsive: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
+export const WorkflowRunHistorySchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.uuid(),
+      createdAt: z.string(),
+      kind: z.string(),
+      detail: z.string(),
+    }),
+  ),
+  total: z.number(),
+});
+export type WorkflowRunHistory = z.infer<typeof WorkflowRunHistorySchema>;
 export const WorkflowRunListSchema = z.object({
   items: z.array(WorkflowRunSchema),
   total: z.number(),

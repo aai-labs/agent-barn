@@ -15,7 +15,10 @@ STEP_INSTRUCTIONS = (
     "your usual approval rules apply. Do not invent facts or claim actions you did not take.\n"
     'When you are done, reply with ONLY a JSON object: {"summary": string, "criteria_met": boolean}. '
     "The summary must contain the actual result and any facts later steps need, in at most 4000 characters, "
-    "following output_description and final_output_description. If the step cannot be completed, set "
+    "following output_description and final_output_description. Format the summary as readable Markdown, "
+    "using short paragraphs, headings or lists where useful. Describe published files by name; do not include "
+    "artifact download URLs or expiring links, since the workflow displays downloadable attachments. "
+    "If the step cannot be completed, set "
     "criteria_met to false and explain why in the summary.\n"
 )
 
