@@ -79,6 +79,7 @@ class PlaybookExtractionService:
         self, agent_id: UUID, data: PlaybookExtractionCreate, context: CurrentUserContext
     ) -> PlaybookExtractionRead:
         agent, _ = self._require_extractor(context, agent_id)
+        self.repository.expire_abandoned(source_agent_id=agent.id)
         if data.skill_id is not None:
             skill_name = self.skills.require_playbook_target(agent.organization_id, data.skill_id).name
         else:
@@ -128,6 +129,8 @@ class PlaybookExtractionService:
         self, agent_id: UUID, pagination: Pagination, context: CurrentUserContext
     ) -> PaginatedItems[PlaybookExtractionRead]:
         agent, scope = self._require_extractor(context, agent_id)
+        # Reconciled on read, like restore points: nothing else revisits abandoned runs.
+        self.repository.expire_abandoned(source_agent_id=agent.id)
         return self.repository.find_for_agent(agent.id, pagination, scope)
 
     def list_for_organization(

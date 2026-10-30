@@ -133,7 +133,7 @@ def main() -> None:
     assert pod["securityContext"]["runAsNonRoot"] is True
     dns_wait = pod["initContainers"][0]
     assert dns_wait["name"] == "wait-for-rpc-dns"
-    assert dns_wait["resources"]["requests"]["memory"] == "48Mi"
+    assert dns_wait["resources"]["requests"]["memory"] == "64Mi"
     assert dns_wait["resources"]["limits"]["memory"] == "64Mi"
     assert "nslookup" in dns_wait["args"][0] and "svc.cluster.local" in dns_wait["args"][0]
     assert dns_wait["securityContext"]["readOnlyRootFilesystem"] is True

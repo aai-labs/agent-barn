@@ -30,6 +30,8 @@ AGENT_MEMORY_ENABLED = "agent.memory.enabled"
 AGENT_MEMORY_DISABLED = "agent.memory.disabled"
 AGENT_MEMORY_GRANT_CREATED = "agent.memory_grant.created"
 AGENT_MEMORY_GRANT_REVOKED = "agent.memory_grant.revoked"
+AGENT_FILE_SYNC_ENABLED = "agent.file_sync.enabled"
+AGENT_FILE_SYNC_DISABLED = "agent.file_sync.disabled"
 PLAYBOOK_EXTRACTION_REQUESTED = "playbook.extraction.requested"
 TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
@@ -291,6 +293,15 @@ class AgentSecretChangedPayload(BaseModel):
 
 
 class AgentMemoryChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class AgentFileSyncChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
@@ -941,6 +952,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (AGENT_MEMORY_DISABLED, AgentMemoryChangedPayload),
         (AGENT_MEMORY_GRANT_CREATED, AgentMemoryGrantPayload),
         (AGENT_MEMORY_GRANT_REVOKED, AgentMemoryGrantPayload),
+        (AGENT_FILE_SYNC_ENABLED, AgentFileSyncChangedPayload),
+        (AGENT_FILE_SYNC_DISABLED, AgentFileSyncChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(

@@ -47,10 +47,19 @@ Inspect paginated `/{agent_id}/workflow-runs` (optionally `workflow_id`), indivi
 `/workflow-runs/{run_id}` and `/history`. Run detail includes each completed
 step's text `summary` and, after success, `final_summary`. Later steps receive
 completed text summaries as context. Cancel with
-`POST /workflow-runs/{run_id}/cancel` and `expected_revision`. Start and cancel
+`POST /workflow-runs/{run_id}/cancel` and `expected_revision`. Start, re-run and cancel
 require current Agent update permission and a full-access key; run/history reads
 currently use Agent read permission. Server `allowed_actions` advertises whether
-the caller can cancel.
+the caller can cancel or re-run.
+
+Repeat a settled run with `POST /workflow-runs/{run_id}/re-run` and a UUID
+`client_request_id` only: the server copies the original run's pinned version and
+inputs (the body accepts nothing else) and returns 202 with a new run whose
+`rerun_of_run_id` is the original and whose history starts with a `RERUN_STARTED`
+entry. It needs the same permission, running Agent and non-archived workflow as a
+start. A run that has not settled, or whose inputs were removed by retention,
+returns 409; retries with the same identity return the same run. The original run
+is unchanged. `allowed_actions` includes `rerun` when it is available.
 
 Cancellation fences new workflow handoffs/results and requests session stop where
 supported. Stop is best effort; cancellation does not prove that all tools have

@@ -61,6 +61,7 @@ export function useHireAgentForm({ onHired, templatePagination }: {
   const [model, setModel] = useState<string | null>(null);
   const { defaultModel } = useModels();
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
+  const [fileSyncEnabled, setFileSyncEnabled] = useState(true);
   // Offered only to Owners and Admins of an Organization the platform lets choose; anyone
   // else hires on the default without being asked.
   const { role } = useActiveOrgRole();
@@ -177,6 +178,7 @@ export function useHireAgentForm({ onHired, templatePagination }: {
         ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
         ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
         ...approval,
+        ...(fileSyncEnabled ? {} : { fileSyncEnabled: false }),
         ...(sizeChoices && agentSizeId ? { agentSizeId } : {}),
       });
       setCreatedAgent({ id: agent.id, name: agent.name });
@@ -224,6 +226,8 @@ export function useHireAgentForm({ onHired, templatePagination }: {
     defaultModel,
     approvalMode,
     setApprovalMode,
+    fileSyncEnabled,
+    setFileSyncEnabled,
     sizeChoices,
     agentSizeId,
     setAgentSizeId,

@@ -175,6 +175,10 @@ FIRECRAWL_API_KEY=
 # Optional: random key protecting the BullMQ admin dashboard. Defaults to '@'.
 # Not needed for production since Firecrawl is on ClusterIP (internal only).
 # FIRECRAWL_BULL_AUTH_KEY=
+# Optional: memory limits for the Firecrawl API and its RabbitMQ queue. Empty keeps
+# the chart defaults (2Gi and 512Mi). Raise them if either container is OOMKilled.
+FIRECRAWL_API_MEMORY_LIMIT=
+FIRECRAWL_RABBITMQ_MEMORY_LIMIT=
 
 # ── Postgres (Firecrawl DB) ──────────────────────────────────────────────────
 POSTGRES_FIRECRAWL_USER=firecrawl

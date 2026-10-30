@@ -1,7 +1,7 @@
 # Sync providers — change log
 
 Status: Active
-Epic: AF-383 — Connect an Organization to OneDrive; AF-384 — Two-way file sync
+Epic: AF-383 — Connect an Organization to OneDrive; AF-384 — Two-way file sync; AF-385 — Per-Agent file sync status and switch
 Related context: [Sync providers](README.md), [ADR: plugin seam](../../adr/2026-10-16-sync-provider-plugin-seam.md), [ADR: Agent file sync](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Integrations](../integrations.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
 
 ## Current state
@@ -79,7 +79,305 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **End-to-end run:** on local k3d against the test tenant instead of staging.
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
+### AF-385 — Per-Agent file sync status and switch
+
+- Delivered:
+  - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`);
+  - `POST …/agents` accepts `file_sync_enabled` and stores it;
+  - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit;
+  - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine;
+  - Ingest refuses an Agent whose switch is off (409), with or without a folder;
+  - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it;
+  - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked;
+  - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled;
+  - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status;
+  - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged;
+  - the Agent page **File sync** tab: the status card, Open in {provider}, the switch, and the history;
+  - the hire form's "Sync files with {provider}" toggle;
+  - an item open for editing at the provider (`RemoteItemLocked`) makes a pass retry quietly instead of failing.
+- In transition: none.
+- Next, in this order, each as its own slice:
+  1. closing this log.
+- Blockers: none.
+
+Acceptance criteria amendments (maintainer, 2026-10-23):
+- **Names:** routes under `/organizations/{organization_id}/agents/{agent_id}/file-sync` and the UI folder `ui/src/features/file-sync/`, not `onedrive-sync`. Every provider word comes from the provider, as everywhere else in the seam.
+- **Routes:** status (`GET …/file-sync`) and history (`GET …/file-sync/activity`) are separate reads. `PUT …/file-sync` returns `{agent_id, enabled}`, so a caller without `activity.read` never receives the status.
+- **The switch:** it is stored on the Agent, can be changed at any time (including before the folder exists or while not connected), and is offered when creating an Agent. An Agent created with sync off gets no folder.
+- **Turning on:** the Sync Engine re-checks the folder, so edits, deletions and new files made at the provider while sync was off are handled.
+- **"Conflict copies":** the activity is `conflict_agent_won`; AF-384 keeps the person's edit in version history instead of making a copy.
+- **States:** a transient "Setting up the folder…" state is added to the ticket's five.
+- **The tab:** the card is on a new File sync tab, gated on `activity.read`. All ten activity kinds are listed.
+- **Manual check:** on local k3d against the test tenant, not on staging.
+
 ## Changes
+
+### 2026-10-26 — AF-385 — Locked items, hint layout and activity wording (fixes after the manual check)
+
+- **Context:** the maintainer checked PRs 1–13 by hand on local k3d and reported three issues:
+  - whitespace in the hire card;
+  - a checkbox where a toggle was wanted;
+  - a memory edit that wasn't tracked.
+
+  Commit `3a81a16f` (made in another session) addressed them. Verifying that commit found the problems this entry fixes.
+- **`3a81a16f` delivered:**
+  - **Toggles:** both "sync" checkboxes became toggles on the right (`role="switch"`, the same markup as the Platform workflow setting).
+  - **Hint:** the hire form's dashed hint always spanned both columns.
+  - **Heading:** "Files that needed attention".
+  - **Backoff:** the engine postponed a connection 120 s on any `ProviderUnavailable`.
+- **Fixed here:**
+  - **Locked items.** The `ProviderUnavailable` backoff answered one 423 Locked from Graph (Word saving the new `Document.docx` at 13:03:41), which the next pass at 13:04:12 had already cleared. With it, any outage set `sync_retry_at`, so the status card said "OneDrive asked Agent Barn to slow down". It is removed. Graph's 423 is now `GraphItemLocked` and the neutral `RemoteItemLocked` (it was "Microsoft couldn't be reached"). `run_pass` logs it at INFO and retries on the next pass, without postponing.
+  - **Hint layout.** Spanning always left an empty cell beside Command approval for Hermes without a sync provider. The hint now spans both columns only when it starts a row (an even number of fields before it).
+  - **Wording (maintainer's choice).** The list shows only changes that didn't go through as made, so it is headed "Changes that didn't sync", and empty as "Every change synced as made.". A name like "Sync activity" would suggest applied edits are listed too, and they aren't. The Agent's own deletes synced, so `activity_page` now leaves `deleted_by_agent` out of the list and its `total`; the rows stay recorded. The UI drops that kind from its schema and sentences. The README now says toggle, not checkbox.
+  - **Contract changes in tests:** the sentence test lists 9 kinds instead of 10, and the empty-list and failed-read tests expect the new wording.
+- **The memory edit:** not a sync defect. On the cluster, Graph showed `memories/USER.md` last written by the app at 13:08:56, and the only file a person changed under "Agent Barn" was `_Not synced/Document.docx`. The edit never reached OneDrive. An applied person-edit still creates no activity entry, by design.
+- **Verified by automated tests only.** The cluster was not redeployed after this change, so none of it has been seen on k3d.
+  - **Unit:** 423 maps to `GraphItemLocked` and to `RemoteItemLocked` (both failed first). Test Drive's new `fail_call(name, error)` raises once and leaves other calls alone (failed first: no hook). The two suites and the Test Drive contract pass (128 and 15).
+  - **Engine:** an unreachable provider leaves `sync_retry_at` empty (failed first: the backoff set it). A locked item logs no warning or error and the next pass finishes the work (failed first: "File sync pass failed"). The engine pass, re-sync, status and folder suites pass (99).
+  - **History:** `test_file_sync_status.py` gains a test that the Agent's deletes are not listed or counted (failed first: listed); the file passes (41).
+  - **UI:** `hire-dialog.spec.ts` gains 4 layout tests comparing boxes. "Beside Command approval" for Hermes without a provider, and "beside the toggle" for OpenClaw with one, failed first; the two full-row cases are guards. The spec passes (28). In `agent-file-sync.spec.ts`, the heading test failed first; the spec passes (21). `pnpm lint` and `tsc --noEmit` pass.
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — The local k3d run
+
+- **Run by:** the maintainer, on `k3d-local-cluster` against the test tenant (`AgentBarnTest`), on the build of `3a81a16f`.
+- **What the cluster's records showed, read-only:**
+  - folders created;
+  - the Agent's Template files and memory uploaded;
+  - a person's new file moved to `_Not synced/` and listed;
+  - the Sync Engine passing every 30 s with a fresh cursor.
+- **No record yet of:** a config edit undone, a deleted file restored, sync turned off and on, or an Agent hired with sync off. Automated tests cover these; they were not checked on the cluster.
+- **Open AF-384 Graph checks** (the from-start listing after a resume; a deleted folder's children; moves out of the folder): not checked on the cluster.
+
+### 2026-10-26 — AF-385 — The hire form's file sync option
+
+- Delivered: the hire form shows a "Sync files with {provider}" checkbox, checked by default, when the Organization has an active connection whose provider declares `file_sync`.
+  - **Provider check:** the same inline check as the retire dialog in `agent-danger-zone-settings.tsx`, from `useSyncProvidersQuery`. Two uses, so no shared helper yet.
+  - **Request:** unchecking it sends `file_sync_enabled: false` with the create request; left checked, nothing is sent, so the API's default applies.
+  - **Elsewhere:** Quick start and other create paths send nothing.
+- Changed: `CreateAgentData.fileSyncEnabled`, `useHireAgentForm` (`fileSyncEnabled` state), `hire-form-dialog.tsx`. README "Turning sync off".
+- Verified:
+  - **3 new tests in `hire-dialog.spec.ts`:**
+    - checked by default, with the exact create body unchanged (failed first: no checkbox);
+    - unchecked sends `file_sync_enabled: false` (failed first: nothing to click);
+    - no checkbox for a provider not connected, or connected without `file_sync` (passed before; a guard).
+  - **The existing specs don't mock the provider list,** so they get no checkbox, and their exact create bodies stay as they were.
+  - **Suites:** `hire-dialog.spec.ts` and `sync-provider.spec.ts` pass together (48). `pnpm lint` and `tsc --noEmit` pass.
+
+### 2026-10-26 — AF-385 — The File sync tab's history
+
+- Delivered: `FileSyncActivityList` below the status card, from `useFileSyncActivity`.
+  - **Paging:** `useInfiniteQuery`, 20 per page, keyed under the Agent's file sync key so the switch's invalidation refreshes it too.
+  - **Sentences:** one per kind (`fileSyncActivitySentence`), naming the path and the provider (from the status, "the storage provider" when there is none), each with its time.
+  - **Load more** while the server has more; "Nothing has happened yet." when empty.
+  - **A failed read** shows in place with Retry, without hiding the status card.
+- Changed:
+  - `schemas.ts`: the history page and its ten kinds.
+  - README "Agent page": the history.
+  - **Test locator:** the page object's status card locator matches the region name exactly. The new "File sync activity" region also matched "File sync" by substring, and Playwright refused the ambiguous locator. Assertions are unchanged.
+- Verified:
+  - **5 new tests in `agent-file-sync.spec.ts`, all failing first** (no list): the ten sentences, including a folder entry without a path; server order; Load more (`page=1` then `page=2`, then no button); the empty list; a failed history read with Retry while the card still shows.
+  - **`interceptFileSyncActivity`** serves pages from a list of entries and records the pages asked for.
+  - **Suites:** the spec and `app-navigation.spec.ts` pass together (44). `pnpm lint` and `tsc --noEmit` pass.
+
+### 2026-10-26 — AF-385 — The Agent page File sync tab
+
+- Delivered: `ui/src/features/file-sync/`.
+  - **Data:**
+    - `schemas.ts`: the status and the switch's answer;
+    - `utils.ts`: query keys by Organization and Agent id, and `fileSyncSummary`, the wording for each state;
+    - `use-file-sync-query.ts`: the status, re-read every 30 s;
+    - `use-file-sync-actions.ts`: the switch, which invalidates the Agent's file sync queries.
+  - **UI:** `FileSyncTab` and `FileSyncStatusCard`, with the state, Open in {provider} when the folder exists, the Organization settings link for Owners and Admins when not connected, and the "Sync this agent's files" checkbox with `agent.update`.
+  - **Wiring:** `agent-page-tabs.ts` adds `file-sync` ("File sync") after Playbooks, gated on `activity.read`. `nav-model.ts` gives it the `FolderSync` icon in the Work group. `agent-detail-page.tsx` renders it.
+- Changed: README new "Agent page" section; `docs/INDEX.md` routes `ui/src/features/file-sync/`.
+- Verified:
+  - **`ui/tests/e2e/agent-file-sync.spec.ts` (17 tests),** with `AgentFileSyncPage`, `FileSyncDataSupport` (stateful: a PUT changes what the next GET returns) and `tests/fixtures/file-sync.ts`. 16 failed first, the card not being found. The one that passed before is "not offered without `activity.read`", true while no tab existed; it now guards the gate.
+  - **They cover:**
+    - the seven states' wording;
+    - Open in OneDrive (`href`, `target=_blank`), and none while the folder doesn't exist;
+    - the settings link for an Owner, and text without a link for a Member;
+    - the switch unchecked while not connected;
+    - turning sync off: the exact PUT body, then "Turned off";
+    - the switch hidden without `agent.update`, and the tab without `activity.read`;
+    - a failed read with Retry.
+  - **`app-navigation.spec.ts`:** a new test, File sync is listed after Logs and before Activity, failed first. The whole navigation spec passes with the File sync spec (39).
+  - **`agent-detail-page.spec.ts`:** the 98 tests whose titles mention tabs, sections, the panel, the Overview or activity pass, in 2.6 minutes. The other 18 weren't run, to stay within the time limit for one run.
+  - `pnpm lint` and `tsc --noEmit` pass.
+
+### 2026-10-26 — AF-385 — An Agent's File Sync history
+
+- Delivered: `GET /organizations/{organization_id}/agents/{agent_id}/file-sync/activity?page&page_size` → `{page, page_size, total, items}` of `{id, kind, path, occurred_at}`.
+  - **Permission:** `activity.read`, the same checks as the status (`AgentFileSyncService._readable`, shared by both reads).
+  - **Order and pages:** newest first, ties broken by id; `page_size` 1 to 100, 20 by default (as Agent Webhooks and Communications).
+  - **Query:** `AgentFileSyncRepository.activity_page` joins `sync_activity` to the Agent under `agent_scope_predicates` before counting, ordering and paging, so only this Agent's rows are counted.
+  - **Not returned:** `detail`. It is the content hash or provider version that keeps a skip recorded once, and has no meaning for a person.
+- Changed:
+  - README "Activity": the route replaces "No route or UI reads them yet". RBAC brief: the history read.
+  - `api/developer_docs/operations-v1.json` lists the operation.
+- Verified:
+  - **15 new tests in `test_file_sync_status.py`.** 11 failed first with 404 (no route).
+  - **The 4 that passed before** did so because every request was 404 then: a Member without access, and missing, deleted and foreign Agents. They now pass against the route.
+  - **They cover:** a Viewer reads it; `agent.read` alone is 403; no authentication is 401; newest first; a stable order for equal times; paging with `total`; `page_size` 101 is 422; only this Agent's rows; a row with no folder (after a disconnect); exactly the four fields, without `detail`; a null path for a folder entry.
+  - **Suites:** the file passes (40). `test_public_api_contract.py`, `test_file_sync_switch.py` and `test_cross_org_isolation.py` pass (56).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — An Agent's File Sync status
+
+- Delivered: `GET /organizations/{organization_id}/agents/{agent_id}/file-sync` → `{enabled, state, provider {key, display_name}, folder_url, last_contact_at, retry_at}`.
+  - **Permission:** `activity.read` (`require_visible`, then `require_action_for_visible`). 404 for an invisible, other-Organization or deleted Agent; 403 without the permission. A read-only API key may read it.
+  - **State,** the first that holds:
+    - `not_connected`: no active connection, a pending one, a provider no longer registered, or one without `file_sync`;
+    - `turned_off`: the switch is off;
+    - `setting_up`: the folder isn't made, isn't created at the provider, or not yet resumed;
+    - `throttled`: the connection's `sync_retry_at` is in the future (returned as `retry_at`);
+    - `waiting_for_restart`: the pod has never got through (`last_contact_at` null);
+    - `not_syncing`: the Agent is running or in error and the last contact is more than 10 minutes old (`NOT_SYNCING_AFTER`);
+    - `synced`: otherwise.
+  - **Reads:** `AgentFileSyncRepository.status_inputs` reads the Agent through `agent_scope_predicates`, then its Organization's active connection and its own folder. The provider's name comes from the registry.
+- Changed:
+  - README: new "Status" section. RBAC brief: the scoped read. `CONTEXT.md`: File Sync names the status.
+  - `api/developer_docs/operations-v1.json` lists the operation.
+- Verified:
+  - **`tests/integration/test_file_sync_status.py` (25 tests, product API with Test Drive), all failing first** with 405 (the path had only the PUT).
+  - **Access:** an Agent Viewer reads it; a custom role with only `agent.read` is 403; a Member without access, and missing, deleted and foreign Agents, are 404; no authentication is 401; a read-only key reads it.
+  - **States:**
+    - no connection (the whole body checked);
+    - a pending connection, a provider without `file_sync`, a provider no longer registered;
+    - turned off, with the folder still openable, and turned off before any connection;
+    - not reached by the engine, reserved but not created, still disabled after turn-on;
+    - throttled with `retry_at`, and a throttle already over;
+    - never contacted;
+    - synced with `last_contact_at`;
+    - 9 min 50 s (synced) and 10 min 10 s (not syncing) for a running Agent;
+    - an Agent in error out of contact;
+    - a stopped Agent out of contact (synced).
+  - **Regression:** `test_public_api_contract.py`, `test_file_sync_switch.py` and `test_cross_org_isolation.py` pass (56).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — Turning sync on re-checks the folder
+
+- Delivered: `FileSyncEngine.process_changes` reads `resync_requested_at` on the active folders.
+  - **Any request set:** the pass runs `_relist` instead of following the feed. That finds what people changed while sync was off, which earlier passes skipped because the folder was `disabled`.
+  - **Compare-and-clear:** afterwards, `FileSyncRepository.clear_resync` clears each request only where it still holds the value read at the start, so a turn-on during the re-list survives for the next pass.
+  - **Requests left in place:** a pass interrupted by throttling or a failure raises before the clear, so its requests are retried.
+  - **Coalescing:** several turn-ons before one pass make one re-list.
+- Changed:
+  - README "People's edits" (sync turned back on) and "Known limits of file sync" (the re-list covers the whole connection; no rate limit on toggling).
+  - RBAC brief: the background-work exception records the one bounded case where a user's authorized turn-on asks the engine for a re-list, and why the exception still holds.
+- Verified:
+  - **6 new tests in `test_file_sync_remote_resync.py`.** `_turn_sync` writes what the switch's request writes: the switch, the folder status, and the request time.
+  - **5 failed first:**
+    - edits made while off become a download and an undo (got none);
+    - a delete is restored and a new file parked (got none);
+    - a deleted folder is rebuilt (the folder id stayed);
+    - the request is cleared (stayed set);
+    - two turn-ons cause one re-list (got none).
+  - **The sixth** (a turn-on made during a re-check survives it) passed before the change, because nothing cleared requests yet. With an unconditional clear put in by hand it failed, so it guards the compare-and-clear.
+  - **Suites:** re-sync, remote edits, the engine pass and remote moves pass together (57). Folders, the switch, disconnect and re-sync pass together (74).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — The full re-list is safe alongside the pod
+
+- **Why now:** the full re-list (`_relist`) has run only when the provider expired the change cursor. Turning sync on will run it routinely (next slice), and the pod keeps syncing through Ingest meanwhile, without the connection lock. Two collisions the independent audit found were fixed first, on the existing expired-cursor path.
+- Delivered (`engine.py`):
+  - **No false restore:** a synced file whose `synced_at` or `upload_started_at` is at or after the start of the listing is not restored for being missing from it (`_changed_since`). Before, a file the pod uploaded during the listing got a `reupload` job and, once done, a false `restored` entry.
+  - **No failed pass:** `_park` treats a file already gone at the provider (`RemoteItemMissing` on the move) as nothing to do and records nothing. Before, it failed the whole pass for that connection, and the re-list started again on the next one.
+- Changed: README "People's edits" (expired cursor and new files).
+- Verified:
+  - **2 new tests in `test_file_sync_remote_resync.py`, both failing first:** a file the pod uploads during a re-list is not restored (got `reupload`), and a file deleted during a re-list doesn't fail the pass (raised `RemoteItemMissing`).
+  - **How "during" is made:** a test-local helper, `_while_listing`, wraps Test Drive's `changes` with `monkeypatch` and runs the action right after the first from-start page is produced: listed, not yet processed. Test Drive itself is unchanged.
+  - **Red again:** both tests failed again with the previous commit's `engine.py` put back, after the helper's final edit.
+  - **Suites:** remote re-sync, remote moves, remote edits and the engine pass pass together (51). ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — The Sync Engine follows the switch
+
+- Delivered: `FileSyncEngine.reconcile_folders` reads each live Agent's `file_sync_enabled` (`live_agent_names` now returns it):
+  - **switch off, no folder:** none is reserved, so an Agent created with sync off, or turned off before the engine reached it, never gets a folder;
+  - **switch off, folder `active`:** the folder becomes `disabled` and stays at the provider (`set_folder_status`). This covers a folder the engine reserved while the switch was being turned off;
+  - **switch on, folder `disabled`:** the folder becomes `active` with `resync_requested_at` set (`resume_folder`), and is created or renamed in the same pass if needed.
+
+  `process_changes` still decides by the stored folder status alone, for both the active list and a tracked file's folder. A person's edit is therefore ignored once the folder is `disabled`, and never mistaken for a file moved away (which would restore the Agent's copy over it).
+- Changed:
+  - README "Agent Folders": folders follow the switch, and "Turning sync off" says an Agent without a folder doesn't get one.
+  - `CONTEXT.md`: an Agent created with the switch off gets no folder.
+- **Contract change in an existing test:** `test_a_folder_with_sync_turned_off_is_left_alone` used to set the folder `disabled` by hand. Under the switch, a pass would turn such a folder back on, so the test now turns the Agent's switch off and lets a pass disable the folder. Its assertions (name and provider folder unchanged after a rename) are the same.
+- Verified:
+  - **5 tests failing first:**
+    - 3 new in `test_file_sync_folders.py`: no folder for an Agent whose switch is off, over two passes (got two folders); an active folder disabled and kept (stayed active); a disabled folder resumed with a re-check (stayed disabled);
+    - the rewritten "left alone" test (the folder followed the rename);
+    - 1 new in `test_file_sync_remote_edits.py`: a full `run_pass` after the switch is turned off leaves a person's edit alone, with the folder `disabled`, no job and no activity (got a download job).
+  - **Suites:** folders, remote edits, engine pass and disconnect pass together (62). Remote moves, remote re-sync, the switch and Ingest auth pass together (82).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — Ingest refuses an Agent whose switch is off
+
+- Delivered: `FileSyncIngestService._target` answers 409 "File sync is turned off for this Agent" when `agent.file_sync_enabled` is false. The check comes after the connection and capability checks and before the folder is looked up or touched, so:
+  - an Agent switched off before it has a folder gets 409, not 404;
+  - an Agent switched off while its folder is still `active` is refused at once, on every pod route;
+  - a refused call doesn't update `last_contact_at`.
+
+  The pod helper already handles a 409 by logging it and asking again after its interval (`file-sync.py` `run_loop`).
+- Changed: [activity and ingest](../activity-and-ingest.md) lists the new 409 case. README: "The Agent's pod" and "Turning sync off".
+- Verified:
+  - **4 new tests in `test_file_sync_ingest_auth.py`, all failing first:** a report from a switched-off Agent with an active folder (was 200), with no folder (was 404), its job claim (was 200), and `last_contact_at` left empty (was set).
+  - The three Ingest suites pass (74). ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — Turning sync off or on
+
+- Delivered: `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}` → 200 `{agent_id, enabled}`.
+  - **Permission:** `agent.update` (`AgentAuthorization.require_action`). An invisible, other-Organization or deleted Agent is 404; a visible one without the permission (Agent Viewer) is 403; a read-only API key is 403.
+  - **One transaction** (`AgentFileSyncRepository.set_enabled_with_event`): locks the Agent row, sets `file_sync_enabled`, updates the Agent's folder on the active connection (off: `disabled`; on: `active` with `resync_requested_at`), and stages the Domain Event. Deliveries are enqueued after commit.
+  - **No change, no record:** setting the current value returns 200 and writes nothing.
+  - **Payload:** `AgentFileSyncUpdate` refuses a missing or non-boolean `enabled` and any other field (422).
+- Changed:
+  - `AgentFileSyncRepository` is a new repository for the user-facing request, separate from the Sync Engine's `FileSyncRepository`, so the RBAC background-work exception keeps covering only engine work.
+  - `api/developer_docs/operations-v1.json` lists the operation.
+  - **One file pair per app**, as Agent Memory (`gateway_routes.py`/`gateway_service.py`) and Workflows (`runtime_routes.py`/`runtime_service.py`) do: the pod-facing Ingest router, `FileSyncIngestService`, its exceptions and `FileSyncTarget` moved unchanged from `routes.py`/`service.py` to `ingest_routes.py`/`ingest_service.py`, which only `ingest_app.py` imports. `routes.py`/`service.py` now hold the product API: the switch, and `FileSyncFolderRemoval` for disconnect. The moved code is byte-identical to the previous commit.
+  - README: new "Turning sync off" section. RBAC brief: the request and its repository. `CONTEXT.md`: File Sync names the switch.
+- Verified:
+  - **`tests/integration/test_file_sync_switch.py` (21 tests, product API with Test Drive).** 16 failed first, all with 404 because the route didn't exist. The 5 that passed before did so for that same reason: a Member without access (404), the three absent, deleted and foreign Agents (404), and one Agent's switch leaving another Agent alone. They are guards now that the route exists.
+  - They cover Owner, Admin, Agent Owner, Editor and Viewer; a Member without access; missing, deleted and foreign Agents; a read-only key; no authentication; three malformed bodies; the folder disabled and kept at the provider; the folder resumed with a re-check requested; no folder; both events in order and their payload; a repeated value recording nothing; another Agent left alone.
+  - **Regression:** `test_agent_memory.py` and `test_file_sync_ingest_auth.py` pass (78). After the move, the three Ingest suites, `test_file_sync_disconnect.py`, `test_file_sync_switch.py` and `test_public_api_contract.py` pass together (100). The API, Ingest and Sync Engine apps import.
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — Domain Events for the switch
+
+- Delivered: `AGENT_FILE_SYNC_ENABLED` (`agent.file_sync.enabled`) and `AGENT_FILE_SYNC_DISABLED` (`agent.file_sync.disabled`), schema version 1.
+  - **Payload:** `AgentFileSyncChangedPayload`: Organization and Agent ids, actor and Agent display names, nothing else (`extra="forbid"`).
+  - **Handler:** routed to `security_audit.projection` only, which lists them as supported. They stay out of product analytics, like the Agent Memory switch.
+- Changed: [Domain Events](../domain-events.md) names the two events.
+- Verified:
+  - **6 new tests, all failing first:**
+    - `test_domain_events.py`: for both events, the payload carries only the four fields (failed on the event not being registered), and any other field is refused (failed because the error was `UnsupportedDomainEventError`, not a payload refusal).
+    - `test_event_handler_registry_wiring.py`: both route to the security audit only, and the production handler registry supports them (failed: no handlers).
+    The tests name the events by string, so they fail on an assertion rather than on an import.
+  - Both unit files pass (49 tests). ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — Creating an Agent with sync off
+
+- Delivered: `AgentCreate.file_sync_enabled` (default `true`), stored by `create_agent`. Unknown fields are still refused (422).
+- In transition: the engine doesn't read the switch yet, so an Agent created with it off still gets a folder; the engine slice makes the switch take effect.
+- Changed: [Agents](../agents.md) "Create" names the field.
+- Verified:
+  - **2 new tests in `test_agents.py`:** creating with `file_sync_enabled: false` stores false, and it failed first (422, field refused). Creating without it stores true; it passed before and after, because the column already defaults to true. It is a guard.
+  - **The create tests:** `test_agents.py -k create_agent` and all of `test_onboarding.py`, which builds the only other `AgentCreate`, pass (66).
+  - ruff and format pass. ty passes apart from the 11 existing Unix-only diagnostics.
+
+### 2026-10-26 — AF-385 — Switch and re-check columns
+
+- Delivered: migration `df10528f512f` (revises `af95cf4c3a1e`):
+  - `agent.file_sync_enabled`, Boolean, not null, server default `true`, so existing Agents keep syncing;
+  - `sync_agent_folder.resync_requested_at`, timestamptz, nullable.
+
+  The models gain `Agent.file_sync_enabled` and `SyncAgentFolder.resync_requested_at`.
+- Verified:
+  - **New tests, all 3 failing first** at their column assertions (column missing):
+    - `test_file_sync_schema.py`: a folder starts with no re-check requested; a new Agent syncs its files;
+    - `test_rbac_schema.py`: existing Agents keep syncing after the upgrade. It sits beside the Agent Memory column test, because that file's `legacy_database` fixture is the one that upgrades a database with existing Agents.
+  - **Both files pass** (45 tests).
+  - **Checks:** one Alembic head (`df10528f512f`), ruff and format pass. ty passes apart from the 11 existing Unix-only diagnostics (`os.getuid` and similar in runtime and test fixtures), run with `--python .venv/Scripts/python.exe` on Windows.
+- Not verified: the downgrade path was not run.
 
 ### 2026-10-23 — AF-384 — Activity notes carry the time the change really happened
 
