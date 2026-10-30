@@ -486,6 +486,7 @@ test.describe("WF02 run progress and text results", () => {
     expect(support.reruns).toHaveLength(0);
     support.failRerun = true;
     await runs.runAgain();
+    expect(support.reruns).toHaveLength(0);
     await runs.confirmRunAgain();
     await expect(
       page.getByText("This run could not be run again"),
