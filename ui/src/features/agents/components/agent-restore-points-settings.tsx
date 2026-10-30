@@ -121,8 +121,9 @@ export function AgentRestorePointsSettings({
 
   const isRunning = agent.status === "RUNNING";
   // A scheduled snapshot in progress blocks nothing: the server stops it for a capture or a restore.
+  // Nor does a restore point being deleted, which never touches the Agent's own volume.
   const hasWorkInFlight = restorePoints.some(
-    (item) => isRestorePointBusy(item) && item.origin !== "SCHEDULED",
+    (item) => isRestorePointBusy(item) && item.origin !== "SCHEDULED" && item.status !== "DELETING",
   );
   const scheduledSnapshots = restorePoints.filter((item) => item.origin === "SCHEDULED");
   const otherRestorePoints = restorePoints.filter((item) => item.origin !== "SCHEDULED");

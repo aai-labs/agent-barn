@@ -1012,6 +1012,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=AgentRestorePointChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.ORGANIZATION,
             )
         )

@@ -14,6 +14,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.restore_points.models import (
     ACTIVE_CAPTURE_STATUSES,
+    AGENT_VOLUME_BUSY_STATUSES,
     AUTOMATIC_BACKUP_ORIGINS,
     MANUAL_GROUP_ORIGINS,
     NON_TERMINAL_STATUSES,
@@ -218,8 +219,8 @@ class RestorePointRepository:
     def has_active_capture(self, agent_id: UUID) -> bool:
         return self._exists_with_status(agent_id, ACTIVE_CAPTURE_STATUSES)
 
-    def has_non_terminal_operation(self, agent_id: UUID, *, ignoring: tuple[RestorePointOrigin, ...] = ()) -> bool:
-        return self._exists_with_status(agent_id, NON_TERMINAL_STATUSES, ignoring=ignoring)
+    def has_agent_volume_operation(self, agent_id: UUID, *, ignoring: tuple[RestorePointOrigin, ...] = ()) -> bool:
+        return self._exists_with_status(agent_id, AGENT_VOLUME_BUSY_STATUSES, ignoring=ignoring)
 
     def find_owing_replay_for_agent(self, agent_id: UUID) -> list[AgentRestorePoint]:
         """Rows whose volume is back but whose recorded configuration is not written.

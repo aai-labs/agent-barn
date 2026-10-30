@@ -1042,10 +1042,18 @@ def test_the_automatic_pre_restore_backup_does_not_emit_its_own_created_event():
             assert_that(_outbox(context, AGENT_RESTORE_POINT_RESTORED), has_length(1))
 
 
-def test_only_restoring_is_projected_into_the_security_audit_trail():
-    for event_name in (AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED):
-        definition = EVENT_REGISTRY.get(event_name, 1)
-        assert_that(definition.handler_names, is_not(has_item(SECURITY_AUDIT_HANDLER)))
+def test_a_backup_being_removed_by_retention_does_not_block_starting_the_agent():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _seed(context, status_value=RestorePointStatus.DELETING, origin=RestorePointOrigin.PRE_UPGRADE)
+
+        with when("I start the agent while retention is removing an old update backup"):
+            response = context.client.post(
+                f"{_BASE}/{context.agent.id}/start".replace("{organization_id}", str(context.organization.id)),
+                headers=_auth(context),
+            )
+
+        with then("the start goes ahead, since the removal never touches the Agent's volume"):
+            assert_that(response.status_code, is_not(equal_to(status.HTTP_409_CONFLICT)))
 
 
 def test_deleting_a_restore_point_stages_an_event():

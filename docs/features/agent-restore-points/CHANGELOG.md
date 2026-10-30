@@ -57,6 +57,15 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Changed: the restore points section lists scheduled snapshots apart, with how often they are
   taken and how many are kept. The list response adds `scheduled_cap` and `schedule_interval_minutes`.
 - Decision: reversed — `PRE_UPGRADE` backups are no longer kept forever; see retention above.
+- Changed: `agent.restore_point.created` and `agent.restore_point.deleted` now reach the security
+  audit trail, like `restored`. Scheduled snapshots and retention removals show the system actor
+  "Agent Barn"; a user's own captures and deletes show the user.
+- Changed: a restore point being removed (`DELETING`) blocks nothing. It never touches the
+  Agent's volume, so start, stop, update, delete, capture and restore all go ahead beside it.
+- Changed: a scheduled snapshot reads the Agent's volume and pod before it takes the lifecycle
+  lock. It holds the lock only while it creates its volume and Job, so a user's start, stop or
+  delete can still meet a 409 in that short window. Moving those two calls outside the lock
+  would let a stop or delete land between the check and the Job.
 
 ### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails
 

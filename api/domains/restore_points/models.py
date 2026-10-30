@@ -25,6 +25,9 @@ NON_TERMINAL_STATUSES = (
     RestorePointStatus.DELETING,
 )
 ACTIVE_CAPTURE_STATUSES = (RestorePointStatus.PENDING, RestorePointStatus.CAPTURING)
+# DELETING is left out: retention removing a restore point touches only that restore
+# point's own volume, never the Agent's.
+AGENT_VOLUME_BUSY_STATUSES = (*ACTIVE_CAPTURE_STATUSES, RestorePointStatus.RESTORING)
 
 # Backups taken before an update or a restore. They share the manual limit with the
 # restore points users take, and are the ones removed when that limit is passed.

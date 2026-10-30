@@ -4,12 +4,19 @@ from datetime import UTC, datetime, timedelta
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, none
 from kubernetes.client import V1Job, V1JobStatus
+from sqlmodel import Session, select
 
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
+from api.domains.events.catalog import AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED
+from api.domains.events.models import ActorIdentityType, EventDelivery, OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.events.security_audit import SecurityAuditRecord
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.scheduling import ScheduledSnapshotRunner
 from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.kubernetes import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -80,6 +87,17 @@ def _remaining_ids(context, agent) -> list[uuid.UUID]:
     ]
 
 
+def _audited(context, event_name) -> list[SecurityAuditRecord]:
+    """Project the staged events into the audit trail. CI has no Redis broker, so delivery
+    is driven here."""
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        for message in session.exec(select(OutboxMessage).where(OutboxMessage.event_name == event_name)).all():
+            delivery = session.exec(select(EventDelivery).where(EventDelivery.event_id == message.event_id)).one()
+            context.injector.get(OutboxMessageRepository).mark_delivery_enqueued(delivery.id)
+            context.injector.get(EventDeliveryProcessor).process(delivery.id)
+        return list(session.exec(select(SecurityAuditRecord).where(SecurityAuditRecord.action == event_name)).all())
+
+
 def _agent(context, name, status_value):
     there_is_an_agent(name=name, status=status_value)(context)
     return context.agent
@@ -106,6 +124,36 @@ def test_the_schedule_snapshots_a_due_running_agent_beside_its_pod():
             assert_that(term.label_selector.match_labels, equal_to({"app": f"agent-{due.id}"}))
             in_flight = context.injector.get(RestorePointRepository).find_in_flight_scheduled()
             assert_that([row.agent_id for row in in_flight], equal_to([due.id]))
+
+
+def test_a_scheduled_snapshot_is_recorded_in_the_audit_trail_as_taken_by_agent_barn():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        context.injector.get(KubernetesClient).get_pod_name_for_deployment.return_value = "agent-pod"
+
+        with when("the schedule snapshots the Agent"):
+            context.injector.get(ScheduledSnapshotRunner).run_once()
+
+        with then("the audit trail shows the snapshot, taken by the system"):
+            [record] = _audited(context, AGENT_RESTORE_POINT_CREATED)
+            assert_that(record.actor_type, equal_to(ActorIdentityType.SYSTEM.value))
+            assert_that(record.actor_display, equal_to("Agent Barn"))
+            assert_that(record.subject_display, equal_to(context.agent.name))
+
+
+def test_a_restore_point_removed_by_retention_is_recorded_in_the_audit_trail():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        oldest = _seed(context, context.agent, RestorePointOrigin.SCHEDULED, age_minutes=900)
+        for age in (600, 300):
+            _seed(context, context.agent, RestorePointOrigin.SCHEDULED, age_minutes=age)
+
+        with when("retention removes the oldest of three snapshots with 2 kept"):
+            context.injector.get(RestorePointService).trim_over_retention()
+
+        with then("the audit trail shows the removal, made by the system"):
+            [record] = _audited(context, AGENT_RESTORE_POINT_DELETED)
+            assert_that(record.details["restore_point_id"], equal_to(str(oldest.id)))
+            assert_that(record.actor_type, equal_to(ActorIdentityType.SYSTEM.value))
+            assert_that(record.actor_display, equal_to("Agent Barn"))
 
 
 def test_the_schedule_starts_no_more_snapshots_than_it_may_run_at_once():

@@ -529,25 +529,25 @@ class RestorePointService:
         changing mid-capture is caught as it was then. Anything that would make this
         wait or refuse — another operation, a managed update, the lifecycle lock — is a
         skip: the schedule tries again on its next run.
+
+        The cluster reads happen before the lock, so a user's start, stop or delete only
+        meets the lock while the capture's volume and Job are created.
         """
+        if not self._is_snapshot_candidate(self.agent_repository.get_by_id(agent_id)):
+            return None
+        if self.k8s.get_pvc(f"agent-{agent_id}", self.config.k8s_namespace) is None:
+            return None
+        # The capture is placed beside the Agent's running pod. With none (an Agent stuck
+        # on quota, or whose pod is still Pending, reads RUNNING) it could never be
+        # scheduled, and would hold a concurrency slot until its deadline.
+        if self.k8s.get_pod_name_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace) is None:
+            return None
+
         with self.agent_repository.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 return None
             current = self.agent_repository.get_by_id(agent_id)
-            if current is None or current.status != AgentStatus.RUNNING or current.deleted_at is not None:
-                return None
-            if managed_update_in_flight(current):
-                return None
-            if self.repository.has_non_terminal_operation(agent_id) or self.repository.find_owing_replay_for_agent(
-                agent_id
-            ):
-                return None
-            if self.k8s.get_pvc(f"agent-{agent_id}", self.config.k8s_namespace) is None:
-                return None
-            # The capture is placed beside the Agent's running pod. With none (an Agent stuck
-            # on quota, or whose pod is still Pending, reads RUNNING) it could never be
-            # scheduled, and would hold a concurrency slot until its deadline.
-            if self.k8s.get_pod_name_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace) is None:
+            if current is None or not self._is_snapshot_candidate(current):
                 return None
             try:
                 restore_point, delivery_ids = self._begin_backup(
@@ -565,6 +565,16 @@ class RestorePointService:
 
         self._dispatch(delivery_ids)
         return restore_point
+
+    def _is_snapshot_candidate(self, agent: Agent | None) -> bool:
+        return (
+            agent is not None
+            and agent.status == AgentStatus.RUNNING
+            and agent.deleted_at is None
+            and not managed_update_in_flight(agent)
+            and not self.repository.has_agent_volume_operation(agent.id)
+            and not self.repository.find_owing_replay_for_agent(agent.id)
+        )
 
     @contextmanager
     def _locked_agent(self, agent_id: UUID) -> Iterator[Agent]:
@@ -806,7 +816,7 @@ class RestorePointService:
 
             # Last, once nothing else refuses: a refused restore never costs the schedule a snapshot.
             self._cancel_scheduled_captures(current)
-            if self.repository.has_non_terminal_operation(agent_id):
+            if self.repository.has_agent_volume_operation(agent_id):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
 
             job_name = restore_job_name(target.id)
@@ -956,7 +966,7 @@ class RestorePointService:
                     detail=f"Restore point {restore_point_id} not found",
                 )
 
-            if self.repository.has_non_terminal_operation(agent_id) or self.repository.find_owing_replay_for_agent(
+            if self.repository.has_agent_volume_operation(agent_id) or self.repository.find_owing_replay_for_agent(
                 agent_id
             ):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
@@ -1097,7 +1107,7 @@ class RestorePointService:
         running Agent, and whatever needs the volume to itself cancels it.
         """
         self.reconcile_agent(agent_id)
-        return self.repository.has_non_terminal_operation(agent_id, ignoring=(RestorePointOrigin.SCHEDULED,)) or bool(
+        return self.repository.has_agent_volume_operation(agent_id, ignoring=(RestorePointOrigin.SCHEDULED,)) or bool(
             self.repository.find_owing_replay_for_agent(agent_id)
         )
 
@@ -1166,7 +1176,7 @@ class RestorePointService:
         if self.repository.find_owing_replay_for_agent(agent.id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
         self._cancel_scheduled_captures(agent)
-        if self.repository.has_non_terminal_operation(agent.id):
+        if self.repository.has_agent_volume_operation(agent.id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
 
     def _capture_job(self, agent: Agent, restore_point: AgentRestorePoint, beside_running_agent: bool) -> V1Job:
