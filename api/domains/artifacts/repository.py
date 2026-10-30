@@ -159,6 +159,28 @@ class ArtifactRepository:
                 bucket = self.buckets.ready_name(agent.id, agent.organization_id, session)
             except ValueError:
                 raise HTTPException(503, "Agent file storage is initializing; retry shortly") from None
+            if source == "chat":
+                # Serialize admission for this Agent so simultaneous identical uploads
+                # share one staging identity before either has finished publishing.
+                session.connection().execute(
+                    sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": f"chat-artifact:{agent.organization_id}:{agent.id}"},
+                )
+                existing = session.exec(
+                    self.scoped(agent_id, scope)
+                    .where(
+                        col(Artifact.source) == "chat",
+                        col(Artifact.bucket) == bucket,
+                        col(Artifact.filename) == payload.filename,
+                        col(Artifact.size) == payload.size,
+                        col(Artifact.checksum) == payload.checksum,
+                        col(Artifact.expires_at) > datetime.now(UTC),
+                        col(Artifact.state).in_(["UPLOADING", "READY"]),
+                    )
+                    .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
+                ).first()
+                if existing is not None:
+                    return existing
             row = Artifact(
                 **payload.model_dump(),
                 organization_id=agent.organization_id,

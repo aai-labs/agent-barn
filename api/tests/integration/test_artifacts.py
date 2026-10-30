@@ -1,5 +1,6 @@
 import base64
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
@@ -230,6 +231,57 @@ def test_runtime_chat_publication_and_rotated_credential(storage, runtime):
         assert_that(context.client.get(link["url"]).content, equal_to(CONTENT))
 
 
+def test_runtime_reuses_matching_chat_artifact(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        headers = runtime_auth(context)
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        first = context.client.post(path, headers=headers, json=metadata()).json()
+        second = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(second["id"], equal_to(first["id"]))
+        published = context.client.put(path + f"/{first['id']}/content", headers=headers, content=CONTENT)
+        assert_that(published.status_code, equal_to(200))
+        reused = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(reused["id"], equal_to(first["id"]))
+        assert_that(
+            context.client.put(path + f"/{reused['id']}/content", headers=headers, content=CONTENT).status_code,
+            equal_to(200),
+        )
+        assert_that(context.client.get(path, headers=headers).json()["items"], has_length(1))
+
+
+def test_runtime_matching_uploads_converge_concurrently(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        headers = runtime_auth(context)
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            responses = list(pool.map(lambda _: context.client.post(path, headers=headers, json=metadata()), range(6)))
+        assert_that([response.status_code for response in responses], equal_to([201] * 6))
+        assert_that(len({response.json()["id"] for response in responses}), equal_to(1))
+
+
+def test_runtime_reuse_respects_name_content_and_deleted_state(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        headers = runtime_auth(context)
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        first = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(
+            context.client.put(path + f"/{first['id']}/content", headers=headers, content=CONTENT).status_code,
+            equal_to(200),
+        )
+        renamed = context.client.post(path, headers=headers, json=metadata(filename="other.csv")).json()
+        changed = context.client.post(path, headers=headers, json=metadata(b"different")).json()
+        assert_that(len({first["id"], renamed["id"], changed["id"]}), equal_to(3))
+        assert_that(
+            context.client.delete(base(context) + f"/artifacts/{first['id']}", headers=auth(context)).status_code,
+            equal_to(204),
+        )
+        replacement = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(replacement["id"] != first["id"], is_(True))
+
+
 def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
@@ -241,7 +293,10 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
         run_id = response.json()["id"]
         repo, current, token = attempt(context, run_id)
         path = "/api/v1/agent-artifacts/runtime/artifacts"
+        chat = context.client.post(path, headers=headers, json=metadata()).json()
         row = context.client.post(path + f"?attempt_id={current.id}", headers=headers, json=metadata()).json()
+        other = context.client.post(path + f"?attempt_id={current.id}", headers=headers, json=metadata()).json()
+        assert_that(len({chat["id"], row["id"], other["id"]}), equal_to(3))
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
         assert_that(response.status_code, equal_to(200), response.text)
         repo.complete(current.id, token, AttemptResult(summary="File prepared", criteria_met=True))

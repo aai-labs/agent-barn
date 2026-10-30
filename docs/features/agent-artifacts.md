@@ -54,7 +54,11 @@ S3-compatible storage owns bytes. Garage is the selected deployment target.
 An artifact belongs to exactly one Organization and Agent. Workflow, run, step,
 attempt and generation provenance are optional and server derived. Keys have the
 fixed form `artifacts/<organization UUID>/<agent UUID>/<artifact UUID>` and never
-include user filenames. Replacement always creates a new artifact ID.
+include user filenames. A changed file creates a new artifact ID. Ordinary runtime chat uploads reuse an
+unexpired READY or UPLOADING chat artifact in the current bucket for the same Agent, filename, size and
+SHA-256. Concurrent matching uploads share one staging identity; a concurrent byte
+write may return a retryable conflict. Reuse retains the original metadata and
+expiration. Human uploads and workflow attempts retain separate identities.
 
 Human metadata/list/download-link reads require current Membership, `agent.read`
 and the scoped undeleted Agent under the [RBAC brief](rbac/IMPLEMENTATION-BRIEF.md).
