@@ -4,18 +4,18 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 
-import { PlatformResourceUsageSchema, type PlatformResourceUsage, type ResourceUsageRange } from "../schemas";
-import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey } from "../utils";
+import { PlatformResourceUsageSchema, type PlatformResourceUsage } from "../schemas";
+import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey, usageDateParams, type UsageDates } from "../utils";
 
 /**
  * CPU and memory of every Agent's container across all Organizations, or one
  * Organization's when it is given. Platform Administrators only.
  */
-export function usePlatformResourceUsage(range: ResourceUsageRange, organizationId: string | null) {
+export function usePlatformResourceUsage(dates: UsageDates, organizationId: string | null) {
   const query = useQuery({
-    queryKey: resourceUsageKey.platform(range, organizationId),
+    queryKey: resourceUsageKey.platform(dates, organizationId),
     queryFn: async () => {
-      const params = new URLSearchParams({ range });
+      const params = usageDateParams(dates);
       if (organizationId) params.set("organization_id", organizationId);
       const response = await api.get<PlatformResourceUsage>(
         `/api/v1/platform/resource-usage?${params.toString()}`,

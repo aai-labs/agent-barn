@@ -5,30 +5,26 @@ import { useQuery } from "@tanstack/react-query";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { api } from "@/shared/api";
 
-import {
-  AgentResourceUsageSchema,
-  type AgentResourceUsage,
-  type ResourceUsageRange,
-} from "../schemas";
-import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey } from "../utils";
+import { AgentResourceUsageSchema, type AgentResourceUsage } from "../schemas";
+import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey, usageDateParams, type UsageDates } from "../utils";
 
 /**
- * One Agent's CPU and memory, now and across a range.
+ * One Agent's CPU and memory, now and across the picked days (the last 24 hours if none).
  *
  * A source that cannot be reached is an answer (`availability`), not an error, so
  * `error` only means the request itself failed: no access, or the API is down.
  */
 export function useAgentResourceUsage(
   agentId: string,
-  range: ResourceUsageRange,
+  dates: UsageDates,
   enabled = true,
 ) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
-    queryKey: resourceUsageKey.agent(agentId, range),
+    queryKey: resourceUsageKey.agent(agentId, dates),
     queryFn: async () => {
       const response = await api.get<AgentResourceUsage>(
-        `${orgApiBase}/agents/${agentId}/resource-usage?range=${range}`,
+        `${orgApiBase}/agents/${agentId}/resource-usage?${usageDateParams(dates).toString()}`,
         { schema: AgentResourceUsageSchema },
       );
       return response.data;

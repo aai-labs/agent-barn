@@ -72,10 +72,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "channel",
     parseAsString.withOptions({ history: "replace" }),
   );
-  const [, setUsageRange] = useQueryState(
-    "range",
-    parseAsString.withOptions({ history: "replace" }),
-  );
+  const [, setUsageFrom] = useQueryState("usageFrom", parseAsString.withOptions({ history: "replace" }));
+  const [, setUsageTo] = useQueryState("usageTo", parseAsString.withOptions({ history: "replace" }));
   const [workflow, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
 
   const [workflowRun, setWorkflowRun] = useQueryState("workflowRun", parseAsString.withOptions({ history: "replace" }));
@@ -87,8 +85,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     void setTab(next);
     // channel is only meaningful on the conversations tab; drop it elsewhere
     if (next !== "conversations") void setChannel(null);
-    // likewise the time range, which only the resource usage tab reads
-    if (next !== "resource-usage") void setUsageRange(null);
+    // likewise the picked days, which only the resource usage tab reads
+    if (next !== "resource-usage") {
+      void setUsageFrom(null);
+      void setUsageTo(null);
+    }
     // and the open workflow, which only the workflows tab reads
     if (next !== "workflows") {
       void setWorkflow(null);

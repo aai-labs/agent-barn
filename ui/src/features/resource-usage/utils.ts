@@ -1,27 +1,31 @@
 import { agentsKey } from "@/features/agents/utils";
 
-import type { ResourceUsageRange } from "./schemas";
+/** Prometheus keeps 15 days, so a picked window reaches back no further. */
+export const USAGE_RETENTION_DAYS = 15;
 
-/** Prometheus keeps 15 days, so the longest range is 14. */
-export const RESOURCE_USAGE_RANGES: { value: ResourceUsageRange; label: string }[] = [
-  { value: "1h", label: "Last hour" },
-  { value: "6h", label: "Last 6 hours" },
-  { value: "24h", label: "Last 24 hours" },
-  { value: "7d", label: "Last 7 days" },
-  { value: "14d", label: "Last 14 days" },
-];
+/** A picked window as ISO bounds, or "" where the page's default applies. */
+export interface UsageDates {
+  from: string;
+  to: string;
+}
 
-export const DEFAULT_USAGE_RANGE: ResourceUsageRange = "24h";
+/** The first day the calendar offers: it and the 14 days after it, today included, make 15. */
+export function earliestUsageDay(now = new Date()): Date {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - (USAGE_RETENTION_DAYS - 1));
+}
 
-/** The periods the agents overview can total spend over. */
-export const OVERVIEW_PERIODS = [
-  { value: "SEVEN_DAYS", label: "Last 7 days" },
-  { value: "THIRTY_DAYS", label: "Last 30 days" },
-  { value: "NINETY_DAYS", label: "Last 90 days" },
-] as const;
+/** The 15 days the Usage page reads when no dates are picked. */
+export function lastUsageDays(now = new Date()): UsageDates {
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  return { from: earliestUsageDay(now).toISOString(), to: endOfToday.toISOString() };
+}
 
-export type OverviewPeriod = (typeof OVERVIEW_PERIODS)[number]["value"];
-export const DEFAULT_OVERVIEW_PERIOD: OverviewPeriod = "THIRTY_DAYS";
+export function usageDateParams(dates: UsageDates): URLSearchParams {
+  const params = new URLSearchParams();
+  if (dates.from) params.set("from_date", dates.from);
+  if (dates.to) params.set("to_date", dates.to);
+  return params;
+}
 
 /** Both figures move slowly; a minute matches how often Prometheus is worth asking. */
 export const RESOURCE_USAGE_REFETCH_MS = 60_000;
@@ -79,16 +83,17 @@ export function capacityStatus(committed: number | null, limit: number | null): 
 
 export const resourceUsageKey = {
   /** Under the Agent's own key, so anything that refreshes the Agent refreshes this. */
-  agent: (agentId: string, range: ResourceUsageRange) =>
-    [...agentsKey.detail(agentId), "resource-usage", range] as const,
+  agent: (agentId: string, dates: UsageDates) =>
+    [...agentsKey.detail(agentId), "resource-usage", dates.from, dates.to] as const,
   /** Under the Agent lists, so starting, stopping or deleting one refreshes the overview. */
-  overview: (period: string) =>
-    agentsKey.list({ scope: { view: "overview" }, filters: { period } }),
+  overview: (dates: UsageDates) =>
+    agentsKey.list({ scope: { view: "overview" }, filters: { from: dates.from, to: dates.to } }),
   /** Not under the Agent keys: it is Platform data, and no Organization's cache is its. */
-  platform: (range: ResourceUsageRange, organizationId: string | null) =>
-    ["platform", "resource-usage", range, organizationId] as const,
-  /** Every Platform usage query, whatever its range or filter. */
+  platform: (dates: UsageDates, organizationId: string | null) =>
+    ["platform", "resource-usage", dates.from, dates.to, organizationId] as const,
+  /** Every Platform usage query, whatever its window or filter. */
   platformAll: ["platform", "resource-usage"] as const,
   /** One opened Heaviest agents row. */
-  platformAgent: (agentId: string) => ["platform", "resource-usage", "agent", agentId] as const,
+  platformAgent: (agentId: string, dates: UsageDates) =>
+    ["platform", "resource-usage", "agent", agentId, dates.from, dates.to] as const,
 };

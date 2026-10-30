@@ -47,11 +47,14 @@ class ResourceUsageRepository:
         at: datetime,
         window_seconds: int,
         throttle_window_seconds: int,
+        throttle_offset_seconds: int = 0,
     ) -> dict[UUID, dict[str, float]]:
         """{agent id: {field: value}} for the Agents that have any series. One request."""
         if not agent_ids:
             return {}
-        query = instant_query(selector(organization_id, agent_ids), window_seconds, throttle_window_seconds)
+        query = instant_query(
+            selector(organization_id, agent_ids), window_seconds, throttle_window_seconds, throttle_offset_seconds
+        )
         return group_instant(self.prometheus.query(query, at), set(agent_ids))
 
     def series_fields(self, organization_id: UUID, agent_id: UUID, window: UsageWindow) -> dict[str, dict[int, float]]:
