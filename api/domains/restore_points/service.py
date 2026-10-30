@@ -1,6 +1,7 @@
 import enum
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -125,6 +126,10 @@ def _parse_manifest(logs: str) -> dict:
     return {}
 
 
+def _without_module_path(line: str) -> str:
+    return re.sub(r"^(?:\w+\.)+(?=\w*(?:Error|Exception):)", "", line)
+
+
 def _deadline_exceeded(job: V1Job) -> bool:
     conditions = job.status.conditions if job.status is not None else None
     return any(c.type == "Failed" and c.status == "True" and c.reason == "DeadlineExceeded" for c in conditions or [])
@@ -162,6 +167,8 @@ class RestorePointService:
         agent: Agent,
         restore_point: AgentRestorePoint,
         context: CurrentUserContext,
+        *,
+        backup_skipped: bool = False,
     ) -> dict:
         return {
             "organization_id": agent.organization_id,
@@ -172,6 +179,7 @@ class RestorePointService:
             "label": restore_point.label,
             "actor_display": context.user.full_name or context.user.email,
             "subject_display": agent.name,
+            "backup_skipped": backup_skipped,
         }
 
     def list_restore_points(
@@ -316,12 +324,19 @@ class RestorePointService:
         A row is committed before its Job is created, so a read landing in that
         window would otherwise fail a healthy operation. Past the grace window a
         missing Job is genuine. A restore target keeps its volume; a capture
-        releases the one it never finished writing.
+        releases the one it never finished writing. The target of a restore the
+        user ran without a backup stays restorable, since nothing else can undo it.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
         if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
-        if row.status == RestorePointStatus.RESTORING:
+        if row.status == RestorePointStatus.RESTORING and row.backup_skipped_by_user:
+            if row.reapply_configuration:
+                self.repository.mark_configuration_failed(
+                    row.id, "Nothing says the restore finished, so the recorded configuration was not applied."
+                )
+            self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
+        elif row.status == RestorePointStatus.RESTORING:
             self._fail(row, reason)
         else:
             self._fail_capture(row, reason)
@@ -352,6 +367,8 @@ class RestorePointService:
                 )
             if outcome == _RestoreOutcome.BACKUP_FAILED:
                 self.repository.mark_restored(row.id)
+            elif row.backup_skipped_by_user:
+                self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
             else:
                 self._fail(row, reason)
             return
@@ -428,7 +445,7 @@ class RestorePointService:
         if logs:
             lines = [line.strip() for line in logs.splitlines() if line.strip() and _manifest_from_line(line) is None]
             if lines:
-                return lines[-1]
+                return _without_module_path(lines[-1])
         return "The operation failed. Check the cluster logs for details."
 
     def get_restore_point(
@@ -566,7 +583,8 @@ class RestorePointService:
             # Without the copy a failed extraction has nothing to fall back to;
             # the caller keeps the target restorable instead (see
             # `reopen_failed_restore`).
-            backup = None if managed_update else self._create_pre_restore_row(current, job_name)
+            skip_backup = managed_update or payload.skip_backup
+            backup = None if skip_backup else self._create_pre_restore_row(current, job_name)
             result = self.repository.update_status_with_event(
                 target.id,
                 RestorePointStatus.RESTORING,
@@ -574,8 +592,9 @@ class RestorePointService:
                 job_name=job_name,
                 event_name=AGENT_RESTORE_POINT_RESTORED,
                 actor=resolve_actor_identity(context, current.organization_id),
-                payload=self._event_payload(current, target, context),
+                payload=self._event_payload(current, target, context, backup_skipped=payload.skip_backup),
                 reapply_configuration=payload.reapply_configuration,
+                backup_skipped_by_user=payload.skip_backup and not managed_update,
                 restored_by_user_id=context.user.id,
                 restored_by_display=context.user.full_name or context.user.email,
             )

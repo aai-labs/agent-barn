@@ -434,6 +434,23 @@ def test_a_failed_capture_releases_its_destination_volume():
             assert_that(deleted, has_item(seeded.pvc_name))
 
 
+def test_a_failed_capture_reports_the_exception_without_its_module_path():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"failed": 1})
+        k8s.read_job_logs.return_value = (
+            "Traceback (most recent call last):\n"
+            "api.domains.agents.restore_point_job.DestinationFullError: the volume is full\n"
+        )
+
+        with when("the capture job failed with a Python exception"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+
+        with then("the reason names the exception but not the module it lives in"):
+            assert_that(body["failure_reason"], equal_to("DestinationFullError: the volume is full"))
+
+
 def test_failed_captures_do_not_consume_the_per_agent_cap():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         _seed(context, status_value=RestorePointStatus.FAILED)
@@ -574,6 +591,72 @@ def test_restore_runs_a_single_job_serving_both_rows():
 
         with then("exactly one job is created"):
             assert_that(k8s.create_job.call_count, equal_to(1))
+
+
+def test_restore_without_backup_takes_no_backup_and_says_so_in_the_audit_event():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.create_job.reset_mock()
+
+        with when("I restore it after choosing to go on without a backup"):
+            response = context.client.post(
+                _restore_url(context, target.id), json={"skip_backup": True}, headers=_auth(context)
+            )
+
+        with then("no backup row or volume is made and the Job has no backup volume"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            listed = context.client.get(_url(context), headers=_auth(context)).json()["items"]
+            origins = [item["origin"] for item in listed]
+            assert_that(origins, is_not(has_item(RestorePointOrigin.PRE_RESTORE.value)))
+            job = k8s.create_job.call_args.args[1]
+            env_names = {e.name for e in job.spec.template.spec.containers[0].env}
+            assert_that("RESTORE_POINT_BACKUP" not in env_names, equal_to(True))
+
+        with then("the restore event records that the backup was skipped"):
+            messages = _outbox(context, AGENT_RESTORE_POINT_RESTORED)
+            assert_that(messages, has_length(1))
+            assert_that(messages[0].payload["backup_skipped"], equal_to(True))
+
+
+def test_a_failed_extraction_without_a_backup_keeps_the_target_restorable():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        context.client.post(_restore_url(context, target.id), json={"skip_backup": True}, headers=_auth(context))
+        created = k8s.create_job.call_args.args[1]
+        k8s.get_job.return_value = V1Job(metadata=created.metadata, spec=created.spec, status=V1JobStatus(failed=1))
+        k8s.get_pod_name_for_job.return_value = "rp-res-pod"
+        k8s.get_job_exit_code.return_value = EXIT_RESTORE_FAILED
+        k8s.read_job_logs.return_value = "restore failed: corrupt archive"
+        k8s.delete_pvc.reset_mock()
+
+        with when("the extraction fails and the user had skipped the backup"):
+            rows = context.client.get(_url(context), headers=_auth(context)).json()["items"]
+
+        with then("the target is ready to restore again, says why it failed, and keeps its volume"):
+            assert_that(rows, has_length(1))
+            assert_that(rows[0]["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(rows[0]["failure_reason"], contains_string("corrupt archive"))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+
+
+def test_a_lost_restore_job_without_a_backup_keeps_the_target_restorable():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        context.client.post(_restore_url(context, target.id), json={"skip_backup": True}, headers=_auth(context))
+        _backdate(context, target.id)
+        k8s.get_job.return_value = None
+        k8s.delete_pvc.reset_mock()
+
+        with when("the Job is deleted before anyone read how it ended"):
+            row = context.client.get(f"{_url(context)}/{target.id}", headers=_auth(context)).json()
+
+        with then("the target is ready to restore again and keeps its volume"):
+            assert_that(row["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(row["failure_reason"], contains_string("no longer available"))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
 
 
 def test_restore_on_a_running_agent_returns_409():

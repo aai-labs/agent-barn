@@ -32,7 +32,7 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
     return null;
   }
 
-  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
+  const update = () => void managedUpdate.mutateAsync({ agentId: agent.id }).catch(toastError);
 
   return (
     <div
@@ -90,7 +90,7 @@ export function AgentUpdateNotice({ agent }: { agent: Agent }) {
     return null;
   }
 
-  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
+  const update = () => void managedUpdate.mutateAsync({ agentId: agent.id }).catch(toastError);
 
   if (updating) {
     return (
@@ -154,6 +154,7 @@ export function AgentUpdateOutcomeNote({
   agent: Agent;
   restorePointsHref: string;
 }) {
+  const managedUpdate = useManagedUpdate();
   const last = agent.lastManagedUpdate;
   if (!last || agent.updateInProgress) {
     return null;
@@ -172,8 +173,35 @@ export function AgentUpdateOutcomeNote({
       <>
         The last update was not applied because the automatic backup could not be taken
         {last.failureReason ? `: ${last.failureReason}` : "."}{" "}
-        {agent.status === "STOPPED" &&
-          `${agent.name} was stopped but not changed. Start it to keep using the current version.`}
+        {agent.status === "STOPPED" && (
+          <>
+            {agent.name} was stopped but not changed. Start it to keep using the current version,
+            or update without a backup. If the new version does not come up healthy there is
+            nothing to roll back to, and {agent.name} stays stopped.
+            <span className="mt-3 block">
+              <button
+                className="af-btn af-btn-primary af-btn-sm"
+                data-testid="agent-update-skip-backup-button"
+                disabled={managedUpdate.isPending}
+                onClick={() =>
+                  void managedUpdate
+                    .mutateAsync({ agentId: agent.id, skipBackup: true })
+                    .catch(toastError)
+                }
+              >
+                <RotateCcw size={14} /> Update without backup snapshot
+              </button>
+            </span>
+          </>
+        )}
+      </>
+    );
+  } else if (last.outcome === "UPDATE_FAILED" && agent.status === "STOPPED") {
+    message = (
+      <>
+        The update, run without a backup, did not come up healthy. There was nothing to roll back
+        to, so {agent.name} was stopped. Start it to go back to the version it ran before the
+        update.
       </>
     );
   } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING") {

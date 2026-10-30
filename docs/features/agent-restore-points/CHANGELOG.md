@@ -23,6 +23,29 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails
+
+- Delivered: `skip_backup` on the restore request and on `POST .../managed-update`. The UI offers
+  it after the automatic backup fails ("Restore without backup snapshot" / "Update without backup
+  snapshot"). The restore offer lives only in the browser. The update offer sits in the note that
+  says the backup failed, and is shown at every screen width for as long as the Agent stays stopped
+  with outcome `BACKUP_FAILED`, so it survives a reload. It was first placed in the update banner,
+  which the navigation rework had made phone-only, so desktop never saw it.
+- Delivered: the update accepts `skip_backup` only for a `STOPPED` Agent whose last outcome is
+  `BACKUP_FAILED`. If the new image fails there is no rollback: the Agent is stopped and the
+  outcome is the new `UPDATE_FAILED`.
+- Delivered: a backup that fails before an update pins the Agent to the image its pod ran. The
+  platform pin already names the new version, so before this a plain start ran it with no backup,
+  and a failed update without a backup put back an empty pin and so started the new version again.
+  Reverses "a capture that fails leaves the pin alone". The image comes from the pod or an existing
+  pin only; when neither has it, no pin is set, since the platform's may already be the new one.
+- Delivered: a restore that skipped its backup and then fails during extraction returns its target
+  to `READY` with the reason on the row, so it can be tried again.
+- Delivered: audit — `agent.managed_update.backup_skipped` and `backup_skipped` on
+  `agent.restore_point.restored`.
+- Not changed: a restore with `skip_backup` is not checked against a failed backup, because a
+  restore already replaces the volume.
+
 ### 2026-10-07 — AF-201 — Managed update review fixes
 
 - Fixed: a rollback restore Job killed with no output (OOM, deadline, eviction) was read as "never
