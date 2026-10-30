@@ -13,6 +13,7 @@ import {
   mockResourceUsage,
   mockUsageSnapshot,
 } from "../pages/data-support/resource-usage-data-support.po";
+import { dayStartIso } from "../pages/usage-date-picker.po";
 
 const ADA = mockOverviewItem({
   id: MOCK_SECOND_AGENT_ID,
@@ -245,18 +246,18 @@ test.describe("Agents overview", () => {
     await expect(page.getByTestId("resource-usage-notice").getByRole("button")).toHaveCount(0);
   });
 
-  test("totals spend over the period the reader picks", async ({ page }) => {
+  test("totals spend over the last 15 days, or the days the reader picks", async ({ page }) => {
     const requests = await dataSupportPage.resourceUsage.interceptAgentOverview({
       body: mockAgentOverview([mockOverviewItem()]),
     });
     await overview.goto();
     await expect(overview.rows()).toHaveCount(1);
-    expect(requests.map((request) => request.get("period"))).toEqual(["THIRTY_DAYS"]);
+    expect(requests.map((request) => request.get("from_date"))).toEqual([dayStartIso(14)]);
 
-    await overview.choosePeriod("Last 7 days");
+    await overview.dates().chooseLastDays(7);
 
-    await expect.poll(() => requests.map((request) => request.get("period"))).toContain("SEVEN_DAYS");
-    await expect(page).toHaveURL(/period=SEVEN_DAYS/);
+    await expect.poll(() => requests.map((request) => request.get("from_date"))).toContain(dayStartIso(6));
+    await expect(page).toHaveURL(/usageFrom=/);
   });
 
   test("says how many agents it is showing when there are more", async ({ page }) => {
@@ -308,7 +309,7 @@ test.describe("Agents overview", () => {
       await expect(cost).toContainText("8");
       const usage = page.getByTestId("agent-overview-usage");
       await expect(usage).toContainText("342 MiB of 1 GiB");
-      await expect(usage).toContainText("Peak memory, 14d");
+      await expect(usage).toContainText("Peak memory, 15d");
 
       await expect(status.getByRole("link", { name: /Open agent/ })).toHaveAttribute(
         "href",
@@ -378,16 +379,16 @@ test.describe("Agents overview", () => {
       await expect(page.getByTestId("agent-overview-usage")).toContainText("342 MiB of 1 GiB");
     });
 
-    test("covers the spend period in usage, up to the 14 days Prometheus keeps", async ({ page }) => {
+    test("covers the page's days in usage, up to the 15 days Prometheus keeps", async ({ page }) => {
       const requests = await dataSupportPage.resourceUsage.interceptAgentResourceUsage(MOCK_AGENT_ID);
       await overview.goto();
       await overview.toggleFor("Maya").click();
       const usage = page.getByTestId("agent-overview-usage");
 
-      await expect(usage).toContainText("Peak memory, 14d");
-      expect(requests.map((request) => request.get("range"))).toEqual(["14d"]);
+      await expect(usage).toContainText("Peak memory, 15d");
+      expect(requests.map((request) => request.get("from_date"))).toEqual([dayStartIso(14)]);
 
-      await overview.choosePeriod("Last 7 days");
+      await overview.dates().chooseLastDays(7);
       await overview.toggleFor("Maya").click();
 
       await expect(usage).toContainText("Peak memory, 7d");

@@ -3,8 +3,9 @@ from itertools import pairwise
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 
-from api.domains.resource_usage.models import ResourceUsageRange, ResourceUsageState, resolve_usage_window
+from api.domains.resource_usage.models import ResourceUsageState, resolve_usage_window
 from api.domains.resource_usage.promql import (
     agent_id_from_labels,
     agent_requests_query,
@@ -105,6 +106,13 @@ def test_a_live_pods_limit_wins_over_an_older_pods_within_the_window():
         f"max by (app) (agent_cpu_limit_cores{_SEL})"
         f" or max by (app) (last_over_time(agent_cpu_limit_cores{_SEL}[1209600s]))"
     ) in query
+
+
+def test_throttling_over_a_past_window_is_read_as_it_was_at_the_windows_end():
+    query = instant_query(_SEL, 300, 86400, throttle_offset_seconds=7200)
+
+    assert f"increase(agent_cpu_throttled_periods_total{_SEL}[86400s] offset 7200s)" in query
+    assert f"increase(agent_cpu_periods_total{_SEL}[86400s] offset 7200s)" in query
 
 
 def test_the_range_query_takes_the_peak_memory_and_the_rate_of_cpu():
@@ -303,8 +311,11 @@ def test_combined_points_are_keyed_by_field_and_epoch_second():
 # --- windows ---------------------------------------------------------------
 
 
-def test_the_window_end_is_aligned_to_the_step():
-    window = resolve_usage_window(ResourceUsageRange.ONE_DAY, datetime(2026, 9, 29, 11, 7, 33, tzinfo=UTC))
+_NOW = datetime(2026, 9, 29, 11, 7, 33, tzinfo=UTC)
+
+
+def test_with_no_dates_the_window_is_the_last_24_hours_aligned_to_the_step():
+    window = resolve_usage_window(None, None, _NOW)
 
     assert window.end == datetime(2026, 9, 29, 11, 5, tzinfo=UTC)
     assert window.start == datetime(2026, 9, 28, 11, 5, tzinfo=UTC)
@@ -312,24 +323,24 @@ def test_the_window_end_is_aligned_to_the_step():
 
 
 def test_polls_within_one_step_ask_for_the_same_window():
-    first = resolve_usage_window(ResourceUsageRange.ONE_DAY, datetime(2026, 9, 29, 11, 5, 1, tzinfo=UTC))
-    second = resolve_usage_window(ResourceUsageRange.ONE_DAY, datetime(2026, 9, 29, 11, 9, 59, tzinfo=UTC))
+    first = resolve_usage_window(None, None, datetime(2026, 9, 29, 11, 5, 1, tzinfo=UTC))
+    second = resolve_usage_window(None, None, datetime(2026, 9, 29, 11, 9, 59, tzinfo=UTC))
 
     assert first == second
 
 
 @pytest.mark.parametrize(
-    ("usage_range", "step_seconds", "points"),
+    ("span", "step_seconds", "points"),
     [
-        (ResourceUsageRange.ONE_HOUR, 60, 61),
-        (ResourceUsageRange.SIX_HOURS, 120, 181),
-        (ResourceUsageRange.ONE_DAY, 300, 289),
-        (ResourceUsageRange.SEVEN_DAYS, 1800, 337),
-        (ResourceUsageRange.FOURTEEN_DAYS, 3600, 337),
+        (timedelta(hours=1), 60, 61),
+        (timedelta(hours=24), 300, 289),
+        (timedelta(days=7), 1800, 337),
+        (timedelta(days=15), 3600, 361),
     ],
 )
-def test_each_range_draws_a_bounded_evenly_spaced_timeline(usage_range, step_seconds, points):
-    window = resolve_usage_window(usage_range, datetime(2026, 9, 29, 11, 7, 33, tzinfo=UTC))
+def test_a_picked_window_draws_a_bounded_evenly_spaced_timeline(span, step_seconds, points):
+    end = datetime(2026, 9, 29, 11, tzinfo=UTC)
+    window = resolve_usage_window(end - span, end, _NOW)
     timeline = window.timeline()
 
     assert window.step_seconds == step_seconds
@@ -339,9 +350,18 @@ def test_each_range_draws_a_bounded_evenly_spaced_timeline(usage_range, step_sec
     assert all((later - earlier).total_seconds() == step_seconds for earlier, later in pairwise(timeline))
 
 
-def test_no_range_reaches_further_back_than_prometheus_keeps():
-    # Retention is 15 days (helm/monitoring/values.yaml), and the newest data is a step old.
-    assert max(usage_range.seconds for usage_range in ResourceUsageRange) < 15 * 24 * 3600
+def test_a_picked_window_is_cut_to_the_15_days_prometheus_keeps_and_to_now():
+    window = resolve_usage_window(_NOW - timedelta(days=40), _NOW + timedelta(days=1), _NOW)
+
+    assert window.start >= _NOW - timedelta(days=15, hours=1)
+    assert window.end <= _NOW
+
+
+def test_a_window_entirely_older_than_15_days_is_rejected():
+    with pytest.raises(HTTPException) as raised:
+        resolve_usage_window(_NOW - timedelta(days=30), _NOW - timedelta(days=20), _NOW)
+
+    assert raised.value.status_code == 422
 
 
 # --- what an agent is doing ------------------------------------------------

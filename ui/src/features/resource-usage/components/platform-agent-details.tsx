@@ -2,7 +2,7 @@
 
 import { Muted, PANEL_GRID_STYLE, Panel, PanelSkeleton, StatusFacts, UsageFacts } from "./agent-detail-panels";
 import { usePlatformAgentDetails } from "../hooks/use-platform-agent-details";
-import type { ResourceUsageRange } from "../schemas";
+import type { UsageDates } from "../utils";
 
 /**
  * What an opened Heaviest agents row shows: the same Status and Resource usage panels the
@@ -11,8 +11,8 @@ import type { ResourceUsageRange } from "../schemas";
  * No Cost panel, and no links: a Platform Administrator has no Membership, so an
  * Organization's agent pages are not theirs to open. Mounted only while the row is open.
  */
-export function PlatformAgentDetails({ agentId, range }: { agentId: string; range: ResourceUsageRange }) {
-  const { details, isLoadingDetails, error } = usePlatformAgentDetails(agentId, range);
+export function PlatformAgentDetails({ agentId, dates }: { agentId: string; dates: UsageDates }) {
+  const { details, isLoadingDetails, error } = usePlatformAgentDetails(agentId, dates);
   const failed = !!error || (!isLoadingDetails && !details);
 
   return (

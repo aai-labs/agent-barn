@@ -27,6 +27,9 @@ interface DateRangePickerProps {
   ariaLabel?: string;
   /** Maximum number of inclusive calendar days a selected range may span. */
   maxRangeDays?: number;
+  /** The earliest and latest days that can be picked; the days outside are disabled. */
+  minDate?: Date;
+  maxDate?: Date;
 }
 
 function toDateRange(from: string, to: string): DateRange | undefined {
@@ -53,6 +56,8 @@ export function DateRangePicker({
   className = "af-input",
   ariaLabel,
   maxRangeDays,
+  minDate,
+  maxDate,
 }: DateRangePickerProps) {
   const range = toDateRange(from, to);
   const [rangeError, setRangeError] = useState<string | null>(null);
@@ -83,13 +88,15 @@ export function DateRangePicker({
         <Calendar
           mode="range"
           selected={range}
-          defaultMonth={range?.from}
+          defaultMonth={range?.from ?? minDate}
           numberOfMonths={2}
-          disabled={
-            maxRangeDays && range?.from && !range.to
-              ? (date) => calendarDayDistance(range.from!, date) + 1 > maxRangeDays
-              : undefined
-          }
+          disabled={[
+            ...(minDate ? [{ before: minDate }] : []),
+            ...(maxDate ? [{ after: maxDate }] : []),
+            ...(maxRangeDays && range?.from && !range.to
+              ? [(date: Date) => calendarDayDistance(range.from!, date) + 1 > maxRangeDays]
+              : []),
+          ]}
           onSelect={(next) => {
             if (
               maxRangeDays &&

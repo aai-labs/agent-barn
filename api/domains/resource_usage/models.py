@@ -10,47 +10,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from fastapi import HTTPException, Query, status
 from pydantic import BaseModel as PydanticBaseModel
 
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.platform_admin.models import StatsPeriod
 from api.domains.rbac.catalog import PermissionKey
 
+# Prometheus keeps 15 days, so a window reaches back no further.
+USAGE_RETENTION = timedelta(days=15)
+DEFAULT_USAGE_SPAN = timedelta(hours=24)
 
-class ResourceUsageRange(str, enum.Enum):
-    """How far back a chart looks. Capped at 14 days: Prometheus keeps 15."""
-
-    ONE_HOUR = "1h"
-    SIX_HOURS = "6h"
-    ONE_DAY = "24h"
-    SEVEN_DAYS = "7d"
-    FOURTEEN_DAYS = "14d"
-
-    @property
-    def seconds(self) -> int:
-        return _RANGE_SECONDS[self]
-
-    @property
-    def step_seconds(self) -> int:
-        return _RANGE_STEP_SECONDS[self]
-
-
-_RANGE_SECONDS = {
-    ResourceUsageRange.ONE_HOUR: 3600,
-    ResourceUsageRange.SIX_HOURS: 6 * 3600,
-    ResourceUsageRange.ONE_DAY: 24 * 3600,
-    ResourceUsageRange.SEVEN_DAYS: 7 * 24 * 3600,
-    ResourceUsageRange.FOURTEEN_DAYS: 14 * 24 * 3600,
-}
-
-# Each range is drawn with a step that keeps a chart at 60 to 337 points.
-_RANGE_STEP_SECONDS = {
-    ResourceUsageRange.ONE_HOUR: 60,
-    ResourceUsageRange.SIX_HOURS: 120,
-    ResourceUsageRange.ONE_DAY: 300,
-    ResourceUsageRange.SEVEN_DAYS: 1800,
-    ResourceUsageRange.FOURTEEN_DAYS: 3600,
-}
+# A window is drawn at the finest of these steps that keeps it at or under the point cap.
+_USAGE_STEPS_SECONDS = (60, 120, 300, 1800, 3600)
+_MAX_POINTS = 360
 
 # The cap on the agents overview. Its queries and its per-row health polling grow with
 # the page, so a bounded page is a deliberate limit, and `total` reports the rest. The cap
@@ -60,31 +33,57 @@ OVERVIEW_MAX_AGENTS = 100
 
 @dataclass(frozen=True)
 class UsageWindow:
-    """A chart window with its end aligned to the step.
+    """A chart window with both ends aligned to the step.
 
     Aligned so that repeated polls ask for the same points; a moving start would shift
     every bucket on each refresh and make the chart wobble.
     """
 
-    usage_range: ResourceUsageRange
     start: datetime
     end: datetime
     step_seconds: int
 
+    @property
+    def seconds(self) -> int:
+        return int((self.end - self.start).total_seconds())
+
     def timeline(self) -> list[datetime]:
-        count = int((self.end - self.start).total_seconds()) // self.step_seconds
-        return [self.start + timedelta(seconds=self.step_seconds * i) for i in range(count + 1)]
+        return [
+            self.start + timedelta(seconds=self.step_seconds * i) for i in range(self.seconds // self.step_seconds + 1)
+        ]
 
 
-def resolve_usage_window(usage_range: ResourceUsageRange, now: datetime) -> UsageWindow:
-    step = usage_range.step_seconds
-    end = datetime.fromtimestamp(int(now.timestamp()) // step * step, UTC)
-    return UsageWindow(
-        usage_range=usage_range,
-        start=end - timedelta(seconds=usage_range.seconds),
-        end=end,
-        step_seconds=step,
-    )
+def resolve_usage_window(from_date: datetime | None, to_date: datetime | None, now: datetime) -> UsageWindow:
+    """The last 24 hours, or the picked dates cut to what Prometheus still holds and to now.
+
+    The response's `from_date` and `to_date` then say what was read. Naive datetimes are
+    read as UTC, as the stats windows read them.
+    """
+
+    def as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    end = min(as_utc(to_date), now) if to_date is not None else now
+    start = max(as_utc(from_date), now - USAGE_RETENTION) if from_date is not None else end - DEFAULT_USAGE_SPAN
+    if start >= end:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The window must end after it starts, within the last 15 days.",
+        )
+    span = (end - start).total_seconds()
+    step = next((step for step in _USAGE_STEPS_SECONDS if span / step <= _MAX_POINTS), _USAGE_STEPS_SECONDS[-1])
+
+    def align(moment: datetime) -> datetime:
+        return datetime.fromtimestamp(int(moment.timestamp()) // step * step, UTC)
+
+    return UsageWindow(start=align(start), end=align(end), step_seconds=step)
+
+
+def get_usage_window(
+    from_date: datetime | None = Query(default=None),
+    to_date: datetime | None = Query(default=None),
+) -> UsageWindow:
+    return resolve_usage_window(from_date, to_date, datetime.now(UTC))
 
 
 class ResourceUsageAvailability(str, enum.Enum):
@@ -115,7 +114,6 @@ class ResourceUsagePoint(PydanticBaseModel):
 
 class AgentResourceUsageRead(PydanticBaseModel):
     agent_id: UUID
-    range: ResourceUsageRange
     from_date: datetime
     to_date: datetime
     step_seconds: int
@@ -267,7 +265,6 @@ class PlatformCapacityRead(PydanticBaseModel):
 
 
 class PlatformResourceUsageRead(PydanticBaseModel):
-    range: ResourceUsageRange
     from_date: datetime
     to_date: datetime
     step_seconds: int
@@ -303,7 +300,6 @@ class PlatformAgentResourceUsageRead(PydanticBaseModel):
     reusing its DTO. `availability` is about the source, `state` about the Agent.
     """
 
-    range: ResourceUsageRange
     from_date: datetime
     to_date: datetime
     step_seconds: int

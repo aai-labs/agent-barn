@@ -4,8 +4,9 @@ Cross-Organization by design: a Platform Administrator reads it without an Activ
 Organization, so the scenarios seed more than one Organization and expect both counted.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
@@ -752,7 +753,6 @@ def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
 
         with then("its usage covers the last 24 hours, with the limits it runs with"):
             usage = body["resource_usage"]
-            assert_that(usage["range"], equal_to("24h"))
             assert_that(usage["availability"], equal_to("available"))
             assert_that(usage["state"], equal_to("reporting"))
             assert_that(usage["memory_working_set_bytes"], equal_to(1 * _GiB))
@@ -760,7 +760,7 @@ def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
             assert_that(usage["cpu_limit_cores"], equal_to(1))
 
 
-def test_an_opened_row_covers_the_range_the_page_asks_for():
+def test_an_opened_row_covers_the_window_the_page_asks_for():
     with given(
         [
             *_BASE_GIVEN,
@@ -770,14 +770,16 @@ def test_an_opened_row_covers_the_range_the_page_asks_for():
             *_platform_admin("admin-details-range@example.com"),
         ]
     ) as context:
-        with when("the admin opens an agent with the page set to the last 14 days"):
-            response = _details(context, context.cy.id, "?range=14d")
+        now = datetime.now(UTC)
+        picked = {"from_date": (now - timedelta(days=15)).isoformat(), "to_date": now.isoformat()}
+        with when("the admin opens an agent with the page set to the last 15 days"):
+            response = _details(context, context.cy.id, "?" + urlencode(picked))
 
-        with then("its usage covers 14 days, one point an hour"):
+        with then("its usage covers those 15 days, one point an hour"):
             usage = response.json()["resource_usage"]
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(usage["range"], equal_to("14d"))
             assert_that(usage["step_seconds"], equal_to(3600))
+            assert_that(datetime.fromisoformat(usage["from_date"]) < now - timedelta(days=14), equal_to(True))
 
 
 def test_an_opened_row_carries_the_agents_request_beside_its_limit():

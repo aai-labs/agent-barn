@@ -45,15 +45,17 @@ def _limit(metric: str, sel: str, window: str) -> str:
     return f"max by (app) ({metric}{sel}) or max by (app) (last_over_time({metric}{sel}[{window}]))"
 
 
-def instant_query(sel: str, window_seconds: int, throttle_window_seconds: int) -> str:
+def instant_query(sel: str, window_seconds: int, throttle_window_seconds: int, throttle_offset_seconds: int = 0) -> str:
     """Current figures for the selected Agents, one row per (agent, field).
 
     `window_seconds` bounds how far back a limit is looked up, so an Agent that stopped
     a moment ago still reports its limits. While a pod is live its own limit wins: each pod
     is its own series, so over a long window a replaced pod's higher limit would otherwise
-    outlast a resize. Throttling is a ratio over its own window.
+    outlast a resize. Throttling is a ratio over its own window, which ends
+    `throttle_offset_seconds` before the query's time, so a window in the past is read as it was.
     """
-    w, t = f"{window_seconds}s", f"{throttle_window_seconds}s"
+    w = f"{window_seconds}s"
+    t = f"[{throttle_window_seconds}s]" + (f" offset {throttle_offset_seconds}s" if throttle_offset_seconds else "")
     return _join(
         [
             _tag("up", f"max by (app) (up{sel})"),
@@ -64,8 +66,8 @@ def instant_query(sel: str, window_seconds: int, throttle_window_seconds: int) -
             _tag("cpu_limit_cores", _limit("agent_cpu_limit_cores", sel, w)),
             _tag(
                 "cpu_throttled_ratio",
-                f"sum by (app) (increase(agent_cpu_throttled_periods_total{sel}[{t}]))"
-                f" / clamp_min(sum by (app) (increase(agent_cpu_periods_total{sel}[{t}])), 1)",
+                f"sum by (app) (increase(agent_cpu_throttled_periods_total{sel}{t}))"
+                f" / clamp_min(sum by (app) (increase(agent_cpu_periods_total{sel}{t})), 1)",
             ),
         ]
     )

@@ -1,39 +1,26 @@
 "use client";
 
-import { parseAsString, parseAsStringEnum, useQueryState } from "nuqs";
+import { parseAsString, useQueryState } from "nuqs";
 import { RefreshCw } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { OrganizationCombobox } from "@/components/organization-combobox";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChartCard } from "@/features/costs/components/cost-charts-panel";
 
-import { formatBytes, formatCores } from "../format";
+import { formatBytes, formatCores, formatUsageDates } from "../format";
 import { usePlatformResourceUsage } from "../hooks/use-platform-resource-usage";
-import type { PlatformResourceUsage, ResourceUsageRange } from "../schemas";
-import {
-  DEFAULT_USAGE_RANGE,
-  METER_CRITICAL_RATIO,
-  RESOURCE_USAGE_RANGES,
-  THROTTLING_WARN_RATIO,
-  usageRatio,
-} from "../utils";
+import { useUsageDates } from "../hooks/use-usage-dates";
+import type { PlatformResourceUsage } from "../schemas";
+import { METER_CRITICAL_RATIO, THROTTLING_WARN_RATIO, usageRatio } from "../utils";
 import { CapacitySection } from "./capacity-section";
 import { OrganizationsByUsage } from "./organizations-by-usage";
 import { PlatformAgentsUsageTable } from "./platform-agents-usage-table";
 import { CpuChart, MemoryChart } from "./resource-usage-charts";
 import { ResourceUsageNotice } from "./resource-usage-notice";
+import { UsageDatePicker } from "./usage-date-picker";
 import { UsageStatCard } from "./usage-stat-card";
 
-const RANGE_VALUES = RESOURCE_USAGE_RANGES.map((range) => range.value);
 const STAT_GRID_STYLE = { gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" };
 // min(..., 100%) keeps a column from being wider than the screen it is on.
 const CHART_GRID_STYLE = { gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))" };
@@ -46,18 +33,12 @@ const CHART_GRID_STYLE = { gridTemplateColumns: "repeat(auto-fit, minmax(min(420
  * resource usage as Platform Oversight Data.
  */
 export function PlatformResourceUsagePage({ agentsOnly = false }: { agentsOnly?: boolean }) {
-  const [range, setRange] = useQueryState(
-    "range",
-    parseAsStringEnum<ResourceUsageRange>(RANGE_VALUES)
-      .withDefault(DEFAULT_USAGE_RANGE)
-      .withOptions({ scroll: false, history: "replace" }),
-  );
+  const [dates, pickDates] = useUsageDates();
   const [orgId, setOrgId] = useQueryState("orgId", parseAsString.withOptions({ history: "replace" }));
   const [orgName, setOrgName] = useQueryState("orgName", parseAsString.withOptions({ history: "replace" }));
-  const { usage, isLoadingUsage, isFetching, error, refetch } = usePlatformResourceUsage(range, orgId);
+  const { usage, isLoadingUsage, isFetching, error, refetch } = usePlatformResourceUsage(dates, orgId);
 
-  const rangeLabel =
-    RESOURCE_USAGE_RANGES.find((option) => option.value === range)?.label.toLowerCase() ?? range;
+  const rangeLabel = formatUsageDates(dates, "last 24 hours");
 
   const selectOrganization = (organization: { id: string; name: string } | null) => {
     void setOrgId(organization?.id ?? null);
@@ -81,25 +62,7 @@ export function PlatformResourceUsagePage({ agentsOnly = false }: { agentsOnly?:
             organizationName={orgName}
             onChange={selectOrganization}
           />
-          <Select value={range} onValueChange={(value) => void setRange(value as ResourceUsageRange)}>
-            <SelectTrigger
-              className="af-input !h-auto"
-              style={{ width: "12rem" }}
-              aria-label="Time range"
-              data-testid="platform-usage-range"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {RESOURCE_USAGE_RANGES.map(({ value, label }) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <UsageDatePicker dates={dates} onChange={pickDates} placeholder="Last 24 hours" />
           <button className="af-btn flex-shrink-0" onClick={() => void refetch()}>
             <RefreshCw size={14} /> Refresh
           </button>
@@ -152,14 +115,14 @@ export function PlatformResourceUsagePage({ agentsOnly = false }: { agentsOnly?:
                         subtitle="In use, excluding cache. Each agent's highest reading in a step, added up."
                         testId="platform-usage-memory-chart"
                       >
-                        <MemoryChart series={usage.series} range={usage.range} limitBytes={null} />
+                        <MemoryChart series={usage.series} limitBytes={null} />
                       </ChartCard>
                       <ChartCard
                         title="CPU"
                         subtitle={`Cores in use, all agents together, ${rangeLabel}.`}
                         testId="platform-usage-cpu-chart"
                       >
-                        <CpuChart series={usage.series} range={usage.range} limitCores={null} />
+                        <CpuChart series={usage.series} limitCores={null} />
                       </ChartCard>
                     </div>
                   </>
@@ -172,7 +135,7 @@ export function PlatformResourceUsagePage({ agentsOnly = false }: { agentsOnly?:
                     <PlatformAgentsUsageTable
                       agents={usage.agents}
                       needUpdate={usage.totals.agentsRestartRequired ?? 0}
-                      range={range}
+                      dates={dates}
                     />
                     <p className="m-0 mt-3 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
                       Readings are current, refreshed every minute.

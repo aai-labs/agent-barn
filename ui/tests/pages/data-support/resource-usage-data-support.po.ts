@@ -15,11 +15,17 @@ export function usageSeries(points = 25) {
   }));
 }
 
+/** The picked days a request asked for, as the API echoes them back; nothing when none were picked. */
+function askedWindow(params: URLSearchParams): Record<string, string> {
+  const from = params.get("from_date");
+  const to = params.get("to_date");
+  return { ...(from ? { from_date: from } : {}), ...(to ? { to_date: to } : {}) };
+}
+
 /** What the API returns for a running agent that reports usage. */
 export function mockResourceUsage(overrides: Record<string, unknown> = {}) {
   return {
     agent_id: MOCK_AGENT_ID,
-    range: "24h",
     from_date: "2026-09-28T12:00:00Z",
     to_date: "2026-09-29T12:00:00Z",
     step_seconds: 300,
@@ -145,7 +151,6 @@ function platformTotals(overrides: Record<string, unknown> = {}) {
  */
 export function mockPlatformUsage(overrides: Record<string, unknown> = {}) {
   return {
-    range: "24h",
     from_date: "2026-09-28T12:00:00Z",
     to_date: "2026-09-29T12:00:00Z",
     step_seconds: 300,
@@ -236,8 +241,7 @@ export function mockPlatformAgentDetails(overrides: Record<string, unknown> = {}
     restart_count: 3,
     termination_reason: "OOMKilled",
     resource_usage: {
-      range: "24h",
-      from_date: "2026-09-28T12:00:00Z",
+        from_date: "2026-09-28T12:00:00Z",
       to_date: "2026-09-29T12:00:00Z",
       step_seconds: 300,
       availability: "available",
@@ -292,7 +296,7 @@ export class ResourceUsageDataSupport {
 
   /**
    * Answers one agent's resource usage. Returns the query strings it was asked with, so a
-   * test can check the range the page sent. With no body it echoes the requested range,
+   * test can check the days the page sent. With no body it echoes the requested days,
    * the way the API does.
    */
   async interceptAgentResourceUsage(
@@ -312,7 +316,7 @@ export class ResourceUsageDataSupport {
           body: JSON.stringify(
             status >= 400
               ? { detail: "Unable to load resource usage" }
-              : (body ?? mockResourceUsage({ agent_id: agentId, range: params.get("range") ?? "24h" })),
+              : (body ?? mockResourceUsage({ agent_id: agentId, ...askedWindow(params) })),
           ),
         });
       },
@@ -350,7 +354,7 @@ export class ResourceUsageDataSupport {
       const answer =
         typeof body === "function"
           ? body(params)
-          : (body ?? mockPlatformUsage({ range: params.get("range") ?? "24h" }));
+          : (body ?? mockPlatformUsage(askedWindow(params)));
       await route.fulfill({
         status,
         contentType: "application/json",
@@ -412,14 +416,14 @@ export class ResourceUsageDataSupport {
       const agentId = url.pathname.split("/").pop() ?? "";
       asked.push(agentId);
       const defaults = mockPlatformAgentDetails({ agent_id: agentId });
-      const range = url.searchParams.get("range") ?? "24h";
+      const window = askedWindow(url.searchParams);
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(
           status >= 400
             ? { detail: "Unable to load this agent" }
-            : (body?.(agentId) ?? { ...defaults, resource_usage: { ...defaults.resource_usage, range } }),
+            : (body?.(agentId) ?? { ...defaults, resource_usage: { ...defaults.resource_usage, ...window } }),
         ),
       });
     });
