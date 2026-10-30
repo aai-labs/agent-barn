@@ -180,8 +180,18 @@ class ArtifactRepository:
                         ),
                     )
                     .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
+                    .limit(1)
+                    .with_for_update(of=Artifact)
                 ).first()
                 if existing is not None:
+                    retention = (
+                        timedelta(days=self.config.artifact_retention_days)
+                        if existing.state == "READY"
+                        else timedelta(hours=1)
+                    )
+                    existing.expires_at = max(existing.expires_at, datetime.now(UTC) + retention)
+                    session.add(existing)
+                    session.commit()
                     return existing
             row = Artifact(
                 **payload.model_dump(),

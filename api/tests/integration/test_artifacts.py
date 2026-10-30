@@ -1,7 +1,12 @@
 import base64
 import hashlib
+import os
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from threading import Event, Lock
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -14,13 +19,15 @@ from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.artifacts.credentials import runtime_token
 from api.domains.artifacts.models import Artifact, ArtifactReference
+from api.domains.artifacts.repository import ArtifactRepository
 from api.domains.artifacts.service import ArtifactService
 from api.domains.workflows.run_models import AttemptResult
 from api.domains.workflows.runtime_service import WorkflowRuntimeService
 from api.infrastructure.crypto import encrypt_token
+from api.infrastructure.s3.client import ArtifactStorage
 from api.tests.core.givenpy import given
 from api.tests.core.modules import set_env_variable
-from api.tests.helpers.artifacts import garage_storage, provision_agents
+from api.tests.helpers.artifacts import garage_storage, provision_agents, running_product_api
 from api.tests.helpers.workflows import draft
 from api.tests.integration.test_workflow_runs import attempt, start
 from api.tests.integration.test_workflows import _GIVEN, auth, base, switch_member
@@ -264,6 +271,30 @@ def test_runtime_reuses_human_published_file(storage):
         )
 
 
+@pytest.mark.parametrize("published", [True, False])
+def test_runtime_reuse_renews_near_expiry_artifact(storage, published):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        headers = runtime_auth(context)
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        original = context.client.post(path, headers=headers, json=metadata()).json()
+        if published:
+            response = context.client.put(path + f"/{original['id']}/content", headers=headers, content=CONTENT)
+            assert_that(response.status_code, equal_to(200))
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get_one(Artifact, UUID(original["id"]))
+            row.expires_at = datetime.now(UTC) + timedelta(seconds=5)
+            session.add(row)
+            session.commit()
+        reused = context.client.post(path, headers=headers, json=metadata()).json()
+        assert_that(reused["id"], equal_to(original["id"]))
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get_one(Artifact, UUID(original["id"]))
+            minimum = timedelta(days=29) if published else timedelta(minutes=59)
+            assert_that(row.expires_at > datetime.now(UTC) + minimum, is_(True))
+        assert_that(context.injector.get(ArtifactService).purge(), equal_to(0))
+
+
 def test_runtime_matching_uploads_converge_concurrently(storage):
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
@@ -273,6 +304,75 @@ def test_runtime_matching_uploads_converge_concurrently(storage):
             responses = list(pool.map(lambda _: context.client.post(path, headers=headers, json=metadata()), range(6)))
         assert_that([response.status_code for response in responses], equal_to([201] * 6))
         assert_that(len({response.json()["id"] for response in responses}), equal_to(1))
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_concurrent_runtime_cli_uploads_recover_shared_publication(storage, tmp_path, monkeypatch, fail_first):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        headers = runtime_auth(context)
+        service = context.injector.get(ArtifactStorage)
+        repository = context.injector.get(ArtifactRepository)
+        put = service.put
+        create = repository.create
+        writing, release, second_admitted = Event(), Event(), Event()
+        counts = {"create": 0, "put": 0}
+        lock = Lock()
+
+        def coordinated_create(*args, **kwargs):
+            with lock:
+                counts["create"] += 1
+                if counts["create"] == 2:
+                    second_admitted.set()
+            return create(*args, **kwargs)
+
+        def coordinated_put(*args, **kwargs):
+            with lock:
+                counts["put"] += 1
+                first = counts["put"] == 1
+            if first:
+                writing.set()
+                if not release.wait(10):
+                    raise TimeoutError("second upload did not start")
+                if fail_first:
+                    raise OSError("simulated first write failure")
+            return put(*args, **kwargs)
+
+        monkeypatch.setattr(repository, "create", coordinated_create)
+        monkeypatch.setattr(service, "put", coordinated_put)
+        local_file = tmp_path / "report.csv"
+        local_file.write_bytes(CONTENT)
+        script = Path(__file__).parents[2] / "domains/agents/scripts/agentbarn_artifacts.py"
+        with running_product_api(context) as origin:
+            variables = {
+                **os.environ,
+                "ARTIFACT_URL": origin + "/api/v1/agent-artifacts/runtime",
+                "ARTIFACT_API_KEY": headers["Authorization"].removeprefix("Bearer "),
+                "ARTIFACT_UPLOAD_ROOTS": str(tmp_path),
+            }
+
+            def upload():
+                return subprocess.run(
+                    [sys.executable, str(script), "upload", str(local_file)],
+                    env=variables,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(upload)
+                assert_that(writing.wait(10), is_(True))
+                second = pool.submit(upload)
+                try:
+                    assert_that(second_admitted.wait(10), is_(True))
+                finally:
+                    release.set()
+                results = [first.result(), second.result()]
+        assert_that([result.returncode for result in results], equal_to([0, 0]), str([r.stderr for r in results]))
+        listing = context.client.get("/api/v1/agent-artifacts/runtime/artifacts", headers=headers).json()
+        assert_that(listing["items"], has_length(1))
 
 
 def test_runtime_reuse_respects_name_content_and_deleted_state(storage):

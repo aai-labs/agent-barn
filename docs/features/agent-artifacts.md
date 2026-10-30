@@ -58,8 +58,9 @@ include user filenames. A changed file creates a new artifact ID. An ordinary ru
 reuses an unexpired READY artifact in the current bucket for the same Agent,
 filename, size and SHA-256, regardless of whether it originated in messaging, a
 human upload or a workflow. Matching concurrent messaging uploads also share a
-staging identity; a concurrent byte write may return a retryable conflict. Reuse
-retains the original metadata and expiration. Human uploads and new workflow
+staging identity; the runtime retries a concurrent byte-write conflict. Reuse
+retains the original metadata and renews retention from reuse, or renews the
+one-hour staging window while publication is pending. Human uploads and new workflow
 publications retain separate identities and workflow provenance.
 
 Human metadata/list/download-link reads require current Membership, `agent.read`
@@ -315,7 +316,8 @@ Integrations, approval policy and spend limits.
 
 ## Retention, deletion and recovery
 
-Ordinary unpinned files retain for 30 days from publication. Active run/checkpoint
+Ordinary unpinned files retain for 30 days from publication or the most recent
+messaging reuse. Active run/checkpoint
 or future pending-review references prevent expiry. Settlement releases run pins
 in the same transaction and starts 30 days from final active reference release.
 Paused/blocked runs remain pinned. Cancellation retains published outputs and
