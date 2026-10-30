@@ -159,7 +159,7 @@ class WorkflowRunRepository:
         grace = timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
         return records, AttemptRead(
             number=len(step_attempts),
-            limit=1,
+            limit=max(1, len(step_attempts)),
             started_at=current.created_at,
             expires_at=current.expires_at,
             server_time=now,

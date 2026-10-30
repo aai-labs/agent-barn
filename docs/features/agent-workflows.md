@@ -256,16 +256,16 @@ control stays visible so users can return to the final summary. Selection stays
 within the current run; changing runs resets to the overall view. Results use the
 shared chat Markdown viewer. A compact Time taken card shows durations. Each completed step shows
 wall-clock time from its first attempt admission to its persisted checkpoint,
-including dispatch waiting and retries. The API exposes nullable `started_at` and
+including dispatch waiting and any attempts recorded by older versions. The API exposes nullable `started_at` and
 `completed_at` fields derived from existing attempts/checkpoints; no migration is
 needed. Unfinished steps show their status, and missing timestamps are unavailable
 rather than zero. Total run time spans run creation through settlement and includes
-queueing and retries. Selecting a completed step also shows its duration. The
+queueing and any earlier attempts. Selecting a completed step also shows its duration. The
 run screen also lists the run's history newest first as Activity (one `history?newest_first=true` read,
 refreshed when the run's revision changes), so a failed attempt's
-reason stays visible while the run retries or after it ends; a completed step shows only
+reason stays visible after an attempt ends; a completed step shows only
 "Step completed" there, since its summary belongs to the step. While a step runs, the
-single-run read includes `attempt` (number, the three-attempt limit, start, deadline and
+single-run read includes `attempt` (number, displayed attempt count, start, deadline and
 `server_time` (the API's clock, which the screen uses for elapsed and remaining time so a
 skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
 not accepted the step after 60 seconds). The
