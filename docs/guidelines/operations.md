@@ -16,7 +16,7 @@ as in the README setup; native transport dependencies belong to the runtime imag
 
 ## Database migrations
 
-Revision `e700d800fb8a` joins staging's file-sync and workflow re-run histories
+Revision `921deb774e01` joins staging's file-sync and workflow re-run histories
 (`63c0e8364607` and `c7d4e2a91b58`) into one head. It has no schema or data
 operations, and preserves both parent histories on upgrade and downgrade.
 
