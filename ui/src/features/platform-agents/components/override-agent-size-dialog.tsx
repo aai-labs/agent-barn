@@ -56,7 +56,7 @@ export function OverrideAgentSizeDialog({
         onSuccess: (updated) => {
           toast.success(
             agentSizeId === null
-              ? `${updated.name} is back on the default size`
+              ? `${updated.name} is back on the default spec`
               : updated.pendingSize
                 ? `${updated.name} moves to ${updated.agentSize.name} when it restarts`
                 : `${updated.name} will start on ${updated.agentSize.name}`,
@@ -70,10 +70,10 @@ export function OverrideAgentSizeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[28rem]" data-testid="override-agent-size-dialog">
         <DialogHeader>
-          <DialogTitle>CPU &amp; memory for {agent.name}</DialogTitle>
+          <DialogTitle>Agent spec for {agent.name}</DialogTitle>
           <DialogDescription>
-            {agent.organizationName} can&apos;t change a size set here until you clear it. The Agent keeps
-            running; the size applies the next time it starts.
+            {agent.organizationName} can&apos;t change a spec set here until you clear it. The Agent keeps
+            running; the spec applies the next time it starts.
           </DialogDescription>
         </DialogHeader>
 
@@ -86,11 +86,11 @@ export function OverrideAgentSizeDialog({
         >
           <div className="flex flex-col gap-1.5">
             <label className="text-[0.8rem] font-medium" style={{ color: "var(--ink-2)" }} htmlFor="override-size">
-              Size
+              Spec
             </label>
             <Select value={selected} onValueChange={setSelected} disabled={isLoadingSizes || setSize.isPending}>
-              <SelectTrigger id="override-size" aria-label="Size" className="w-full">
-                <SelectValue placeholder={isLoadingSizes ? "Loading sizes…" : "Choose a size"} />
+              <SelectTrigger id="override-size" aria-label="Spec" className="w-full">
+                <SelectValue placeholder={isLoadingSizes ? "Loading specs…" : "Choose a spec"} />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
@@ -134,7 +134,7 @@ export function OverrideAgentSizeDialog({
                 Cancel
               </button>
               <button type="submit" className="af-btn af-btn-primary" disabled={setSize.isPending || unchanged}>
-                {setSize.isPending && <Loader2 size={14} className="animate-spin" />} Set size
+                {setSize.isPending && <Loader2 size={14} className="animate-spin" />} Set spec
               </button>
             </div>
           </DialogFooter>

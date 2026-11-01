@@ -38,7 +38,7 @@ def _conflict(detail: str) -> HTTPException:
 
 
 def _not_found() -> HTTPException:
-    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent size not found")
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent spec not found")
 
 
 @inject
@@ -63,12 +63,12 @@ class AgentSizeService:
 
     def create_size(self, data: AgentSizeCreate, context: CurrentUserContext) -> AgentSizeRead:
         if self.repository.name_taken(data.name):
-            raise _conflict(f"A size named {data.name!r} already exists")
+            raise _conflict(f"A spec named {data.name!r} already exists")
         size = AgentSize(**data.model_dump(), is_default=False)
         try:
             result = self.repository.create_with_event(size, actor=_actor(context))
         except IntegrityError:
-            raise _conflict(f"A size named {data.name!r} already exists") from None
+            raise _conflict(f"A spec named {data.name!r} already exists") from None
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return to_read(result.size, {})
 
@@ -91,11 +91,11 @@ class AgentSizeService:
         except ValueError as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from None
         if "name" in changes and self.repository.name_taken(changes["name"], excluding=size_id):
-            raise _conflict(f"A size named {changes['name']!r} already exists")
+            raise _conflict(f"A spec named {changes['name']!r} already exists")
         if size.is_default and merged["enabled"] is False:
-            raise _conflict("The default size can't be disabled. Make another size the default first.")
+            raise _conflict("The default spec can't be disabled. Make another spec the default first.")
         if changes.get("is_default") and not merged["enabled"]:
-            raise _conflict("Enable the size before making it the default.")
+            raise _conflict("Enable the spec before making it the default.")
 
         try:
             result = self.repository.update_with_events(size_id, changes, actor=_actor(context))
@@ -113,11 +113,11 @@ class AgentSizeService:
         if size is None:
             raise _not_found()
         if size.is_default:
-            raise _conflict("The default size can't be deleted. Make another size the default first.")
+            raise _conflict("The default spec can't be deleted. Make another spec the default first.")
         try:
             result = self.repository.delete_with_event(size_id, actor=_actor(context))
         except AgentSizeInUse:
-            raise _conflict("Agents are on this size. Disable it instead, so it can't be chosen again.") from None
+            raise _conflict("Agents are on this spec. Disable it instead, so it can't be chosen again.") from None
         if result is None:
             raise _not_found()
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
@@ -169,7 +169,7 @@ class OrganizationAgentSizeService:
         except AgentSizesNotAllowable:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only enabled sizes in the catalog can be allowed.",
+                detail="Only enabled specs in the catalog can be allowed.",
             ) from None
         if delivery_ids is None:
             raise HTTPException(

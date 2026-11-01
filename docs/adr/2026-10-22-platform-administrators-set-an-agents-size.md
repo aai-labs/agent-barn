@@ -2,10 +2,9 @@
 
 Status: Accepted
 Date: 2026-10-22
-Origin: Agent Sizes epic, agreed with Kalkidan Betre on 2026-10-21
 Amended: 2026-10-23, Platform Administrators restart any Agent, per the epic's acceptance criteria
 
-A Platform Administrator may give one Organization's Agent an Agent Size from Platform View, and while that override stands the Organization cannot change it. This is a narrow exception to [Platform Oversight without Organization access](2026-07-30-platform-oversight-without-organization-access.md): the platform wants Organizations, starting with its own default one, kept from choosing sizes "so people don't go crazy with it", while still giving particular Agents more memory (the first was an Agent at risk of being OOM-killed on large reports). Those Organizations may later be paying customers, which makes CPU and memory a platform-granted allowance rather than an Organization setting.
+A Platform Administrator may give one Organization's Agent an Agent Size from Platform View, and while that override stands the Organization cannot change it. This is a narrow exception to [Platform Oversight without Organization access](2026-07-30-platform-oversight-without-organization-access.md): the platform wants Organizations, starting with its own default one, kept from choosing sizes freely, while still giving particular Agents more memory (the first was an Agent at risk of being OOM-killed on large reports). Those Organizations may later be paying customers, which makes CPU and memory a platform-granted allowance rather than an Organization setting.
 
 ## Considered alternatives
 

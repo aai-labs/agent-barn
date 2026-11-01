@@ -26,7 +26,7 @@ export class PlatformAgentsPage {
   }
 
   async openOverride(agentName: string) {
-    await this.page.getByRole("button", { name: `Override size of ${agentName}`, exact: true }).click();
+    await this.page.getByRole("button", { name: `Override spec of ${agentName}`, exact: true }).click();
   }
 
   dialog(): Locator {
@@ -34,12 +34,12 @@ export class PlatformAgentsPage {
   }
 
   async chooseSize(label: string) {
-    await this.dialog().getByRole("combobox", { name: "Size" }).click();
+    await this.dialog().getByRole("combobox", { name: "Spec" }).click();
     await this.page.getByRole("option", { name: label }).click();
   }
 
   async setSize() {
-    await this.dialog().getByRole("button", { name: "Set size" }).click();
+    await this.dialog().getByRole("button", { name: "Set spec" }).click();
   }
 
   async clearOverride() {

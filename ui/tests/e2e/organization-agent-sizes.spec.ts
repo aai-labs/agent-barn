@@ -21,6 +21,7 @@ const LARGE = mockSize({
   cpu_limit_millicores: 2000,
   memory_request_bytes: 2 * GIB,
   memory_limit_bytes: 4 * GIB,
+  storage_bytes: 10 * GIB,
   is_default: false,
   sort_order: 1,
 });
@@ -70,8 +71,8 @@ test.describe("Organizations choosing Agent sizes", () => {
     const { writes } = await sizes.interceptSetOrganizationSizes(organization);
 
     await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
-    const card = page.getByRole("region", { name: "Agent sizes" });
-    const toggle = card.getByRole("switch", { name: "Can choose CPU & memory" });
+    const card = page.getByRole("region", { name: "Agent specs" });
+    const toggle = card.getByRole("switch", { name: "Can choose an Agent spec" });
     await expect(card).toContainText("Every agent runs on Standard, the default");
     await expect(toggle).toHaveAttribute("aria-checked", "false");
 
@@ -79,7 +80,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     // A disabled size is not offered to an organization that does not have it already.
     await expect(card.getByRole("checkbox", { name: "Retired" })).toHaveCount(0);
     await expect(card.getByRole("button", { name: "Save" })).toBeDisabled();
-    await expect(card).toContainText("Choose at least one size, or turn choosing off.");
+    await expect(card).toContainText("Choose at least one spec, or turn choosing off.");
     await card.getByRole("checkbox", { name: "Large" }).click();
     await card.getByRole("button", { name: "Save" }).click();
 
@@ -105,7 +106,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     const { writes } = await sizes.interceptSetOrganizationSizes(organization);
 
     await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
-    const card = page.getByRole("region", { name: "Agent sizes" });
+    const card = page.getByRole("region", { name: "Agent specs" });
     const retired = card.getByRole("checkbox", { name: "Retired" });
     await expect(retired).toBeChecked();
     await expect(card).toContainText("(disabled: agents on it keep it)");
@@ -135,10 +136,10 @@ test.describe("Organizations choosing Agent sizes", () => {
     await page.getByRole("combobox", { name: "Template", exact: true }).click();
     await page.getByRole("option", { name: "General Purpose · v1" }).click();
 
-    const size = page.getByRole("combobox", { name: "CPU & memory" });
-    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB (default)");
+    const size = page.getByRole("combobox", { name: "Agent spec" });
+    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk (default)");
     await size.click();
-    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB" }).click();
+    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB · 10 GiB disk" }).click();
 
     const create = page.waitForRequest((request) => request.url().endsWith("/agents") && request.method() === "POST");
     await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
@@ -159,7 +160,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     await dashboard.openHireCard();
 
     await expect(page.getByRole("heading", { name: "Build your own agent" })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "CPU & memory" })).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "Agent spec" })).toHaveCount(0);
   });
 
   test("an owner changes a running agent's size and is told it applies on restart", async ({ page }) => {
@@ -182,14 +183,14 @@ test.describe("Organizations choosing Agent sizes", () => {
     const configuration = new AgentConfigurationPage(page);
     await configuration.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     const tile = page.getByTestId("agent-size-tile");
-    const size = tile.getByRole("combobox", { name: "CPU & memory" });
-    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB (default)");
+    const size = tile.getByRole("combobox", { name: "Agent spec" });
+    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk (default)");
     await expect(page.getByTestId("agent-pending-size-note")).toHaveCount(0);
 
     await size.click();
-    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB" }).click();
+    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB · 10 GiB disk" }).click();
 
-    await expect(size).toHaveText("Large · 2 vCPU · 4 GiB");
+    await expect(size).toHaveText("Large · 2 vCPU · 4 GiB · 10 GiB disk");
     await expect(page.getByTestId("agent-pending-size-note")).toHaveText("Pending: applies on restart");
     await expect(page.getByTestId("agent-pending-size-restart")).toBeEnabled();
     expect(writes).toEqual([{ agent_size_id: LARGE.id }]);
@@ -215,7 +216,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     await new AgentConfigurationPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID);
     const tile = page.getByTestId("agent-size-tile");
 
-    await expect(tile).toContainText("Large · 2 vCPU · 4 GiB");
+    await expect(tile).toContainText("Large · 2 vCPU · 4 GiB · 10 GiB disk");
     await expect(tile.getByTestId("agent-size-set-by-platform")).toHaveText("Set by platform");
     await expect(tile.getByRole("combobox")).toHaveCount(0);
   });
@@ -233,7 +234,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     await new AgentConfigurationPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID);
     const tile = page.getByTestId("agent-size-tile");
 
-    await expect(tile).toContainText("Standard · 0.5 vCPU · 1 GiB(default)");
+    await expect(tile).toContainText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk(default)");
     await expect(tile.getByRole("combobox")).toHaveCount(0);
   });
 });

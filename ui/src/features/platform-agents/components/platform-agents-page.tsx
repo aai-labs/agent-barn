@@ -54,7 +54,7 @@ export function PlatformAgentsPage() {
     <div data-testid="platform-agents-page">
       <ListPageHeader
         title="Agents"
-        description="Every agent on the platform, by organization, with the CPU and memory it runs on."
+        description="Every agent on the platform, by organization, with the Agent spec it runs on."
         count={total}
         noun="agent"
         onSearch={setSearch}
@@ -132,7 +132,7 @@ export function PlatformAgentsPage() {
                     <th className="px-4 py-2.5 font-medium">Agent</th>
                     <th className="px-4 py-2.5 font-medium">Runtime</th>
                     <th className="px-4 py-2.5 font-medium">Status</th>
-                    <th className="px-4 py-2.5 font-medium">CPU &amp; memory</th>
+                    <th className="px-4 py-2.5 font-medium">Agent spec</th>
                     <th className="px-4 py-2.5" aria-label="Actions" />
                   </tr>
                 </thead>
@@ -254,9 +254,9 @@ function AgentRow({
             type="button"
             className="af-btn af-btn-sm"
             onClick={onOverride}
-            aria-label={`Override size of ${agent.name}`}
+            aria-label={`Override spec of ${agent.name}`}
           >
-            Override size
+            Override spec
           </button>
           <button
             type="button"

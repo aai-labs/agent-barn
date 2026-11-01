@@ -10,10 +10,13 @@ export const agentSizesKey = {
 };
 
 export const MIB = 1024 ** 2;
+export const GIB = 1024 ** 3;
 
 // The API's bounds, so the dialog refuses what the API would.
 export const MAX_CPU_MILLICORES = 64_000;
 export const MAX_MEMORY_BYTES = 256 * 1024 ** 3;
+export const MIN_STORAGE_BYTES = 1 * GIB;
+export const MAX_STORAGE_BYTES = 100 * GIB;
 
 /** "0.05 vCPU", "2 vCPU": cores the way an administrator thinks of them. */
 export function formatCpu(millicores: number): string {
@@ -24,13 +27,14 @@ export function formatMemory(bytes: number): string {
   return formatBytes(bytes);
 }
 
-/** "Large · 2 vCPU · 4 GiB": a size by what it may grow to, the way people compare them. */
+/** "Large · 2 vCPU · 4 GiB · 10 GiB disk": a size by what it may grow to, the way people compare them. */
 export function describeSize(size: {
   name: string;
   cpuLimitMillicores: number;
   memoryLimitBytes: number;
+  storageBytes: number;
 }): string {
-  return `${size.name} · ${formatCpu(size.cpuLimitMillicores)} · ${formatMemory(size.memoryLimitBytes)}`;
+  return `${size.name} · ${formatCpu(size.cpuLimitMillicores)} · ${formatMemory(size.memoryLimitBytes)} · ${formatMemory(size.storageBytes)} disk`;
 }
 
 /** "1 agent", "3 agents". */

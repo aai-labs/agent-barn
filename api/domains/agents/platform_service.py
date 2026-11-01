@@ -21,7 +21,7 @@ def _not_found(agent_id: UUID) -> HTTPException:
 def _size_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Only an enabled size in the catalog can be set.",
+        detail="Only an enabled spec in the catalog can be set.",
     )
 
 

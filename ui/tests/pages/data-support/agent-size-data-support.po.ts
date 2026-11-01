@@ -12,6 +12,7 @@ type Size = {
   cpu_limit_millicores: number;
   memory_request_bytes: number;
   memory_limit_bytes: number;
+  storage_bytes: number;
   enabled: boolean;
   is_default: boolean;
   sort_order: number;
@@ -29,6 +30,7 @@ export function mockSize(overrides: Partial<Size> = {}): Size {
     cpu_limit_millicores: 500,
     memory_request_bytes: 320 * MIB,
     memory_limit_bytes: 1 * GIB,
+    storage_bytes: 1 * GIB,
     enabled: true,
     is_default: true,
     sort_order: 0,
@@ -87,7 +89,7 @@ export class AgentSizeDataSupport {
       const body = method === "PATCH" ? (route.request().postDataJSON() as Record<string, unknown>) : undefined;
       writes.push({ method, id, body });
       if (failWith) return reply(route, failWith.status, { detail: failWith.detail });
-      if (!size) return reply(route, 404, { detail: "Agent size not found" });
+      if (!size) return reply(route, 404, { detail: "Agent spec not found" });
       if (method === "DELETE") {
         catalog.splice(catalog.indexOf(size), 1);
         return reply(route, 204);
@@ -105,13 +107,23 @@ export class AgentSizeDataSupport {
     allowed = [],
     defaultSize = mockSize(),
   }: { allowed?: Size[]; defaultSize?: Size } = {}) {
-    const option = ({ id, name, cpu_request_millicores, cpu_limit_millicores, memory_request_bytes, memory_limit_bytes, is_default }: Size) => ({
+    const option = ({
       id,
       name,
       cpu_request_millicores,
       cpu_limit_millicores,
       memory_request_bytes,
       memory_limit_bytes,
+      storage_bytes,
+      is_default,
+    }: Size) => ({
+      id,
+      name,
+      cpu_request_millicores,
+      cpu_limit_millicores,
+      memory_request_bytes,
+      memory_limit_bytes,
+      storage_bytes,
       is_default,
     });
     await this.page.route("**/api/v1/organizations/*/agent-sizes", (route) =>

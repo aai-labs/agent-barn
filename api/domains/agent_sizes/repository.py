@@ -359,6 +359,7 @@ class AgentSizeRepository:
             "cpu_limit_millicores": size.cpu_limit_millicores,
             "memory_request_bytes": size.memory_request_bytes,
             "memory_limit_bytes": size.memory_limit_bytes,
+            "storage_bytes": size.storage_bytes,
             "enabled": size.enabled,
             "is_default": size.is_default,
         }

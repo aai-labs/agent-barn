@@ -10,9 +10,11 @@ from uuid import UUID, uuid7
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from kubernetes.client import V1Job
+from kubernetes.utils import parse_quantity
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.builders.common import pvc_capacity_bytes, pvc_storage_bytes, storage_quantity
 from api.domains.agents.builders.restore_point import (
     build_capture_job,
     build_restore_job,
@@ -45,6 +47,9 @@ from api.domains.events.catalog import (
 from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.constants import (
+    RESTORE_POINT_ARCHIVE_MARGIN_BYTES,
+    RESTORE_POINT_ARCHIVE_MARGIN_PERCENT,
+    RESTORE_POINT_ARCHIVE_ROUNDING_BYTES,
     RESTORE_POINT_POD_TERMINATION_POLL_SECONDS,
     RESTORE_POINT_POD_TERMINATION_TIMEOUT_SECONDS,
     RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS,
@@ -83,6 +88,15 @@ PRE_RESTORE_LABEL = "Automatic backup before restore"
 NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
 STILL_SHUTTING_DOWN_DETAIL = "The Agent is still shutting down. Try again in a moment."
 MANAGED_UPDATE_IN_FLIGHT_DETAIL = "A managed update is in progress for this Agent. Wait for it to finish."
+
+
+def archive_volume_bytes(volume_bytes: int) -> int:
+    """The archive volume for an Agent volume of this size: the volume, a tenth more, and
+    512MiB, rounded up to 256MiB. See `RESTORE_POINT_ARCHIVE_MARGIN_PERCENT`."""
+    wanted = (
+        volume_bytes + volume_bytes * RESTORE_POINT_ARCHIVE_MARGIN_PERCENT // 100 + RESTORE_POINT_ARCHIVE_MARGIN_BYTES
+    )
+    return -(-wanted // RESTORE_POINT_ARCHIVE_ROUNDING_BYTES) * RESTORE_POINT_ARCHIVE_ROUNDING_BYTES
 
 
 def _selection_type(agent: Agent) -> str:
@@ -755,7 +769,7 @@ class RestorePointService:
                         agent.id,
                         agent.organization_id,
                         namespace,
-                        self.config.restore_point_size,
+                        self._archive_size(agent),
                         self.config.storage_class or None,
                     ),
                 )
@@ -908,6 +922,22 @@ class RestorePointService:
         if self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace) is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_CAPTURE_DETAIL)
 
+    def _archive_size(self, agent: Agent) -> str:
+        """The volume a restore point's archive gets: the Agent's volume and a margin, so an
+        archive of a full volume of incompressible data still fits, and never below
+        `RESTORE_POINT_SIZE`.
+
+        The Agent's volume is the larger of what its claim requests and what it has, since a
+        volume can be larger than requested.
+        """
+        floor = int(parse_quantity(self.config.restore_point_size))
+        pvc = self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace)
+        volume = max(pvc_storage_bytes(pvc) or 0, pvc_capacity_bytes(pvc) or 0)
+        if not volume:
+            return self.config.restore_point_size
+        archive = archive_volume_bytes(volume)
+        return storage_quantity(archive) if archive > floor else self.config.restore_point_size
+
     def _provision_capture(self, agent: Agent, restore_point: AgentRestorePoint) -> None:
         namespace = self.config.k8s_namespace
         try:
@@ -918,7 +948,7 @@ class RestorePointService:
                     agent.id,
                     agent.organization_id,
                     namespace,
-                    self.config.restore_point_size,
+                    self._archive_size(agent),
                     self.config.storage_class or None,
                 ),
             )

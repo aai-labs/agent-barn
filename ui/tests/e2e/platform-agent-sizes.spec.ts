@@ -35,15 +35,16 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
     await expect(sizesPage.row("Standard")).toContainText("request 0.05 vCPU");
     await expect(sizesPage.row("Standard")).toContainText("1 GiB");
     await expect(sizesPage.row("Standard")).toContainText("request 320 MiB");
+    await expect(sizesPage.row("Standard").getByTestId("agent-size-storage")).toHaveText("1 GiB");
     // The default is always enabled, so its switch can't be turned off.
     await expect(sizesPage.enabledSwitch("Standard")).toBeDisabled();
-    await expect(page.getByRole("complementary").getByRole("link", { name: "Agent sizes" })).toHaveAttribute(
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Agent specs" })).toHaveAttribute(
       "aria-current",
       "page",
     );
   });
 
-  test("adds a size, sending millicores and bytes", async () => {
+  test("adds a size, sending millicores and bytes, with the 1 GiB volume unless told otherwise", async () => {
     const { writes } = await sizes.intercept();
     await sizesPage.goto();
 
@@ -67,11 +68,37 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
           cpu_limit_millicores: 2000,
           memory_request_bytes: 2 * GIB,
           memory_limit_bytes: 4 * GIB,
+          storage_bytes: 1 * GIB,
         },
       },
     ]);
     await expect(sizesPage.row("Large")).toContainText("2 vCPU");
     await expect(sizesPage.row("Large")).toContainText("4 GiB");
+  });
+
+  test("gives a size a bigger volume, in whole GiB from 1 to 100", async () => {
+    const { writes } = await sizes.intercept();
+    await sizesPage.goto();
+
+    await sizesPage.addSize();
+    await sizesPage.fill({
+      Name: "Big disk",
+      "CPU request (vCPU)": "0.05",
+      "CPU limit (vCPU)": "0.5",
+      "Memory request (MiB)": "320",
+      "Memory limit (MiB)": "1024",
+      "Storage (GiB)": "101",
+    });
+    await sizesPage.submit();
+    await expect(sizesPage.dialog()).toContainText("Enter whole GiB from 1 to 100.");
+    expect(writes).toEqual([]);
+
+    await sizesPage.fill({ "Storage (GiB)": "10" });
+    await sizesPage.submit();
+
+    await expect(sizesPage.dialog()).toBeHidden();
+    expect(writes[0].body).toEqual(expect.objectContaining({ storage_bytes: 10 * GIB }));
+    await expect(sizesPage.row("Big disk").getByTestId("agent-size-storage")).toHaveText("10 GiB");
   });
 
   test("refuses a request above its limit before anything is sent", async () => {
@@ -94,7 +121,7 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
   });
 
   test("shows the API's refusal in the dialog and keeps the edit", async () => {
-    await sizes.intercept({ failWith: { status: 409, detail: "A size named 'Standard' already exists" } });
+    await sizes.intercept({ failWith: { status: 409, detail: "A spec named 'Standard' already exists" } });
     await sizesPage.goto();
 
     await sizesPage.addSize();
@@ -133,9 +160,32 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
           cpu_limit_millicores: 500,
           memory_request_bytes: 320 * MIB,
           memory_limit_bytes: 1536 * MIB,
+          storage_bytes: 1 * GIB,
         },
       },
     ]);
+  });
+
+  test("renaming a size keeps values set in bytes exactly, so no volume grows by rounding", async () => {
+    const { writes } = await sizes.intercept({
+      sizes: [mockSize({ memory_request_bytes: 1_000_000_001, memory_limit_bytes: 2 * GIB, storage_bytes: 1536 * MIB })],
+    });
+    await sizesPage.goto();
+
+    await sizesPage.openActions("Standard");
+    await sizesPage.action("Edit").click();
+    await expect(sizesPage.field("Storage (GiB)")).toHaveValue("1.5");
+    await sizesPage.fill({ Name: "Standard plus" });
+    await sizesPage.submit();
+
+    await expect(sizesPage.dialog()).toBeHidden();
+    expect(writes[0].body).toEqual(
+      expect.objectContaining({
+        name: "Standard plus",
+        memory_request_bytes: 1_000_000_001,
+        storage_bytes: 1536 * MIB,
+      }),
+    );
   });
 
   test("makes another size the default after confirming, which moves the badge", async () => {
@@ -181,7 +231,7 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
     await sizesPage.enabledSwitch("Large").click();
     await expect(sizesPage.confirmDialog()).toContainText("2 agents on Large stay on it");
     expect(writes).toEqual([]);
-    await sizesPage.confirm("Disable size").click();
+    await sizesPage.confirm("Disable spec").click();
 
     await expect(sizesPage.enabledSwitch("Large")).toHaveAttribute("aria-checked", "false");
     expect(writes).toEqual([{ method: "PATCH", id: LARGE_ID, body: { enabled: false } }]);
@@ -229,7 +279,7 @@ test.describe("Platform Agent sizes (non platform_admin)", () => {
 
     await new AgentSizesSettingsPage(page).goto();
 
-    await expect(page.getByRole("table", { name: "Agent sizes" })).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "Agent specs" })).toHaveCount(0);
     expect(writes).toEqual([]);
   });
 });

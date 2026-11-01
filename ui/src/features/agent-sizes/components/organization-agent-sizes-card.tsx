@@ -46,15 +46,15 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
   const save = () => setAllowed.mutate(willSave, { onSuccess: () => setDraft(null) });
 
   return (
-    <section className="af-card mb-9 p-5" aria-label="Agent sizes">
+    <section className="af-card mb-9 p-5" aria-label="Agent specs">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1 basis-[22rem]">
           <h2 className="m-0 text-[15px] font-semibold" style={{ color: "var(--ink)" }}>
-            Agent sizes
+            Agent specs
           </h2>
           <p className="mb-0 mt-1 text-[13.5px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            {defaultSize ? `Every agent runs on ${defaultSize.name}, the default, ` : "Every agent runs on the default size "}
-            unless this organization may choose. Its owners and admins then pick from the sizes below, and a change
+            {defaultSize ? `Every agent runs on ${defaultSize.name}, the default, ` : "Every agent runs on the default spec "}
+            unless this organization may choose. Its owners and admins then pick from the specs below, and a change
             applies the next time the agent starts.
           </p>
         </div>
@@ -63,7 +63,7 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
             type="button"
             role="switch"
             aria-checked={current.canChoose}
-            aria-label="Can choose CPU & memory"
+            aria-label="Can choose an Agent spec"
             disabled={isLoadingSizes || setAllowed.isPending || (options.length === 0 && !current.canChoose)}
             onClick={() => update({ canChoose: !current.canChoose })}
             className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
@@ -73,13 +73,13 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
               className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${current.canChoose ? "translate-x-4" : ""}`}
             />
           </button>
-          Can choose CPU &amp; memory
+          Can choose an Agent spec
         </label>
       </div>
 
       {isLoadingSizes && (
         <p className="mb-0 mt-4 text-[13px]" style={{ color: "var(--ink-3)" }}>
-          Loading sizes…
+          Loading specs…
         </p>
       )}
       {sizesError && (
@@ -89,14 +89,14 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
       )}
       {!isLoadingSizes && !sizesError && options.length === 0 && (
         <p className="mb-0 mt-4 text-[13px]" style={{ color: "var(--ink-3)" }}>
-          There are no sizes besides the default to offer. Add one under Platform settings → Agent sizes.
+          There are no specs besides the default to offer. Add one under Platform settings → Agent specs.
         </p>
       )}
 
       {current.canChoose && options.length > 0 && (
         <fieldset className="mt-4 flex flex-col gap-2.5 border-0 p-0">
           <legend className="mb-2 text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
-            Sizes it may choose besides {defaultSize?.name ?? "the default"}
+            Specs it may choose besides {defaultSize?.name ?? "the default"}
           </legend>
           {options.map((size) => {
             const checked = current.sizeIds.includes(size.id);
@@ -130,7 +130,7 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
       {dirty && keptOn.length > 0 && (
         <p className="mb-0 mt-4 text-[13px]" data-testid="agent-sizes-withdraw-note" style={{ color: "var(--ink-3)" }}>
           {keptOn.map((size) => `${agentCountLabel(size.agentCount)} on ${size.name}`).join(", ")} stay on{" "}
-          {keptOn.length === 1 ? "it" : "them"} until someone changes their size. Withdrawing only stops a size
+          {keptOn.length === 1 ? "it" : "them"} until someone changes their spec. Withdrawing only stops a spec
           being chosen again.
         </p>
       )}
@@ -139,7 +139,7 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           {missingChoice && (
             <span className="mr-auto text-[13px]" style={{ color: "var(--ink-3)" }}>
-              Choose at least one size, or turn choosing off.
+              Choose at least one spec, or turn choosing off.
             </span>
           )}
           <button

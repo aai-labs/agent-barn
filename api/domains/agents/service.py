@@ -12,13 +12,14 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from kubernetes.client.exceptions import ApiException
 from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
-from api.domains.agent_sizes.models import size_is_pending, size_resources
+from api.domains.agent_sizes.models import LEGACY_STORAGE_BYTES, running_snapshot, size_is_pending
 from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_tool_context_md,
@@ -50,8 +51,11 @@ from api.domains.agents.builders import (
     native_slack_env,
     native_telegram_channel,
     native_telegram_env,
+    pvc_capacity_bytes,
+    pvc_storage_bytes,
     runtime_teams_channel,
     runtime_teams_env,
+    storage_quantity,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
@@ -200,7 +204,7 @@ from api.infrastructure.integration_validators import (
 from api.infrastructure.integration_validators.atlassian_utils import (
     get_atlassian_cloud_id,
 )
-from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.kubernetes.client import KubernetesClient, VolumeExpansionUnsupported
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -274,14 +278,14 @@ def _refuse_during_managed_update(agent: Agent) -> None:
 def _size_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="That size isn't available to your organization.",
+        detail="That spec isn't available to your organization.",
     )
 
 
 def _size_set_by_platform() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail="A platform administrator set this agent's size, so it can't be changed here.",
+        detail="A platform administrator set this agent's spec, so it can't be changed here.",
     )
 
 
@@ -411,7 +415,7 @@ class AgentService:
             context,
             org_id,
             PermissionKey.AGENT_SIZE_MANAGE,
-            detail="You don't have permission to choose an agent's size.",
+            detail="You don't have permission to choose an agent's spec.",
         )
 
     def _size_to_store(self, agent_size_id: UUID | None, org_id: UUID) -> UUID | None:
@@ -1146,7 +1150,7 @@ class AgentService:
             context,
             agent_id,
             PermissionKey.AGENT_SIZE_MANAGE,
-            detail="You don't have permission to change this agent's size.",
+            detail="You don't have permission to change this agent's spec.",
         )
         # The Organization grant, which the Agent check above takes for granted from an
         # Owner or Admin role.
@@ -1184,6 +1188,7 @@ class AgentService:
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_visible(context, agent_id)
+        self._reconcile_volume(agent)
         return self._get_agent_read(agent, context)
 
     def get_agent_template(self, agent_id: UUID, version: int, context: CurrentUserContext) -> TemplateRead:
@@ -2230,6 +2235,70 @@ class AgentService:
                 logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
         return connection.settings, connection.credentials, home_channel
 
+    def _ensure_volume(self, pvc: object, name: str, namespace: str, storage_bytes: int) -> int:
+        """Ask an existing volume to grow to its size's storage, and return what it has now.
+
+        A new volume was just created at that size. An older, smaller one is patched up, which
+        needs a StorageClass that allows volume expansion. Kubernetes grows a volume
+        asynchronously and can still fail after accepting the patch, so what is returned is the
+        volume's actual capacity, not the request: `pending_size` keeps saying the size is not
+        applied until the capacity catches up, which `_reconcile_volume` notices. When the
+        cluster refuses outright, the Agent still starts on the volume it has. A volume is never
+        shrunk, so a larger one than the size asks for stays.
+
+        A StorageClass that cannot grow volumes at all, such as `local-path`, which does not
+        enforce a claim's size either, counts the volume as already at the size's storage, so
+        the Agent is not left pending on a resize that can never happen.
+        """
+        requested = pvc_storage_bytes(pvc)
+        if requested is None:
+            # Nothing to read back (the PVC call returned no manifest): what was asked for.
+            return storage_bytes
+        if requested < storage_bytes:
+            try:
+                self.k8s.patch_pvc_storage(name, namespace, storage_quantity(storage_bytes))
+            except VolumeExpansionUnsupported:
+                logger.info(
+                    "Volume %s's StorageClass cannot grow volumes; counting it as %s bytes", name, storage_bytes
+                )
+                return storage_bytes
+            except ApiException as exc:
+                logger.warning(
+                    "Could not grow volume %s from %s to %s bytes (%s %s); starting on the volume it has",
+                    name,
+                    requested,
+                    storage_bytes,
+                    exc.status,
+                    exc.reason,
+                )
+        # A claim that is not bound yet, such as one just created, has no capacity to read and
+        # is provisioned at its request.
+        capacity = pvc_capacity_bytes(pvc)
+        return capacity if capacity is not None else requested
+
+    def _reconcile_volume(self, agent: Agent) -> None:
+        """Record a running Agent's grown volume once Kubernetes has finished growing it.
+
+        Only reads the cluster when the Agent's size asks for more storage than its last start
+        recorded, so an Agent read stays local otherwise. A read failure leaves the record as
+        it is: the Agent keeps reading as pending, which is the safe side.
+        """
+        if agent.status != AgentStatus.RUNNING or agent.running_resources is None:
+            return
+        recorded = agent.running_resources.get("storage_bytes", LEGACY_STORAGE_BYTES)
+        if self.agent_sizes.resolve(agent.agent_size_id).storage_bytes <= recorded:
+            return
+        try:
+            capacity = pvc_capacity_bytes(self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace))
+        except Exception:
+            logger.warning("Could not read the volume of agent %s to reconcile its size", agent.id, exc_info=True)
+            return
+        if capacity is None or capacity <= recorded:
+            return
+        updated = self.repository.record_volume_capacity(agent.id, capacity)
+        if updated is not None:
+            agent.running_resources = updated
+
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         try:
@@ -2792,9 +2861,14 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.create_config_map(ns, config_map)
         self.k8s.create_secret(ns, secret)
-        self.k8s.create_pvc(
+        volume_bytes = self._ensure_volume(
+            self.k8s.create_pvc(
+                ns,
+                build_pvc(agent.id, org_id, ns, self.config.storage_class or None, storage_bytes=size.storage_bytes),
+            ),
+            name,
             ns,
-            build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+            size.storage_bytes,
         )
         self.k8s.create_service(ns, service)
         self.k8s.create_deployment(ns, deployment)
@@ -2808,8 +2882,9 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
-        # Likewise the resources, so a size changed while it runs reads as pending.
-        agent.running_resources = size_resources(size)
+        # Likewise the resources and the volume, so a size changed while it runs reads as
+        # pending.
+        agent.running_resources = running_snapshot(size, volume_bytes)
         if agent.agent_type == AgentType.HERMES:
             agent.running_config_digest = agent_runtime_config_digest(
                 self.config.openclaw_image,

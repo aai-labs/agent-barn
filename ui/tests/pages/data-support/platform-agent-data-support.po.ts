@@ -25,9 +25,19 @@ function option({
   cpu_limit_millicores,
   memory_request_bytes,
   memory_limit_bytes,
+  storage_bytes,
   is_default,
 }: Size) {
-  return { id, name, cpu_request_millicores, cpu_limit_millicores, memory_request_bytes, memory_limit_bytes, is_default };
+  return {
+    id,
+    name,
+    cpu_request_millicores,
+    cpu_limit_millicores,
+    memory_request_bytes,
+    memory_limit_bytes,
+    storage_bytes,
+    is_default,
+  };
 }
 
 export function mockPlatformAgent(overrides: Partial<PlatformAgent> = {}): PlatformAgent {
