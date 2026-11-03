@@ -12,6 +12,7 @@ import {
   useArtifacts,
   useArtifactDownload,
   useArtifactUpload,
+  useArtifactStorage,
 } from "@/features/artifacts/hooks/use-artifacts";
 import type { Artifact } from "@/features/artifacts/schemas";
 import {
@@ -43,6 +44,7 @@ export function WorkflowFileInput({
   onUploadingChange: (busy: boolean) => void;
 }) {
   const { files } = useArtifacts(agentId);
+  const { storage, provision } = useArtifactStorage(agentId);
   const upload = useArtifactUpload(agentId);
   const download = useArtifactDownload(agentId);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -54,6 +56,39 @@ export function WorkflowFileInput({
     rows.find((file) => file.id === selectedId) ??
     (lastUploaded?.id === selectedId ? lastUploaded : undefined);
   const busy = disabled || upload.isPending;
+  const ready = storage.data?.state === "READY";
+
+  if (storage.isPending) return <p role="status">Checking artifact storage…</p>;
+  if (storage.error)
+    return (
+      <p role="alert">
+        Storage status is unavailable.{" "}
+        <button type="button" className="underline" onClick={() => void storage.refetch()}>
+          Retry
+        </button>
+      </p>
+    );
+  if (!ready) {
+    const state = storage.data?.state;
+    const message = state === "NOT_CONFIGURED"
+      ? "Artifact storage is unavailable. Ask an administrator to configure it."
+      : state === "PROVISIONING"
+        ? "Artifact storage is being prepared."
+        : state === "FAILED"
+          ? "Artifact storage provisioning failed."
+          : "Artifact storage is not provisioned.";
+    return (
+      <div className="space-y-2 text-sm">
+        <p role="status">{message}</p>
+        {state !== "NOT_CONFIGURED" && (
+          <Button type="button" variant="outline" disabled={disabled || provision.isPending} onClick={() => provision.mutate()}>
+            {state === "NOT_PROVISIONED" ? "Provision storage" : "Retry provisioning"}
+          </Button>
+        )}
+        {provision.error && <p role="alert">Storage provisioning could not be requested.</p>}
+      </div>
+    );
+  }
 
   if (files.error)
     return (
@@ -196,7 +231,7 @@ export function WorkflowFileInput({
         </p>
       )}
       <p className="text-xs leading-relaxed text-[var(--ink-3)]">
-        Choose an existing artifact or upload a file up to 100 MiB. Uploads are
+        Choose an existing artifact or upload a file up to {storage.data!.maxBytes.toLocaleString()} bytes. Uploads are
         saved to this Agent; starting the run pins the selected file.
       </p>
     </div>

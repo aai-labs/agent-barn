@@ -14,6 +14,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-11-03 — AF-430 — review fixes
+
+- Recovery rotates active and parked runs independently; storage status exposes the configured upload limit and workflow inputs offer provisioning.
+- Locked provider items are recorded for later retry without blocking the connection cursor. Workflow handoff checks prompt size before retrieval, retrieves files with bounded concurrency and a shared deadline, and clears abandoned temporary inputs at startup.
+- Verification: focused PostgreSQL/Garage, sync, runtime and authorization tests pass; recovery-starvation and locked-file regressions were reproduced against the original behavior. Workflow browser tests pass with stubbed API responses. Live provider/model acceptance remains separate.
+
+
 ### 2026-10-30 — AF-387 — staging integration
 
 - Re-runs retain the source version and revalidate and pin its file inputs. Uncertain attempts remain blocked rather than replayed; explicit non-retryable failures settle and release pins.

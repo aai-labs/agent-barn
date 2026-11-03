@@ -885,7 +885,7 @@ def test_running_step_reports_its_attempt_and_an_unresponsive_agent() -> None:
         assert context.client.get(url, headers=auth(context)).json()["attempt"] is None
         repository, row, _ = attempt(context, run_id)
         live = context.client.get(url, headers=auth(context)).json()["attempt"]
-        assert (live["number"], live["limit"], live["agent_unresponsive"]) == (1, 1, False)
+        assert (live["number"], live["agent_unresponsive"]) == (1, False)
         with Session(context.postgres_delegate.engine) as session:
             stored = session.get_one(WorkflowAttempt, row.id)
             stored.created_at = datetime.now(UTC) - timedelta(minutes=2)
@@ -976,3 +976,59 @@ def test_history_can_be_read_newest_first_and_the_attempt_carries_server_time() 
         assert_that(newest["total"], equal_to(len(oldest)))
         live = context.client.get(url, headers=auth(context)).json()["attempt"]
         assert_that(live["server_time"] is not None, is_(True))
+
+
+def test_recovery_active_runs_are_not_starved_by_parked_runs() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        run_id = UUID(response.json()["id"])
+        repository = context.injector.get(WorkflowRunRepository)
+        with Session(context.postgres_delegate.engine) as session:
+            active = session.get_one(WorkflowRun, run_id)
+            for index in range(105):
+                session.add(
+                    WorkflowRun(
+                        workflow_id=active.workflow_id,
+                        version_id=active.version_id,
+                        initiating_user_id=active.initiating_user_id,
+                        initiating_membership_id=active.initiating_membership_id,
+                        client_request_id=uuid4(),
+                        request_hash=str(index),
+                        inputs={},
+                        state="BLOCKED" if index % 2 else "PAUSED",
+                        updated_at=datetime.now(UTC) - timedelta(hours=1),
+                        runtime=active.runtime,
+                    )
+                )
+            session.commit()
+        assert run_id in repository.active_ids()
+        first = set(repository.parked_ids(limit=100))
+        second = set(repository.parked_ids(limit=100))
+        assert len(first) == len(second) == 100
+        assert len(first | second) == 105
+
+
+def test_recovery_rotates_active_runs_that_make_no_progress() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        repository = context.injector.get(WorkflowRunRepository)
+        with Session(context.postgres_delegate.engine) as session:
+            source = session.get_one(WorkflowRun, UUID(response.json()["id"]))
+            for index in range(105):
+                session.add(
+                    WorkflowRun(
+                        workflow_id=source.workflow_id,
+                        version_id=source.version_id,
+                        initiating_user_id=source.initiating_user_id,
+                        initiating_membership_id=source.initiating_membership_id,
+                        client_request_id=uuid4(),
+                        request_hash=str(index),
+                        inputs={},
+                        state="RUNNING",
+                        runtime=source.runtime,
+                    )
+                )
+            session.commit()
+        first = set(repository.active_ids(limit=100))
+        second = set(repository.active_ids(limit=100))
+        assert len(first | second) == 106

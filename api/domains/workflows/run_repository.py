@@ -42,10 +42,10 @@ from api.domains.workflows.run_models import (
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
-def _timeout_cause(accepted: bool, earlier: str | None) -> str:
+def _timeout_cause(accepted: bool) -> str:
     """Why an attempt expired unreported, keeping the failure an earlier attempt reported."""
     timeout = "The attempt timed out" if accepted else "The Agent did not accept the step"
-    return f"{earlier} (last attempt: {timeout})" if earlier else timeout
+    return timeout
 
 
 def start_hash(payload: WorkflowRunCreate, user_id: UUID, rerun_of_run_id: UUID | None) -> str:
@@ -159,7 +159,6 @@ class WorkflowRunRepository:
         grace = timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
         return records, AttemptRead(
             number=len(step_attempts),
-            limit=max(1, len(step_attempts)),
             started_at=current.created_at,
             expires_at=current.expires_at,
             server_time=now,
@@ -516,16 +515,30 @@ class WorkflowRunRepository:
         run.settled_at = datetime.now(UTC)
 
     def active_ids(self, limit: int = 100) -> list[UUID]:
-        """Operator/controller-only scan; HTTP callers use scoped queries above."""
-        with Session(self.delegate.engine) as session:
-            return list(
+        """Select and rotate active recovery work; no-op dispatches cannot starve newer runs."""
+        return self._recovery_ids(("QUEUED", "RUNNING", "CANCELLING"), limit)
+
+    def parked_ids(self, limit: int = 100) -> list[UUID]:
+        """Audit parked runs separately for lifecycle and authorization changes."""
+        return self._recovery_ids(("BLOCKED", "PAUSED"), limit)
+
+    def _recovery_ids(self, states: tuple[str, ...], limit: int) -> list[UUID]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            rows = list(
                 session.exec(
-                    select(WorkflowRun.id)
-                    .where(col(WorkflowRun.state).not_in(TERMINAL_STATES))
-                    .order_by(col(WorkflowRun.updated_at))
+                    select(WorkflowRun)
+                    .where(col(WorkflowRun.state).in_(states))
+                    .order_by(col(WorkflowRun.updated_at), col(WorkflowRun.id))
                     .limit(limit)
+                    .with_for_update(skip_locked=True)
                 )
             )
+            now = datetime.now(UTC)
+            for row in rows:
+                row.updated_at = now
+                session.add(row)
+            session.commit()
+            return [row.id for row in rows]
 
     def inspect(self, run_id: UUID) -> tuple[WorkflowRun, WorkflowAttempt | None] | None:
         with Session(self.delegate.engine) as session:
@@ -540,7 +553,7 @@ class WorkflowRunRepository:
             return run, attempt
 
     def advance(
-        self, run_id: UUID, *, stopped: bool = False, lost: bool = False, cause: str | None = None
+        self, run_id: UUID, *, stopped: bool = False, lost: bool = False
     ) -> tuple[WorkflowAttempt | None, list[UUID]]:
         """Serialize all progression. Recovery never replays completed checkpoints."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -581,7 +594,7 @@ class WorkflowRunRepository:
                     run.state, run.reason = (
                         "BLOCKED",
                         (
-                            f"{_timeout_cause(attempt.dispatched_at is not None, None)}; "
+                            f"{_timeout_cause(attempt.dispatched_at is not None)}; "
                             "outcome is uncertain; inspect external effects before starting another run"
                         ),
                     )

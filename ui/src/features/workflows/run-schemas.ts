@@ -61,7 +61,6 @@ export const WorkflowRunSchema = z.object({
   attempt: z
     .object({
       number: z.number(),
-      limit: z.number(),
       startedAt: z.string(),
       expiresAt: z.string(),
       serverTime: z.string(),

@@ -43,6 +43,15 @@ class SyncActivityKind(StrEnum):
     SKIPPED_NAME = "skipped_name"
 
 
+class SyncLockedItem(BaseModel, table=True):
+    """Durable provider item to revisit after a lock, scoped by its connection."""
+
+    __tablename__: str = "sync_locked_item"
+    __table_args__ = (sa.UniqueConstraint("connection_id", "item_id", name="uq_sync_locked_item"),)
+    connection_id: UUID = SqlField(foreign_key="sync_provider_connection.id", ondelete="CASCADE", index=True)
+    item_id: str = SqlField(nullable=False)
+
+
 class SyncAgentFolder(BaseModel, table=True):
     """One Agent's folder inside the connection's "Agent Barn" folder.
 

@@ -513,3 +513,56 @@ def test_verified_workflow_inputs_are_readable_but_not_offered_to_file_sync(
     assert seen["paths"] == ["workspace/ordinary.csv"]
     assert outcomes == ["http://api/attempts/a/result"]
     assert list(workspace.iterdir()) == [ordinary]
+
+
+def test_startup_cleans_abandoned_workflow_inputs_without_following_symlinks(monkeypatch, trigger_server, tmp_path):
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(tmp_path))
+    abandoned = tmp_path / ".workflow-files-stale"
+    abandoned.mkdir()
+    (abandoned / "input").write_text("private")
+    keep = tmp_path / "ordinary"
+    keep.mkdir()
+    (keep / "file").write_text("keep")
+    (tmp_path / ".workflow-files-link").symlink_to(keep, target_is_directory=True)
+    trigger_server._clean_workflow_directories()
+    assert not abandoned.exists()
+    assert (keep / "file").read_text() == "keep"
+
+
+def test_oversized_file_manifest_fails_before_download(monkeypatch, trigger_server, tmp_path):
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(tmp_path))
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    reports, downloads = [], []
+    files = [{"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e", "checksum": "a" * 64}]
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            return {"session_id": "s", "prompt": "x" * 63900, "files": files}
+        reports.append(body)
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_retrieve_workflow_files", lambda *args: downloads.append(args))
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert downloads == []
+    assert "context exceeds" in reports[0]["reason"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_workflow_file_retrieval_runs_concurrently_and_preserves_manifest_order(monkeypatch, trigger_server, tmp_path):
+    import threading
+    from types import SimpleNamespace
+
+    barrier = threading.Barrier(2, timeout=5)
+    files = [
+        {"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e", "checksum": "a" * 64},
+        {"artifact_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8f", "checksum": "b" * 64},
+    ]
+
+    def retrieve(*args, **kwargs):
+        barrier.wait()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(trigger_server.subprocess, "run", retrieve)
+    result = trigger_server._retrieve_workflow_files(files, str(tmp_path), "attempt")
+    assert [item["artifact_id"] for item in result] == [item["artifact_id"] for item in files]

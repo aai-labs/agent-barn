@@ -31,6 +31,24 @@ test.describe("WF02 run progress and text results", () => {
     support = new WorkflowRunDataSupport(page);
     await support.intercept(MOCK_AGENT_ID);
   });
+  test("file inputs expose provisioning and enforce the configured limit", async ({ page }) => {
+    support.fileInputs = true;
+    support.storageState = "NOT_PROVISIONED";
+    support.storageLimit = 8;
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openInputReview();
+    await expect(page.getByText("Artifact storage is not provisioned.")).toBeVisible();
+    await page.getByRole("button", { name: "Provision storage" }).click();
+    await expect(page.getByText("Artifact storage is being prepared.")).toBeVisible();
+    expect(support.provisionRequests).toBe(1);
+    support.storageState = "READY";
+    await expect(page.getByText(/file up to 8 bytes/)).toBeVisible({ timeout: 10000 });
+    await runs.uploadFile("Reporting period", Buffer.from("123456789"));
+    await expect(page.getByText("Files must be at most 8 bytes", { exact: true })).toBeVisible();
+    expect(support.uploadedBytes).toBeNull();
+  });
+
   test("selects an existing file and retains exact references across start retries", async ({ page }) => {
     support.fileInputs = true;
     support.failStart = true;
@@ -334,13 +352,12 @@ test.describe("WF02 run progress and text results", () => {
     );
   });
 
-  test("a retrying step shows its attempt, the failure reason and the activity", async ({
+  test("a running step shows its attempt and activity", async ({
     page,
   }) => {
-    support.runReason = "Step failed, retrying: Pipedrive is not connected";
+    support.runReason = "Pipedrive is not connected";
     support.attempt = {
       number: 2,
-      limit: 3,
       started_at: "2026-10-17T10:01:00Z",
       expires_at: "2026-10-17T10:16:00Z",
       server_time: "2026-10-17T10:02:00Z",
@@ -348,7 +365,7 @@ test.describe("WF02 run progress and text results", () => {
     };
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
     const summary = page.getByLabel("Run summary");
-    await expect(summary).toContainText("Attempt 2 of 3");
+    await expect(summary).toContainText("Attempt 2");
     await expect(summary).toContainText("Pipedrive is not connected");
     const activity = page.getByLabel("Run activity");
     await expect(activity.locator("li")).toHaveText([
@@ -392,13 +409,12 @@ test.describe("WF02 run progress and text results", () => {
   }) => {
     support.attempt = {
       number: 1,
-      limit: 3,
       started_at: "2026-10-17T10:00:00Z",
       expires_at: "2026-10-17T10:15:00Z",
       server_time: "2026-10-17T10:02:00Z",
       agent_unresponsive: true,
     };
-    support.runReason = "Step failed, retrying: Pipedrive is not connected";
+    support.runReason = "Pipedrive is not connected";
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
     const summary = page.getByLabel("Run summary");
     await expect(summary.getByRole("alert")).toContainText("hasn’t accepted");
@@ -411,7 +427,6 @@ test.describe("WF02 run progress and text results", () => {
   }) => {
     support.attempt = {
       number: 1,
-      limit: 3,
       started_at: "2026-10-17T10:00:00Z",
       expires_at: "2026-10-17T10:15:00Z",
       server_time: "2026-10-17T10:05:00Z",
@@ -517,7 +532,7 @@ test.describe("WF02 run progress and text results", () => {
     await runs.selectStep("Step 3: Prepare summary");
     await expect(panel).toContainText("This step is in progress.");
     await runs.selectStep("Step 4: Review results");
-    await expect(panel).toContainText("This step has not started yet.");
+    await expect(panel).toContainText("Waiting for earlier work to finish.");
     await runs.showSummary();
     await expect(page.getByLabel("Run summary")).toBeVisible();
     await expect(panel).toHaveCount(0);

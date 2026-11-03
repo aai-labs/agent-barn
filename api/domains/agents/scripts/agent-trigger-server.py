@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -250,6 +251,7 @@ WORKFLOW_STEPS_PATH = "/agent-triggers/v1/workflow-steps"
 _STEP_PATH = re.compile(r"^/agent-triggers/v1/workflow-steps/([0-9a-f-]{36})/stop$")
 _STEP_TIMEOUT_SECONDS = 900
 _SUMMARY_LIMIT = 4000
+_FILE_HANDOFF_TIMEOUT_SECONDS = 120
 # In-flight steps by attempt id. Process-local: a pod restart ends the session, and the
 # platform blocks the run when the attempt expires.
 _STEPS_LOCK = threading.Lock()
@@ -397,8 +399,12 @@ def _parse_step_reply(text: str, *, require_envelope: bool = False) -> tuple[boo
 
 
 def _retrieve_workflow_files(files: list[dict], directory: str, attempt_id: str) -> list[dict]:
-    materialized = []
-    for item in files:
+    deadline = time.monotonic() + _FILE_HANDOFF_TIMEOUT_SECONDS
+
+    def retrieve(item: dict) -> dict:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Workflow file retrieval timed out")
         artifact_id = str(UUID(item["artifact_id"]))
         destination = str(Path(directory) / artifact_id)
         result = subprocess.run(
@@ -413,13 +419,15 @@ def _retrieve_workflow_files(files: list[dict], directory: str, attempt_id: str)
                 attempt_id,
             ],
             capture_output=True,
-            timeout=150,
+            timeout=remaining,
             check=False,
         )
         if result.returncode:
             raise RuntimeError("Workflow input file retrieval failed; check access and storage availability")
-        materialized.append({**item, "path": destination})
-    return materialized
+        return {**item, "path": destination}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return list(pool.map(retrieve, files))
 
 
 def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
@@ -432,9 +440,15 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
             if not workspace:
                 raise RuntimeError("Workflow file workspace is unavailable")
             directory = tempfile.mkdtemp(prefix=".workflow-files-", dir=workspace)
-            files = _retrieve_workflow_files(handoff["files"], directory, attempt_id)
+            files = [
+                {**item, "path": str(Path(directory) / str(UUID(item["artifact_id"])))} for item in handoff["files"]
+            ]
+            manifest = "\nVerified input files (read these actual bytes): " + json.dumps(files)
+            if len((prompt + manifest).encode()) > 64000:
+                raise RuntimeError("Workflow context exceeds the context limit")
+            _retrieve_workflow_files(handoff["files"], directory, attempt_id)
             _post_json(f"{callback_url}/handoff", token, None, method="GET")
-            prompt += "\nVerified input files (read these actual bytes): " + json.dumps(files)
+            prompt += manifest
         with _STEPS_LOCK:
             if _STEPS.get(attempt_id, {}).get("stopped"):
                 return
@@ -617,5 +631,18 @@ class TriggerHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
 
+def _clean_workflow_directories() -> None:
+    root = os.environ.get("ARTIFACT_UPLOAD_ROOTS", "").split(":")[0]
+    if not root:
+        return
+    workspace = Path(root)
+    if not workspace.is_dir():
+        return
+    for item in workspace.glob(".workflow-files-*"):
+        if item.is_dir() and not item.is_symlink():
+            shutil.rmtree(item)
+
+
 if __name__ == "__main__":
+    _clean_workflow_directories()
     ThreadingHTTPServer(("0.0.0.0", PORT), TriggerHandler).serve_forever()

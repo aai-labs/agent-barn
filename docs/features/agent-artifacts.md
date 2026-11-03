@@ -117,7 +117,7 @@ Concurrent/repeated requests preserve the same bucket/key identity. READY reques
 are idempotent; failed PENDING requests can be retried. No credentials or raw
 provider diagnostics appear in status responses.
 
-Storage status is `NOT_CONFIGURED`, `NOT_PROVISIONED`, `PROVISIONING`, `READY` or
+The storage status response includes the configured `max_bytes` upload limit so clients can validate and display the installation-specific limit. Storage status is `NOT_CONFIGURED`, `NOT_PROVISIONED`, `PROVISIONING`, `READY` or
 `FAILED`. The Artifacts view polls every two seconds while provisioning or failed,
 shows progress, and offers **Retry provisioning** after failure. Readers see status
 and instructions to ask an editor; they cannot provision. Missing deployment

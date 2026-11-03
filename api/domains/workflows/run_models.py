@@ -134,7 +134,6 @@ class WorkflowHistoryRead(DTO):
 
 class AttemptRead(DTO):
     number: int
-    limit: int
     started_at: datetime
     expires_at: datetime
     # The API's clock, so a browser with a skewed clock can still show elapsed and remaining time.

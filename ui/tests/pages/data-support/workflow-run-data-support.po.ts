@@ -11,6 +11,9 @@ const stepTimes = [
 ];
 export class WorkflowRunDataSupport {
   fileInputs = false;
+  storageState = "READY";
+  storageLimit = 26214400;
+  provisionRequests = 0;
   failUpload = false;
   uploadedBytes: Buffer | null = null;
   uploaded = { ...artifactFixture };
@@ -31,6 +34,13 @@ export class WorkflowRunDataSupport {
   constructor(private page: Page) {}
   async intercept(agentId: string) {
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts?**`, route => route.fulfill({json: {items: this.fileInputs ? [this.uploaded] : [], total: this.fileInputs ? 1 : 0, page: 1, page_size: 20}}));
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts/storage`, async route => {
+      if (route.request().method() === "POST") {
+        this.provisionRequests++;
+        this.storageState = "PROVISIONING";
+      }
+      await route.fulfill({json: {state: this.storageState, max_bytes: this.storageLimit}});
+    });
     const filesBase = `**/api/v1/organizations/*/agents/${agentId}/artifacts`;
     await this.page.route(filesBase, async route => {
       this.uploaded = { ...artifactFixture, ...route.request().postDataJSON() };

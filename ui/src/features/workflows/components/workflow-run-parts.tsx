@@ -214,7 +214,7 @@ export function StepRail({
                   {interrupted
                     ? "Needs attention"
                     : step.state === "RUNNING" && attempt
-                      ? `${stepLabel[step.state]} · attempt ${attempt.number} of ${attempt.limit}`
+                      ? `${stepLabel[step.state]} · attempt ${attempt.number}`
                       : stepLabel[step.state]}
                 </p>
               </div>

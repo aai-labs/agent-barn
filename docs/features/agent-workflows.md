@@ -265,7 +265,7 @@ run screen also lists the run's history newest first as Activity (one `history?n
 refreshed when the run's revision changes), so a failed attempt's
 reason stays visible after an attempt ends; a completed step shows only
 "Step completed" there, since its summary belongs to the step. While a step runs, the
-single-run read includes `attempt` (number, displayed attempt count, start, deadline and
+single-run read includes `attempt` (number, start, deadline and
 `server_time` (the API's clock, which the screen uses for elapsed and remaining time so a
 skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
 not accepted the step after 60 seconds). The
@@ -319,7 +319,7 @@ service or controller immediately enqueues the staged delivery IDs; a broker
 outage leaves durable pending deliveries for recovery. Its handler advances
 the run and sends a newly admitted step to the Agent's private trigger server
 (`POST /agent-triggers/v1/workflow-steps` on port 8082, authenticated with the
-Agent's trigger key). The scheduled pass recovers missed wakeups once per minute.
+Agent's trigger key). The scheduled pass recovers missed wakeups once per minute, rotating bounded active and parked scans separately so parked runs cannot starve active runs and lifecycle/authority changes are still audited.
 Each attempt is sent at most once: `dispatched_at` records the Agent's acceptance,
 and the trigger server commits an attempt receipt in its existing PVC-backed SQLite
 journal before file I/O or runtime execution. The same attempt is refused even
@@ -434,8 +434,7 @@ checksum, and supplies verified local paths to the step. Retrieval requests carr
 find an active pin for that run; current initiator, Agent, generation and deadline
 are checked before each new link and again after downloads before runtime start.
 Download, integrity or admission failure prevents starting the session and parks
-the run rather than silently substituting summaries. The final assembled prompt
-must fit 64,000 UTF-8 bytes. Temporary inputs are removed when the trigger finishes;
+the run rather than silently substituting summaries. The final assembled prompt must fit 64,000 UTF-8 bytes and is checked before downloads. Up to four files are retrieved concurrently within a shared 120-second deadline; every manifest file remains required because the workflow has no per-step file selection. A failed or unavailable file therefore prevents that step from starting. Temporary inputs are removed when the trigger finishes and abandoned directories are cleaned at trigger startup;
 the owning Agent remains a shared filesystem/trust boundary, not a session sandbox.
 Hidden temporary inputs follow the [file-sync exclusion rules](sync-provider/README.md#what-syncs):
 the sync helper does not mirror them or offer provider edits to that transient path.

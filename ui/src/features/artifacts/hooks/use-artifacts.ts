@@ -70,12 +70,15 @@ export function useArtifactStorage(agentId: string) {
 }
 
 export function useArtifactUpload(agentId: string) {
+  const { storage } = useArtifactStorage(agentId);
   const base = `${useOrganizationApiBase()}/agents/${agentId}/artifacts`;
   const client = useQueryClient();
   return useMutation({
     mutationFn: async (file: File) => {
-      if (file.size > 100 * 1024 * 1024)
-        throw new Error("Files must be at most 100 MiB");
+      if (!storage.data || storage.data.state !== "READY")
+        throw new Error("Artifact storage is not ready");
+      if (file.size > storage.data.maxBytes)
+        throw new Error(`Files must be at most ${storage.data.maxBytes} bytes`);
       const bytes = await file.arrayBuffer();
       const digest = await crypto.subtle.digest("SHA-256", bytes);
       const checksum = Array.from(new Uint8Array(digest), (b) =>
