@@ -8,12 +8,19 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes. H5: Hermes reads recent messages in Slack listen-in channels.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 H5 — Slack channel context on Hermes
+
+- Delivered: the first turn of a Slack room session, listening or addressed, reads up to 15 recent channel messages with `conversations.history`. Nothing is kept in memory, so this works after a restart. Names and text are flattened to one line with Hermes' own helper, and the block is labelled as background, not instructions.
+- Decided: one Slack call per new session rather than a rolling buffer, which is lost on restart and needs a seed call anyway. Internal customer-built apps, which is how our Slack manifest is used, stay at about 50 calls a minute. A failed or slow call (5-second limit) only leaves the turn without history.
+- Evidence: Slack's rate limit documentation (2025-05-29 and 2025-06-03 changelog entries). The manifest already grants `channels:history` and `groups:history`. The adapter helpers were checked against Hermes v2026.8.19. H7 confirms the call live.
+- Known limits: `conversations.history` returns top-level messages, so thread replies aren't included, and neither are the Agent's answers inside threads. Each message's text is cut at 450 characters. A queued message may use the message ID of the turn that held it, which only makes its history slightly older.
 
 ### 2026-11-03 — MDP-118 H4 — Hermes listen-in is live
 
