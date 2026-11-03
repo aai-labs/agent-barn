@@ -13,6 +13,7 @@ import inspect
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -322,11 +323,38 @@ def check_forks():
     expect("original_user_message" in parameters, "the memory sync changed its arguments")
 
 
-def check_startup_check():
-    check = load("/listen-in-check.py", "listen_in_check")
-    config_path = HOME / "config.yaml"
-    check.check(config_path, Path("/plugin/__init__.py"))
-    expect(yaml.safe_load(config_path.read_text()) == CONFIG, "the startup check removed rooms from a working guard")
+def run_startup_check(plugin_source):
+    home = Path(tempfile.mkdtemp())
+    (home / "config.yaml").write_text(yaml.safe_dump(CONFIG))
+    installed = home / "plugins" / "agentbarn-listen-in"
+    installed.mkdir(parents=True)
+    (installed / "plugin.yaml").write_text(Path("/plugin/plugin.yaml").read_text())
+    (installed / "__init__.py").write_text(plugin_source)
+    subprocess.run(
+        [sys.executable, "/listen-in-check.py", str(home / "config.yaml")],
+        env={**os.environ, "HERMES_HOME": str(home)},
+        cwd="/tmp",
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
+    return yaml.safe_load((home / "config.yaml").read_text())
+
+
+def check_the_guard_loads_the_way_hermes_loads_it():
+    source = Path("/plugin/__init__.py").read_text()
+    expect(run_startup_check(source) == CONFIG, "the guard does not load through Hermes' own plugin loader")
+    broken = source.replace(
+        "def register(ctx):\n", "def register(ctx):\n    from run_agent import AIAgent  # noqa\n    AIAgent\n"
+    )
+    expect(broken != source, "could not build the broken guard")
+    result = run_startup_check(broken)
+    expect(
+        "free_response_chats" not in result["telegram"], "the startup check kept rooms for a guard that failed to load"
+    )
+    expect(
+        "agentbarn-listen-in" not in result["plugins"]["enabled"], "the startup check kept a guard that failed to load"
+    )
 
 
 def main():
@@ -350,7 +378,7 @@ def main():
     threading.Thread(target=loop.run_forever, daemon=True).start()
     check_turn_and_delivery(plugin, hooks, post, runner, loop)
     check_slack_history(plugin, hooks, runner, loop)
-    check_startup_check()
+    check_the_guard_loads_the_way_hermes_loads_it()
     print("listen-in contract holds")
 
 

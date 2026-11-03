@@ -15,6 +15,22 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Changes
 
+### 2026-11-03 — MDP-118 H7 — Hermes live round
+
+- Result: passed on Slack, Discord and Telegram, on Hermes v2026.8.19 with Memory on and a Connection for each platform. Eric ran the builder's config with the load fix patched into its ConfigMap, ahead of the API redeploy.
+- Observed: greetings, `ls /tmp` requests, "teal", "thanks" sent during a running turn, and unmentioned `/reset` all posted nothing. Each room got one Canberra correction, with no repeat. Mentions were answered. The Discord thread posted no listing. A blocked `terminal` call was recorded. Slack mention turns saw earlier channel messages.
+- Memory: Hindsight holds Falcon and mentioned turns, but not "teal" or the Sydney message.
+- Failed, not the guard: one Telegram reply was lost when Telegram's connection dropped (`send_path_degraded` after 2 retries). Conversations still shows it as OUTBOUND, because the observer mirrors the row on every ledger state. This is existing behaviour and needs its own ticket.
+- Noted: the model twice called `post_to_room` on a mention, was refused, and then answered normally. "Write a story" was declined on all platforms as outside the Agent's role, which comes from its instructions, not listen-in.
+- Not checked: `/background` in a listen-in room, the duplicate failure notice, and typing indicators.
+- Next: redeploy with the load fix, then O2 for OpenClaw, where Hindsight saves unmentioned messages. Ticket 1 stays open until then.
+
+### 2026-11-03 — MDP-118 H4 fix — The guard failed to load on a real Hermes Agent
+
+- Fixed: Hermes discovers plugins while `run_agent` is still importing, so the plugin's import of `AIAgent` at registration failed and the gateway started without the guard, with free-response rooms answering every message. No message was sent to the room before this was caught. The memory guard now installs when the first turn starts.
+- Fixed: `listen-in-check.py` loaded the plugin in a clean process, where that import works, so it passed a guard Hermes itself could not load. It now imports `run_agent` and asks Hermes' plugin manager whether the guard loaded.
+- Evidence: found on a live Agent through the real builder, in the pod's log. `hermes_listen_in_driver.py` now runs the check through Hermes' real loader, with a working guard and with one that fails the same way.
+
 ### 2026-11-03 — MDP-118 H6 — Hermes contract driver
 
 - Delivered: `hermes-base/test-image.sh` runs `hermes_listen_in_driver.py` in the image, against Hermes' real adapters, ledger, silence filter, tool hook dispatch, sanitiser and memory sync. `hermes_observer_driver.py` now also covers recording at the adapter and the reply before a queued message. An upgrade that changes any of these fails the image test.

@@ -1,9 +1,10 @@
 import importlib.util
 import json
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 from uuid import UUID
 
-import pytest
 import yaml
 
 from api.domains.agent_sizes.models import (
@@ -39,7 +40,6 @@ _LISTENING_CONFIG = {
     "discord": {"require_mention": True, "free_response_channels": ["channel-1"]},
     "telegram": {"free_response_chats": ["-1001"]},
 }
-_WORKING_PLUGIN = "def register(ctx):\n    ctx.register_hook('pre_llm_call', print)\n"
 
 # The Standard size, which every Agent ran on before sizes existed.
 STANDARD = container_resources(
@@ -728,36 +728,26 @@ def test_the_listen_in_check_runs_before_the_gateway_starts() -> None:
     assert start.index("cp /app/config/agentbarn-listen-in-init.py") < start.index(check) < start.index("exec hermes")
 
 
-def _listen_in_check(tmp_path: Path, plugin_source: str | None, config: dict) -> dict:
+def _listen_in_check(tmp_path: Path, failure: str | None, config: dict) -> tuple[dict, Any]:
     spec = importlib.util.spec_from_file_location("test_listen_in_check", _LISTEN_IN_CHECK)
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
+    module: Any = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module._load_failure = MagicMock(return_value=failure)
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config))
-    plugin_path = tmp_path / "plugin.py"
-    if plugin_source is not None:
-        plugin_path.write_text(plugin_source)
-    module.check(config_path, plugin_path)
-    return yaml.safe_load(config_path.read_text())
+    module.check(config_path)
+    return yaml.safe_load(config_path.read_text()), module._load_failure
 
 
 def test_the_listen_in_check_keeps_rooms_when_the_guard_loads(tmp_path: Path) -> None:
-    assert _listen_in_check(tmp_path, _WORKING_PLUGIN, _LISTENING_CONFIG) == _LISTENING_CONFIG
+    result, _ = _listen_in_check(tmp_path, None, _LISTENING_CONFIG)
+
+    assert result == _LISTENING_CONFIG
 
 
-@pytest.mark.parametrize(
-    "plugin_source",
-    [
-        None,
-        "import a_module_that_does_not_exist\n",
-        "def register(ctx):\n    raise AttributeError('renamed upstream')\n",
-        "def register(ctx):\n    pass\n",
-    ],
-    ids=["missing", "import-fails", "register-fails", "registers-nothing"],
-)
-def test_the_listen_in_check_falls_back_to_mentions_when_the_guard_fails(tmp_path: Path, plugin_source) -> None:
-    result = _listen_in_check(tmp_path, plugin_source, _LISTENING_CONFIG)
+def test_the_listen_in_check_falls_back_to_mentions_when_the_guard_fails(tmp_path: Path) -> None:
+    result, _ = _listen_in_check(tmp_path, "cannot import name AIAgent", _LISTENING_CONFIG)
 
     assert result == {
         "plugins": {"enabled": ["telemetry-push"]},
@@ -767,7 +757,24 @@ def test_the_listen_in_check_falls_back_to_mentions_when_the_guard_fails(tmp_pat
     }
 
 
+def test_the_listen_in_check_falls_back_to_mentions_when_it_cannot_ask_hermes(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("test_listen_in_check", _LISTEN_IN_CHECK)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._load_failure = MagicMock(side_effect=ImportError("no hermes"))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(_LISTENING_CONFIG))
+
+    module.check(config_path)
+
+    assert "free_response_chats" not in yaml.safe_load(config_path.read_text())["telegram"]
+
+
 def test_the_listen_in_check_ignores_an_agent_without_the_guard(tmp_path: Path) -> None:
     config = {"plugins": {"enabled": ["telemetry-push"]}, "discord": {"require_mention": True}}
 
-    assert _listen_in_check(tmp_path, None, config) == config
+    result, load_failure = _listen_in_check(tmp_path, None, config)
+
+    assert result == config
+    load_failure.assert_not_called()

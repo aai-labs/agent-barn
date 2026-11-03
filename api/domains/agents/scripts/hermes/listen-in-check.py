@@ -2,10 +2,10 @@
 
 Free-response rooms answer every message, and only the agentbarn-listen-in plugin
 keeps them quiet. Hermes starts anyway when a plugin fails to load, so this loads
-it first and, if that fails, removes the rooms and the plugin from the config.
+Hermes the way the gateway does, asks its plugin manager whether the guard loaded
+and, if not, removes the rooms and the plugin from the config.
 """
 
-import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -20,29 +20,17 @@ _ROOM_SETTINGS = (
 )
 
 
-class _Probe:
-    def __init__(self) -> None:
-        self.registered = 0
+def _load_failure() -> str | None:
+    sys.path.insert(0, "/opt/hermes")
+    import run_agent  # noqa: F401  # ty: ignore[unresolved-import]
+    from hermes_cli.plugins import get_plugin_manager  # ty: ignore[unresolved-import]
 
-    def register_hook(self, *_) -> None:
-        self.registered += 1
-
-    def register_tool(self, *_) -> None:
-        self.registered += 1
-
-
-def _load_guard(config_path: Path, plugin_path: Path) -> None:
-    os.environ["HERMES_HOME"] = str(config_path.parent)
-    spec = importlib.util.spec_from_file_location("agentbarn_listen_in_check", plugin_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"no plugin at {plugin_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    probe = _Probe()
-    module.register(probe)
-    if not probe.registered:
-        raise RuntimeError("the plugin registered nothing")
+    loaded = get_plugin_manager()._plugins.get(_PLUGIN)
+    if loaded is None:
+        return "Hermes did not load the plugin"
+    if loaded.error or not loaded.enabled:
+        return loaded.error or "Hermes did not enable the plugin"
+    return None if loaded.hooks_registered else "the plugin registered no hooks"
 
 
 def _disable_listen_in(config: dict, config_path: Path) -> None:
@@ -54,16 +42,19 @@ def _disable_listen_in(config: dict, config_path: Path) -> None:
     os.replace(staged, config_path)
 
 
-def check(config_path: Path, plugin_path: Path) -> None:
+def check(config_path: Path) -> None:
     config = yaml.safe_load(config_path.read_text()) or {}
     if _PLUGIN not in ((config.get("plugins") or {}).get("enabled") or []):
         return
+    os.environ["HERMES_HOME"] = str(config_path.parent)
     try:
-        _load_guard(config_path, plugin_path)
+        failure = _load_failure()
     except Exception as exc:
-        print(f"[listen-in-check] guard failed to load, answering mentions only: {exc!r}", file=sys.stderr)
+        failure = repr(exc)
+    if failure:
+        print(f"[listen-in-check] guard failed to load, answering mentions only: {failure}", file=sys.stderr)
         _disable_listen_in(config, config_path)
 
 
 if __name__ == "__main__":
-    check(Path(sys.argv[1]), Path(sys.argv[2]))
+    check(Path(sys.argv[1]))

@@ -97,6 +97,7 @@ _queues: OrderedDict[str, deque[bool]] = OrderedDict()  # session_key -> oldest-
 _lock = threading.Lock()
 _turn: ContextVar[_Turn | None] = ContextVar("agentbarn_listen_in_turn", default=None)
 _loop: asyncio.AbstractEventLoop | None = None
+_memory_guard_installed = False
 
 
 def _load_rooms(path: Path) -> dict[str, set[str]]:
@@ -261,7 +262,20 @@ def _slack_history() -> str:
     return "\n".join([_HISTORY_HEADER, *lines, _HISTORY_FOOTER]) if lines else ""
 
 
+def _ensure_memory_guard() -> None:
+    global _memory_guard_installed
+    with _lock:
+        if _memory_guard_installed:
+            return
+        _memory_guard_installed = True
+    try:
+        _install_memory_guard()
+    except Exception:
+        logger.exception("agentbarn-listen-in could not install its memory guard")
+
+
 def _on_pre_llm_call(platform=None, is_first_turn=False, **_):
+    _ensure_memory_guard()
     if platform == _SUBAGENT_PLATFORM:
         return
     if threading.current_thread().name == _REVIEW_THREAD:
@@ -417,6 +431,7 @@ def _patch_memory_sync(agent_class) -> None:
 
 
 def _install_memory_guard() -> None:
+    # Not at registration: Hermes discovers plugins while run_agent is still importing.
     from run_agent import AIAgent  # ty: ignore[unresolved-import]
 
     _patch_memory_sync(AIAgent)
@@ -429,7 +444,6 @@ def register(ctx):
     _rooms.clear()
     _rooms.update(rooms)
     _install_ingress()
-    _install_memory_guard()
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("transform_llm_output", _on_transform)

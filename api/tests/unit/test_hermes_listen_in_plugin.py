@@ -957,7 +957,36 @@ def test_with_rooms_the_plugin_installs_its_tool_and_memory_guards(plugin, monke
     plugin.register(ctx)
 
     ctx.register_hook.assert_any_call("pre_tool_call", plugin._on_pre_tool_call)
+
+
+def test_registering_never_imports_the_agent(plugin, monkeypatch, tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({"discord": {"free_response_channels": [_DISCORD_ROOM]}}))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(plugin, "_install_ingress", lambda: None)
+
+    plugin.register(MagicMock())
+
+    plugin._install_memory_guard.assert_not_called()
+
+
+def test_the_memory_guard_is_installed_once_when_turns_start(plugin) -> None:
+    plugin._on_pre_llm_call()
+    plugin._on_pre_llm_call()
+
     plugin._install_memory_guard.assert_called_once_with()
+
+
+def test_a_subagent_turn_can_install_the_memory_guard(plugin) -> None:
+    plugin._on_pre_llm_call(platform="subagent")
+
+    plugin._install_memory_guard.assert_called_once_with()
+
+
+def test_a_failed_memory_guard_does_not_stop_the_turn(plugin, caplog) -> None:
+    plugin._install_memory_guard.side_effect = AttributeError("renamed upstream")
+
+    assert plugin._on_pre_llm_call() == {"context": plugin._REMINDER}
+    assert "memory" in caplog.text
 
 
 def test_without_rooms_the_plugin_installs_no_memory_guard(plugin, monkeypatch, tmp_path) -> None:
