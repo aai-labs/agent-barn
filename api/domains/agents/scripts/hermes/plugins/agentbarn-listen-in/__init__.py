@@ -8,7 +8,9 @@ resumed after a restart, counts as listening: a mistake means silence, not noise
 
 A listening turn speaks only through post_to_room, at most once. A send is tried
 once whatever the outcome, because a failed or timed-out send may have reached
-the room in part.
+the room in part. The turn's other tools are blocked, and it leaves nothing in
+memory. Background review of a room's session can't save anything either, so a room
+reaches memory only when someone addresses the Agent and asks.
 
 Unaddressed messages also lose gateway control, Hermes' own flag for untrusted
 text, so they can't run slash commands or answer approval prompts.
@@ -42,6 +44,9 @@ _LISTENING = "listening"
 _ADDRESSED = "addressed"
 _REVIEW = "review"
 _SEND_TIMEOUT = 30
+_SUBAGENT_PLATFORM = "subagent"
+_LISTENING_TOOLS = {"post_to_room", "web_search", "web_extract"}
+_REVIEW_BLOCKED_TOOLS = {"memory", "skill_manage"}
 _REMINDER = (
     "[Listen-in room: this message was not addressed to you. Your final answer is discarded and nobody will see it. "
     "On this turn the only tools that work are post_to_room, web_search and web_extract; every other tool is blocked. "
@@ -70,6 +75,7 @@ _POST_SCHEMA = {
 class _Turn:
     kind: str
     post_claimed: bool = False
+    tool_blocked: bool = False
 
 
 _rooms: dict[str, set[str]] = {}
@@ -195,7 +201,9 @@ def _in_room_session() -> bool:
     return any(chat_id in rooms for rooms in _rooms.values())
 
 
-def _on_pre_llm_call(**_):
+def _on_pre_llm_call(platform=None, **_):
+    if platform == _SUBAGENT_PLATFORM:
+        return
     if threading.current_thread().name == _REVIEW_THREAD:
         _turn.set(_Turn(_REVIEW))
         return
@@ -226,6 +234,24 @@ def _on_transform(response_text=None, **_):
     stripped = (response_text or "").strip()
     clean = _without_marker(stripped)
     return clean if clean and clean != stripped else None
+
+
+def _block(message: str) -> dict:
+    return {"action": "block", "message": message}
+
+
+def _on_pre_tool_call(tool_name=None, **_):
+    turn = _turn.get()
+    if turn is None:
+        return _block("Not available in a listen-in room.") if _in_room_session() else None
+    if turn.kind == _REVIEW:
+        if tool_name in _REVIEW_BLOCKED_TOOLS and _in_room_session():
+            return _block("Nothing from a listen-in room is saved.")
+        return None
+    if turn.kind == _LISTENING and tool_name not in _LISTENING_TOOLS:
+        turn.tool_blocked = True
+        return _block("Not available in a listen-in room. Use post_to_room or stay silent.")
+    return None
 
 
 def _adapter(platform: str):
@@ -269,6 +295,12 @@ def _post_to_room(args, **_) -> str:
     with _lock:
         if turn.post_claimed:
             return _error(f"You already posted this turn. End your turn with exactly {_MARKER}.")
+        if turn.tool_blocked:
+            turn.tool_blocked = False
+            return _error(
+                "Not posted: a tool you tried is unavailable here, so this text may depend on a result you will "
+                "never get. Post only a complete message, or stay silent."
+            )
         turn.post_claimed = True
     chat_id = _session_env("HERMES_SESSION_CHAT_ID")
     thread_id = _session_env("HERMES_SESSION_THREAD_ID") or None
@@ -310,6 +342,24 @@ def _install_ingress() -> None:
     _patch_ingress(BasePlatformAdapter)
 
 
+def _patch_memory_sync(agent_class) -> None:
+    original = agent_class._sync_external_memory_for_turn
+
+    def sync(self, *args, **kwargs):
+        turn = _turn.get()
+        if (turn.kind == _LISTENING) if turn else _in_room_session():
+            return None
+        return original(self, *args, **kwargs)
+
+    agent_class._sync_external_memory_for_turn = sync
+
+
+def _install_memory_guard() -> None:
+    from run_agent import AIAgent  # ty: ignore[unresolved-import]
+
+    _patch_memory_sync(AIAgent)
+
+
 def register(ctx):
     rooms = _load_rooms(Path(os.environ.get("HERMES_HOME", "/opt/data")) / "config.yaml")
     if not rooms:
@@ -317,6 +367,8 @@ def register(ctx):
     _rooms.clear()
     _rooms.update(rooms)
     _install_ingress()
+    _install_memory_guard()
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("transform_llm_output", _on_transform)
     ctx.register_tool("post_to_room", "agentbarn_listen_in", _POST_SCHEMA, _post_to_room)

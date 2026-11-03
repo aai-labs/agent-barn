@@ -43,7 +43,8 @@ def plugin(monkeypatch):
     monkeypatch.setattr(module, "_is_known_command", lambda name: name in {"status", "new"})
     module.test_env = {"HERMES_SESSION_KEY": _KEY, "HERMES_SESSION_CHAT_ID": _DISCORD_ROOM}
     monkeypatch.setattr(module, "_session_env", lambda name: module.test_env.get(name, ""))
-    monkeypatch.setattr(module, "_sanitize", lambda _platform, text: text, raising=False)
+    monkeypatch.setattr(module, "_sanitize", lambda _platform, text: text)
+    monkeypatch.setattr(module, "_install_memory_guard", MagicMock(), raising=False)
     return module
 
 
@@ -396,7 +397,11 @@ def test_with_rooms_the_plugin_registers_its_hooks(plugin, monkeypatch, tmp_path
 
     plugin.register(ctx)
 
-    assert {call.args[0] for call in ctx.register_hook.call_args_list} == {"pre_llm_call", "transform_llm_output"}
+    assert {call.args[0] for call in ctx.register_hook.call_args_list} == {
+        "pre_llm_call",
+        "pre_tool_call",
+        "transform_llm_output",
+    }
 
 
 @pytest.fixture
@@ -770,3 +775,191 @@ def test_without_rooms_the_post_tool_is_not_registered(plugin, monkeypatch, tmp_
     plugin.register(ctx)
 
     ctx.register_tool.assert_not_called()
+
+
+def _in_review(action):
+    results = []
+    thread = threading.Thread(target=lambda: results.append(action()), name="bg-review")
+    thread.start()
+    thread.join()
+    return results[0]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["terminal", "memory", "skill_manage", "clarify", "execute_code", "delegate_task", "session_search", "cronjob"],
+)
+def test_a_listening_turn_cannot_use_other_tools(plugin, tool) -> None:
+    _listening_turn(plugin)
+
+    assert plugin._on_pre_tool_call(tool_name=tool)["action"] == "block"
+
+
+@pytest.mark.parametrize("tool", ["post_to_room", "web_search", "web_extract"])
+def test_a_listening_turn_can_post_and_look_things_up(plugin, tool) -> None:
+    _listening_turn(plugin)
+
+    assert plugin._on_pre_tool_call(tool_name=tool) is None
+
+
+@pytest.mark.parametrize("tool", ["terminal", "memory", "clarify"])
+def test_an_addressed_turn_keeps_every_tool(plugin, tool) -> None:
+    plugin._classify(_discord(mentioned=True), _event())
+    plugin._on_pre_llm_call()
+
+    assert plugin._on_pre_tool_call(tool_name=tool) is None
+
+
+def test_a_room_session_with_no_turn_state_cannot_use_tools(plugin) -> None:
+    assert plugin._on_pre_tool_call(tool_name="terminal")["action"] == "block"
+
+
+def test_a_session_outside_the_rooms_keeps_every_tool(plugin) -> None:
+    plugin.test_env.update({"HERMES_SESSION_KEY": "other", "HERMES_SESSION_CHAT_ID": "999"})
+    plugin._on_pre_llm_call()
+
+    assert plugin._on_pre_tool_call(tool_name="terminal") is None
+
+
+def test_a_scheduled_run_in_a_room_keeps_every_tool(plugin) -> None:
+    plugin.test_env["HERMES_CRON_SESSION"] = "1"
+    plugin._on_pre_llm_call()
+
+    assert plugin._on_pre_tool_call(tool_name="terminal") is None
+
+
+@pytest.mark.parametrize("tool", ["memory", "skill_manage"])
+def test_background_review_of_a_room_saves_nothing(plugin, tool) -> None:
+    def review():
+        plugin._on_pre_llm_call()
+        return plugin._on_pre_tool_call(tool_name=tool)
+
+    assert _in_review(review)["action"] == "block"
+
+
+def test_background_review_of_a_room_can_still_read(plugin) -> None:
+    def review():
+        plugin._on_pre_llm_call()
+        return plugin._on_pre_tool_call(tool_name="session_search")
+
+    assert _in_review(review) is None
+
+
+def test_background_review_outside_the_rooms_can_save(plugin) -> None:
+    plugin.test_env.update({"HERMES_SESSION_KEY": "other", "HERMES_SESSION_CHAT_ID": "999"})
+
+    def review():
+        plugin._on_pre_llm_call()
+        return plugin._on_pre_tool_call(tool_name="memory")
+
+    assert _in_review(review) is None
+
+
+def test_a_post_right_after_a_blocked_tool_is_refused_once(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+    plugin._on_pre_tool_call(tool_name="terminal")
+
+    first = _post(plugin, "Here's what's in /tmp:")
+    second = _post(plugin)
+
+    assert "error" in first
+    assert second["success"] is True
+    assert [message["content"] for message in sent] == ["The deadline moved to Friday."]
+
+
+def test_an_allowed_lookup_does_not_hold_back_a_post(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+    plugin._on_pre_tool_call(tool_name="web_search")
+
+    assert _post(plugin)["success"] is True
+    assert len(sent) == 1
+
+
+def test_a_subagent_does_not_take_a_queued_classification(plugin) -> None:
+    plugin._classify(_discord(mentioned=True), _event())
+    plugin._classify(_discord(mentioned=True), _event())
+    plugin._on_pre_llm_call(platform="discord")
+
+    plugin._on_pre_llm_call(platform="subagent")
+    plugin._on_pre_llm_call(platform="discord")
+
+    assert plugin._on_transform(response_text="the answer") is None
+
+
+def test_a_subagent_of_a_mention_keeps_its_tools_and_answer(plugin) -> None:
+    plugin._classify(_discord(mentioned=True), _event())
+    plugin._on_pre_llm_call(platform="discord")
+
+    def subagent():
+        result = plugin._on_pre_llm_call(platform="subagent")
+        return result, plugin._on_pre_tool_call(tool_name="terminal"), plugin._on_transform(response_text="found it")
+
+    assert contextvars.copy_context().run(subagent) == (None, None, None)
+
+
+class _Agent:
+    def __init__(self):
+        self.calls = []
+
+    def _sync_external_memory_for_turn(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+def _sync(plugin) -> list:
+    plugin._patch_memory_sync(_Agent)
+    agent = _Agent()
+    agent._sync_external_memory_for_turn(original_user_message="hi", final_response="yo")
+    return agent.calls
+
+
+@pytest.fixture
+def restore_agent():
+    original = _Agent._sync_external_memory_for_turn
+    yield
+    _Agent._sync_external_memory_for_turn = original
+
+
+def test_a_listening_turn_is_not_retained_in_memory(plugin, restore_agent) -> None:
+    _listening_turn(plugin)
+
+    assert _sync(plugin) == []
+
+
+def test_a_room_session_with_no_turn_state_is_not_retained_in_memory(plugin, restore_agent) -> None:
+    assert _sync(plugin) == []
+
+
+def test_an_addressed_turn_is_retained_in_memory(plugin, restore_agent) -> None:
+    plugin._classify(_discord(mentioned=True), _event())
+    plugin._on_pre_llm_call()
+
+    assert _sync(plugin) == [{"original_user_message": "hi", "final_response": "yo"}]
+
+
+def test_a_session_outside_the_rooms_is_retained_in_memory(plugin, restore_agent) -> None:
+    plugin.test_env.update({"HERMES_SESSION_KEY": "other", "HERMES_SESSION_CHAT_ID": "999"})
+    plugin._on_pre_llm_call()
+
+    assert len(_sync(plugin)) == 1
+
+
+def test_with_rooms_the_plugin_installs_its_tool_and_memory_guards(plugin, monkeypatch, tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({"discord": {"free_response_channels": [_DISCORD_ROOM]}}))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(plugin, "_install_ingress", lambda: None)
+    ctx = MagicMock()
+
+    plugin.register(ctx)
+
+    ctx.register_hook.assert_any_call("pre_tool_call", plugin._on_pre_tool_call)
+    plugin._install_memory_guard.assert_called_once_with()
+
+
+def test_without_rooms_the_plugin_installs_no_memory_guard(plugin, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    plugin.register(MagicMock())
+
+    plugin._install_memory_guard.assert_not_called()

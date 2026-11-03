@@ -8,12 +8,20 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 H3 — Hermes tool and memory rules
+
+- Delivered: listening turns can use only `post_to_room`, `web_search` and `web_extract`, and a post right after a blocked tool is refused once, so a half-written message can't reach the room. Listening turns aren't sent to the external memory provider. Background review of a room's session can't write memory or skills. Addressed turns keep every tool, so `@Agent remember X` still saves. No behaviour changes yet: nothing enables the plugin until H4.
+- Fixed: delegated subagents also fire `pre_llm_call`. They now keep their parent's turn instead of taking a queued classification, which would have silenced a subagent's answer and misclassified the next message.
+- Evidence: spike H0b (review block and memory guard, live). Hermes v2026.8.19 code: the subagent platform value and hook arguments; Hindsight has no `on_session_end`, so the turn sync is its only automatic retain path. The plugin registered against the pinned image and patched the real `AIAgent`.
+- Not verified: stored Hindsight rows, because local Hindsight was down during H0b; H7 re-checks them. Also `/background` in a listen-in room, which starts a turn without a classification and may come back silent; H7 checks it.
+- Known limit: memory saved elsewhere, such as in DMs, is still loaded on listening turns, so the Agent can use it when it speaks in a room.
 
 ### 2026-11-03 — MDP-118 H2 — Hermes `post_to_room` and per-turn rules
 
