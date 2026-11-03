@@ -1,9 +1,13 @@
+import asyncio
 import importlib.util
 import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 _PLUGIN = (
     Path(__file__).parents[2]
@@ -119,3 +123,304 @@ def test_delivered_obligation_is_mirrored_when_attempting_was_not_observed(tmp_p
             "occurred_at": payload["messages"][0]["occurred_at"],
         }
     ]
+
+
+def _gateway_runner():
+    runner = MagicMock()
+    runner._session_key_for_source.return_value = "agent:main:discord:channel:channel-1"
+    return runner
+
+
+def _inbound(**overrides):
+    values = {"source": _source(), "message_id": "message-1", "text": "hello", "internal": False}
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _adapter_class(calls: list):
+    class Adapter:
+        async def handle_message(self, event):
+            calls.append(event)
+
+    return Adapter
+
+
+def _arrive(plugin, event, runner=None):
+    calls: list = []
+    adapter_class = _adapter_class(calls)
+    plugin._patch_ingress(adapter_class)
+    with patch.object(plugin, "_runner", return_value=runner or _gateway_runner()):
+        asyncio.run(adapter_class().handle_message(event))
+    return calls
+
+
+def _inbound_rows(plugin) -> list:
+    return [message for message in plugin._messages if message["direction"] == "INBOUND"]
+
+
+def test_a_message_queued_behind_a_running_turn_is_recorded() -> None:
+    plugin = _load_plugin()
+
+    calls = _arrive(plugin, _inbound())
+
+    assert len(calls) == 1
+    rows = _inbound_rows(plugin)
+    assert len(rows) == 1
+    assert rows[0]["provider_message_id"] == "message-1"
+    assert rows[0]["session_key"] == "agent:main:discord:channel:channel-1"
+    assert rows[0]["channel_id"] == "channel-1"
+    assert rows[0]["conversation_type"] == "CHANNEL"
+    assert rows[0]["content"] == "hello"
+
+
+def test_an_idle_message_seen_on_both_paths_is_recorded_once() -> None:
+    plugin = _load_plugin()
+    runner = _gateway_runner()
+    event = _inbound()
+
+    _arrive(plugin, event, runner)
+    plugin._on_pre_gateway_dispatch(event=event, gateway=runner)
+
+    assert len(_inbound_rows(plugin)) == 1
+
+
+def test_a_message_seen_only_at_dispatch_is_still_recorded() -> None:
+    plugin = _load_plugin()
+
+    plugin._on_pre_gateway_dispatch(event=_inbound(), gateway=_gateway_runner())
+
+    assert len(_inbound_rows(plugin)) == 1
+
+
+def test_the_same_id_on_another_platform_is_a_different_message() -> None:
+    plugin = _load_plugin()
+
+    _arrive(plugin, _inbound())
+    _arrive(plugin, _inbound(source=_source(platform=SimpleNamespace(value="slack"))))
+
+    assert len(_inbound_rows(plugin)) == 2
+
+
+def test_arrival_leaves_the_journal_to_the_dispatch_path() -> None:
+    plugin = _load_plugin()
+    runner = _gateway_runner()
+    plugin._on_pre_gateway_dispatch(event=_inbound(message_id="running"), gateway=runner)
+    plugin._buffer.clear()
+
+    _arrive(plugin, _inbound(message_id="queued"), runner)
+
+    assert plugin._buffer == []
+    assert plugin._latest_inbound["agent:main:discord:channel:channel-1"] == "discord:running"
+
+
+def test_seen_messages_stay_bounded() -> None:
+    plugin = _load_plugin()
+    runner = _gateway_runner()
+
+    with patch.object(plugin, "_MAX_TRACKED", 2):
+        for message_id in ("a", "b", "c"):
+            plugin._on_pre_gateway_dispatch(event=_inbound(message_id=message_id), gateway=runner)
+
+    assert list(plugin._seen_inbound) == ["discord:b", "discord:c"]
+
+
+def test_internal_events_are_not_recorded_on_arrival() -> None:
+    plugin = _load_plugin()
+
+    calls = _arrive(plugin, _inbound(internal=True))
+
+    assert len(calls) == 1
+    assert plugin._messages == []
+
+
+def test_a_message_without_text_or_id_is_not_recorded_on_arrival() -> None:
+    plugin = _load_plugin()
+
+    _arrive(plugin, _inbound(text=""))
+    _arrive(plugin, _inbound(message_id=None, source=_source(message_id=None)))
+
+    assert plugin._messages == []
+
+
+def test_a_message_without_text_can_still_be_recorded_later_with_text() -> None:
+    plugin = _load_plugin()
+    runner = _gateway_runner()
+    event = _inbound(text="")
+
+    _arrive(plugin, event, runner)
+    event.text = "a transcribed voice note"
+    plugin._on_pre_gateway_dispatch(event=event, gateway=runner)
+
+    assert [row["content"] for row in _inbound_rows(plugin)] == ["a transcribed voice note"]
+
+
+def test_a_broken_observer_never_stops_a_message() -> None:
+    plugin = _load_plugin()
+    calls: list = []
+    adapter_class = _adapter_class(calls)
+    plugin._patch_ingress(adapter_class)
+
+    with patch.object(plugin, "_runner", side_effect=RuntimeError("no gateway")):
+        asyncio.run(adapter_class().handle_message(_inbound()))
+
+    assert len(calls) == 1
+    assert plugin._messages == []
+
+
+def test_arrival_installs_the_first_response_patch_once() -> None:
+    plugin = _load_plugin()
+    runner = _gateway_runner()
+
+    with patch.object(plugin, "_patch_first_response") as patch_first_response:
+        _arrive(plugin, _inbound(message_id="a"), runner)
+        _arrive(plugin, _inbound(message_id="b"), runner)
+
+    patch_first_response.assert_called_once_with(type(runner))
+
+
+def test_a_failed_first_response_patch_still_records_the_message() -> None:
+    plugin = _load_plugin()
+
+    with patch.object(plugin, "_patch_first_response", side_effect=AttributeError("renamed upstream")):
+        _arrive(plugin, _inbound())
+
+    assert len(_inbound_rows(plugin)) == 1
+
+
+def _runner_class(deliver=None):
+    class Runner:
+        delivered: ClassVar[list] = []
+
+        def _session_key_for_source(self, source):
+            return "agent:main:discord:channel:channel-1"
+
+        async def _deliver_queued_first_response(self, response, source, adapter, metadata=None, **kwargs):
+            if deliver:
+                deliver()
+            self.delivered.append({"response": response, "metadata": metadata, **kwargs})
+
+    return Runner
+
+
+def _deliver(plugin, runner_class, response="The first answer.", source=None):
+    with patch.object(
+        plugin, "_visible_text", side_effect=lambda text, _adapter: text.replace("MEDIA:a.png", "").strip()
+    ):
+        asyncio.run(
+            runner_class()._deliver_queued_first_response(
+                response,
+                source=source or _source(),
+                adapter=MagicMock(),
+                metadata={"thread_id": "t1"},
+                event_message_id="message-1",
+            )
+        )
+
+
+def _first_response(plugin, runner_class, **kwargs):
+    plugin._patch_first_response(runner_class)
+    _deliver(plugin, runner_class, **kwargs)
+
+
+def _outbound_rows(plugin) -> list:
+    return [message for message in plugin._messages if message["direction"] == "OUTBOUND"]
+
+
+def test_a_first_response_before_a_queued_message_is_recorded() -> None:
+    plugin = _load_plugin()
+    runner_class = _runner_class()
+
+    _first_response(plugin, runner_class, source=_source(thread_id="t1"))
+
+    assert runner_class.delivered == [
+        {"response": "The first answer.", "metadata": {"thread_id": "t1"}, "event_message_id": "message-1"}
+    ]
+    rows = _outbound_rows(plugin)
+    assert len(rows) == 1
+    assert rows[0]["provider_message_id"].startswith("outbound:")
+    assert rows[0]["platform"] == "discord"
+    assert rows[0]["session_key"] == "agent:main:discord:channel:channel-1"
+    assert rows[0]["channel_id"] == "channel-1"
+    assert rows[0]["thread_id"] == "t1"
+    assert rows[0]["conversation_type"] == "CHANNEL"
+    assert rows[0]["content"] == "The first answer."
+
+
+def test_two_identical_first_responses_are_separate_rows() -> None:
+    plugin = _load_plugin()
+    runner_class = _runner_class()
+
+    _first_response(plugin, runner_class)
+    _deliver(plugin, runner_class)
+
+    first, second = _outbound_rows(plugin)
+    assert first["provider_message_id"] != second["provider_message_id"]
+
+
+def test_a_first_response_is_recorded_without_its_attachments() -> None:
+    plugin = _load_plugin()
+
+    _first_response(plugin, _runner_class(), response="The chart. MEDIA:a.png")
+
+    assert _outbound_rows(plugin)[0]["content"] == "The chart."
+
+
+def test_a_first_response_with_only_attachments_has_no_row() -> None:
+    plugin = _load_plugin()
+
+    _first_response(plugin, _runner_class(), response="MEDIA:a.png")
+
+    assert _outbound_rows(plugin) == []
+
+
+def test_a_first_response_that_raises_has_no_row_and_still_raises() -> None:
+    plugin = _load_plugin()
+
+    def fail():
+        raise RuntimeError("send failed")
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        _first_response(plugin, _runner_class(deliver=fail))
+
+    assert _outbound_rows(plugin) == []
+
+
+def test_a_broken_record_does_not_fail_a_delivered_first_response() -> None:
+    plugin = _load_plugin()
+    runner_class = _runner_class()
+
+    def broken(_self, _source):
+        raise RuntimeError("no session")
+
+    runner_class._session_key_for_source = broken
+
+    _first_response(plugin, runner_class)
+
+    assert len(runner_class.delivered) == 1
+    assert _outbound_rows(plugin) == []
+
+
+def test_register_observes_arrivals(monkeypatch, tmp_path) -> None:
+    plugin = _load_plugin()
+    monkeypatch.setenv("AGENT_ID", "agent-1")
+    monkeypatch.setenv("INGEST_URL", "http://ingest")
+    monkeypatch.setenv("INGEST_API_KEY", "key")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with (
+        patch.object(plugin, "_install_ingress") as install,
+        patch.object(plugin.threading, "Thread"),
+    ):
+        plugin.register(MagicMock())
+
+    install.assert_called_once_with()
+
+
+def test_register_without_ingest_settings_observes_nothing(monkeypatch) -> None:
+    plugin = _load_plugin()
+    monkeypatch.delenv("AGENT_ID", raising=False)
+
+    with patch.object(plugin, "_install_ingress") as install:
+        plugin.register(MagicMock())
+
+    install.assert_not_called()

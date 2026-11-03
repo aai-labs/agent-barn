@@ -8,12 +8,21 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 H3b — Conversations rows for busy Hermes turns
+
+- Delivered: the Hermes observer records each message at the adapter, before the busy queue, and records the reply sent just before a queued message runs, which skips the delivery ledger. A message seen at both the adapter and the dispatch hook is recorded once.
+- Decided: this lives in the observer and applies to every Hermes Agent, because the gap isn't specific to listen-in.
+- Changed: Requests rises on busy Hermes Agents and Cost per Request falls, because the old count was too low. Past data isn't corrected. Queued messages from senders the Agent won't answer now get a row and count as Requests, as idle ones already did. The runtime digest changes, so running Hermes Agents report an update.
+- Evidence: H0b found the gaps live (database rows against logs). The new patches were applied against Hermes v2026.8.19, where the method signature and attachment stripping matched.
+- Known limits: queued messages have no Connection Journal timeline of their own. Hermes doesn't report the result of that reply's send, so a send that fails without raising still has an OUTBOUND row. H7 confirms the rows live.
+- Follow-up: H6 pins the two new private Hermes points.
 
 ### 2026-11-03 — MDP-118 H3 — Hermes tool and memory rules
 
