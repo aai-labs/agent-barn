@@ -27,11 +27,13 @@ type Target = "new" | "existing";
 function usePlaybookTargets() {
   const { runs } = useOrganizationPlaybookRuns(null, true);
   return useMemo(() => {
-    const seen = new Map<string, string>();
+    const seen = new Map<string, { id: string; name: string; hasDraft: boolean }>();
     for (const run of runs) {
-      if (run.skillId && run.status === "SUCCEEDED" && !seen.has(run.skillId)) seen.set(run.skillId, run.skillName);
+      if (run.skillId && run.status === "SUCCEEDED" && !seen.has(run.skillId)) {
+        seen.set(run.skillId, { id: run.skillId, name: run.skillName, hasDraft: run.skillHasDraft });
+      }
     }
-    return [...seen].map(([id, name]) => ({ id, name }));
+    return [...seen.values()];
   }, [runs]);
 }
 
@@ -50,7 +52,8 @@ export function PlaybookExtractionForm({ agent, hasActiveRun }: { agent: Agent; 
   );
   const start = useStartPlaybookExtraction(agent.id);
 
-  const chosenSkillId = skillId ?? targets[0]?.id ?? null;
+  // A playbook with an unpublished draft cannot take the next one until it is published or discarded.
+  const chosenSkillId = skillId ?? targets.find((option) => !option.hasDraft)?.id ?? null;
   const targetReady = target === "new" ? name.trim().length > 0 : chosenSkillId !== null;
   const blockedReason = hasActiveRun
     ? "A playbook extraction is already running for this Agent."
@@ -143,8 +146,8 @@ export function PlaybookExtractionForm({ agent, hasActiveRun }: { agent: Agent; 
               <SelectContent>
                 <SelectGroup>
                   {targets.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>
-                      {option.name}
+                    <SelectItem key={option.id} value={option.id} disabled={option.hasDraft}>
+                      {option.hasDraft ? `${option.name} (publish or discard its draft first)` : option.name}
                     </SelectItem>
                   ))}
                 </SelectGroup>

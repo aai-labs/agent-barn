@@ -2,17 +2,18 @@
 
 ## Read when
 
-Read before changing the Resource usage tab, the Agents overview page, the Platform resource usage page, the CPU and memory series the healthz servers export, the PromQL that reads them, or how the API reaches Prometheus.
+Read before changing the Resource usage tab, the Agents overview page, the Platform or Agent Resource Usage pages, the CPU and memory series the healthz servers export, the PromQL that reads them, or how the API reaches Prometheus.
 
 ## Role in the system
 
 Resource usage answers how much CPU and memory an Agent's container is using, against the limits it runs with. Costs answers what the Agent spent, and Activity answers what it did. This is container usage, not model usage or spend.
 
-Three surfaces show it:
+Four surfaces show it:
 
 - The **Resource usage** tab on the Agent page: current figures, peak memory, CPU throttling, and charts over 1 hour to 14 days.
 - The **Agents overview** at `/dashboard/{org}/agents`, reached from **Usage** on the navigation rail: every Agent the viewer can read, with status, spend, CPU and memory in the row. A row opens to status, cost and resource usage in full, each linking to its own tab.
-- The **Platform Resource Usage** page at `/dashboard/platform/resource-usage`, for Platform Administrators: the same figures across every Organization, as totals, a table by Organization, the heaviest Agents, and two charts. It can be narrowed to one Organization.
+- The **Platform Resource Usage** page at `/dashboard/platform/resource-usage`, for Platform Administrators: the same figures across every Organization, as totals, a table by Organization, and two charts. It can be narrowed to one Organization.
+- **Agent Resource Usage** at `/dashboard/platform/agents/resource-usage`, under Agents: the Heaviest agents table. It uses the same Platform Administrator authorization.
 
 The data path has no table of its own:
 
@@ -20,7 +21,7 @@ The data path has no table of its own:
 Agent container  healthz server reads /sys/fs/cgroup ──► /metrics on :8081
 Prometheus       `agent` scrape job (helm/monitoring) ──► keeps 15 days
 API              resource_usage domain ──► PromQL over HTTP, basic auth
-UI               Resource usage tab, Agents overview, Platform Resource Usage
+  UI               Resource usage tab, Agents overview, Platform and Agent Resource Usage
 ```
 
 ## Invariants
@@ -53,7 +54,7 @@ UI               Resource usage tab, Agents overview, Platform Resource Usage
 
 ## Platform view
 
-`GET /api/v1/platform/resource-usage?range=&organization_id=` is behind `require_platform_admin`, with its own service (`PlatformResourceUsageService`) and read models, so the Organization surface has no path to another Organization's figures. Classing this as oversight data is recorded in [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md).
+The **Platform Resource Usage** page at `/dashboard/platform/resource-usage` shows totals, Organizations, capacity and charts. **Agent Resource Usage** at `/dashboard/platform/agents/resource-usage`, under Agents, shows only the Heaviest agents table. Both use `GET /api/v1/platform/resource-usage?range=&organization_id=`, behind `require_platform_admin`, with its own service (`PlatformResourceUsageService`) and read models, so the Organization surface has no path to another Organization's figures. Classing this as oversight data is recorded in [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md).
 
 - It makes one platform-wide instant query (`{job="agent"}`) and one range query, plus one database read of every live Agent. Readings are keyed by the `app` label alone. The Agent, its name and its Organization come from the database, never from the `org_id`, `org_name` or `agent_name` labels, so a wrong label cannot move an Agent or rename an Organization.
 - A container that reports but belongs to no live Agent (deleted, or never known here) is not dropped. It becomes its own row with no Organization, listed last and not selectable as a filter, so the Organization rows add up to the platform total and a leaked container is visible. In the Agent table it is named `agent-<first 8 characters of its id>`, enough to find its Deployment.

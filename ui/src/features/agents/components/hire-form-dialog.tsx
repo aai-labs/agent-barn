@@ -10,6 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { useSyncProvidersQuery } from "@/features/sync-provider/hooks/use-sync-providers-query";
+import { FILE_SYNC } from "@/features/sync-provider/schemas";
 import { useHireAgentForm, type HiredAgent } from "../hooks/use-hire-agent-form";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { AgentErrorBanner } from "./agent-error-banner";
@@ -40,6 +43,8 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
     defaultModel,
     approvalMode,
     setApprovalMode,
+    fileSyncEnabled,
+    setFileSyncEnabled,
     sizeChoices,
     agentSizeId,
     setAgentSizeId,
@@ -58,6 +63,12 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
     canHire,
     hire,
   } = useHireAgentForm({ onHired });
+  const { providers } = useSyncProvidersQuery();
+  const fileSyncProvider = providers?.find(
+    (provider) => provider.connection?.status === "active" && provider.capabilities.includes(FILE_SYNC),
+  );
+  const fieldsBeforeHint = 4 + (agentType === "hermes" ? 1 : 0) + (fileSyncProvider ? 1 : 0);
+  const hintStartsRow = fieldsBeforeHint % 2 === 0;
 
   const hireButtonLabel = createdAgent
     ? pending
@@ -126,7 +137,28 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
             </Select>
           </FormField>
         )}
-        <div className="rounded-xl border border-dashed p-4 text-sm" style={{ color: "var(--ink-3)" }}>
+        {fileSyncProvider && (
+          <div className="flex items-center justify-between gap-4">
+            <span id="hire-file-sync-label" className="text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              Sync files with {fileSyncProvider.displayName}
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-labelledby="hire-file-sync-label"
+              aria-checked={fileSyncEnabled}
+              disabled={pending}
+              onClick={() => setFileSyncEnabled(!fileSyncEnabled)}
+              className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ backgroundColor: fileSyncEnabled ? "var(--ink)" : "var(--line)" }}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${fileSyncEnabled ? "translate-x-4" : ""}`}
+              />
+            </button>
+          </div>
+        )}
+        <div className={cn("rounded-xl border border-dashed p-4 text-sm", hintStartsRow && "sm:col-span-2")} style={{ color: "var(--ink-3)" }}>
           {template?.requiredSkills.length
             ? "Communication connections are configured after hiring. Credentials required by this template are configured before hiring."
             : "Communication connections and integration credentials are configured independently after hiring."}

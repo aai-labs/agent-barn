@@ -76,6 +76,8 @@ Hermes uses `/workspace` as its terminal working directory while its managed sta
 
 Opted-in Agent Memory configures each runtime's pinned Hindsight provider alongside native memory during assembly. Startup replaces stale provider settings and keeps the per-start credential in environment variables; a bounded authenticated health wait lets the API persist that credential before provider initialization. See [Agent Memory runtime integration](../features/agent-memory.md#runtime-integration) for plugin versions and behavior.
 
+Both runtimes ship `scripts/file-sync.py` and a `file-sync-rules.json` rendered from `api/domains/file_sync/rules.py`. As the last setup step before the ready file, `start.sh` runs `file-sync.py --once`, which always exits within 60 s and is never fatal, then starts it in the background. Because both files are part of the runtime configuration digest, running Agents show an update until they restart. See [Agent file sync](../features/sync-provider/README.md#agent-file-sync).
+
 ### Runtime configuration digest
 
 Both runtimes read their configuration once, at container start, so a pod keeps serving the code and images it was assembled from until someone restarts it. Step 11 records that fact. `Agent.running_config_digest` identifies the platform code and runtime images the pod was built from, and `AgentRead.update_available` reports when a running Agent's recorded digest differs from what the API would build now. Stop clears the digest, because a stopped Agent has no pod to describe. The digest is computed from the image the pod actually starts on, which is the platform pin unless the Agent has its own `pinned_runtime_image`. Only a managed-update rollback sets that pin, so a rolled-back Agent keeps starting on its previous image, through restarts and operator fleet rebuilds alike, and keeps reporting `update_available` until a managed update succeeds. The signal is advisory: it blocks no operation, changes no Agent behaviour, and for every Agent without its own pin it clears on the next start. See [`../features/agents.md`](../features/agents.md) for the read contract.
@@ -151,7 +153,35 @@ New Connections, including lazy Web Chat creation, no longer mint gateway driver
 
 ## Mention gating
 
+Native Hermes Slack rejects group DMs (`mpim`) for incoming messages and gated button
+interactions, including approvals. One-to-one DMs require a D-prefixed channel
+ID. For G-prefixed IDs, which can identify legacy private channels or group DMs,
+the plugin verifies Slack conversation metadata before message intake or gated
+button handling. Only a confirmed private channel may use the channel policy;
+failed or inconclusive lookups deny access. Confirmed private-channel identities
+are cached for the runtime process.
+
 Shared-room admission is a Platform Plugin concern. Plugin settings define provider-specific restrictions. Discord exposes Hermes' native user, role, and channel gates plus an explicit Allow all users switch. A user allowlist applies in DMs and server messages; channel and role gates apply in server messages. There are no separate guild or DM policy switches. Native Hermes receives those gates directly and owns Discord admission; native OpenClaw receives them as a wildcard `guilds["*"]` entry (users, roles, channels) plus a DM `allowFrom`. The Agent Barn observer is telemetry-only on both. Native Telegram keeps the DM and group policies and requires a mention or reply to the bot in groups, never in DMs. Runtime-owned Teams keeps policy enforcement at the authenticated public relay because the runtimes must accept the activity unchanged for Bot Framework lifecycle and Adaptive Card handling. Slack channel messages require a direct bot mention and expose a schema-driven thread policy: `every_message` requires a mention on every thread reply, while `start_only` admits unmentioned replies only after a matching Connection-scoped thread has persisted Agent state. Slack admission runs in the native gateway using the projected Connection restrictions; observers remain telemetry-only. Updating a native Connection restarts a running Agent because its credentials and policy are projected only at boot; Web Chat and Email changes keep their Communications configuration path.
+
+Native Hermes Slack enforces channel and DM access independently through the
+`agentbarn-slack-access` runtime plugin. It scopes the gateway's authorization
+method before adapter attachment fetching and final dispatch: channel access
+checks `group_policy` and `channel_ids`, while DMs check `dm_policy` and
+`dm_user_ids`. An empty allowlist admits nobody in that scope. Native pairing
+grants and global user allowlists cannot bypass the Connection policy. The
+plugin delegates other Platforms to Hermes' original authorization method;
+Slack's native mention and thread gates still apply. Its files ship in the
+Agent ConfigMap and are enabled only for native Slack. Deploy the API change
+and restart affected Agents to rebuild this configuration. Apply the current
+migration head before deployment as described in the [operations guide](../guidelines/operations.md#database-migrations);
+no base-image rebuild is required. Existing empty channel allowlists become
+closed on restart; review them before rollout as described in the
+[Communications changelog](../features/communications/CHANGELOG.md).
+
+`SLACK_ALLOW_ALL_USERS=true` delegates Hermes' native user gate to the mandatory
+Connection-policy plugin and suppresses the otherwise misleading startup warning
+about having no user allowlists. The plugin remains authoritative for Slack;
+this flag does not widen the Connection policy or another Platform's access.
 
 ## Processing feedback
 
@@ -212,6 +242,13 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 `../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. The API chart deploys separate product, Ingest, Communications, credential gateway, and optional Memory processes; the Communications Service is reachable internally by runtimes and exposes only the provider-webhook prefix through ingress. API deployment mounts Kubernetes access so the product service can manage Agent resources. An API Helm hook runs Alembic before installation or upgrade. Helmfile always enables the Memory gateway, which runs on port 8003 with its own Hindsight auth-key reference; Hindsight and its pgvector database have separate releases. CI supplies Hindsight's database, backend-authentication, and internal-settings credentials from environment-specific GitHub Secrets. Hindsight's pre-install/pre-upgrade Job generates its platform LiteLLM key without a key-level budget cap using the same delete/generate/Secret-update pattern as the API key hook; the backend loads the key from its own Secret. Deployment syncs Hindsight first and passes only the generated key hashes to the API release for cost attribution. Hindsight resolves its model and Organization team credential through the API workload's internal port-8004 listener with its separate settings credential; ingress routes no traffic to that listener; the gateway holds neither LiteLLM master access nor key-encryption credentials. Agent pods disable automatic ServiceAccount token mounting. See [Agent Memory](../features/agent-memory.md) for gateway contracts and [operations](../guidelines/operations.md#agent-memory-deployment) for configuration.
 
 The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. The same worker consumes the `playbook_extraction` queue, running each [Playbook Extraction](../features/playbooks.md) once with no automatic retry; it receives `LITELLM_BASE_URL` to call models with the source Agent's key. Communications uses PostgreSQL-backed leases and durable Communication Deliveries, distinct from Domain Event delivery.
+
+The Sync Engine is a separate Deployment of the API image (`api/sync_engine_main.py`, chart value `syncEngine`). Every 30 s it runs [Agent file sync](../features/sync-provider/README.md#agent-file-sync) for each active Sync Provider Connection whose provider supports it.
+- **Pod lifecycle:** it uses a non-overlapping rolling update like the worker, and has one replica. A per-connection PostgreSQL advisory lock still keeps two copies off the same connection during a rollout.
+- **Liveness:** the probe fails when the heartbeat file is older than `syncEngine.heartbeatMaxAgeSeconds` (600 s). The engine writes it after each page of changes, each connection and each completed pass, so a long pass stays alive.
+- **No Kubernetes access:** the engine never calls the Kubernetes API, so its pod sets `automountServiceAccountToken: false` and mounts no kubeconfig. It keeps the release's service account name, like every other Deployment in the chart, but receives no credential for it.
+- **What it needs:** the API Secret. It needs no Redis, no LiteLLM and no Kubernetes access.
+- **Local runs:** `make dev-sync-engine`, or the `sync-engine` Compose service.
 
 The k3s deploy workflow builds API and UI images under moving environment tags, passes those tags into Helmfile as `API_IMAGE_TAG` and `UI_IMAGE_TAG`, and applies Helmfile. The current convention is `latest` on `main` and `latest-staging` on the `staging` branch. The API image is the exception to "deploys the tag": it is pushed without a tag, deployed as `<tag>@sha256:<digest>` so the migration hook and rollout use exactly that image, and re-tagged only after the sync succeeds, so a failed migration cannot move the tag under running pods ([`../guidelines/operations.md`](../guidelines/operations.md#versioning-and-releases)). Component change detection compares the current commit with the latest successful deploy run for that branch; failed runs therefore leave their entire source range pending for the next attempt. Manual dispatches and missing or non-ancestor baselines rebuild all components. Manual and bundled release flows also pass explicit API/UI tags; chart metadata is not used as the source of truth for API/UI images.
 

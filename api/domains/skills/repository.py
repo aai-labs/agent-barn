@@ -539,6 +539,22 @@ class SkillRepository:
             session.refresh(draft)
             return draft
 
+    def save_new_skill_with_draft(
+        self, skill: Skill, files: list[tuple[str, str]], *, description: str | None, required_providers: list[str]
+    ) -> SkillDraft:
+        """Create a lineage and its first draft together, so a failure leaves neither behind."""
+        files = validate_files(files)
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.add(skill)
+            session.flush()
+            draft = SkillDraft(skill_id=skill.id, description=description, required_providers=required_providers)
+            session.add(draft)
+            session.flush()
+            for path, content in files:
+                session.add(SkillDraftFile(skill_draft_id=draft.id, path=path, content=content))
+            session.commit()
+            return draft
+
     def update_draft_files(
         self,
         draft_id: UUID,

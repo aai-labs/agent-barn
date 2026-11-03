@@ -16,6 +16,7 @@ import type { WorkflowRun } from "../run-schemas";
 import { WorkflowPager } from "./workflow-pager";
 import { WorkflowMarkdown } from "./workflow-markdown";
 import { WorkflowRunTiming, stepTiming } from "./workflow-run-timing";
+import { AttemptStatus, WorkflowRunActivity } from "./workflow-run-activity";
 import {
   RunCard,
   RunPageHeader,
@@ -66,6 +67,7 @@ export function WorkflowRuns({
             <span className="block text-sm text-[var(--ink-3)]">
               Version {run.versionNumber} ·{" "}
               {new Date(run.createdAt).toLocaleString()}
+              {run.rerunOfRunId && " · Re-run"}
             </span>
           </span>
           <span className="flex items-center gap-3 text-sm text-[var(--ink-3)]">
@@ -93,12 +95,17 @@ export function WorkflowRunDetail({
   agentHref,
   canManageFiles,
   runId,
+  canRunAgain,
+  onOpenRun,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
   canManageFiles: boolean;
   runId: string;
+  /** Whether this actor may start runs of the workflow; the server decides per run. */
+  canRunAgain: boolean;
+  onOpenRun: (id: string) => void;
 }) {
   const run = useWorkflowRun(agentId, runId);
   if (run.error)
@@ -118,6 +125,8 @@ export function WorkflowRunDetail({
       agentHref={agentHref}
       canManageFiles={canManageFiles}
       run={run.data}
+      canRunAgain={canRunAgain}
+      onOpenRun={onOpenRun}
     />
   );
 }
@@ -125,9 +134,11 @@ export function WorkflowRunDetail({
 function RunSummary({
   run,
   agentName,
+  agentHref,
 }: {
   run: WorkflowRun;
   agentName: string;
+  agentHref: string;
 }) {
   const current = run.steps.find((step) => step.state === "RUNNING");
   const note = (text: string) => (
@@ -214,7 +225,7 @@ function RunSummary({
             <p className="mt-1 text-sm">{current.name}</p>
           </div>
         )}
-        {run.reason && <p className="text-sm">{run.reason}</p>}
+        <AttemptStatus run={run} agentName={agentName} agentHref={agentHref} />
       </div>
     </RunCard>
   );
@@ -265,16 +276,23 @@ function RunContents({
   agentHref,
   canManageFiles,
   run,
+  canRunAgain,
+  onOpenRun,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
   canManageFiles: boolean;
   run: WorkflowRun;
+  canRunAgain: boolean;
+  onOpenRun: (id: string) => void;
 }) {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const actions = useWorkflowRunActions(agentId);
   const [confirm, setConfirm] = useState(false);
+  const [confirmRerun, setConfirmRerun] = useState(false);
+  // Retained through retries so an uncertain request can never start a second run.
+  const [rerunRequestId] = useState(() => crypto.randomUUID());
   const selectedStep = run.steps.find((step) => step.id === selectedStepId);
   const started = new Date(run.createdAt).toLocaleString();
   return (
@@ -293,9 +311,36 @@ function RunContents({
                 Cancel run
               </button>
             )}
+            {canRunAgain && run.allowedActions.includes("rerun") && (
+              <button
+                className="af-btn af-btn-primary"
+                onClick={() => setConfirmRerun(true)}
+              >
+                Run again
+              </button>
+            )}
           </>
         }
       />
+      {run.rerunOfRunId && (
+        <p className="-mt-4 mb-6 text-sm text-[var(--ink-3)]">
+          Re-run of{" "}
+          <button
+            type="button"
+            className="underline hover:text-[var(--ink)]"
+            onClick={() => onOpenRun(run.rerunOfRunId!)}
+          >
+            run {run.rerunOfRunId.slice(0, 8)}
+          </button>
+          , with the same version and inputs.
+        </p>
+      )}
+      {actions.rerun.error && (
+        <AppErrorState
+          error={actions.rerun.error}
+          title="This run could not be run again"
+        />
+      )}
       {actions.cancel.error && (
         <AppErrorState
           error={actions.cancel.error}
@@ -344,22 +389,54 @@ function RunContents({
           <StepRail
             steps={run.steps}
             runState={run.state}
+            attempt={run.attempt}
             selectedStepId={selectedStepId}
             onSelectStep={setSelectedStepId}
           />
         </nav>
-        <div className="min-w-0 space-y-4">
-          <div id="workflow-run-panel" className="min-w-0 [&>section]:h-full">
+        <div className="min-w-0 space-y-4 self-start">
+          <div id="workflow-run-panel" className="min-w-0">
             {selectedStep ? (
               <StepDetail run={run} step={selectedStep} />
             ) : (
-              <RunSummary run={run} agentName={agent.name} />
+              <RunSummary
+                run={run}
+                agentName={agent.name}
+                agentHref={agentHref}
+              />
             )}
           </div>
           <AgentFiles canManageFiles={canManageFiles} key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
           <WorkflowRunTiming run={run} />
+          <WorkflowRunActivity agentId={agentId} run={run} />
         </div>
       </div>
+      <ConfirmationDialog
+        open={confirmRerun}
+        onOpenChange={setConfirmRerun}
+        title="Run this workflow again?"
+        description={
+          <span className="block">
+            This starts a new run of version {run.versionNumber} with the same
+            inputs as this one. This run and its results stay in the history.
+          </span>
+        }
+        cancelLabel="Not now"
+        confirmLabel="Run again"
+        isPending={actions.rerun.isPending}
+        onConfirm={async () => {
+          try {
+            const started = await actions.rerun.mutateAsync({
+              run,
+              clientRequestId: rerunRequestId,
+            });
+            setConfirmRerun(false);
+            onOpenRun(started.id);
+          } catch {
+            setConfirmRerun(false);
+          }
+        }}
+      />
       <ConfirmationDialog
         open={confirm}
         onOpenChange={setConfirm}

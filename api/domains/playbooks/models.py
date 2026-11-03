@@ -45,6 +45,7 @@ class PlaybookExtractionError(str, enum.Enum):
     ANSWER_TRUNCATED = "answer_truncated"
     DRAFT_CONFLICT = "draft_conflict"
     SKILL_UNAVAILABLE = "skill_unavailable"
+    INTERRUPTED = "interrupted"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -162,16 +163,19 @@ class PlaybookExtractionRead(PydanticBaseModel):
     cost_usd: Decimal | None
     requested_by_user_id: UUID | None
     convention_count: int
+    # Whether the target Skill holds an unpublished draft now; filled in on run lists.
+    skill_has_draft: bool = False
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
 
     @classmethod
-    def from_row(cls, row: PlaybookExtraction, source_agent_name: str) -> Self:
+    def from_row(cls, row: PlaybookExtraction, source_agent_name: str, skill_has_draft: bool = False) -> Self:
         return cls.model_validate(
             {
                 **row.model_dump(),
                 "source_agent_name": source_agent_name,
+                "skill_has_draft": skill_has_draft,
                 "convention_count": len(row.result_conventions or []),
                 "conventions": row.result_conventions or [],
             }

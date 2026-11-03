@@ -343,9 +343,9 @@ def test_signed_link_expires_without_deleting_file(storage):
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = publish(context)
         path = base(context) + f"/artifacts/{row['id']}/download-link"
-        old = context.client.get(path + "?seconds=1", headers=auth(context)).json()
+        old = context.client.get(path + "?seconds=3", headers=auth(context)).json()
         assert_that(context.client.get(old["url"]).content, equal_to(CONTENT))
-        time.sleep(2)
+        time.sleep(4)
         expired = context.client.get(old["url"])
         assert_that(expired.status_code, equal_to(403))  # Provider rejection is concealed by the app.
         assert_that(expired.content != CONTENT, is_(True))

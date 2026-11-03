@@ -244,7 +244,7 @@ def test_onedrive_is_listed_not_connected_when_configured():
                 location_noun="SharePoint site",
                 schema_version=1,
                 available=True,
-                capabilities=["admin_approval", "location_picker"],
+                capabilities=["admin_approval", "file_sync", "location_picker"],
                 connection=None,
                 can_connect=True,
                 blocked_reason=None,

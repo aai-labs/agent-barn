@@ -10,15 +10,18 @@ RATE_LIMIT_MAX_WAIT_SECONDS = 30
 DEFAULT_RETRY_AFTER_SECONDS = 1
 
 
-def retry_after_seconds(raw: str | None) -> int:
-    """Seconds to wait per a 429 response's Retry-After header, clamped to a sane range."""
+def retry_after_seconds(raw: str | None, max_seconds: int | None = RATE_LIMIT_MAX_WAIT_SECONDS) -> int:
+    """Seconds to wait per a 429 response's Retry-After header, at least one and at most
+    ``max_seconds``. A caller that schedules the retry instead of sleeping passes ``None``."""
     if raw is None:
         return DEFAULT_RETRY_AFTER_SECONDS
     try:
         seconds = int(raw)
     except ValueError:
         seconds = DEFAULT_RETRY_AFTER_SECONDS
-    return max(1, min(seconds, RATE_LIMIT_MAX_WAIT_SECONDS))
+    if max_seconds is not None:
+        seconds = min(seconds, max_seconds)
+    return max(1, seconds)
 
 
 def resilient_request(

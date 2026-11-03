@@ -1,14 +1,17 @@
+import json
 from pathlib import Path
 from uuid import UUID
 
 import yaml
 from kubernetes import client
 
+from api.domains.agents.restore_point_job import RUNTIME_HERMES
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import (
     RUNTIME_WEBHOOK_PORT,
     AgentBarnTelegramRuntime,
 )
+from api.domains.file_sync.rules import rules_manifest
 
 from .artifacts import (
     ARTIFACT_COMMAND,
@@ -31,6 +34,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
@@ -42,9 +46,12 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
+SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
@@ -184,6 +191,8 @@ def build_hermes_gateway_config(
     plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
+    if native_slack:
+        plugins.append("agentbarn-slack-access")
     config = _hermes_config_core(
         model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
     )
@@ -269,9 +278,8 @@ def native_slack_env(
     ``home_channel`` is the Connection's resolved default delivery target, which
     native cron jobs without an origin deliver to.
 
-    ponytail: Hermes has one user allowlist for channels and DMs alike, so a DM
-    allowlist also restricts channel senders; model it separately if that matters
-    beyond the spike.
+    The Slack access plugin enforces the DM sender and channel allowlists
+    independently, before the adapter fetches attachments.
     """
     env = {
         "SLACK_BOT_TOKEN": credentials["bot_token"],
@@ -279,13 +287,15 @@ def native_slack_env(
         "SLACK_REQUIRE_MENTION": "true",
         "SLACK_THREAD_REQUIRE_MENTION": "true" if settings.get("thread_mention_policy") != "start_only" else "false",
         "SLACK_DISABLE_DMS": "true" if settings.get("dm_policy", "off") == "off" else "false",
+        # Delegate Slack admission to the mandatory Connection-policy plugin.
+        # Also prevents Hermes' startup warning from claiming all senders are denied.
+        "SLACK_ALLOW_ALL_USERS": "true",
+        "AGENTBARN_SLACK_DM_POLICY": settings.get("dm_policy", "off"),
+        "AGENTBARN_SLACK_GROUP_POLICY": settings.get("group_policy", "allowlist"),
+        "AGENTBARN_SLACK_DM_ALLOWED_USERS": ",".join(settings.get("dm_user_ids") or []),
     }
     if settings.get("group_policy", "allowlist") == "allowlist":
         env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
-    if settings.get("dm_policy") == "allowlist":
-        env["SLACK_ALLOWED_USERS"] = ",".join(settings.get("dm_user_ids") or [])
-    else:
-        env["SLACK_ALLOW_ALL_USERS"] = "true"
     if home_channel is not None:
         env["SLACK_HOME_CHANNEL"] = home_channel.id
         env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
@@ -431,6 +441,8 @@ def build_hermes_config_map(
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
+        "slack-access-plugin.yaml": SLACK_ACCESS_PLUGIN_YAML,
+        "slack-access-init.py": SLACK_ACCESS_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
@@ -441,6 +453,8 @@ def build_hermes_config_map(
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
+        "file-sync.py": FILE_SYNC_PY,
+        "file-sync-rules.json": json.dumps(rules_manifest(RUNTIME_HERMES)),
     }
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml

@@ -31,6 +31,19 @@ export class WorkflowRunsPage {
       .click();
     await this.page.getByLabel("Reporting period (required)").fill(period);
   }
+  async runAgain() {
+    // The closing confirmation dialog retains another Run again button.
+    await this.page
+      .getByRole("region", { name: "Run detail", exact: true })
+      .getByRole("button", { name: "Run again", exact: true })
+      .click();
+  }
+  async confirmRunAgain() {
+    await this.page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Run again", exact: true })
+      .click();
+  }
   async start() {
     await this.page.getByRole("button", { name: /^Start run/ }).click();
   }

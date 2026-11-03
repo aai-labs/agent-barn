@@ -17,6 +17,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    providers_accept_credentials,
     there_is_a_shared_credential,
     there_is_an_agent,
     use_org_for_auth,
@@ -55,7 +56,7 @@ def _auth(context) -> dict:
 
 
 def test_start_agent_with_shared_credential_sets_status_running():
-    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), providers_accept_credentials()]) as ctx:
         client: TestClient = ctx.client
         k8s: MagicMock = ctx.injector.get(KubernetesClient)
 

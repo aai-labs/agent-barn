@@ -6,6 +6,19 @@ from api.domains.sync_provider.plugins.base import SyncLocationGuard, SyncProvid
 CAPABILITY_METHODS: dict[SyncProviderCapability, tuple[str, ...]] = {
     SyncProviderCapability.LOCATION_PICKER: ("search_locations", "resolve_location"),
     SyncProviderCapability.ADMIN_APPROVAL: ("approval_url", "is_approval_callback"),
+    SyncProviderCapability.FILE_SYNC: (
+        "create_folder",
+        "get_item",
+        "get_item_by_path",
+        "move_item",
+        "delete_item",
+        "delete_item_with",
+        "changes",
+        "list_files",
+        "upload_target",
+        "download_url",
+        "write_empty_file",
+    ),
 }
 
 

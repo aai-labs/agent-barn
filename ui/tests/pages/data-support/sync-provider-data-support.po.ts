@@ -32,7 +32,7 @@ export function oneDriveEntry(overrides: Entry = {}): Entry {
       "A Microsoft Global Administrator approves Agent Barn for your organization once, and the person connecting must be a SharePoint Administrator and a member of the site they pick.",
     location_noun: "SharePoint site",
     schema_version: 1,
-    capabilities: ["admin_approval", "location_picker"],
+    capabilities: ["admin_approval", "location_picker", "file_sync"],
     available: true,
     approval_url: ONEDRIVE_APPROVAL_URL,
     connection: null,

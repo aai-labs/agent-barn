@@ -67,13 +67,20 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(usagePage.organizationRows().nth(1)).toContainText("Acme");
     await expect(usagePage.organizationRows().nth(2)).toContainText("No live agent");
 
+    await expect(page.getByTestId("platform-usage-memory-chart")).toBeVisible();
+    await expect(page.getByTestId("platform-usage-cpu-chart")).toBeVisible();
+
+    await usagePage.gotoAgentResourceUsage();
+    await expect(usagePage.agentResourceUsageHeading()).toBeVisible();
     expect(await usagePage.agentIds()).toEqual([PLATFORM_CY_ID, PLATFORM_ADA_ID, PLATFORM_ORPHAN_ID]);
     await expect(usagePage.agentRows().nth(0)).toContainText("Cy");
     await expect(usagePage.agentRows().nth(0)).toContainText("Globex");
     await expect(usagePage.agentRows().nth(0)).toContainText("30%");
-
-    await expect(page.getByTestId("platform-usage-memory-chart")).toBeVisible();
-    await expect(page.getByTestId("platform-usage-cpu-chart")).toBeVisible();
+    await expect(page.getByTestId("platform-usage-memory")).toHaveCount(0);
+    await expect(usagePage.organizationRows()).toHaveCount(0);
+    await expect(usagePage.capacityCard("limits-memory")).toHaveCount(0);
+    await expect(page.getByTestId("platform-usage-memory-chart")).toHaveCount(0);
+    await expect(page.getByTestId("platform-usage-cpu-chart")).toHaveCount(0);
   });
 
   test("lists the top five organizations, keeps the no-live-agent row, and says how many more", async ({
@@ -144,7 +151,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
   test("names a container with no live agent by its id, not by a guess", async () => {
     await data.resourceUsage.interceptPlatformResourceUsage();
 
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     const row = usagePage.agentRows().nth(2);
     await expect(row).toContainText("agent-99999999");
@@ -174,7 +181,6 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     await usagePage.organizationRow(PLATFORM_ACME_ID).click();
 
-    await expect(usagePage.agentRows()).toHaveCount(1);
     await expect(usagePage.stat("memory")).toContainText("1 GiB");
     // Narrowed, the card shows that organization alone: not the others, and not the
     // container with no live agent, which the narrowed totals leave out.
@@ -186,10 +192,14 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page).toHaveURL(/orgName=Acme/);
     expect(requests.at(-1)?.get("organization_id")).toBe(PLATFORM_ACME_ID);
 
-    // Clicking it again clears the filter, and the others come back.
-    await usagePage.organizationRow(PLATFORM_ACME_ID).click();
+    // The separate Agents resource view accepts the same organization filter.
+    await usagePage.gotoAgentResourceUsage(`?orgId=${PLATFORM_ACME_ID}&orgName=Acme`);
+    await expect(usagePage.agentRows()).toHaveCount(1);
+    await expect(usagePage.agentRows().first()).toContainText("Ada");
 
-    await expect(usagePage.agentRows()).toHaveCount(3);
+    // Clicking it again clears the filter, and the other organizations come back.
+    await page.goBack();
+    await usagePage.organizationRow(PLATFORM_ACME_ID).click();
     await expect(usagePage.organizationRows()).toHaveCount(3);
     await expect(page).not.toHaveURL(/orgId=/);
     expect(requests.at(-1)?.get("organization_id")).toBeNull();
@@ -244,7 +254,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
       body: mockPlatformUsage({ agents }),
     });
 
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await expect(usagePage.agentRows()).toHaveCount(10);
     // Heaviest first.
@@ -260,7 +270,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
       body: mockPlatformUsage({ agents: [], organizations: [] }),
     });
 
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await expect(page.getByTestId("platform-agents-empty")).toBeVisible();
     // Nobody is waiting on an update, so it does not say they are.
@@ -293,6 +303,15 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     // The totals of what the agents request are not cards of their own: Capacity covers that, for every pod.
     await expect(page.getByTestId("platform-usage-aggregates")).toHaveCount(0);
+    // Organization rows remain on the Platform overview.
+    const globex = usagePage.organizationRows().nth(0);
+    await expect(globex.getByTestId("organization-request-memory")).toHaveText("req 512 MiB");
+    await expect(globex.getByTestId("organization-request-cpu")).toHaveText("req 0.1");
+    await expect(usagePage.organizationRows().nth(1).getByTestId("organization-request-memory")).toHaveText("—");
+    const box = await globex.boundingBox();
+    expect(box?.height ?? Infinity).toBeLessThan(44);
+
+    await usagePage.gotoAgentResourceUsage();
     // Cy asks for 512 MiB of its 2 GiB, so the tick sits a quarter of the way along the bar.
     const cy = usagePage.agentRows().nth(0);
     await expect(cy.getByTestId("platform-agent-memory-request")).toHaveText("requests 512 MiB");
@@ -303,14 +322,6 @@ test.describe("Platform resource usage (platform_admin)", () => {
     const ada = usagePage.agentRows().nth(1);
     await expect(ada.getByTestId("platform-agent-memory-request")).toHaveCount(0);
     await expect(ada.getByTestId("usage-meter-request-marker")).toHaveCount(0);
-    // And the organization rows, on a wide screen.
-    const globex = usagePage.organizationRows().nth(0);
-    await expect(globex.getByTestId("organization-request-memory")).toHaveText("req 512 MiB");
-    await expect(globex.getByTestId("organization-request-cpu")).toHaveText("req 0.1");
-    await expect(usagePage.organizationRows().nth(1).getByTestId("organization-request-memory")).toHaveText("—");
-    // The extra columns still keep a row on one line.
-    const box = await globex.boundingBox();
-    expect(box?.height ?? Infinity).toBeLessThan(44);
   });
 
   test("says nothing about requests when they could not be read", async () => {
@@ -320,6 +331,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits");
     await expect(usagePage.organizationRows().nth(0).getByTestId("organization-request-memory")).toHaveText("—");
+    await usagePage.gotoAgentResourceUsage();
     await expect(usagePage.agentRows().nth(0).getByTestId("platform-agent-memory-request")).toHaveCount(0);
     await expect(usagePage.agentRows().nth(0).getByTestId("usage-meter-request-marker")).toHaveCount(0);
   });
@@ -359,7 +371,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
       },
     });
 
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await expect(page.getByTestId("platform-agents-empty")).toContainText("No agent is reporting CPU or memory right now.");
     await expect(page.getByTestId("platform-agents-need-update")).toContainText(
@@ -373,7 +385,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
       body: { ...base, totals: { ...base.totals, agents_reporting: 0, agents_restart_required: 1 }, agents: [] },
     });
 
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await expect(page.getByTestId("platform-agents-need-update")).toContainText("1 agent is running an older version.");
   });
@@ -411,14 +423,13 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 
-  test("marks Spend on the rail and Resources in its panel", async () => {
+  test("marks Overview on the rail and Resource Usage in its panel", async () => {
     await data.resourceUsage.interceptPlatformResourceUsage();
 
     await usagePage.goto();
 
-    await expect(usagePage.navLink("Spend")).toHaveAttribute("aria-current", "page");
-    await expect(usagePage.navLink("Overview")).not.toHaveAttribute("aria-current", "page");
-    await expect(usagePage.panelLink("Resources")).toHaveAttribute("aria-current", "page");
+    await expect(usagePage.navLink("Overview")).toHaveAttribute("aria-current", "page");
+    await expect(usagePage.panelLink("Resource Usage")).toHaveAttribute("aria-current", "page");
   });
 });
 
@@ -440,6 +451,8 @@ test.describe("Platform resource usage (non platform_admin)", () => {
       page.getByRole("heading", { level: 1, name: "Platform Resource Usage" }),
     ).not.toBeVisible();
     // The page never mounted, so nothing asked for cross-organization figures.
+    await new PlatformResourceUsagePage(page).gotoAgentResourceUsage();
+    await expect(page.getByText(/platform admin access required/i)).toBeVisible();
     expect(requests).toHaveLength(0);
   });
 });
@@ -747,7 +760,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
   test("rows start closed, and a closed row asks for nothing", async ({ page }) => {
     const asked = await data.resourceUsage.interceptPlatformAgentDetails();
 
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await expect(usagePage.agentRows()).toHaveCount(3);
     await expect(usagePage.agentDetails()).toHaveCount(0);
@@ -757,7 +770,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
 
   test("opening a row shows the same Status and Resource usage panels as the organization page", async () => {
     const asked = await data.resourceUsage.interceptPlatformAgentDetails();
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
 
@@ -782,7 +795,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
 
   test("has no Cost panel and no links, since an organization's agent pages are not an admin's to open", async () => {
     await data.resourceUsage.interceptPlatformAgentDetails();
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
 
@@ -795,7 +808,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
 
   test("clicking the row opens it, and clicking it again closes it", async ({ page }) => {
     await data.resourceUsage.interceptPlatformAgentDetails();
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
     const row = page.locator(`[data-testid="platform-agent-usage-row"][data-agent-id="${PLATFORM_ADA_ID}"]`);
 
     await row.getByText("Ada").click();
@@ -816,7 +829,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
           restart_count: agentId === PLATFORM_CY_ID ? 3 : 0,
         }),
     });
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
     await usagePage.agentToggle(PLATFORM_ADA_ID).click();
@@ -826,7 +839,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
 
   test("a row stays open when the table is sorted", async ({ page }) => {
     await data.resourceUsage.interceptPlatformAgentDetails();
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
     await expect(usagePage.agentDetails()).toBeVisible();
 
@@ -854,7 +867,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
           },
         }),
     });
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
 
@@ -879,7 +892,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
           resource_usage: null,
         }),
     });
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
 
@@ -891,7 +904,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
 
   test("a container with no live agent has nothing to open", async ({ page }) => {
     const asked = await data.resourceUsage.interceptPlatformAgentDetails();
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
     const orphan = page.locator(
       `[data-testid="platform-agent-usage-row"][data-agent-id="${PLATFORM_ORPHAN_ID}"]`,
     );
@@ -905,7 +918,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
 
   test("a failed request is said inline, in both panels, and the row stays", async () => {
     await data.resourceUsage.interceptPlatformAgentDetails({ status: 500 });
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
 
@@ -922,7 +935,7 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
     await data.resourceUsage.interceptPlatformAgentDetails({
       body: (agentId) => mockPlatformAgentDetails({ agent_id: agentId, health_status: "wedged" }),
     });
-    await usagePage.goto();
+    await usagePage.gotoAgentResourceUsage();
 
     await usagePage.agentToggle(PLATFORM_CY_ID).click();
 

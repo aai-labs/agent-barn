@@ -20,6 +20,7 @@ import {
   mockAgentTemplate,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
+import { activeOneDriveConnection, oneDriveEntry } from "../pages/data-support/sync-provider-data-support.po";
 
 test.describe("Agent configuration page", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -1765,6 +1766,39 @@ test.describe("Agent configuration page", () => {
       await expect(section.getByText("closed before it finished", { exact: false })).toBeVisible();
       await expect(section.getByText("approve SharePoint access", { exact: false }).last()).toBeVisible();
       await expect(section.getByText("Mobile and desktop applications", { exact: false }).last()).toBeVisible();
+    });
+  });
+
+  test.describe("Retiring", () => {
+    async function openRetireDialog(page: Page, providers: Record<string, unknown>[]) {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await dataSupport.syncProviders.interceptProviders({ providers });
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionLink("Danger zone").click();
+      await page.getByRole("button", { name: "Retire Agent" }).click();
+      return page.getByRole("alertdialog").or(page.getByRole("dialog"));
+    }
+
+    test("says the Agent's synced folder is deleted too", async ({ page }) => {
+      const dialog = await openRetireDialog(page, [
+        oneDriveEntry({ connection: activeOneDriveConnection(), can_connect: false }),
+      ]);
+
+      await expect(dialog).toContainText("Its folder in OneDrive is deleted too.");
+    });
+
+    test("says nothing about a folder when no provider syncs files", async ({ page }) => {
+      const dialog = await openRetireDialog(page, [oneDriveEntry()]);
+
+      await expect(dialog).toContainText("This action cannot be undone.");
+      await expect(dialog).not.toContainText("Its folder in");
     });
   });
 });

@@ -1,5 +1,6 @@
 """Real Garage authority boundaries and durable provisioning/deletion retries."""
 
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -39,6 +40,18 @@ def journal(context):
         return session.exec(select(ArtifactBucket).where(ArtifactBucket.agent_id == context.agent.id)).one()
 
 
+def assert_cross_bucket_denied(error: ClientError, *, operation: str, target_type: str, direction: str) -> None:
+    response = error.response
+    code = response.get("Error", {}).get("Code")
+    # Provider messages and arbitrary response values may include resource names or credentials.
+    safe_code = code if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", code) else "unavailable"
+    assert_that(
+        response["ResponseMetadata"]["HTTPStatusCode"],
+        is_in((403, 404)),
+        f"Cross-bucket {operation} ({direction}, {target_type}); provider error code: {safe_code}",
+    )
+
+
 @pytest.mark.parametrize("other_tenant", [False, True])
 def test_each_agent_key_cannot_read_write_or_administer_another_bucket(storage, other_tenant):  # noqa: F811
     env, provider = storage
@@ -66,19 +79,23 @@ def test_each_agent_key_cannot_read_write_or_administer_another_bucket(storage, 
         assert_that(hasattr(config, "artifact_s3_secret_key"), is_(False))
         secret = decrypt_token(first_bucket.secret_key_encrypted, config.agent_token_encryption_key)
         assert_that(secret in repr(first_bucket) + repr(first), is_(False))
-        for attacker, victim, victim_bucket in (
-            (first_s3, second_row, second_bucket),
-            (second_s3, first_row, first_bucket),
+        for direction, attacker, victim, victim_bucket in (
+            ("first to second", first_s3, second_row, second_bucket),
+            ("second to first", second_s3, first_row, first_bucket),
         ):
             # Test the provider ID too: a private alias alone could hide a shared
             # bucket while both credentials still have access to its actual ID.
-            for target in (victim.bucket, victim_bucket.provider_id):
+            for target_type, target in (("alias", victim.bucket), ("provider ID", victim_bucket.provider_id)):
                 with pytest.raises(ClientError) as denied:
                     attacker.get_object(Bucket=target, Key=victim.object_key)
-                assert_that(denied.value.response["ResponseMetadata"]["HTTPStatusCode"], is_in((403, 404)))
+                assert_cross_bucket_denied(
+                    denied.value, operation="get_object", target_type=target_type, direction=direction
+                )
                 with pytest.raises(ClientError) as denied:
                     attacker.put_object(Bucket=target, Key=victim.object_key, Body=b"overwrite")
-                assert_that(denied.value.response["ResponseMetadata"]["HTTPStatusCode"], is_in((403, 404)))
+                assert_cross_bucket_denied(
+                    denied.value, operation="put_object", target_type=target_type, direction=direction
+                )
         anonymous = httpx.get(
             env["ARTIFACT_S3_ENDPOINT_URL"] + "/" + first_bucket.provider_id + "/" + first_row.object_key,
             trust_env=False,

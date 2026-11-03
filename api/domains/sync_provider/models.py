@@ -10,11 +10,13 @@ from sqlmodel import Field as SqlField
 from api.infrastructure.postgres.models import BaseModel
 
 OPEN_CONNECTION_INDEX = "uq_sync_provider_connection_open"
+FOLDER_NAME = "Agent Barn"
 
 
 class SyncProviderCapability(StrEnum):
     LOCATION_PICKER = "location_picker"
     ADMIN_APPROVAL = "admin_approval"
+    FILE_SYNC = "file_sync"
 
 
 class SyncProviderStatus(StrEnum):
@@ -67,6 +69,8 @@ class SyncProviderConnection(BaseModel, table=True):
     disconnected_at: datetime | None = SqlField(
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
+    sync_cursor: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text, repr=False)
+    sync_retry_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
 
 
 class SyncProviderDescriptorRead(PydanticBaseModel):

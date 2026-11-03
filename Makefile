@@ -6,7 +6,7 @@ RUNTIME ?= hermes
 	reconcile-workflows \
 	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts report-message-counts backfill-business-actions forward-teams forward-triggers forward-telegram forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-sync-engine dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts report-message-counts backfill-business-actions forward-teams forward-triggers forward-telegram forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs purge-agent-memory
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -134,6 +134,9 @@ dev-ui:
 
 dev-worker:
 	cd api && uv run dramatiq api.worker_app --path .. --processes 1 --threads 4 --watch .
+
+dev-sync-engine:
+	cd api && uv run python -c "from api.sync_engine_main import main; main()"
 
 # One-shot reconciliation pass; production runs this on a CronJob schedule.
 reconcile:
