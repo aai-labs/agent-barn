@@ -24,6 +24,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Fixed: OpenClaw transcripts now record sender and channel names, which OpenClaw reports under the message hook's `metadata`; they were always empty. A reply in the same session as an inbound message is recorded under that message's channel ID and thread, so Conversations shows it inside the thread. OpenClaw's `message_sent` hook carries no thread, and a message-tool send names the channel as the model typed it, so a listen-in reply previously opened a second channel such as `c0b3k981aak` beside `C0B3K981AAK`. A reply sent to another channel keeps its own target. Already-recorded rows are not repaired.
 
+### 2026-11-03 — MDP-118 — Hermes listen-in
+
+- Changed: Listen-in channels and groups now apply to Hermes Agents. The settings descriptions no longer say OpenClaw only, and they note that on Hermes Verbose mode is off for that platform and new messages wait for the running turn.
+- Added: `listen-in-check.py` removes a Hermes Agent's listen-in rooms at start if the guard plugin can't load, so it falls back to mentions.
+
 ### 2026-10-29 — MDP-118 — Telegram listen-in groups — PR pending
 
 - Added: Telegram Connections offer **Listen-in groups**, numeric group IDs that must also be Allowed groups under an allowlist. On OpenClaw each gets its own `groups` entry next to `"*"` or the allowed groups; Hermes ignores the list. Setup guidance says listen-in groups need privacy mode disabled or the bot made an administrator, so it sees every message.
