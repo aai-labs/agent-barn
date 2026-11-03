@@ -35,6 +35,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -53,7 +54,8 @@ LISTEN_IN_SYSTEM_PROMPT = (
     "a factual error or outdated claim worth correcting, missing context or a relevant fact you know, "
     "a risk or blocker, or an open question nobody has answered that you can answer. "
     "When you speak, send one short message with no greeting and get straight to the point. "
-    "Messages that @mention you are normal requests; answer those as usual."
+    "Messages that @mention you are normal requests; answer those as usual. "
+    "Never answer an @mention with silence: if it asks for something you cannot do here, say so briefly."
 )
 _LISTEN_IN_ROOM = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
 _ROOM_EVENT_PLATFORMS = frozenset({"slack", "discord", "telegram"})
@@ -72,6 +74,9 @@ TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").rea
 OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
+LISTEN_IN_INDEX_JS: str = (_LISTEN_IN / "index.js").read_text()
+LISTEN_IN_PACKAGE_JSON: str = (_LISTEN_IN / "package.json").read_text()
+LISTEN_IN_PLUGIN_JSON: str = (_LISTEN_IN / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -153,6 +158,7 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_LISTEN_IN_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-listen-in"
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
@@ -183,6 +189,11 @@ def build_openclaw_gateway_config(
         for key in channels:
             plugins["entries"][key] = {"enabled": True}
         plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
+    if unmentioned == "room_event":
+        plugins = config["plugins"]
+        plugins["allow"].append("agentbarn-listen-in")
+        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
+        plugins["entries"]["agentbarn-listen-in"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
     return config
 
 
@@ -431,6 +442,9 @@ def build_config_map(
         data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
         data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
+        data["agentbarn-listen-in-index.js"] = LISTEN_IN_INDEX_JS
+        data["agentbarn-listen-in-package.json"] = LISTEN_IN_PACKAGE_JSON
+        data["agentbarn-listen-in-plugin.json"] = LISTEN_IN_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["retire-messaging.py"] = RETIRE_MESSAGING_PY

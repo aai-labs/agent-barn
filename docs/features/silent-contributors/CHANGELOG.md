@@ -8,12 +8,22 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 O1 — limit tools on unmentioned OpenClaw turns
+
+- Delivered: an unmentioned message in a listen-in room could lead the Agent to run any tool. The new `agentbarn-listen-in` plugin blocks everything except `message`, `web_search`, `web_fetch` and `x_search` on those turns. Mentions keep every tool.
+- Evidence: on OpenClaw 2026.8.2, Discord, a per-room `tools.deny` blocked `exec` in the channel but not in threads under it (`exec` succeeded twice). A spike of the plugin blocked `exec` on an unmentioned message in a thread, allowed it on mentions, and classified a mention and an unmentioned message sent seconds apart separately. Slack and Telegram are not yet tested live with the plugin; PR 6 covers them.
+- Changed:
+  - Runtime: the plugin ships in the ConfigMap and is enabled with room events. The listen-in rules add "Never answer an @mention with silence". The runtime configuration digest changes, so running OpenClaw Agents report an update.
+  - Docs: [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating), [communications](../communications/CHANGELOG.md).
+- Known limit: a turn with no classification, such as one resumed after a restart, is not limited.
+- Follow-up: PR 6. Whether Hindsight `autoRetain` stores room events on OpenClaw is still unverified.
 
 ### 2026-10-29 — MDP-118 PR 5b — OpenClaw observer transcripts
 

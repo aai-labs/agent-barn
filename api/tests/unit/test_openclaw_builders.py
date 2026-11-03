@@ -268,6 +268,55 @@ def test_gateway_config_writes_user_requests_explicitly_without_a_listen_in_plat
         assert config["messages"] == {"groupChat": {"unmentionedInbound": "user_request"}}
 
 
+def test_gateway_config_enables_the_listen_in_guard_with_room_events() -> None:
+    for key in ("slack", "discord", "telegram"):
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {key: {"enabled": True}})
+
+        assert "agentbarn-listen-in" in config["plugins"]["allow"]
+        assert "/home/node/.openclaw/local-plugins/agentbarn-listen-in" in config["plugins"]["load"]["paths"]
+        assert config["plugins"]["entries"]["agentbarn-listen-in"] == {
+            "enabled": True,
+            "hooks": {"allowConversationAccess": True},
+        }
+
+
+def test_gateway_config_leaves_the_listen_in_guard_off_without_room_events() -> None:
+    for channels in (None, {"msteams": {"enabled": True}}):
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels)
+
+        assert "agentbarn-listen-in" not in config["plugins"]["allow"]
+        assert "agentbarn-listen-in" not in config["plugins"]["entries"]
+
+
+def test_config_map_and_startup_ship_the_listen_in_guard() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay=build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+
+    for key, target in (
+        ("agentbarn-listen-in-index.js", "index.js"),
+        ("agentbarn-listen-in-package.json", "package.json"),
+        ("agentbarn-listen-in-plugin.json", "openclaw.plugin.json"),
+    ):
+        assert key in config_map.data
+        assert f'cp /app/config/{key} "$LISTEN_IN_DIR/{target}"' in START_SH
+
+
+def test_listen_in_prompt_never_leaves_a_mention_unanswered() -> None:
+    assert "Never answer an @mention with silence" in LISTEN_IN_SYSTEM_PROMPT
+
+
 def test_listen_in_prompt_says_when_to_stay_silent_and_when_to_speak() -> None:
     assert "Stay silent" in LISTEN_IN_SYSTEM_PROMPT
     assert "factual error" in LISTEN_IN_SYSTEM_PROMPT
