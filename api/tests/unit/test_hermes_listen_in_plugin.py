@@ -1,7 +1,10 @@
 import asyncio
+import contextvars
 import importlib.util
+import json
 import sys
 import threading
+from enum import Enum
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -24,6 +27,7 @@ _SLACK_ROOM = "C-ROOM"
 _DISCORD_ROOM = "111"
 _TELEGRAM_ROOM = "-100"
 _KEY = "agent:main:discord:group:111"
+_DiscordPlatform = Enum("_DiscordPlatform", {"DISCORD": "discord"})
 
 
 @pytest.fixture
@@ -39,6 +43,7 @@ def plugin(monkeypatch):
     monkeypatch.setattr(module, "_is_known_command", lambda name: name in {"status", "new"})
     module.test_env = {"HERMES_SESSION_KEY": _KEY, "HERMES_SESSION_CHAT_ID": _DISCORD_ROOM}
     monkeypatch.setattr(module, "_session_env", lambda name: module.test_env.get(name, ""))
+    monkeypatch.setattr(module, "_sanitize", lambda _platform, text: text, raising=False)
     return module
 
 
@@ -392,3 +397,376 @@ def test_with_rooms_the_plugin_registers_its_hooks(plugin, monkeypatch, tmp_path
     plugin.register(ctx)
 
     assert {call.args[0] for call in ctx.register_hook.call_args_list} == {"pre_llm_call", "transform_llm_output"}
+
+
+@pytest.fixture
+def gateway_loop(plugin):
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    plugin._loop = loop
+    yield loop
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
+    loop.close()
+
+
+@pytest.fixture
+def ledger(monkeypatch):
+    module: Any = ModuleType("gateway.delivery_ledger")
+    module.record_obligation = MagicMock()
+    module.mark_delivered = MagicMock()
+    package: Any = ModuleType("gateway")
+    package.delivery_ledger = module
+    monkeypatch.setitem(sys.modules, "gateway", package)
+    monkeypatch.setitem(sys.modules, "gateway.delivery_ledger", module)
+    return module
+
+
+def _room_adapter(plugin, result=None, error=None, delay=0.0):
+    sent = []
+
+    async def send(chat_id, content, metadata=None):
+        sent.append({"chat_id": chat_id, "content": content, "metadata": metadata})
+        await asyncio.sleep(delay)
+        if error:
+            raise error
+        return result or SimpleNamespace(success=True, message_id="m1", error=None)
+
+    plugin._runner().adapters = {_DiscordPlatform.DISCORD: SimpleNamespace(send=send)}
+    plugin.test_env.update({"HERMES_SESSION_PLATFORM": "discord", "HERMES_SESSION_THREAD_ID": ""})
+    return sent
+
+
+def _listening_turn(plugin):
+    plugin._classify(_discord(), _event())
+    plugin._on_pre_llm_call()
+
+
+def _post(plugin, message="The deadline moved to Friday."):
+    return json.loads(plugin._post_to_room({"message": message}))
+
+
+def test_a_listening_turn_gets_the_rules_for_speaking(plugin) -> None:
+    plugin._classify(_discord(), _event())
+
+    result = plugin._on_pre_llm_call()
+
+    assert result == {"context": plugin._REMINDER}
+    for word in ("post_to_room", "web_search", "web_extract", plugin._MARKER):
+        assert word in plugin._REMINDER
+
+
+def test_a_room_turn_with_no_classification_gets_the_rules(plugin) -> None:
+    assert plugin._on_pre_llm_call() == {"context": plugin._REMINDER}
+
+
+def test_an_addressed_turn_gets_no_rules(plugin) -> None:
+    plugin._classify(_discord(mentioned=True), _event())
+
+    assert plugin._on_pre_llm_call() is None
+
+
+def test_a_session_outside_the_rooms_gets_no_rules(plugin) -> None:
+    plugin.test_env.update({"HERMES_SESSION_KEY": "other", "HERMES_SESSION_CHAT_ID": "999"})
+
+    assert plugin._on_pre_llm_call() is None
+
+
+def test_background_review_gets_no_rules(plugin) -> None:
+    results = []
+    thread = threading.Thread(target=lambda: results.append(plugin._on_pre_llm_call()), name=plugin._REVIEW_THREAD)
+    thread.start()
+    thread.join()
+
+    assert results == [None]
+
+
+def test_a_post_goes_to_the_current_room(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    result = _post(plugin)
+
+    assert result["success"] is True
+    assert plugin._MARKER in result["note"]
+    assert sent == [{"chat_id": _DISCORD_ROOM, "content": "The deadline moved to Friday.", "metadata": None}]
+
+
+def test_a_post_stays_in_the_current_thread(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    plugin.test_env["HERMES_SESSION_THREAD_ID"] = "t1"
+    _listening_turn(plugin)
+
+    _post(plugin)
+
+    assert sent[0]["metadata"] == {"thread_id": "t1"}
+
+
+def test_a_post_appears_in_the_delivery_ledger(plugin, gateway_loop, ledger) -> None:
+    _room_adapter(plugin)
+    plugin.test_env["HERMES_SESSION_THREAD_ID"] = "t1"
+    _listening_turn(plugin)
+
+    _post(plugin)
+
+    recorded = ledger.record_obligation.call_args.kwargs
+    assert recorded["session_key"] == _KEY
+    assert recorded["platform"] == "discord"
+    assert recorded["chat_id"] == _DISCORD_ROOM
+    assert recorded["thread_id"] == "t1"
+    assert recorded["content"] == "The deadline moved to Friday."
+    ledger.mark_delivered.assert_called_once_with(recorded["obligation_id"])
+
+
+def test_two_identical_posts_in_a_session_have_separate_ledger_rows(plugin, gateway_loop, ledger) -> None:
+    _room_adapter(plugin)
+    _listening_turn(plugin)
+    _post(plugin)
+    _listening_turn(plugin)
+    _post(plugin)
+
+    first, second = ledger.record_obligation.call_args_list
+
+    assert first.kwargs["obligation_id"] != second.kwargs["obligation_id"]
+
+
+def test_only_one_post_is_sent_in_a_turn(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    _post(plugin)
+    second = _post(plugin)
+
+    assert "error" in second
+    assert len(sent) == 1
+
+
+def test_parallel_posts_send_one_message(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin, delay=0.05)
+    _listening_turn(plugin)
+    context = contextvars.copy_context()
+    results = []
+
+    threads = [
+        threading.Thread(target=lambda ctx=context.copy(): results.append(ctx.run(_post, plugin))) for _ in range(5)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(sent) == 1
+    assert sum("success" in result for result in results) == 1
+
+
+def test_the_next_turn_can_post_again(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+    _post(plugin)
+    _listening_turn(plugin)
+
+    _post(plugin)
+
+    assert len(sent) == 2
+
+
+def test_a_rejected_send_is_not_retried_or_recorded(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin, result=SimpleNamespace(success=False, message_id=None, error="rate limited"))
+    _listening_turn(plugin)
+
+    first = _post(plugin)
+    second = _post(plugin)
+
+    assert "error" in first
+    assert "error" in second
+    assert len(sent) == 1
+    ledger.record_obligation.assert_not_called()
+
+
+def test_a_send_that_raises_is_not_retried(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin, error=RuntimeError("connection reset"))
+    _listening_turn(plugin)
+
+    first = _post(plugin)
+    _post(plugin)
+
+    assert plugin._MARKER in first["error"]
+    assert len(sent) == 1
+
+
+def test_a_send_that_times_out_is_not_retried(plugin, gateway_loop, ledger, monkeypatch) -> None:
+    monkeypatch.setattr(plugin, "_SEND_TIMEOUT", 0.01)
+    sent = _room_adapter(plugin, delay=0.2)
+    _listening_turn(plugin)
+
+    first = _post(plugin)
+    _post(plugin)
+
+    assert plugin._MARKER in first["error"]
+    assert len(sent) == 1
+
+
+def test_a_ledger_failure_still_reports_the_post_as_sent(plugin, gateway_loop, ledger) -> None:
+    ledger.record_obligation.side_effect = RuntimeError("database is locked")
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    result = _post(plugin)
+
+    assert result["success"] is True
+    assert len(sent) == 1
+
+
+def test_the_ledger_is_written_only_after_the_send_succeeds(plugin, gateway_loop, ledger) -> None:
+    order = []
+    ledger.record_obligation.side_effect = lambda **_: order.append("ledger")
+
+    async def send(chat_id, content, metadata=None):
+        order.append("send")
+        return SimpleNamespace(success=True, message_id="m1", error=None)
+
+    plugin._runner().adapters = {_DiscordPlatform.DISCORD: SimpleNamespace(send=send)}
+    plugin.test_env["HERMES_SESSION_PLATFORM"] = "discord"
+    _listening_turn(plugin)
+
+    _post(plugin)
+
+    assert order == ["send", "ledger"]
+
+
+def test_a_post_is_refused_on_an_addressed_turn(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    plugin._classify(_discord(mentioned=True), _event())
+    plugin._on_pre_llm_call()
+
+    assert "error" in _post(plugin)
+    assert sent == []
+
+
+def test_a_post_is_refused_outside_the_rooms(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    plugin.test_env.update({"HERMES_SESSION_KEY": "other", "HERMES_SESSION_CHAT_ID": "999"})
+    plugin._on_pre_llm_call()
+
+    assert "error" in _post(plugin)
+    assert sent == []
+
+
+def test_a_post_is_refused_during_background_review(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    results = []
+
+    def review():
+        plugin._on_pre_llm_call()
+        results.append(_post(plugin))
+
+    thread = threading.Thread(target=review, name=plugin._REVIEW_THREAD)
+    thread.start()
+    thread.join()
+
+    assert "error" in results[0]
+    assert sent == []
+
+
+@pytest.mark.parametrize("message", ["", "   ", "NO_REPLY", " NO_REPLY\n"])
+def test_a_post_with_nothing_to_say_is_not_sent(plugin, gateway_loop, ledger, message) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    assert "error" in _post(plugin, message)
+    assert sent == []
+
+
+def test_an_empty_attempt_leaves_the_real_post_available(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    _post(plugin, "")
+    result = _post(plugin)
+
+    assert result["success"] is True
+    assert len(sent) == 1
+
+
+def test_a_stray_marker_on_a_post_is_removed(plugin, gateway_loop, ledger) -> None:
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    _post(plugin, "The deadline moved to Friday.\nNO_REPLY")
+
+    assert sent[0]["content"] == "The deadline moved to Friday."
+
+
+def test_a_post_is_sanitised_like_a_final_answer(plugin, gateway_loop, ledger, monkeypatch) -> None:
+    monkeypatch.setattr(plugin, "_sanitize", lambda _platform, _text: "clean text")
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    _post(plugin, "token sk-secret")
+
+    assert sent[0]["content"] == "clean text"
+    assert ledger.record_obligation.call_args.kwargs["content"] == "clean text"
+
+
+def test_a_post_that_sanitises_to_nothing_is_not_sent(plugin, gateway_loop, ledger, monkeypatch) -> None:
+    monkeypatch.setattr(plugin, "_sanitize", lambda _platform, _text: "")
+    sent = _room_adapter(plugin)
+    _listening_turn(plugin)
+
+    assert "error" in _post(plugin)
+    assert sent == []
+
+
+def test_a_post_without_a_gateway_loop_fails_cleanly(plugin, ledger) -> None:
+    _room_adapter(plugin)
+    plugin._on_pre_llm_call()
+
+    assert "error" in _post(plugin)
+
+
+def test_a_post_without_an_adapter_fails_cleanly(plugin, gateway_loop, ledger) -> None:
+    _room_adapter(plugin)
+    plugin._runner().adapters = {}
+    _listening_turn(plugin)
+
+    assert "error" in _post(plugin)
+
+
+def test_ingress_remembers_the_gateway_loop(plugin) -> None:
+    captured = {}
+
+    class Base:
+        async def handle_message(self, event):
+            captured["loop"] = asyncio.get_running_loop()
+
+    plugin._patch_ingress(Base)
+    adapter: Any = Base()
+    adapter._self_is_explicitly_mentioned = lambda _raw: False
+
+    asyncio.run(adapter.handle_message(_event()))
+
+    assert plugin._loop is captured["loop"]
+
+
+def test_with_rooms_the_plugin_registers_the_post_tool(plugin, monkeypatch, tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({"discord": {"free_response_channels": [_DISCORD_ROOM]}}))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(plugin, "_install_ingress", lambda: None)
+    ctx = MagicMock()
+
+    plugin.register(ctx)
+
+    name, _toolset, schema, handler = ctx.register_tool.call_args.args
+    assert name == "post_to_room"
+    assert schema["name"] == "post_to_room"
+    assert handler is plugin._post_to_room
+
+
+def test_without_rooms_the_post_tool_is_not_registered(plugin, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    ctx = MagicMock()
+
+    plugin.register(ctx)
+
+    ctx.register_tool.assert_not_called()

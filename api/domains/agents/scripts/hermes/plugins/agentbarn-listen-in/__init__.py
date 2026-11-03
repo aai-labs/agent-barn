@@ -6,16 +6,24 @@ takes its classification when it starts, so the decision belongs to the turn
 rather than the session. A room turn that was never classified, such as one
 resumed after a restart, counts as listening: a mistake means silence, not noise.
 
+A listening turn speaks only through post_to_room, at most once. A send is tried
+once whatever the outcome, because a failed or timed-out send may have reached
+the room in part.
+
 Unaddressed messages also lose gateway control, Hermes' own flag for untrusted
 text, so they can't run slash commands or answer approval prompts.
 """
 
+import asyncio
+import json
 import logging
 import os
 import sys
 import threading
+import uuid
 from collections import OrderedDict, deque
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -33,11 +41,42 @@ _ROOM_SETTINGS = {
 _LISTENING = "listening"
 _ADDRESSED = "addressed"
 _REVIEW = "review"
+_SEND_TIMEOUT = 30
+_REMINDER = (
+    "[Listen-in room: this message was not addressed to you. Your final answer is discarded and nobody will see it. "
+    "On this turn the only tools that work are post_to_room, web_search and web_extract; every other tool is blocked. "
+    "Stay silent for greetings, small talk, thanks, jokes, messages aimed at someone else, requests you cannot do with "
+    "those tools, and anything you would only acknowledge or agree with. If you can correct a factual error or outdated "
+    "claim, add missing context or a relevant fact you know, flag a risk or blocker, or answer an open question nobody "
+    "has answered, you MUST call post_to_room with the complete text: one short, self-contained message, no greeting, "
+    "never a promise of a later result. Call it on its own, after any lookup has finished. Writing it as your answer "
+    f"loses it. Do not ask questions. End your turn with exactly {_MARKER}.]"
+)
+_POST_SCHEMA = {
+    "name": "post_to_room",
+    "description": (
+        "Post one message to the current room. In a listen-in room this is the only way to be seen: "
+        "your final answer is never delivered there."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"message": {"type": "string", "description": "The message to post."}},
+        "required": ["message"],
+    },
+}
+
+
+@dataclass
+class _Turn:
+    kind: str
+    post_claimed: bool = False
+
 
 _rooms: dict[str, set[str]] = {}
 _queues: OrderedDict[str, deque[bool]] = OrderedDict()  # session_key -> oldest-first listening flags
 _lock = threading.Lock()
-_turn: ContextVar[str | None] = ContextVar("agentbarn_listen_in_turn", default=None)
+_turn: ContextVar[_Turn | None] = ContextVar("agentbarn_listen_in_turn", default=None)
+_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _load_rooms(path: Path) -> dict[str, set[str]]:
@@ -69,6 +108,12 @@ def _is_known_command(name: str | None) -> bool:
     from hermes_cli.commands import is_gateway_known_command  # ty: ignore[unresolved-import]
 
     return is_gateway_known_command(name)
+
+
+def _sanitize(platform: str, text: str) -> str:
+    from gateway.run import _sanitize_gateway_final_response  # ty: ignore[unresolved-import]
+
+    return _sanitize_gateway_final_response(platform, text)
 
 
 def _is_room(source) -> bool:
@@ -152,7 +197,7 @@ def _in_room_session() -> bool:
 
 def _on_pre_llm_call(**_):
     if threading.current_thread().name == _REVIEW_THREAD:
-        _turn.set(_REVIEW)
+        _turn.set(_Turn(_REVIEW))
         return
     if not _in_room_session():
         _turn.set(None)
@@ -160,27 +205,96 @@ def _on_pre_llm_call(**_):
     with _lock:
         queue = _queues.get(_session_env("HERMES_SESSION_KEY"))
         listening = queue.popleft() if queue else True
-    _turn.set(_LISTENING if listening else _ADDRESSED)
+    _turn.set(_Turn(_LISTENING if listening else _ADDRESSED))
+    if listening:
+        return {"context": _REMINDER}
+
+
+def _without_marker(text: str) -> str:
+    stripped = text.strip()
+    return stripped[: -len(_MARKER)].rstrip() if stripped.endswith(_MARKER) else stripped
 
 
 def _on_transform(response_text=None, **_):
     turn = _turn.get()
-    if turn == _REVIEW:
+    if turn is None:
+        return _MARKER if _in_room_session() else None
+    if turn.kind == _REVIEW:
         return None
-    if turn == _LISTENING or (turn is None and _in_room_session()):
+    if turn.kind == _LISTENING:
         return _MARKER
-    if turn != _ADDRESSED:
-        return None
     stripped = (response_text or "").strip()
-    if stripped.endswith(_MARKER) and (clean := stripped[: -len(_MARKER)].rstrip()):
-        return clean
+    clean = _without_marker(stripped)
+    return clean if clean and clean != stripped else None
+
+
+def _adapter(platform: str):
+    runner = _runner()
+    for name, adapter in runner.adapters.items() if runner else ():
+        if str(getattr(name, "value", name)) == platform:
+            return adapter
     return None
+
+
+def _record_post(platform: str, chat_id: str, thread_id: str | None, content: str) -> None:
+    from gateway.delivery_ledger import mark_delivered, record_obligation  # ty: ignore[unresolved-import]
+
+    obligation_id = uuid.uuid4().hex[:24]
+    record_obligation(
+        obligation_id=obligation_id,
+        session_key=_session_env("HERMES_SESSION_KEY"),
+        platform=platform,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        content=content,
+    )
+    mark_delivered(obligation_id)
+
+
+def _error(message: str) -> str:
+    return json.dumps({"error": message})
+
+
+def _post_to_room(args, **_) -> str:
+    turn = _turn.get()
+    if turn is None or turn.kind != _LISTENING:
+        return _error("Not a listen-in turn: answer normally in your final response.")
+    platform = _session_env("HERMES_SESSION_PLATFORM")
+    message = _sanitize(platform, _without_marker(str(args.get("message") or "")))
+    if not message:
+        return _error(f"There is nothing to post. Call post_to_room with the text, or end your turn with {_MARKER}.")
+    adapter = _adapter(platform)
+    if adapter is None or _loop is None:
+        return _error(f"The room is not reachable. End your turn with exactly {_MARKER}.")
+    with _lock:
+        if turn.post_claimed:
+            return _error(f"You already posted this turn. End your turn with exactly {_MARKER}.")
+        turn.post_claimed = True
+    chat_id = _session_env("HERMES_SESSION_CHAT_ID")
+    thread_id = _session_env("HERMES_SESSION_THREAD_ID") or None
+    metadata = {"thread_id": thread_id} if thread_id else None
+    try:
+        send = adapter.send(chat_id=chat_id, content=message, metadata=metadata)
+        result = asyncio.run_coroutine_threadsafe(send, _loop).result(timeout=_SEND_TIMEOUT)
+    except Exception:
+        logger.exception("agentbarn-listen-in could not confirm a post")
+        return _error(f"The post could not be confirmed. Do not try again. End your turn with exactly {_MARKER}.")
+    if not result.success:
+        logger.warning("agentbarn-listen-in post was rejected: %s", result.error)
+        return _error(f"The post failed. Do not try again. End your turn with exactly {_MARKER}.")
+    try:
+        _record_post(platform, chat_id, thread_id, message)
+    except Exception:
+        logger.exception("agentbarn-listen-in could not record a post")
+    return json.dumps({"success": True, "note": f"Posted. End your turn with exactly {_MARKER}."})
 
 
 def _patch_ingress(adapter_class) -> None:
     original = adapter_class.handle_message
 
     async def handle_message(self, event):
+        global _loop
+        _loop = asyncio.get_running_loop()
         try:
             _classify(self, event)
         except Exception:
@@ -205,3 +319,4 @@ def register(ctx):
     _install_ingress()
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("transform_llm_output", _on_transform)
+    ctx.register_tool("post_to_room", "agentbarn_listen_in", _POST_SCHEMA, _post_to_room)

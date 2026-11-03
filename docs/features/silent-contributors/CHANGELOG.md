@@ -8,12 +8,20 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 H2 — Hermes `post_to_room` and per-turn rules
+
+- Delivered: a listening turn receives the rules for when to speak through `pre_llm_call`, and speaks only through the `post_to_room` tool, into its current room and thread. The tool refuses every other kind of turn. Posts pass through Hermes' final-response sanitiser and appear in Conversations through the delivery ledger. No behaviour changes yet: nothing enables the plugin until H4.
+- Decided: one send attempt per turn, whatever the outcome. A rejected or timed-out send may have reached the room in part, because adapters split long messages, so a retry could double post. A failed post means silence, and is logged but not shown in the Connection Journal.
+- Evidence: spike H0 and H0b live posts on Slack, Discord and Telegram. The sanitiser, ledger, `register_tool` and adapter `send` signatures were checked against the pinned image.
+- Known limits: a crash between the send and the ledger write can lose the Conversations row, and a crash between the ledger's two writes can redeliver the post once. If a model ends a turn with a truly empty answer, Hermes skips the transform and posts its own "no response" notice; this did not occur in the spike, and H7 checks for it.
+- Follow-up: H3 adds the tool allowlist that the rules describe, including refusing a post after a blocked tool.
 
 ### 2026-11-03 — MDP-118 H1 — Hermes guard plugin core
 
