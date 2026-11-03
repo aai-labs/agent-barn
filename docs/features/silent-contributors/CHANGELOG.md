@@ -8,12 +8,19 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 H1 — Hermes guard plugin core
+
+- Delivered: the `agentbarn-listen-in` Hermes plugin classifies each inbound message at ingress, before Hermes' busy queue, and each turn takes its classification when it starts. Unaddressed turns have their final answer replaced with `NO_REPLY`; a room turn never classified counts as listening. Unaddressed messages lose `allow_gateway_control`, so they can't run slash commands or answer approvals. No behaviour changes yet: nothing enables the plugin until H4.
+- Evidence: spike H0b on Hermes v2026.8.19 (queue races on Discord and Telegram, approvals, slash commands). The plugin was also loaded against the pinned image: all private adapter helpers exist and no adapter overrides `handle_message`.
+- Changed: Runtime: the plugin ships in the ConfigMap and `start.sh` installs it. The runtime configuration digest changes, so running Hermes Agents report an update.
+- Follow-up: H2 adds `post_to_room` and the per-turn rules; until then a listening turn has no way to speak.
 
 ### 2026-11-03 — MDP-118 O1 — limit tools on unmentioned OpenClaw turns
 

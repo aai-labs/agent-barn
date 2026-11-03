@@ -63,6 +63,21 @@ def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> N
     assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
 
 
+def test_config_map_ships_the_listen_in_guard_without_enabling_it() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_discord=True)
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", config
+    )
+
+    assert "agentbarn-listen-in" not in config["plugins"]["enabled"]
+    for key, target in (
+        ("agentbarn-listen-in-plugin.yaml", "plugin.yaml"),
+        ("agentbarn-listen-in-init.py", "__init__.py"),
+    ):
+        assert key in config_map.data
+        assert f"cp /app/config/{key} /opt/data/plugins/agentbarn-listen-in/{target}" in config_map.data["start.sh"]
+
+
 def test_native_slack_env_ignores_listen_in_channels() -> None:
     credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
     settings = {"group_policy": "allowlist", "channel_ids": ["C1"]}
