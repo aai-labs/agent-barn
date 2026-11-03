@@ -8,12 +8,18 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes. H5: Hermes reads recent messages in Slack listen-in channels.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes. H5: Hermes reads recent messages in Slack listen-in channels. H6: image tests pin the private Hermes code the guard and observer rely on.
 - In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-03 — MDP-118 H6 — Hermes contract driver
+
+- Delivered: `hermes-base/test-image.sh` runs `hermes_listen_in_driver.py` in the image, against Hermes' real adapters, ledger, silence filter, tool hook dispatch, sanitiser and memory sync. `hermes_observer_driver.py` now also covers recording at the adapter and the reply before a queued message. An upgrade that changes any of these fails the image test.
+- Evidence: both drivers passed on the local base image. Ten deliberately broken copies of the listen-in plugin and two of the observer each made their driver fail.
+- Not covered: the drivers don't connect to Slack, Discord or Telegram, or run a model. H7 checks those live.
 
 ### 2026-11-03 — MDP-118 H5 — Slack channel context on Hermes
 
