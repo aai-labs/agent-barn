@@ -43,6 +43,7 @@ export class WorkflowRunsPage {
   }
   async runAgain() {
     await this.page
+      .getByLabel("Run detail")
       .getByRole("button", { name: "Run again", exact: true })
       .click();
   }

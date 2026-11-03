@@ -647,6 +647,7 @@ test.describe("WF02 run progress and text results", () => {
     await runs.goto(MOCK_AGENT_ID, true);
     await runs.runAgain();
     await page.getByRole("button", { name: "Not now" }).click();
+    await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(0);
     expect(support.reruns).toHaveLength(0);
     support.failRerun = true;
     await runs.runAgain();
@@ -654,6 +655,7 @@ test.describe("WF02 run progress and text results", () => {
     await expect(
       page.getByText("This run could not be run again"),
     ).toBeVisible();
+    await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(0);
     await runs.runAgain();
     await runs.confirmRunAgain();
     await expect(page).toHaveURL(new RegExp(`workflowRun=${RERUN_ID}`));
