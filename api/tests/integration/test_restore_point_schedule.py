@@ -3,9 +3,10 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, none
-from kubernetes.client import V1Job, V1JobStatus
+from kubernetes.client import V1Job, V1JobStatus, V1ObjectMeta
 from sqlmodel import Session, select
 
+from api.domains.agents.builders.restore_point import RESTORE_POINT_ID_LABEL_KEY
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.events.catalog import AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED
 from api.domains.events.models import ActorIdentityType, EventDelivery, OutboxMessage
@@ -191,6 +192,37 @@ def test_scheduled_snapshots_keep_the_newest_and_only_the_latest_failure():
         with then("the oldest snapshot and the older failure are gone, with the snapshot's volume"):
             assert_that(_remaining_ids(context, agent), contains_inanyorder(middle.id, newest.id, last_failure.id))
             k8s.delete_pvc.assert_any_call(oldest.pvc_name, "agent-farm")
+
+
+def test_retention_deletes_every_job_that_used_a_snapshot_before_its_volume():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        agent = context.agent
+        oldest = _seed(context, agent, RestorePointOrigin.SCHEDULED, age_minutes=900)
+        for age in (600, 300):
+            _seed(context, agent, RestorePointOrigin.SCHEDULED, age_minutes=age)
+        k8s = context.injector.get(KubernetesClient)
+        leftover_jobs = [f"rp-cap-{oldest.id}", f"rp-res-{oldest.id}-a1b2c3"]
+        k8s.list_jobs.side_effect = lambda namespace, label_selector="": [
+            V1Job(metadata=V1ObjectMeta(name=name))
+            for name in leftover_jobs
+            if label_selector == f"{RESTORE_POINT_ID_LABEL_KEY}={oldest.id}"
+        ]
+
+        with when("retention removes a ready snapshot its capture and a restore ran from"):
+            context.injector.get(RestorePointService).enforce_retention(agent.id)
+
+        with then("both finished Jobs go first, so nothing holds the volume once it is deleted"):
+            calls = [(c[0], c.args[0]) for c in k8s.method_calls if c[0] in ("delete_job", "delete_pvc")]
+            assert_that(
+                calls,
+                equal_to(
+                    [
+                        ("delete_job", leftover_jobs[0]),
+                        ("delete_job", leftover_jobs[1]),
+                        ("delete_pvc", oldest.pvc_name),
+                    ]
+                ),
+            )
 
 
 def test_past_the_manual_limit_the_oldest_automatic_backup_goes_but_never_the_users_or_the_newest():

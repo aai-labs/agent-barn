@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders.restore_point import (
+    RESTORE_POINT_ID_LABEL_KEY,
     build_capture_job,
     build_restore_job,
     build_restore_point_pvc,
@@ -746,11 +747,20 @@ class RestorePointService:
         self._dispatch(delivery_ids)
 
     def _release(self, row: AgentRestorePoint) -> None:
-        """Delete a restore point's Job and volume. The row goes after, so a removal cut short
-        stays DELETING and reconciliation finishes it."""
+        """Delete a restore point's Jobs and volume. The row goes after, so a removal cut short
+        stays DELETING and reconciliation finishes it.
+
+        A ready row no longer names its capture Job, and restore Jobs are never on the row, so
+        every Job is found by label. Their finished pods still mount the volume, and until they
+        go the volume's deletion waits on them for the Job TTL.
+        """
         namespace = self.config.k8s_namespace
-        if row.job_name:
-            self.k8s.delete_job(row.job_name, namespace)
+        job_names = [row.job_name] if row.job_name else []
+        for job in self.k8s.list_jobs(namespace, f"{RESTORE_POINT_ID_LABEL_KEY}={row.id}"):
+            if job.metadata.name not in job_names:
+                job_names.append(job.metadata.name)
+        for job_name in job_names:
+            self.k8s.delete_job(job_name, namespace)
         if row.pvc_name:
             self.k8s.delete_pvc(row.pvc_name, namespace)
 
@@ -1078,11 +1088,7 @@ class RestorePointService:
         # Above all the update's own backup, which its rollback restores from.
         self._refuse_during_managed_update(agent)
 
-        namespace = self.config.k8s_namespace
-        if restore_point.job_name:
-            self.k8s.delete_job(restore_point.job_name, namespace)
-        if restore_point.pvc_name:
-            self.k8s.delete_pvc(restore_point.pvc_name, namespace)
+        self._release(restore_point)
 
         delivery_ids = self.repository.delete_with_event(
             restore_point,

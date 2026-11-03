@@ -52,6 +52,9 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   that would actually lose a row are picked, so an Agent over the limit by rows retention keeps
   is not revisited every run. A removal is `READY → DELETING`, then Job and volume, then the row;
   a row left `DELETING` is finished by reconciliation.
+- Fixed: removing a restore point, by retention or by the user, now deletes every Job labelled with
+  its id (the capture Job, which a ready row no longer names, and any restore Job) before its
+  volume. Their finished pods kept the volume `Terminating` until the Job TTL (1h) reaped them.
 - Changed: the limit no longer refuses an update's own backup. A user's capture is still refused
   when their own captures reach the limit.
 - Changed: a scheduled snapshot in progress blocks nothing (`has_blocking_operation` ignores it).

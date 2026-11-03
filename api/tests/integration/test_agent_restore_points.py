@@ -19,12 +19,13 @@ from hamcrest import (
     not_none,
     raises,
 )
-from kubernetes.client import V1Job, V1JobCondition, V1JobStatus
+from kubernetes.client import V1Job, V1JobCondition, V1JobStatus, V1ObjectMeta
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col
 
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.builders.restore_point import RESTORE_POINT_ID_LABEL_KEY
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
@@ -954,6 +955,35 @@ def test_start_agent_is_allowed_once_a_stale_job_has_been_reconciled():
 
         with then("the stale row does not block the agent forever"):
             assert_that(response.status_code, is_not(equal_to(status.HTTP_409_CONFLICT)))
+
+
+def test_delete_restore_point_removes_every_job_that_used_it_before_its_volume():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        leftover_jobs = [f"rp-cap-{seeded.id}", f"rp-res-{seeded.id}-a1b2c3"]
+        k8s.list_jobs.side_effect = lambda namespace, label_selector="": [
+            V1Job(metadata=V1ObjectMeta(name=name))
+            for name in leftover_jobs
+            if label_selector == f"{RESTORE_POINT_ID_LABEL_KEY}={seeded.id}"
+        ]
+
+        with when("I delete a ready restore point its capture and a restore ran from"):
+            response = context.client.delete(f"{_url(context)}/{seeded.id}", headers=_auth(context))
+
+        with then("both finished Jobs go first, so nothing holds the volume once it is deleted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            calls = [(c[0], c.args[0]) for c in k8s.method_calls if c[0] in ("delete_job", "delete_pvc")]
+            assert_that(
+                calls,
+                equal_to(
+                    [
+                        ("delete_job", leftover_jobs[0]),
+                        ("delete_job", leftover_jobs[1]),
+                        ("delete_pvc", seeded.pvc_name),
+                    ]
+                ),
+            )
 
 
 def test_delete_agent_is_refused_while_a_capture_is_running():
