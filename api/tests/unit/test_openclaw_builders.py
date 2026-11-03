@@ -277,6 +277,7 @@ def test_gateway_config_enables_the_listen_in_guard_with_room_events() -> None:
         assert config["plugins"]["entries"]["agentbarn-listen-in"] == {
             "enabled": True,
             "hooks": {"allowConversationAccess": True},
+            "config": {"slackRooms": []},
         }
 
 
@@ -616,3 +617,59 @@ def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
         _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
     )
     assert "Files and download links" not in config_map.data["AGENTS.md"]
+
+
+def _listening_channels() -> dict[str, dict]:
+    return {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C0B3K981AAK"]}),
+        "discord": native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["111"]}),
+        "telegram": native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-100"]}),
+    }
+
+
+def _hindsight(config: dict) -> dict:
+    return config["plugins"]["entries"]["hindsight-openclaw"]["config"]
+
+
+def test_memory_does_not_save_listen_in_rooms_but_still_recalls() -> None:
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", _listening_channels(), memory_enabled=True
+    )
+
+    memory = _hindsight(config)
+    assert memory["statelessSessionPatterns"] == [
+        "agent:*:slack:channel:c0b3k981aak",
+        "agent:*:slack:channel:c0b3k981aak:**",
+        "agent:*:discord:channel:111",
+        "agent:*:discord:channel:111:**",
+        "agent:*:telegram:group:-100",
+        "agent:*:telegram:group:-100:**",
+    ]
+    assert memory["skipStatelessSessions"] is False
+    assert memory["autoRecall"] is True
+
+
+def test_memory_settings_are_unchanged_without_listen_in_rooms() -> None:
+    channels = {"slack": native_slack_channel({"group_policy": "open"})}
+
+    memory = _hindsight(
+        build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels, memory_enabled=True)
+    )
+
+    assert "statelessSessionPatterns" not in memory
+    assert "skipStatelessSessions" not in memory
+
+
+def test_the_listen_in_guard_knows_the_slack_rooms() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", _listening_channels())
+
+    assert config["plugins"]["entries"]["agentbarn-listen-in"]["config"] == {"slackRooms": ["C0B3K981AAK"]}
+
+
+def test_a_room_that_only_requires_a_mention_is_not_a_listen_in_room() -> None:
+    channels = {"slack": native_slack_channel({"group_policy": "allowlist", "channel_ids": ["C1"]})}
+
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels, memory_enabled=True)
+
+    assert config["plugins"]["entries"]["agentbarn-listen-in"]["config"] == {"slackRooms": []}
+    assert "statelessSessionPatterns" not in _hindsight(config)

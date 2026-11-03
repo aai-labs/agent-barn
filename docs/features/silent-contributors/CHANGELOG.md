@@ -15,6 +15,14 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Changes
 
+### 2026-11-03 — MDP-118 O2 — OpenClaw memory and Slack context
+
+- Fixed: with Memory on, Hindsight saved unmentioned room messages and recalled them on later turns. Live, Odin posted the Canberra correction a second time on an unrelated message, and "teal" reached memory. Memory-enabled Agents now list listen-in rooms in Hindsight's `statelessSessionPatterns`, with recall still on.
+- Added: the first turn of a Slack room session reads up to 15 recent channel messages, as Hermes does since H5, because each top-level Slack message is its own session.
+- Decided: Hindsight's own per-room setting rather than a per-turn block, which would mean altering the shared `agent_end` event. Setting `success` there would mark every listening turn as failed in the Connection Journal.
+- Differs from Hermes: on OpenClaw, mentions in a listen-in room aren't auto-saved. Unmentioned messages in a Discord thread under a listen-in channel are still saved, because a thread has its own session key.
+- Follow-up: the live OpenClaw round must be rerun on all three platforms, including whether `@bot remember X` still saves. The `4` reply to "remember Falcon" stays unexplained until then.
+
 ### 2026-11-03 — MDP-118 H7 — Hermes live round
 
 - Result: passed on Slack, Discord and Telegram, on Hermes v2026.8.19 with Memory on and a Connection for each platform. Eric ran the builder's config with the load fix patched into its ConfigMap, ahead of the API redeploy.

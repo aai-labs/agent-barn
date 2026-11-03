@@ -162,6 +162,35 @@ _LISTEN_IN_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-listen-in
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
+def _listen_in_rooms(channels: dict[str, dict]) -> dict[str, list[str]]:
+    rooms_by_platform = {
+        "slack": (channels.get("slack") or {}).get("channels") or {},
+        "discord": {
+            channel_id: room
+            for guild in ((channels.get("discord") or {}).get("guilds") or {}).values()
+            for channel_id, room in (guild.get("channels") or {}).items()
+        },
+        "telegram": (channels.get("telegram") or {}).get("groups") or {},
+    }
+    return {
+        platform: [room_id for room_id, room in rooms.items() if room.get("systemPrompt") == LISTEN_IN_SYSTEM_PROMPT]
+        for platform, rooms in rooms_by_platform.items()
+    }
+
+
+def _no_memory_saving_patterns(rooms: dict[str, list[str]]) -> list[str]:
+    sessions = {"slack": "slack:channel", "discord": "discord:channel", "telegram": "telegram:group"}
+    return [
+        pattern
+        for platform, room_ids in rooms.items()
+        for room_id in room_ids
+        for pattern in (
+            f"agent:*:{sessions[platform]}:{room_id.lower()}",
+            f"agent:*:{sessions[platform]}:{room_id.lower()}:**",
+        )
+    ]
+
+
 def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -180,6 +209,12 @@ def build_openclaw_gateway_config(
         config["plugins"]["entries"]["hindsight-openclaw"].update(
             {"config": openclaw_memory_settings(), "hooks": {"allowConversationAccess": True}}
         )
+        # Hindsight would save every unmentioned message. It decides per session, so
+        # mentions in these rooms aren't auto-saved either; recall stays on.
+        if patterns := _no_memory_saving_patterns(_listen_in_rooms(channels)):
+            config["plugins"]["entries"]["hindsight-openclaw"]["config"].update(
+                statelessSessionPatterns=patterns, skipStatelessSessions=False
+            )
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
@@ -193,7 +228,11 @@ def build_openclaw_gateway_config(
         plugins = config["plugins"]
         plugins["allow"].append("agentbarn-listen-in")
         plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
-        plugins["entries"]["agentbarn-listen-in"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
+        plugins["entries"]["agentbarn-listen-in"] = {
+            "enabled": True,
+            "hooks": {"allowConversationAccess": True},
+            "config": {"slackRooms": _listen_in_rooms(channels)["slack"]},
+        }
     return config
 
 
