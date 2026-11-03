@@ -437,6 +437,8 @@ class RestorePointService:
             row.id,
             archive_bytes=manifest.get("bytes"),
             file_count=manifest.get("file_count"),
+            changed_file_count=manifest.get("changed"),
+            skipped_file_count=manifest.get("skipped"),
         )
 
     def _fail(self, row: AgentRestorePoint, reason: str) -> bool:

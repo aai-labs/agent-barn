@@ -270,6 +270,8 @@ export const mockRestorePoint = {
   agent_type: "openclaw",
   archive_bytes: 2_097_152,
   file_count: 42,
+  changed_file_count: 0,
+  skipped_file_count: 0,
   failure_reason: null,
   reapply_configuration: false,
   configuration_error: null,

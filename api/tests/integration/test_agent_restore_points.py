@@ -388,6 +388,37 @@ def test_a_succeeded_job_moves_the_row_to_ready_with_its_manifest():
             assert_that(body["captured_at"], not_none())
 
 
+def test_a_ready_row_carries_the_files_that_changed_while_it_was_taken():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12, "skipped": 1, "changed": 2}\n'
+
+        with when("I read a snapshot taken while the Agent wrote to its files"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+
+        with then("it says how many files shrank or vanished mid-capture"):
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(body["changed_file_count"], equal_to(2))
+            assert_that(body["skipped_file_count"], equal_to(1))
+
+
+def test_a_manifest_without_change_counts_leaves_them_unknown():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12}\n'
+
+        with when("I read a capture from a Job that did not count changed files"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+
+        with then("the change counts are unknown, not zero"):
+            assert_that(body["changed_file_count"], none())
+            assert_that(body["skipped_file_count"], none())
+
+
 def test_an_empty_archive_is_ready_not_failed():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         seeded = _reconcilable(context)

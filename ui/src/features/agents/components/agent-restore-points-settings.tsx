@@ -204,6 +204,7 @@ export function AgentRestorePointsSettings({
     const isExpanded = expandedId === restorePoint.id;
     const originBadge = RESTORE_POINT_ORIGIN_BADGE[restorePoint.origin];
     const timestamp = restorePointTime(restorePoint);
+    const unsettledFiles = (restorePoint.changedFileCount ?? 0) + (restorePoint.skippedFileCount ?? 0);
     return (
       <div
         key={restorePoint.id}
@@ -238,6 +239,12 @@ export function AgentRestorePointsSettings({
               {restorePoint.fileCount !== null &&
                 ` · ${restorePoint.fileCount} ${restorePoint.fileCount === 1 ? "file" : "files"}`}
             </div>
+            {unsettledFiles > 0 && (
+              <div className="mt-0.5 text-[0.78rem]" style={{ color: "var(--warn)" }}>
+                {unsettledFiles} {unsettledFiles === 1 ? "file" : "files"} changed while this was taken. They may be
+                incomplete or missing.
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

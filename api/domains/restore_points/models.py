@@ -147,6 +147,8 @@ class AgentRestorePointRead(PydanticBaseModel):
     agent_type: str
     archive_bytes: int | None
     file_count: int | None
+    changed_file_count: int | None
+    skipped_file_count: int | None
     failure_reason: str | None
     # True while a confirmed restore still owes the Agent its recorded configuration.
     reapply_configuration: bool = False

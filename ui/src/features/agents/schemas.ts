@@ -521,6 +521,9 @@ export const RestorePointSchema = z.object({
   agentType: z.string(),
   archiveBytes: z.number().int().nullable(),
   fileCount: z.number().int().nullable(),
+  // Files that shrank or vanished while a snapshot of a running Agent read them.
+  changedFileCount: z.number().int().nullable().default(null),
+  skippedFileCount: z.number().int().nullable().default(null),
   failureReason: z.string().nullable(),
   // True while a confirmed restore still owes the Agent its recorded configuration.
   reapplyConfiguration: z.boolean().default(false),

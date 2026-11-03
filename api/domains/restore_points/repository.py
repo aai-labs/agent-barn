@@ -326,6 +326,8 @@ class RestorePointRepository:
         *,
         archive_bytes: int | None,
         file_count: int | None,
+        changed_file_count: int | None,
+        skipped_file_count: int | None,
     ) -> bool:
         return self._conditional_update(
             restore_point_id,
@@ -334,6 +336,8 @@ class RestorePointRepository:
                 "status": RestorePointStatus.READY,
                 "archive_bytes": archive_bytes,
                 "file_count": file_count,
+                "changed_file_count": changed_file_count,
+                "skipped_file_count": skipped_file_count,
                 "captured_at": datetime.now(UTC),
                 "failure_reason": None,
                 "job_name": None,

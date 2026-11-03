@@ -630,6 +630,28 @@ test.describe("Agent restore points", () => {
     await expect(page.getByTestId("restore-point-capacity")).toContainText("1 of 5 captures used");
   });
 
+  test("warns when files changed while a snapshot was taken", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({
+        items: [{ ...mockScheduledSnapshot, changed_file_count: 2, skipped_file_count: 1 }, mockRestorePoint],
+        manualCount: 1,
+      }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    await expect(page.getByTestId("scheduled-snapshots")).toContainText(
+      "3 files changed while this was taken. They may be incomplete or missing.",
+    );
+    await expect(configurationPage.restorePointRow("Before the rewrite")).not.toContainText(
+      "changed while this was taken",
+    );
+  });
+
   test("a scheduled snapshot in progress does not block a capture", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
