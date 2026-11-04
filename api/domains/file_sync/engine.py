@@ -183,6 +183,29 @@ class FileSyncEngine:
             by_item={folder.folder_item_id: folder for folder, _ in active if folder.folder_item_id is not None},
             progress=progress or _no_progress,
         )
+        for item_id in self.repository.locked_items(connection.id):
+            try:
+                item = plugin.get_item(root, item_id=item_id)
+            except RemoteItemLocked:
+                self.repository.remember_locked_item(connection.id, item_id)
+                continue
+            except RemoteItemMissing:
+                item = RemoteItem(
+                    id=item_id,
+                    name=None,
+                    parent_id=None,
+                    path=None,
+                    version=None,
+                    content_version=None,
+                    size=0,
+                    content_hash=None,
+                    is_folder=item_id in changes.by_item,
+                    deleted=True,
+                    modified_at=None,
+                    modified_by_app=False,
+                    web_url=None,
+                )
+            self._remote_change(changes, item)
         requested = {
             folder.id: folder.resync_requested_at for folder, _ in active if folder.resync_requested_at is not None
         }
@@ -233,8 +256,14 @@ class FileSyncEngine:
 
     def _remote_change(self, changes: _Changes, item: RemoteItem) -> None:
         if item.modified_by_app:
+            self.repository.forget_locked_item(changes.connection.id, item.id)
             return
-        self._handle(changes, item)
+        try:
+            self._handle(changes, item)
+        except RemoteItemLocked:
+            self.repository.remember_locked_item(changes.connection.id, item.id)
+            return
+        self.repository.forget_locked_item(changes.connection.id, item.id)
 
     def _handle(self, changes: _Changes, item: RemoteItem) -> None:
         if not item.deleted and item.path is None:

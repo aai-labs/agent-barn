@@ -27,9 +27,9 @@ export class ArtifactDataSupport {
             await route.fulfill({status: 403, json: {detail: "Agent update access required"}}); return;
           }
           this.storageState = "PROVISIONING";
-          await route.fulfill({status: 202, json: {state: this.storageState}}); return;
+          await route.fulfill({status: 202, json: {state: this.storageState, max_bytes: 26214400}}); return;
         }
-        await route.fulfill({json: {state: this.storageState}}); return;
+        await route.fulfill({json: {state: this.storageState, max_bytes: 26214400}}); return;
       }
       if (this.listDenied || (this.denied && url.pathname.endsWith("download-link"))) {
         await route.fulfill({status: 404, json: {detail: "Artifact not found"}}); return;

@@ -426,3 +426,32 @@ def test_two_turn_ons_before_a_pass_cause_one_re_check(monkeypatch):
         _process(context)
 
         assert_that(len(listings), equal_to(1))
+
+
+def test_locked_item_during_relist_does_not_repeat_the_full_listing(monkeypatch):
+    from api.domains.sync_provider.plugins.base import RemoteItemLocked
+
+    with given(_BASE) as context:
+        _connected_with(context)
+        drive = fake_drive(context)
+        first = drive.user_adds(context.sync_root, "Sales Bot/workspace/locked.md", b"first")
+        drive.user_adds(context.sync_root, "Sales Bot/workspace/later.md", b"second")
+        original = drive.move_item
+        locked = True
+        listings = _count_listings(context, monkeypatch)
+
+        def move(root, *, item_id, name=None, parent_id=None):
+            if locked and item_id == first.id:
+                raise RemoteItemLocked("open")
+            return original(root, item_id=item_id, name=name, parent_id=parent_id)
+
+        monkeypatch.setattr(drive, "move_item", move)
+        drive.expire_cursors()
+        _process(context)
+        assert _exists(context, "Sales Bot/_Not synced/later.md")
+        assert len(listings) == 1
+        assert _engine(context).repository.locked_items(context.connection.id) == [first.id]
+        locked = False
+        _process(context)
+        assert _exists(context, "Sales Bot/_Not synced/locked.md")
+        assert len(listings) == 1
