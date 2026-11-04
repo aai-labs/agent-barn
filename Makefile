@@ -3,6 +3,7 @@ RUNTIME ?= hermes
 
 .PHONY: \
 	check-workflows \
+	check-restore-points \
 	reconcile-workflows \
 	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
@@ -93,6 +94,9 @@ check-memory:
 
 check-workflows:
 	cd api && uv run --frozen python scripts/check_workflow_charts.py
+
+check-restore-points:
+	cd api && uv run --frozen python scripts/check_restore_point_charts.py
 
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod

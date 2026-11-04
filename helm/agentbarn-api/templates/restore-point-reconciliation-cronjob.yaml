@@ -22,6 +22,10 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # Above the run's own budget (RESTORE_POINT_RECONCILIATION_MAX_RUNTIME_SECONDS,
+      # 120) plus pod start, and inside the 10-minute window. Under Forbid, a run that
+      # never finishes would otherwise stop retention and recovery for good.
+      activeDeadlineSeconds: 540
       template:
         metadata:
           labels:

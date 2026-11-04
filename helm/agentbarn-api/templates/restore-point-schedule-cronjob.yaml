@@ -21,6 +21,10 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # A run only starts Jobs, so it takes seconds. Under Forbid, one that never
+      # finishes (a Pending pod, a hung call) skips every later run and holds its
+      # quota, so it is stopped inside its own 5-minute window.
+      activeDeadlineSeconds: 280
       template:
         metadata:
           labels:

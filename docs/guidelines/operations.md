@@ -780,11 +780,14 @@ Documentation-only changes do not change a service image and do not require a se
   PVC permissions. Each run logs `Scheduled snapshot summary: in_flight started failed`. The
   oldest snapshots past each Agent's limits are deleted by the reconciliation CronJob below.
   `maxConcurrent` exists because each capture Job's 512Mi memory limit counts against the
-  namespace's `limits.memory` quota. Run one pass by hand with `make snapshot-restore-points`.
+  namespace's `limits.memory` quota. A run is stopped after 280s (`activeDeadlineSeconds`), so one
+  that never finishes cannot hold its quota or, under `concurrencyPolicy: Forbid`, skip every later
+  run. Run one pass by hand with `make snapshot-restore-points`.
 - Restore point rows resolve from live Job status when they are read, and a
   `<release>-restore-point-reconciliation` CronJob resolves the ones nobody reads. It runs every
   10 minutes (`restorePoints.reconciliation.schedule`, disable with
-  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, and needs the
+  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, with each run
+  stopped after 540s (`activeDeadlineSeconds`, above its own 120s budget), and needs the
   same `batch/jobs` and PVC permissions as the API pod because it authenticates with the same
   mounted kubeconfig. Run one pass by hand with `make reconcile-restore-points`, which targets
   whatever `K8S_KUBECONFIG_PATH` and `K8S_NAMESPACE` point at — check both before invoking it

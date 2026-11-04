@@ -55,6 +55,10 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Fixed: removing a restore point, by retention or by the user, now deletes every Job labelled with
   its id (the capture Job, which a ready row no longer names, and any restore Job) before its
   volume. Their finished pods kept the volume `Terminating` until the Job TTL (1h) reaped them.
+- Fixed: the schedule and reconciliation CronJobs stop a run after 280s and 540s
+  (`activeDeadlineSeconds`). Under `concurrencyPolicy: Forbid`, one run that never finished (a
+  `Pending` pod, a hung call) skipped every later one, stopping snapshots or retention without an
+  error. `make check-restore-points` (also on CI) renders the chart and checks both.
 - Changed: the limit no longer refuses an update's own backup. A user's capture is still refused
   when their own captures reach the limit.
 - Changed: a scheduled snapshot in progress blocks nothing (`has_blocking_operation` ignores it).
