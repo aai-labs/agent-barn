@@ -3,10 +3,23 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, none
-from kubernetes.client import V1Job, V1JobStatus, V1ObjectMeta
+from kubernetes.client import (
+    V1Job,
+    V1JobSpec,
+    V1JobStatus,
+    V1ObjectMeta,
+    V1PersistentVolumeClaimVolumeSource,
+    V1PodSpec,
+    V1PodTemplateSpec,
+    V1Volume,
+)
 from sqlmodel import Session, select
 
-from api.domains.agents.builders.restore_point import RESTORE_POINT_ID_LABEL_KEY
+from api.domains.agents.builders.restore_point import (
+    COMPONENT_LABEL,
+    COMPONENT_LABEL_KEY,
+    RESTORE_POINT_ID_LABEL_KEY,
+)
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.events.catalog import AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED
 from api.domains.events.models import ActorIdentityType, EventDelivery, OutboxMessage
@@ -194,6 +207,32 @@ def test_scheduled_snapshots_keep_the_newest_and_only_the_latest_failure():
             k8s.delete_pvc.assert_any_call(oldest.pvc_name, "agent-farm")
 
 
+def _job_mounting(name: str, labelled_for: str, *claim_names: str) -> V1Job:
+    volumes = [
+        V1Volume(name=f"volume-{index}", persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=claim))
+        for index, claim in enumerate(claim_names)
+    ]
+    labels = {COMPONENT_LABEL_KEY: COMPONENT_LABEL, RESTORE_POINT_ID_LABEL_KEY: labelled_for}
+    return V1Job(
+        metadata=V1ObjectMeta(name=name, labels=labels),
+        spec=V1JobSpec(template=V1PodTemplateSpec(spec=V1PodSpec(containers=[], volumes=volumes))),
+    )
+
+
+def _cluster_with(k8s, jobs: list[V1Job]) -> None:
+    """List Jobs the way the cluster does: only those carrying every label the selector asks for."""
+
+    def list_jobs(namespace: str, label_selector: str = "") -> list[V1Job]:
+        wanted = dict(term.split("=", 1) for term in label_selector.split(",") if term)
+        return [job for job in jobs if all(job.metadata.labels.get(k) == v for k, v in wanted.items())]
+
+    k8s.list_jobs.side_effect = list_jobs
+
+
+def _volume_calls(k8s) -> list[tuple[str, str]]:
+    return [(c[0], c.args[0]) for c in k8s.method_calls if c[0] in ("delete_job", "delete_pvc")]
+
+
 def test_retention_deletes_every_job_that_used_a_snapshot_before_its_volume():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         agent = context.agent
@@ -201,27 +240,60 @@ def test_retention_deletes_every_job_that_used_a_snapshot_before_its_volume():
         for age in (600, 300):
             _seed(context, agent, RestorePointOrigin.SCHEDULED, age_minutes=age)
         k8s = context.injector.get(KubernetesClient)
-        leftover_jobs = [f"rp-cap-{oldest.id}", f"rp-res-{oldest.id}-a1b2c3"]
-        k8s.list_jobs.side_effect = lambda namespace, label_selector="": [
-            V1Job(metadata=V1ObjectMeta(name=name))
-            for name in leftover_jobs
-            if label_selector == f"{RESTORE_POINT_ID_LABEL_KEY}={oldest.id}"
-        ]
+        _cluster_with(
+            k8s,
+            [
+                _job_mounting(f"rp-cap-{oldest.id}", str(oldest.id), oldest.pvc_name),
+                _job_mounting(f"rp-res-{oldest.id}-a1b2c3", str(oldest.id), "agent-volume", oldest.pvc_name),
+                _job_mounting("rp-cap-another", str(uuid.uuid4()), "restore-point-another"),
+            ],
+        )
 
         with when("retention removes a ready snapshot its capture and a restore ran from"):
             context.injector.get(RestorePointService).enforce_retention(agent.id)
 
         with then("both finished Jobs go first, so nothing holds the volume once it is deleted"):
-            calls = [(c[0], c.args[0]) for c in k8s.method_calls if c[0] in ("delete_job", "delete_pvc")]
             assert_that(
-                calls,
+                _volume_calls(k8s),
                 equal_to(
                     [
-                        ("delete_job", leftover_jobs[0]),
-                        ("delete_job", leftover_jobs[1]),
+                        ("delete_job", f"rp-cap-{oldest.id}"),
+                        ("delete_job", f"rp-res-{oldest.id}-a1b2c3"),
                         ("delete_pvc", oldest.pvc_name),
                     ]
                 ),
+            )
+
+
+def test_retention_deletes_the_restore_job_that_wrote_a_backup_before_the_backups_volume():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        agent = context.agent
+        _seed(context, agent, RestorePointOrigin.MANUAL, age_minutes=900)
+        _seed(context, agent, RestorePointOrigin.MANUAL, age_minutes=800)
+        older_backup = _seed(context, agent, RestorePointOrigin.PRE_RESTORE, age_minutes=700)
+        _seed(context, agent, RestorePointOrigin.PRE_RESTORE, age_minutes=10)
+        k8s = context.injector.get(KubernetesClient)
+        # The restore Job carries the restored snapshot's id, not the backup's.
+        _cluster_with(
+            k8s,
+            [
+                _job_mounting(
+                    "rp-res-target-a1b2c3",
+                    str(uuid.uuid4()),
+                    "agent-volume",
+                    older_backup.pvc_name,
+                    "restore-point-target",
+                ),
+            ],
+        )
+
+        with when("retention removes the older backup past the manual limit"):
+            context.injector.get(RestorePointService).enforce_retention(agent.id)
+
+        with then("the restore Job that wrote it goes first, so the backup's volume is freed at once"):
+            assert_that(
+                _volume_calls(k8s),
+                equal_to([("delete_job", "rp-res-target-a1b2c3"), ("delete_pvc", older_backup.pvc_name)]),
             )
 
 

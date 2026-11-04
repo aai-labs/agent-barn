@@ -17,7 +17,8 @@ from sqlalchemy.exc import IntegrityError
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders.restore_point import (
-    RESTORE_POINT_ID_LABEL_KEY,
+    COMPONENT_LABEL,
+    COMPONENT_LABEL_KEY,
     build_capture_job,
     build_restore_job,
     build_restore_point_pvc,
@@ -149,6 +150,12 @@ def _without_module_path(line: str) -> str:
 def _deadline_exceeded(job: V1Job) -> bool:
     conditions = job.status.conditions if job.status is not None else None
     return any(c.type == "Failed" and c.status == "True" and c.reason == "DeadlineExceeded" for c in conditions or [])
+
+
+def _mounted_claims(job: V1Job) -> set[str]:
+    template = job.spec.template if job.spec is not None else None
+    volumes = template.spec.volumes if template is not None and template.spec is not None else None
+    return {v.persistent_volume_claim.claim_name for v in volumes or [] if v.persistent_volume_claim is not None}
 
 
 def _ran_safety_copy(job: V1Job) -> bool:
@@ -750,15 +757,17 @@ class RestorePointService:
         """Delete a restore point's Jobs and volume. The row goes after, so a removal cut short
         stays DELETING and reconciliation finishes it.
 
-        A ready row no longer names its capture Job, and restore Jobs are never on the row, so
-        every Job is found by label. Their finished pods still mount the volume, and until they
-        go the volume's deletion waits on them for the Job TTL.
+        Every Job that mounts the volume goes first: its finished pods otherwise hold the
+        volume's deletion until the Job TTL reaps them. A ready row no longer names its capture
+        Job, and a restore Job carries the restored snapshot's id while it also writes the
+        pre-restore backup's volume, so Jobs are matched by what they mount, not by label.
         """
         namespace = self.config.k8s_namespace
         job_names = [row.job_name] if row.job_name else []
-        for job in self.k8s.list_jobs(namespace, f"{RESTORE_POINT_ID_LABEL_KEY}={row.id}"):
-            if job.metadata.name not in job_names:
-                job_names.append(job.metadata.name)
+        if row.pvc_name:
+            for job in self.k8s.list_jobs(namespace, f"{COMPONENT_LABEL_KEY}={COMPONENT_LABEL}"):
+                if row.pvc_name in _mounted_claims(job) and job.metadata.name not in job_names:
+                    job_names.append(job.metadata.name)
         for job_name in job_names:
             self.k8s.delete_job(job_name, namespace)
         if row.pvc_name:

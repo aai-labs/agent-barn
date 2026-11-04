@@ -19,13 +19,27 @@ from hamcrest import (
     not_none,
     raises,
 )
-from kubernetes.client import V1Job, V1JobCondition, V1JobStatus, V1ObjectMeta
+from kubernetes.client import (
+    V1Job,
+    V1JobCondition,
+    V1JobSpec,
+    V1JobStatus,
+    V1ObjectMeta,
+    V1PersistentVolumeClaimVolumeSource,
+    V1PodSpec,
+    V1PodTemplateSpec,
+    V1Volume,
+)
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col
 
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.agents.builders.restore_point import RESTORE_POINT_ID_LABEL_KEY
+from api.domains.agents.builders.restore_point import (
+    COMPONENT_LABEL,
+    COMPONENT_LABEL_KEY,
+    RESTORE_POINT_ID_LABEL_KEY,
+)
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
@@ -348,6 +362,28 @@ def test_a_restoring_row_may_coexist_with_an_active_capture():
 
         with then("the index permits it, because restore holds both rows at once"):
             assert_that(second.id, not_none())
+
+
+def _job_mounting(name: str, labelled_for: str, *claim_names: str) -> V1Job:
+    volumes = [
+        V1Volume(name=f"volume-{index}", persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=claim))
+        for index, claim in enumerate(claim_names)
+    ]
+    labels = {COMPONENT_LABEL_KEY: COMPONENT_LABEL, RESTORE_POINT_ID_LABEL_KEY: labelled_for}
+    return V1Job(
+        metadata=V1ObjectMeta(name=name, labels=labels),
+        spec=V1JobSpec(template=V1PodTemplateSpec(spec=V1PodSpec(containers=[], volumes=volumes))),
+    )
+
+
+def _cluster_with(k8s, jobs: list[V1Job]) -> None:
+    """List Jobs the way the cluster does: only those carrying every label the selector asks for."""
+
+    def list_jobs(namespace: str, label_selector: str = "") -> list[V1Job]:
+        wanted = dict(term.split("=", 1) for term in label_selector.split(",") if term)
+        return [job for job in jobs if all(job.metadata.labels.get(k) == v for k, v in wanted.items())]
+
+    k8s.list_jobs.side_effect = list_jobs
 
 
 def _job_with(status_kwargs) -> V1Job:
@@ -961,12 +997,14 @@ def test_delete_restore_point_removes_every_job_that_used_it_before_its_volume()
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         seeded = _seed(context, status_value=RestorePointStatus.READY)
         k8s = context.injector.get(KubernetesClient)
-        leftover_jobs = [f"rp-cap-{seeded.id}", f"rp-res-{seeded.id}-a1b2c3"]
-        k8s.list_jobs.side_effect = lambda namespace, label_selector="": [
-            V1Job(metadata=V1ObjectMeta(name=name))
-            for name in leftover_jobs
-            if label_selector == f"{RESTORE_POINT_ID_LABEL_KEY}={seeded.id}"
-        ]
+        _cluster_with(
+            k8s,
+            [
+                _job_mounting(f"rp-cap-{seeded.id}", str(seeded.id), seeded.pvc_name),
+                _job_mounting(f"rp-res-{seeded.id}-a1b2c3", str(seeded.id), "agent-volume", seeded.pvc_name),
+                _job_mounting("rp-cap-another", str(uuid.uuid4()), "restore-point-another"),
+            ],
+        )
 
         with when("I delete a ready restore point its capture and a restore ran from"):
             response = context.client.delete(f"{_url(context)}/{seeded.id}", headers=_auth(context))
@@ -978,8 +1016,8 @@ def test_delete_restore_point_removes_every_job_that_used_it_before_its_volume()
                 calls,
                 equal_to(
                     [
-                        ("delete_job", leftover_jobs[0]),
-                        ("delete_job", leftover_jobs[1]),
+                        ("delete_job", f"rp-cap-{seeded.id}"),
+                        ("delete_job", f"rp-res-{seeded.id}-a1b2c3"),
                         ("delete_pvc", seeded.pvc_name),
                     ]
                 ),

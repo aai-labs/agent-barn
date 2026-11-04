@@ -52,9 +52,11 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   that would actually lose a row are picked, so an Agent over the limit by rows retention keeps
   is not revisited every run. A removal is `READY → DELETING`, then Job and volume, then the row;
   a row left `DELETING` is finished by reconciliation.
-- Fixed: removing a restore point, by retention or by the user, now deletes every Job labelled with
-  its id (the capture Job, which a ready row no longer names, and any restore Job) before its
-  volume. Their finished pods kept the volume `Terminating` until the Job TTL (1h) reaped them.
+- Fixed: removing a restore point, by retention or by the user, now deletes every restore point
+  Job that mounts its volume before the volume: its capture Job (which a ready row no longer
+  names), restore Jobs that read it, and the restore Job that wrote it as a pre-restore backup
+  (labelled with the restored snapshot, not the backup). Their finished pods kept the volume
+  `Terminating` until the Job TTL (1h) reaped them.
 - Fixed: the schedule and reconciliation CronJobs stop a run after 280s and 540s
   (`activeDeadlineSeconds`). Under `concurrencyPolicy: Forbid`, one run that never finished (a
   `Pending` pod, a hung call) skipped every later one, stopping snapshots or retention without an
