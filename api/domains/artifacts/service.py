@@ -51,13 +51,16 @@ class ArtifactService:
     def storage_status(self, agent_id: UUID, context: CurrentUserContext) -> ArtifactStorageRead:
         scope = self.scope(agent_id, context)
         if not self.config.artifact_s3_endpoint_url:
-            return ArtifactStorageRead(state="NOT_CONFIGURED")
+            return ArtifactStorageRead(max_bytes=self.config.artifact_max_bytes, state="NOT_CONFIGURED")
         row = self.buckets.status(agent_id, scope.organization_id)
         if row is None or row.state == "DELETED":
-            return ArtifactStorageRead(state="NOT_PROVISIONED")
+            return ArtifactStorageRead(max_bytes=self.config.artifact_max_bytes, state="NOT_PROVISIONED")
         if row.state == "READY":
-            return ArtifactStorageRead(state="READY")
-        return ArtifactStorageRead(state="FAILED" if row.last_error or row.state == "DELETING" else "PROVISIONING")
+            return ArtifactStorageRead(max_bytes=self.config.artifact_max_bytes, state="READY")
+        return ArtifactStorageRead(
+            max_bytes=self.config.artifact_max_bytes,
+            state="FAILED" if row.last_error or row.state == "DELETING" else "PROVISIONING",
+        )
 
     def request_storage(self, agent_id: UUID, context: CurrentUserContext) -> ArtifactStorageRead:
         scope = self.scope(agent_id, context, True)
@@ -185,8 +188,19 @@ class ArtifactService:
         return row
 
     def link(
-        self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope, seconds: int = 900
+        self,
+        artifact_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        seconds: int = 900,
+        *,
+        attempt_id: UUID | None = None,
     ) -> ArtifactLinkRead:
+        if attempt_id is not None:
+            try:
+                self.repository.authorize_workflow_read(artifact_id, attempt_id, agent_id)
+            except WorkflowConflict as exc:
+                raise HTTPException(409, str(exc)) from exc
         self.enabled()
         row = self.ready(artifact_id, agent_id, scope)
         if not 1 <= seconds <= self.config.artifact_link_max_seconds:

@@ -30,6 +30,7 @@ export type ArtifactList = z.infer<typeof ArtifactListSchema>;
 export type ArtifactLink = z.infer<typeof ArtifactLinkSchema>;
 
 export const ArtifactStorageSchema = z.object({
+  maxBytes: z.number().int().positive(),
   state: z.enum(["NOT_CONFIGURED", "NOT_PROVISIONED", "PROVISIONING", "READY", "FAILED"]),
 });
 export type ArtifactStorage = z.infer<typeof ArtifactStorageSchema>;

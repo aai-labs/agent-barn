@@ -31,6 +31,8 @@ def main() -> int:
         sub.add_argument("artifact_id")
         if command == "retrieve":
             sub.add_argument("destination")
+            sub.add_argument("--checksum")
+            sub.add_argument("--attempt-id")
         else:
             sub.add_argument("--seconds", type=int, default=900)
     args = parser.parse_args()
@@ -99,7 +101,15 @@ def main() -> int:
 
             artifact_id = str(UUID(args.artifact_id))
             link = request(
-                "/artifacts/" + artifact_id + "/download-link?" + urlencode({"seconds": getattr(args, "seconds", 900)})
+                "/artifacts/"
+                + artifact_id
+                + "/download-link?"
+                + urlencode(
+                    {
+                        "seconds": getattr(args, "seconds", 900),
+                        **({"attempt_id": args.attempt_id} if getattr(args, "attempt_id", None) else {}),
+                    }
+                )
             )
             if args.command == "link":
                 print(json.dumps(link))
@@ -107,6 +117,8 @@ def main() -> int:
                 # Use the Agent's reachable app origin, not the human-facing one.
                 # Provider authority is opaque and unchanged; no service bearer
                 # is forwarded to the app's capability-only byte route.
+                if args.checksum and link["artifact"]["checksum"] != args.checksum:
+                    raise ValueError("Artifact does not match the pinned checksum")
                 download = urlsplit(link["url"])
                 if not download.path.startswith("/api/v1/agent-artifacts/"):
                     raise ValueError("Unexpected artifact download route")

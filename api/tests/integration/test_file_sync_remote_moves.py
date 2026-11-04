@@ -400,3 +400,32 @@ def test_files_in_a_renamed_subfolder_are_moved_back():
             (_row(context, "workspace/reports/q3.md").pending, _row(context, "workspace/reports/deep/q4.md").pending),
             equal_to((None, None)),
         )
+
+
+def test_locked_item_does_not_block_later_changes_and_is_retried(monkeypatch):
+    from datetime import UTC, datetime
+
+    from api.domains.sync_provider.plugins.base import RemoteItemLocked
+
+    with given(_BASE) as context:
+        _connected_with(context)
+        drive = fake_drive(context)
+        first = drive.user_adds(context.sync_root, "Sales Bot/workspace/locked.md", b"first")
+        drive.user_adds(context.sync_root, "Sales Bot/workspace/later.md", b"second")
+        original = drive.move_item
+        locked = True
+
+        def move(root, *, item_id, name=None, parent_id=None):
+            if locked and item_id == first.id:
+                raise RemoteItemLocked("open")
+            return original(root, item_id=item_id, name=name, parent_id=parent_id)
+
+        monkeypatch.setattr(drive, "move_item", move)
+        _engine(context).run_pass(datetime.now(UTC))
+        assert _exists(context, "Sales Bot/workspace/locked.md")
+        assert _exists(context, "Sales Bot/_Not synced/later.md")
+        assert _engine(context).repository.locked_items(context.connection.id) == [first.id]
+        locked = False
+        _process(context)
+        assert _exists(context, "Sales Bot/_Not synced/locked.md")
+        assert _engine(context).repository.locked_items(context.connection.id) == []

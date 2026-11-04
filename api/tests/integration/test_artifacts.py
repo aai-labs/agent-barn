@@ -485,7 +485,7 @@ def test_custom_read_role_and_general_access_need_no_activity_permission(storage
         assert_that(context.client.get(path + "/download-link", headers=auth(context)).status_code, equal_to(200))
         assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(403))
         storage_path = base(context) + "/artifacts/storage"
-        assert_that(context.client.get(storage_path, headers=auth(context)).json(), equal_to({"state": "READY"}))
+        assert_that(context.client.get(storage_path, headers=auth(context)).json()["state"], equal_to("READY"))
         assert_that(context.client.post(storage_path, headers=auth(context)).status_code, equal_to(403))
 
 

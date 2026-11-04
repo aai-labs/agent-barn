@@ -48,7 +48,7 @@ export function AttemptStatus({
   return (
     <div className="space-y-3">
       <p className="text-sm tabular-nums text-[var(--ink-3)]">
-        Attempt {attempt.number} of {attempt.limit} · running{" "}
+        Attempt {attempt.number} · running{" "}
         {clock(now - Date.parse(attempt.startedAt))} · times out in{" "}
         {clock(Date.parse(attempt.expiresAt) - now)}
       </p>
@@ -75,7 +75,7 @@ export function AttemptStatus({
   );
 }
 
-/** Newest-first run history, so failed attempts stay visible while the run retries or after it ends. */
+/** Newest-first run history keeps failed attempts visible after they end. */
 export function WorkflowRunActivity({
   agentId,
   run,
