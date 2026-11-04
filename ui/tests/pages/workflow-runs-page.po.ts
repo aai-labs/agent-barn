@@ -42,8 +42,9 @@ export class WorkflowRunsPage {
     await this.page.getByLabel(`Upload file for ${label}`).setInputFiles({ name: "uploaded.csv", mimeType: "text/csv", buffer: bytes });
   }
   async runAgain() {
+    // The closing confirmation dialog retains another Run again button.
     await this.page
-      .getByLabel("Run detail")
+      .getByRole("region", { name: "Run detail", exact: true })
       .getByRole("button", { name: "Run again", exact: true })
       .click();
   }
