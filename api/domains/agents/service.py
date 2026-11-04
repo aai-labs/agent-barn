@@ -2178,6 +2178,12 @@ class AgentService:
                     detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
                 )
             started = self._start_agent_unchecked(current, actor)
+            if started.managed_update_outcome == ManagedUpdateOutcome.BACKUP_FAILED:
+                # Updating without a backup is offered only while the Agent is still as the
+                # failed backup left it. Once the user runs it, the volume holds newer data
+                # with no backup, so a later stop must not bring the offer back.
+                self.repository.clear_backup_failed_outcome(started.id)
+                started = self.repository.get_by_id(started.id) or started
         return self._get_agent_read(started, context)
 
     def _native_connection_configuration(
