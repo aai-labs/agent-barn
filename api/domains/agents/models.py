@@ -18,6 +18,7 @@ from sqlmodel import Field as SqlField
 from api.domains.agent_sizes.models import AgentSizeOption
 from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
+from api.domains.custom_api.models import CustomApiConnectionsApply
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -1178,6 +1179,12 @@ class AgentCreate(PydanticBaseModel):
         return self
 
 
+class IntegrationPolicyUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: SecretProvider
+    isolated: bool
+
+
 class AgentUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1199,6 +1206,10 @@ class AgentUpdate(PydanticBaseModel):
     secrets: list[AgentSecretCreate] | None = None
     shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+    # Opt in to a server-owned validate/stop/save/start operation.
+    restart: bool = False
+    policies: list[IntegrationPolicyUpdate] = Field(default_factory=list)
+    custom_api: CustomApiConnectionsApply | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
     # Unset leaves the limit alone; an explicit null returns the Agent to the
@@ -1242,6 +1253,20 @@ class AgentUpdate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_secret_operations(self) -> AgentUpdate:
+        if self.restart and self.model_fields_set - {
+            "restart",
+            "secrets",
+            "shared_credentials",
+            "removed_secret_providers",
+            "policies",
+            "custom_api",
+        }:
+            raise ValueError("Restart on PATCH is supported for integration changes only")
+        policies = [policy.provider for policy in self.policies]
+        if len(policies) != len(set(policies)):
+            raise ValueError("Duplicate isolation policy providers are not allowed")
+        if self.custom_api and (self.custom_api.restart or any(create.restart for create in self.custom_api.creates)):
+            raise ValueError("Use the top-level restart choice")
         upserts = [s.provider for s in self.secrets or []]
         if len(upserts) != len(set(upserts)):
             raise ValueError("Duplicate secret providers are not allowed")

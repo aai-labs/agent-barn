@@ -56,7 +56,8 @@ export class CustomApiDataSupport {
         return route.fulfill({ json: { ...mockAgent, status: operation === "start" ? "RUNNING" : "STOPPED" } });
       });
     }
-    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/apply`, (route) => {
+    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
       const body = route.request().postDataJSON();
       this.requests.push({ method: route.request().method(), body, url: route.request().url() });
       if (options.failStartOnce && this.requests.length === 1) {

@@ -1020,8 +1020,8 @@ test.describe("Agent configuration page", () => {
           }),
         });
       });
-      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}{,/integrations/apply}`, async (route) => {
-        if (!["PATCH", "POST"].includes(route.request().method())) {
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "PATCH") {
           await route.fallback();
           return;
         }
@@ -1184,8 +1184,8 @@ test.describe("Agent configuration page", () => {
       await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED", secrets } });
       await dataSupport.agents.interceptGetAgentConfigurationRequest();
       const sent: { patchBody?: Record<string, unknown>; isolation: unknown[] } = { isolation: [] };
-      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/apply`, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
         sent.patchBody = route.request().postDataJSON() as Record<string, unknown>;
         await route.fulfill({ json: { ...mockAgent, status: "STOPPED", secrets: [
           { provider: "gmail_app_password", secret_name: "Gmail app password", source: "agent_secret", isolation: savedIsolation },

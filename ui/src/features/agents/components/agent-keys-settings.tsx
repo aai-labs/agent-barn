@@ -11,7 +11,7 @@ import { IntegrationsStep } from "./hire-dialog-steps";
 import { IntegrationIsolationControl } from "./integration-isolation-control";
 import { useIntegrationIsolation } from "../hooks/use-integration-isolation";
 import { useStartAgent } from "../hooks/use-start-agent";
-import { useApplyIntegrations } from "../hooks/use-apply-integrations";
+import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import type { Agent, AgentSecretRead } from "../schemas";
 import { coerceBooleanFields, expandGithubContent, getIntegrationProvider, hasIncompleteIntegration, isSignInOnlyProvider, type IntegrationDraft } from "../integrations";
@@ -45,7 +45,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const customApi = useCustomApi(agent.id, agent.status === "RUNNING");
   const [customDrafts, setCustomDrafts] = useState<ConnectionDraft[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
-  const applyIntegrations = useApplyIntegrations(agent.id);
+  const updateAgent = useUpdateAgent();
   const isolation = useIntegrationIsolation(agent.id);
   const startAgent = useStartAgent();
   const [drafts, setDrafts] = useState<IntegrationDraft[]>(() => setupDrafts(agent));
@@ -68,7 +68,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const removedConnections = (customApi.connections ?? []).filter((connection) => !customDrafts.some((draft) => draft.connection?.id === connection.id));
   const hasCustomChanges = customChanges.length > 0 || removedConnections.length > 0;
   const hasChanges = hasCustomChanges || hasCredentialChanges || changedPolicies.length > 0 || restartRequired || (failed && (drafts.length > 0 || customDrafts.length > 0));
-  const pending = saving || applyIntegrations.isPending || isolation.isPending || startAgent.isPending || customApi.connectionMutation.isPending || customApi.batchMutation.isPending;
+  const pending = saving || updateAgent.isPending || isolation.isPending || startAgent.isPending || customApi.connectionMutation.isPending || customApi.batchMutation.isPending;
   const canRestart = agent.allowedActions.includes("agent.lifecycle.manage");
   const restart = restartRequired || agent.status === "RUNNING" || (failed && (drafts.length > 0 || customDrafts.length > 0));
 
@@ -109,7 +109,8 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
           await customApi.batchMutation.mutateAsync(batch);
         } else {
           setRestartRequired(restart);
-          await applyIntegrations.mutateAsync({
+          await updateAgent.mutateAsync({
+            agentId: agent.id,
             secrets: changedCredentials.filter((draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider)).map((draft) => ({
               provider: draft.provider,
               content: coerceBooleanFields(draft.provider === "github" ? expandGithubContent(draft.content) : draft.content),

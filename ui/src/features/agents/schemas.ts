@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { AgentSizeOptionSchema } from "@/features/agent-sizes/schemas";
-import { CustomApiBatchSchema } from "@/features/custom-api/schemas";
 import { OrganizationRoleSchema } from "@/features/organizations/schemas";
 import { SkillScopeSchema } from "@/features/skills/schemas";
 
@@ -686,16 +685,3 @@ export const AgentRuntimeDiagnosticsSchema = z.object({
   previousLogsAvailable: z.boolean(),
 });
 export type AgentRuntimeDiagnostics = z.infer<typeof AgentRuntimeDiagnosticsSchema>;
-
-export const AgentIntegrationsApplySchema = z.object({
-  secrets: z.array(z.object({
-    provider: z.string(),
-    content: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.boolean()])),
-  })),
-  sharedCredentials: z.array(z.object({ sharedCredentialId: z.string().uuid() })),
-  removedSecretProviders: z.array(z.string()),
-  policies: z.array(z.object({ provider: z.string(), isolated: z.boolean() })),
-  customApi: CustomApiBatchSchema.omit({ restart: true }),
-  restart: z.boolean(),
-});
-export type AgentIntegrationsApply = z.infer<typeof AgentIntegrationsApplySchema>;

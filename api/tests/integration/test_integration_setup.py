@@ -46,7 +46,7 @@ def _auth(context):
 
 
 def _apply(context, **body):
-    return context.client.post(f"{_base(context)}/integrations/apply", json=body, headers=_auth(context))
+    return context.client.patch(_base(context), json=body, headers=_auth(context))
 
 
 def _start(context):
@@ -259,6 +259,7 @@ def test_apply_requires_each_permission_before_validation_or_stop(permission):
             422,
         ),
         ({"secrets": [_secret("key"), _secret("duplicate")]}, 422),
+        ({"name": "Unrelated change"}, 422),
         (
             {
                 "secrets": [_secret("key")],

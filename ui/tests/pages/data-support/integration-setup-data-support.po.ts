@@ -39,7 +39,6 @@ export class IntegrationSetupDataSupport {
     await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, (route) => {
       return route.request().method() === "PATCH" ? save(route) : route.fulfill({ json: agent });
     });
-    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/apply`, save);
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration?section=keys`);
   }
 }

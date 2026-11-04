@@ -190,7 +190,7 @@ test.describe("Custom API integrations", () => {
       await expect(ui.section.getByRole("alert")).toContainText("Invalid Custom API configuration");
       await expect(ui.form).toHaveCount(2);
       expect(data.lifecycleRequests).toEqual([]);
-      expect(data.requests[0].url).toMatch(/\/apply$/);
+      expect(data.requests[0].url).toMatch(mixed ? /\/agents\/[^/]+$/ : /\/apply$/);
       if (mixed) expect(data.requests[0].body).toHaveProperty("custom_api");
     });
   }

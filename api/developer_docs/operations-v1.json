@@ -1191,11 +1191,6 @@
   ],
   [
     "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/integrations/apply",
-    "apply_integrations_organizations__organization_id__agents__agent_id__integrations_apply_post"
-  ],
-  [
-    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint/sign-in",
     "complete_sharepoint_sign_in_organizations__organization_id__agents__agent_id__integrations_sharepoint_sign_in_post"
   ],
