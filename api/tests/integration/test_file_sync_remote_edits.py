@@ -239,6 +239,24 @@ def test_edits_in_a_folder_with_sync_off_are_ignored():
         assert_that(_row(context, "workspace/notes.md").pending, none())
 
 
+def test_a_persons_edit_after_the_agents_sync_is_turned_off_is_left_alone():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get(Agent, agent.id)
+            assert row is not None
+            row.file_sync_enabled = False
+            session.add(row)
+            session.commit()
+        fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/notes.md", b"edited")
+
+        _engine(context).run_pass(datetime.now(UTC))
+
+        assert_that(agent_folder(context).status, equal_to(SyncFolderStatus.DISABLED))
+        assert_that(_row(context, "workspace/notes.md").pending, none())
+        assert_that(activity_entries(context), equal_to([]))
+
+
 def test_the_cursor_moves_on_so_an_edit_is_handled_once():
     with given(_BASE) as context:
         _connected_with(context, ("workspace/AGENTS.md", b"rules"))

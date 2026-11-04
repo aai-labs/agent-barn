@@ -54,7 +54,14 @@ S3-compatible storage owns bytes. Garage is the selected deployment target.
 An artifact belongs to exactly one Organization and Agent. Workflow, run, step,
 attempt and generation provenance are optional and server derived. Keys have the
 fixed form `artifacts/<organization UUID>/<agent UUID>/<artifact UUID>` and never
-include user filenames. Replacement always creates a new artifact ID.
+include user filenames. A changed file creates a new artifact ID. An ordinary runtime messaging upload
+reuses an unexpired READY artifact in the current bucket for the same Agent,
+filename, size and SHA-256, regardless of whether it originated in messaging, a
+human upload or a workflow. Matching concurrent messaging uploads also share a
+staging identity; the runtime retries a concurrent byte-write conflict. Reuse
+retains the original metadata and renews retention from reuse, or renews the
+one-hour staging window while publication is pending. Human uploads and new workflow
+publications retain separate identities and workflow provenance.
 
 Human metadata/list/download-link reads require current Membership, `agent.read`
 and the scoped undeleted Agent under the [RBAC brief](rbac/IMPLEMENTATION-BRIEF.md).
@@ -117,7 +124,7 @@ Concurrent/repeated requests preserve the same bucket/key identity. READY reques
 are idempotent; failed PENDING requests can be retried. No credentials or raw
 provider diagnostics appear in status responses.
 
-Storage status is `NOT_CONFIGURED`, `NOT_PROVISIONED`, `PROVISIONING`, `READY` or
+The storage status response includes the configured `max_bytes` upload limit so clients can validate and display the installation-specific limit. Storage status is `NOT_CONFIGURED`, `NOT_PROVISIONED`, `PROVISIONING`, `READY` or
 `FAILED`. The Artifacts view polls every two seconds while provisioning or failed,
 shows progress, and offers **Retry provisioning** after failure. Readers see status
 and instructions to ask an editor; they cannot provision. Missing deployment
@@ -153,7 +160,9 @@ migration or legacy access path is implemented.
 ## Publication and immutable handoff
 
 1. `POST /organizations/{organization_id}/agents/{agent_id}/artifacts` stages
-   filename, content type, byte size and lowercase SHA-256, returning UPLOADING.
+   filename, content type, byte size and lowercase SHA-256. It returns UPLOADING
+   for a staged file or READY when a matching chat upload reuses a published file.
+   A busy matching row returns retryable 409.
 2. `PUT .../artifacts/{artifact_id}/content` accepts bounded raw bytes. The API
    computes size and SHA-256, writes only matching content, then reads it back
    from S3 and verifies it before committing READY. The service serializes
@@ -165,11 +174,11 @@ migration or legacy access path is implemented.
    File locks use NOWAIT in both byte writing and finalization; concurrent publication
    returns retryable 409 without marking the artifact failed. A finalizer never waits
    on another S3 writer while holding the run lock. Retry the same artifact ID after
-   contention; changed bytes
-   cannot replace it. After a failed/uncertain upload, stage a new ID to retry.
-   A crash after S3 write leaves UPLOADING metadata for cleanup; it is never
-   exposed as a file. Staging expires after one hour. Interrupted/oversized
-   request bodies remain unavailable and expire through the same cleanup path.
+   contention; changed bytes cannot replace it. After a failed upload, a new ID
+   may be staged; after an uncertain upload, chat POST may reuse the same UPLOADING
+   ID. A later chat upload can adopt a row left by a crash and renew its one-hour
+   staging window. UPLOADING files are not exposed; abandoned staging and
+   interrupted/oversized request bodies expire through cleanup.
 
 The default file limit is 25 MiB, configurable from 1 byte to 100 MiB. Uploads
 are buffered within that bound; choose API concurrency/memory limits accordingly.
@@ -191,7 +200,9 @@ Upload roots are `/workspace` on Hermes and
 `/home/node/.openclaw/workspace` on OpenClaw. Retrieval verifies the expected
 checksum and refuses to overwrite a destination. Workflow prompts provide only
 `--attempt-id`; the CLI's Agent credential supplies publication authority, not the
-completion bearer. The service rejects superseded/expired/unauthorized attempts.
+completion bearer. The service rejects publication into superseded, expired or
+unauthorized attempts. A runtime PUT of matching bytes to an already READY file
+returns 200 even when its original attempt is superseded.
 With storage unconfigured, prompts omit the file-tool instructions. HTTP failures
 include their status code without echoing credentials, URLs or response bodies.
 
@@ -213,6 +224,14 @@ Admission caps staged/READY files at 16 per attempt and reserves at most 16,000 
 bytes of file-reference metadata across a run. These checks serialize on the run lock;
 excess staging returns 409 before accepting bytes. Use an archive for larger file sets.
 The overall workflow context bound still applies to combined text and file references.
+
+Run start can pin existing same-Agent files as typed workflow inputs.
+[Workflow file inputs and results](agent-workflows.md#file-workflow-inputs-and-results)
+owns selection, byte materialization and accepted/final-output behavior. Input
+metadata shares the run file-reference budget with published outputs. Workflow
+retrieval uses `retrieve <id> <new-path> --checksum <sha256> --attempt-id <id>`;
+the runtime link request validates current attempt authority and an active run pin.
+Ordinary retrieval remains Agent-scoped.
 
 Publication pins an exact artifact ID/checksum to its active run. Completion
 records published files in the step checkpoint, so later sessions receive immutable
@@ -275,8 +294,12 @@ The Agent Artifacts view shows READY chat, human and workflow files with names,
 sizes, types, provenance and download actions. File rows use recognizable type
 icons with a generic fallback, based on the filename extension or MIME type.
 Download controls include an icon and retain an accessible filename label on small
-screens; SHA-256 remains available in the quieter checksum line. Run/step attachments use the same
-service alongside existing text summaries. Each click requests a fresh link;
+screens. File cards are shared with workflow inputs and outputs; SHA-256 remains
+in stored references and byte verification, and is not displayed in file cards.
+The shared cards compose the [shadcn Attachment](https://ui.shadcn.com/docs/components/base/attachment)
+primitives using the repository's Radix registry variant and existing dependencies.
+Run-wide attachments live in the workflow's All artifacts view, while step/final
+result views display their checkpoint files once. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
 People with current `agent.update` access can delete from Agent Artifacts using the
 trash action and the shared destructive confirmation dialog. The dialog identifies
@@ -309,7 +332,8 @@ Integrations, approval policy and spend limits.
 
 ## Retention, deletion and recovery
 
-Ordinary unpinned files retain for 30 days from publication. Active run/checkpoint
+Ordinary unpinned files retain for 30 days from publication or the most recent
+messaging reuse. Active run/checkpoint
 or future pending-review references prevent expiry. Settlement releases run pins
 in the same transaction and starts 30 days from final active reference release.
 Paused/blocked runs remain pinned. Cancellation retains published outputs and
