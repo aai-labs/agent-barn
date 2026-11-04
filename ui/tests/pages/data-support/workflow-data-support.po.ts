@@ -61,6 +61,7 @@ export class WorkflowDataSupport {
       stepId,
       paginated = false,
       description,
+      emptyCriteria = false,
     }: {
       saved?: boolean;
       viewer?: boolean;
@@ -69,6 +70,7 @@ export class WorkflowDataSupport {
       stepId?: string;
       paginated?: boolean;
       description?: string;
+      emptyCriteria?: boolean;
     } = {},
   ) {
     const data = new DataSupport(this.page);
@@ -76,6 +78,7 @@ export class WorkflowDataSupport {
     await data.agents.interceptGetConversationChannelsRequest();
     await data.communicationConnections.interceptChannelsRequests({ agentId });
     let workflow = workflowFixture(agentId, viewer);
+    if (emptyCriteria) workflow.version.draft.steps[0].completion_criteria = "";
     if (stepId) workflow.version.draft.steps[0].id = stepId;
     if (description) workflow.version.draft.description = description;
     let present = saved;

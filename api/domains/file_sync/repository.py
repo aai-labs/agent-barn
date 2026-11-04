@@ -2,7 +2,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -23,6 +23,7 @@ from api.domains.file_sync.models import (
     SyncAgentFolder,
     SyncFile,
     SyncFolderStatus,
+    SyncLockedItem,
     SyncPendingAction,
 )
 from api.domains.rbac.policy import AuthorizationScope
@@ -177,6 +178,37 @@ class FileSyncRepository:
                 session.add(row)
             session.commit()
             return rows
+
+    def remember_locked_item(self, connection_id: UUID, item_id: str) -> None:
+        from sqlalchemy.dialects.postgresql import insert
+
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                insert(SyncLockedItem)
+                .values(connection_id=connection_id, item_id=item_id)
+                .on_conflict_do_update(constraint="uq_sync_locked_item", set_={"updated_at": datetime.now(UTC)})
+            )
+            session.commit()
+
+    def locked_items(self, connection_id: UUID) -> list[str]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(SyncLockedItem.item_id)
+                    .where(col(SyncLockedItem.connection_id) == connection_id)
+                    .order_by(col(SyncLockedItem.updated_at), col(SyncLockedItem.id))
+                    .limit(100)
+                )
+            )
+
+    def forget_locked_item(self, connection_id: UUID, item_id: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.delete(SyncLockedItem).where(
+                    col(SyncLockedItem.connection_id) == connection_id, col(SyncLockedItem.item_id) == item_id
+                )
+            )
+            session.commit()
 
     def save_cursor(self, connection_id: UUID, cursor: str) -> None:
         with Session(self.delegate.engine) as session:

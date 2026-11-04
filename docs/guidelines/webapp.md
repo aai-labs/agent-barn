@@ -82,6 +82,11 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 - Order imports as external packages, `@/*` aliases, then relative imports.
 - Prefer `@/*` aliases for internal imports.
 - Reuse existing UI primitives before introducing new ones.
+- Compose file attachment displays from `components/ui/attachment.tsx`, using the
+  shadcn Attachment primitives for media, metadata, actions and upload state. The
+  repository uses the `radix-nova` registry style; map registry imports to local
+  UI components and utilities. Hide native file inputs behind labeled upload
+  actions and preserve keyboard access to selection/removal controls.
 
 ## UI feature workflow
 
