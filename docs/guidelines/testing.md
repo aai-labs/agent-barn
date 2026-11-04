@@ -452,7 +452,9 @@ migrated PostgreSQL test database. It exercises actual bytes, signed-link downlo
 and expiry, publication/checksum fences, current access, pinned retention and
 retryable purge; injected failures isolate recovery while keeping real storage.
 The migration contract verifies upgrade and refusal to drop cleanup evidence.
-These tests require Docker, never installation storage credentials.
+These tests require Docker, never installation storage credentials. The reuse
+regressions also run simultaneous CLI subprocesses over HTTP against the real API
+and Garage, including recovery from a failed first writer and renewed expiry.
 
 `make test-artifact-runtime` is an explicit additional contract; set both
 `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` to already-built images. It executes
