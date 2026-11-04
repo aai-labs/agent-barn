@@ -11,6 +11,7 @@ to the attempt's callback URL with the attempt's capability token.
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import shutil
@@ -27,6 +28,8 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
+
+_LOGGER = logging.getLogger(__name__)
 
 PORT = int(os.environ.get("AGENT_TRIGGER_PORT", "8082"))
 TRIGGER_KEY = os.environ.get("AGENT_TRIGGER_KEY", "")
@@ -640,7 +643,10 @@ def _clean_workflow_directories() -> None:
         return
     for item in workspace.glob(".workflow-files-*"):
         if item.is_dir() and not item.is_symlink():
-            shutil.rmtree(item)
+            try:
+                shutil.rmtree(item)
+            except OSError as error:
+                _LOGGER.warning("Could not clean abandoned workflow directory %s: %s", item, error)
 
 
 if __name__ == "__main__":

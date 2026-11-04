@@ -434,7 +434,7 @@ checksum, and supplies verified local paths to the step. Retrieval requests carr
 find an active pin for that run; current initiator, Agent, generation and deadline
 are checked before each new link and again after downloads before runtime start.
 Download, integrity or admission failure prevents starting the session and parks
-the run rather than silently substituting summaries. The final assembled prompt must fit 64,000 UTF-8 bytes and is checked before downloads. Up to four files are retrieved concurrently within a shared 120-second deadline; every manifest file remains required because the workflow has no per-step file selection. A failed or unavailable file therefore prevents that step from starting. Temporary inputs are removed when the trigger finishes and abandoned directories are cleaned at trigger startup;
+the run rather than silently substituting summaries. The final assembled prompt must fit 64,000 UTF-8 bytes and is checked before downloads. Up to four files are retrieved concurrently within a shared 120-second deadline; every manifest file remains required because the workflow has no per-step file selection. A failed or unavailable file therefore prevents that step from starting. Temporary inputs are removed when the trigger finishes and abandoned directories are cleaned at trigger startup. A directory deletion failure logs a warning and leaves that directory for a later startup to retry, while cleanup of other directories and trigger server startup continue;
 the owning Agent remains a shared filesystem/trust boundary, not a session sandbox.
 Hidden temporary inputs follow the [file-sync exclusion rules](sync-provider/README.md#what-syncs):
 the sync helper does not mirror them or offer provider edits to that transient path.

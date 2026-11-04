@@ -1,5 +1,6 @@
 import ast
 import importlib.util
+import runpy
 from pathlib import Path
 
 import pytest
@@ -527,6 +528,42 @@ def test_startup_cleans_abandoned_workflow_inputs_without_following_symlinks(mon
     trigger_server._clean_workflow_directories()
     assert not abandoned.exists()
     assert (keep / "file").read_text() == "keep"
+
+
+@pytest.mark.parametrize("error", [PermissionError("permission denied"), OSError("device busy")])
+def test_cleanup_failure_does_not_prevent_trigger_startup(monkeypatch, trigger_server, tmp_path, caplog, error):
+    monkeypatch.setenv("ARTIFACT_UPLOAD_ROOTS", str(tmp_path))
+    blocked = tmp_path / ".workflow-files-blocked"
+    blocked.mkdir()
+    removable = tmp_path / ".workflow-files-removable"
+    removable.mkdir()
+    rmtree = trigger_server.shutil.rmtree
+
+    def remove(path):
+        if path == blocked:
+            raise error
+        rmtree(path)
+
+    # Ensure the failure happens before another directory still needing cleanup.
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter([blocked, removable]))
+    monkeypatch.setattr(trigger_server.shutil, "rmtree", remove)
+    started = []
+
+    class Server:
+        def __init__(self, *args):
+            pass
+
+        def serve_forever(self):
+            started.append(True)
+
+    monkeypatch.setattr("http.server.ThreadingHTTPServer", Server)
+    runpy.run_path(str(_SCRIPT), run_name="__main__")
+
+    assert started == [True]
+    assert blocked.is_dir()
+    assert not removable.exists()
+    assert str(blocked) in caplog.text
+    assert str(error) in caplog.text
 
 
 def test_oversized_file_manifest_fails_before_download(monkeypatch, trigger_server, tmp_path):
