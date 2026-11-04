@@ -139,8 +139,12 @@ def _open_regular_file(path: Path):
 def capture(source: Path, dest: Path, runtime: str) -> dict:
     archive_path = dest / ARCHIVE_NAME
     file_count = 0
+    # Files that vanished (skipped) or shrank (changed) while a live capture read them.
     skipped = 0
     changed = 0
+    # Entries no extraction could ever accept, such as a link pointing outside the volume.
+    # They are left out of every capture, so they say nothing about the Agent writing.
+    left_out = 0
     try:
         with tarfile.open(archive_path, "w:gz") as tar:
             for path, rel_path in _walk_included_files(source, runtime):
@@ -152,7 +156,7 @@ def capture(source: Path, dest: Path, runtime: str) -> dict:
                 try:
                     tarfile.data_filter(info, "")
                 except tarfile.FilterError:
-                    skipped += 1
+                    left_out += 1
                     continue
                 if info.isreg():
                     stream = _open_regular_file(path)
@@ -180,6 +184,7 @@ def capture(source: Path, dest: Path, runtime: str) -> dict:
         "file_count": file_count,
         "skipped": skipped,
         "changed": changed,
+        "left_out": left_out,
     }
     (dest / MANIFEST_NAME).write_text(json.dumps(manifest))
     return manifest

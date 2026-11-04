@@ -581,7 +581,9 @@ def test_the_openclaw_plugin_store_round_trips_through_a_restore(tmp_path):
 
     restore(target, backup, archive_dir, _OPENCLAW)
 
-    assert_that(manifest["skipped"], equal_to(1))
+    # The link is left out on every capture, so it is not a file that changed mid-capture.
+    assert_that(manifest["skipped"], equal_to(0))
+    assert_that(manifest["left_out"], equal_to(1))
     assert_that(
         (target / "npm/projects/p/node_modules/@openclaw/slack/package.json").read_text(),
         equal_to('{"version":"2026.8.2"}'),
@@ -638,18 +640,22 @@ def test_every_archived_member_survives_the_extraction_filter(tmp_path, runtime)
             tarfile.data_filter(member, "/target")
 
 
-def test_capture_drops_links_that_could_never_be_extracted_and_reports_them(tmp_path):
+def test_capture_drops_links_that_could_never_be_extracted_and_counts_them_apart(tmp_path):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()
     dest.mkdir()
     _write(source, "memories/USER.md", "profile")
     _write(source, "memories/wheel", "wheel")
     (source / "memories/absolute-link").symlink_to(source / "memories/wheel")
+    (source / "memories/escaping-link").symlink_to("../../outside")
 
     manifest = capture(source, dest, _HERMES)
 
-    assert_that(manifest["skipped"], equal_to(1))
+    # Left out by design on every capture, so never reported as changed mid-capture.
+    assert_that(manifest["left_out"], equal_to(2))
+    assert_that(manifest["skipped"], equal_to(0))
     assert_that(_all_member_names(dest), is_not(has_item("memories/absolute-link")))
+    assert_that(_all_member_names(dest), is_not(has_item("memories/escaping-link")))
     validate_archive(dest / ARCHIVE_NAME, tmp_path / "anywhere")
 
 

@@ -43,6 +43,11 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   Both counts are kept on the row (`changed_file_count`, `skipped_file_count`, null for rows
   captured before them) and returned by the API. A row with either above zero says in the UI how
   many files changed while it was taken and that they may be incomplete or missing.
+- Changed: `skipped` now means only files that vanished mid-capture. Entries the extraction filter
+  refuses (the uv wheel links below, OpenClaw's plugin-store link to its global install) are left
+  out of every capture, so they are counted apart as `left_out` in the manifest and never shown as
+  changed. Counted together, every OpenClaw snapshot with a plugin installed warned that a file
+  changed.
 - Delivered: retention, applied by the reconciliation CronJob every 10 minutes, so it runs
   whether or not scheduled snapshots are on, and never inside a request. An Agent keeps its newest `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT` (default 4) scheduled snapshots and only
   its newest failed one. Backups taken before an update or a restore now share
