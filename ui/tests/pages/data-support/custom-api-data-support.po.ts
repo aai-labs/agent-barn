@@ -29,6 +29,7 @@ export class CustomApiDataSupport {
       empty?: boolean;
       fail?: boolean;
       loadError?: boolean;
+      failStartOnce?: boolean;
 
     } = {},
   ) {
@@ -55,6 +56,17 @@ export class CustomApiDataSupport {
         return route.fulfill({ json: { ...mockAgent, status: operation === "start" ? "RUNNING" : "STOPPED" } });
       });
     }
+    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/apply`, (route) => {
+      const body = route.request().postDataJSON();
+      this.requests.push({ method: route.request().method(), body, url: route.request().url() });
+      if (options.failStartOnce && this.requests.length === 1) {
+        connections = body.custom_api.creates.map((data: Record<string, unknown>) => ({ ...mockCustomApiConnection, ...data }));
+        return route.fulfill({ status: 503, json: { detail: "The runtime could not start" } });
+      }
+      return route.fulfill(options.fail
+        ? { status: 422, json: { detail: "Invalid Custom API configuration" } }
+        : { json: { ...mockAgent, status: options.running ? "RUNNING" : "STOPPED" } });
+    });
     let connections: Record<string, unknown>[] = options.empty
       ? []
       : [{ ...mockCustomApiConnection }];

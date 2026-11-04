@@ -1888,14 +1888,21 @@ class AgentService:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
             return self._update_agent_locked(agent_id, data, context)
 
-    def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
+    def _update_agent_locked(
+        self,
+        agent_id: UUID,
+        data: AgentUpdate,
+        context: CurrentUserContext,
+        *,
+        before_save: Callable[[Agent, dict[SecretProvider, Any]], Agent] | None = None,
+    ) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         updated = data.model_dump(exclude_unset=True)
         if _CREDENTIAL_FIELDS & updated.keys():
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
 
-        if agent.status == AgentStatus.RUNNING:
+        if agent.status == AgentStatus.RUNNING and before_save is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
@@ -2040,8 +2047,15 @@ class AgentService:
         ]
         for item, content in manual_upserts:
             self._validate_live_integration(item.provider, content)
+        credential_overrides = {item.provider: content for item, content in manual_upserts}
         for credential in shared_upserts:
-            self._validate_live_integration(credential.provider, self._decrypt_shared_credential(credential))
+            content = self._decrypt_shared_credential(credential)
+            self._validate_live_integration(credential.provider, content)
+            credential_overrides[SecretProvider(credential.provider)] = content
+        if before_save is not None:
+            # The integration apply workflow holds the lifecycle lock and stops only
+            # after every request check and provider validation above has succeeded.
+            agent = before_save(agent, credential_overrides)
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
@@ -2288,6 +2302,8 @@ class AgentService:
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+        credential_overrides: Mapping[SecretProvider, Any] | None = None,
+        removed_providers: Collection[SecretProvider] = (),
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
@@ -2483,6 +2499,8 @@ class AgentService:
         decrypted = {}
         for s in agent_secrets:
             provider = SecretProvider(s.provider)
+            if preflight and (provider in (credential_overrides or {}) or provider in removed_providers):
+                continue
             if s.shared_credential_id and s.shared_credential_id in shared_by_id:
                 ciphertext = shared_by_id[s.shared_credential_id].content
             else:
@@ -2502,6 +2520,10 @@ class AgentService:
                         f"({_validation_problems(exc)}). Edit the integration and save it again."
                     ),
                 ) from exc
+        if preflight:
+            decrypted.update(
+                {provider: content.model_copy(deep=True) for provider, content in (credential_overrides or {}).items()}
+            )
         self._backfill_google_client_credentials(decrypted)
         # A Google refresh token is useless without the client it was issued under: either
         # the credential's own, or the server-owned one backfilled just above.
@@ -3503,6 +3525,7 @@ class AgentService:
         a live validator still receive schema validation;
         their credentials remain eligible for the existing on-demand validation endpoint.
         """
+        provider = SecretProvider(provider)
         validator = PROVIDER_VALIDATORS.get(provider)
         if validator is None:
             return

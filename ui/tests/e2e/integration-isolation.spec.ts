@@ -102,7 +102,7 @@ test.describe("Credential isolation", () => {
   });
 
   for (const fail of [false, true]) {
-    test(`credential replacement and isolation save ${fail ? "preserves a stopped Agent on failure" : "restart once after both saves"}`, async ({ page }) => {
+    test(`credential replacement and isolation save ${fail ? "shows server apply failure" : "uses one server apply"}`, async ({ page }) => {
       const requests = await open(page, { status: "RUNNING", fail });
       const sequence: string[] = [];
       const agentUrl = `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`;
@@ -114,10 +114,8 @@ test.describe("Credential isolation", () => {
         sequence.push("start");
         return route.fulfill({ json: mockAgent });
       });
-      await page.route(agentUrl, (route) => {
-        if (route.request().method() !== "PATCH") return route.fallback();
-        sequence.push("credentials");
-        return route.fulfill({ json: { ...mockAgent, status: "STOPPED" } });
+      const applyRequests = await new DataSupport(page).agents.interceptApplyIntegrationsRequest({
+        status: fail ? 500 : 200, detail: "The runtime could not start. Retry the selected mode.",
       });
       await page.getByRole("button", { name: "Replace credential" }).click();
       await page.getByPlaceholder("github_pat_… or ghp_…").fill("fixture-token");
@@ -127,12 +125,16 @@ test.describe("Credential isolation", () => {
       await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
       if (fail) {
         await expect(page.getByRole("alert").filter({ hasText: "runtime could not start" }).first()).toBeVisible();
-        expect(sequence).toEqual(["stop", "credentials"]);
+        expect(sequence).toEqual([]);
       } else {
-        await expect.poll(() => sequence).toEqual(["stop", "credentials", "start"]);
+        await expect.poll(() => applyRequests).toHaveLength(1);
+        expect(sequence).toEqual([]);
         await expect(page.getByRole("switch")).toHaveCount(0);
       }
-      expect(requests).toEqual([{ isolated: true, restart: false }]);
+      expect(applyRequests).toHaveLength(1);
+      expect(applyRequests[0]).toMatchObject({ restart: true, policies: [{ provider: "github", isolated: true }],
+        secrets: [{ provider: "github", content: { token: "fixture-token" } }] });
+      expect(requests).toEqual([]);
     });
   }
 

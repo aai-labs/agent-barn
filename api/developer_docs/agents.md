@@ -79,3 +79,5 @@ Platform Administrators manage installation-wide authoring through
 `authoring_enabled` and nullable `updated_at`. A saved choice overrides the
 initial off default without granting Agent permissions. Disabling authoring
 retains API inspection and history. Execution has its own deployment admission flag.
+
+Apply integration changes through `POST /{agent_id}/integrations/apply`. It accepts `secrets`, `shared_credentials`, `removed_secret_providers`, provider isolation `policies`, a `custom_api` batch, and one top-level `restart` choice. It requires `agent.update` and `agent.secret.manage`; restarting additionally requires `agent.lifecycle.manage`. A running Agent requires `restart: true`. The service checks proposed credentials and configuration before stopping or writing anything, then saves and restarts under one lifecycle lock. Invalid credentials leave a running Agent and its previous configuration untouched. With `restart: false`, a stopped Agent stays stopped. A persistence or startup failure after validation can leave saved changes and a stopped or failed Agent; inspect its current state before retrying. Ordinary `PATCH` remains stopped-only.

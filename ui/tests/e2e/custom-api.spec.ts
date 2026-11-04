@@ -190,9 +190,28 @@ test.describe("Custom API integrations", () => {
       await expect(ui.section.getByRole("alert")).toContainText("Invalid Custom API configuration");
       await expect(ui.form).toHaveCount(2);
       expect(data.lifecycleRequests).toEqual([]);
-      expect(data.requests[0].url).toMatch(mixed ? /\/preflight$/ : /\/apply$/);
+      expect(data.requests[0].url).toMatch(/\/apply$/);
+      if (mixed) expect(data.requests[0].body).toHaveProperty("custom_api");
     });
   }
+
+  test("retry after a mixed save and failed start updates the newly saved connection", async ({ page }) => {
+    const data = new CustomApiDataSupport(page);
+    const ui = new CustomApiPage(page);
+    await data.open({ running: true, empty: true, failStartOnce: true });
+    await ui.beginEditing();
+    await ui.addGithubCredential();
+    await ui.add.click();
+    await ui.field("Connection name").fill("Inventory API");
+    await ui.field("Allowed base URL").fill("https://api.example.com/v1");
+    await ui.confirmApply();
+    await expect(ui.section.getByRole("alert")).toContainText("runtime could not start");
+    await ui.confirmApply();
+    await expect(ui.form).toHaveCount(0);
+    expect(data.requests).toHaveLength(2);
+    expect(data.requests[1].body).toMatchObject({ restart: true, custom_api: { creates: [], updates: [{ data: { name: "Inventory API" } }] } });
+    expect(data.lifecycleRequests).toEqual([]);
+  });
 
   test("failed saves retain edits and do not restart", async ({ page }) => {
     const data = new CustomApiDataSupport(page);

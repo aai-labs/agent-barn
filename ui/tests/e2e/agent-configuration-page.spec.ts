@@ -1020,8 +1020,8 @@ test.describe("Agent configuration page", () => {
           }),
         });
       });
-      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
-        if (route.request().method() !== "PATCH") {
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}{,/integrations/apply}`, async (route) => {
+        if (!["PATCH", "POST"].includes(route.request().method())) {
           await route.fallback();
           return;
         }
@@ -1184,8 +1184,8 @@ test.describe("Agent configuration page", () => {
       await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED", secrets } });
       await dataSupport.agents.interceptGetAgentConfigurationRequest();
       const sent: { patchBody?: Record<string, unknown>; isolation: unknown[] } = { isolation: [] };
-      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
-        if (route.request().method() !== "PATCH") return route.fallback();
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/apply`, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
         sent.patchBody = route.request().postDataJSON() as Record<string, unknown>;
         await route.fulfill({ json: { ...mockAgent, status: "STOPPED", secrets: [
           { provider: "gmail_app_password", secret_name: "Gmail app password", source: "agent_secret", isolation: savedIsolation },
@@ -1221,7 +1221,8 @@ test.describe("Agent configuration page", () => {
       expect(sent.patchBody?.secrets).toEqual([
         { provider: "gmail_app_password", content: { email: "someone@gmail.com", app_password: "abcd efgh ijkl mnop" } },
       ]);
-      await expect.poll(() => sent.isolation).toEqual([{ isolated: true, restart: false }]);
+      expect(sent.patchBody?.policies).toEqual([{ provider: "gmail_app_password", isolated: true }]);
+      expect(sent.isolation).toEqual([]);
     });
 
     test("a saved app password stays isolated with nothing to apply", async ({ page }) => {

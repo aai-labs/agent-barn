@@ -7,6 +7,26 @@ export class AgentConfigurationPage {
     await this.page.goto(`/dashboard/${orgId}/agents/${agentId}/configuration`);
   }
 
+  integrationsSection(): Locator {
+    return this.page.getByRole("region", { name: "Integrations", exact: true });
+  }
+
+  async addApolloCredential(key: string) {
+    const section = this.integrationsSection();
+    await section.getByRole("button", { name: "Edit", exact: true }).click();
+    await section.getByRole("button", { name: "Apollo", exact: true }).click();
+    await this.apolloKey().fill(key);
+  }
+
+  apolloKey(): Locator {
+    return this.integrationsSection().locator("label").filter({ hasText: /^API key$/ }).locator("..").locator("input");
+  }
+
+  async applyIntegrations() {
+    await this.integrationsSection().getByRole("button", { name: /^Apply(?: & Restart)?$/ }).click();
+    await this.applyConfirmationButton().click();
+  }
+
   profileHeading(): Locator {
     return this.page.getByRole("heading", { name: "Profile", exact: true });
   }

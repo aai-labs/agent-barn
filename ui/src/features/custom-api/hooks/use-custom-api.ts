@@ -110,6 +110,5 @@ export function useCustomApi(agentId: string, running: boolean) {
     refetchConnections: query.refetch,
     connectionMutation: mutation,
     batchMutation,
-    preflight: (data: CustomApiBatch) => api.post(`${url}/preflight`, data, { timeout: 120_000 }),
   };
 }

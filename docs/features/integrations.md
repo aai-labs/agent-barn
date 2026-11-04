@@ -40,6 +40,7 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - An agent has at most one Agent Secret per provider.
 - Duplicate providers in create/update payloads are rejected.
 - Read APIs return provider and display label, not credential contents.
+- The Integrations settings submit credential changes through `POST /agents/{agent_id}/integrations/apply` in the Organization scope. One lifecycle lock covers provider validation, preparation of the proposed credentials/isolation/Custom API configuration, stop, save, and optional start. Validation uses the submitted manual credentials and organization-scoped shared credentials before any writes or runtime teardown; a rejected credential or unavailable validator leaves a running Agent running with its previous configuration. Valid changes to a running Agent require explicit `restart: true` and restart it once; `restart: false` preserves a stopped Agent's state. The operation requires `agent.update` and `agent.secret.manage`, plus `agent.lifecycle.manage` when restarting. Existing stopped-only PATCH updates keep their validation contract. Persistence/infrastructure failures after validation can leave partial saved changes and a stopped or failed Agent; no automatic restart with a partly saved selection is attempted.
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
 - A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
@@ -174,6 +175,7 @@ In direct selected-sites mode the profile is aai-cli's generic `auth_type = "tok
 | Provider enum, content schemas, encryption helpers | `../../api/domains/agents/models.py`                                                                                                                |
 | Per-provider behavior (Integration Plugins)        | `../../api/domains/integrations/plugins/`                                                                                                           |
 | Shared Credential CRUD and lifecycle               | `../../api/domains/shared_credentials/`                                                                                                             |
+| Integration form apply | `../../api/domains/integrations/setup_service.py`, `../../api/domains/integrations/models.py` |
 | Agent Secret persistence and lifecycle             | `../../api/domains/agents/service.py`, `../../api/domains/agents/repository.py`                                                                     |
 | aai-cli runtime materialization                    | `../../api/domains/agents/aai_cli_artifacts.py`, `../../api/domains/agents/aai_cli_skills/bundled/skills/`                                         |
 | gog runtime materialization                        | `../../api/domains/agents/gog_artifacts.py`; gog is pinned in `../../openclaw-base/Dockerfile` and `../../hermes-base/Dockerfile`                 |
@@ -293,13 +295,12 @@ the Agent, then persists the connection changes and their events in one transact
 Invalid batches leave the running Agent and saved connections unchanged. A running
 Agent requires explicit restart authorization and is restarted once for the batch;
 a stopped Agent stays stopped unless `restart` is requested.
-For edits combining Custom API and built-in provider changes, the editor first
-uses `POST /custom-api-connections/preflight` with the same batch body. This validates
-the resulting Custom API configuration without saving or stopping, before entering
-the shared provider stop/save/start workflow. The batch is revalidated when saved;
-this preflight does not reserve configuration across requests or make built-in
-provider and Custom API writes atomic together. Failed mixed saves retain the
-restart choice for retry within the editor.
+Edits combining Custom API and built-in provider changes use the single integration
+apply operation described in the [invariants](#invariants). The standalone Custom API
+preflight endpoint remains available to API clients. Configuration writes across
+built-in providers and Custom API connections do not share one database transaction;
+validation failures occur before any writes, while persistence failures can leave
+partially saved settings. Failed mixed saves retain the restart choice in the editor.
 
 Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
 use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.

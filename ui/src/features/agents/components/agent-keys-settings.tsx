@@ -11,9 +11,8 @@ import { IntegrationsStep } from "./hire-dialog-steps";
 import { IntegrationIsolationControl } from "./integration-isolation-control";
 import { useIntegrationIsolation } from "../hooks/use-integration-isolation";
 import { useStartAgent } from "../hooks/use-start-agent";
-import { useStopAgent } from "../hooks/use-stop-agent";
+import { useApplyIntegrations } from "../hooks/use-apply-integrations";
 import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
-import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentSecretRead } from "../schemas";
 import { coerceBooleanFields, expandGithubContent, getIntegrationProvider, hasIncompleteIntegration, isSignInOnlyProvider, type IntegrationDraft } from "../integrations";
 
@@ -46,9 +45,8 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const customApi = useCustomApi(agent.id, agent.status === "RUNNING");
   const [customDrafts, setCustomDrafts] = useState<ConnectionDraft[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
-  const updateAgent = useUpdateAgent();
+  const applyIntegrations = useApplyIntegrations(agent.id);
   const isolation = useIntegrationIsolation(agent.id);
-  const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
   const [drafts, setDrafts] = useState<IntegrationDraft[]>(() => setupDrafts(agent));
   const [saving, setSaving] = useState(false);
@@ -70,7 +68,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const removedConnections = (customApi.connections ?? []).filter((connection) => !customDrafts.some((draft) => draft.connection?.id === connection.id));
   const hasCustomChanges = customChanges.length > 0 || removedConnections.length > 0;
   const hasChanges = hasCustomChanges || hasCredentialChanges || changedPolicies.length > 0 || restartRequired || (failed && (drafts.length > 0 || customDrafts.length > 0));
-  const pending = customApi.connectionMutation.isPending || customApi.batchMutation.isPending || saving || updateAgent.isPending || isolation.isPending || stopAgent.isPending || startAgent.isPending;
+  const pending = saving || applyIntegrations.isPending || isolation.isPending || startAgent.isPending || customApi.connectionMutation.isPending || customApi.batchMutation.isPending;
   const canRestart = agent.allowedActions.includes("agent.lifecycle.manage");
   const restart = restartRequired || agent.status === "RUNNING" || (failed && (drafts.length > 0 || customDrafts.length > 0));
 
@@ -88,6 +86,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
     if (!formRef.current?.reportValidity()) throw new Error("Complete the integration fields before applying.");
     setSaveError(null);
     setSaving(true);
+    const previousConnectionIds = new Set((customApi.connections ?? []).map((connection) => connection.id));
     try {
       // A single policy change uses the server's complete preflight/restart flow.
       if (!hasCredentialChanges && changedPolicies.length === 0 && customChanges.length + removedConnections.length === 1) {
@@ -109,31 +108,33 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         if (hasCustomChanges && !hasCredentialChanges && changedPolicies.length === 0) {
           await customApi.batchMutation.mutateAsync(batch);
         } else {
-          // Reject invalid Custom API drafts before the shared provider workflow stops the Agent.
-          if (hasCustomChanges) await customApi.preflight(batch);
-          if (restart) setRestartRequired(true);
-          if (agent.status === "RUNNING") await stopAgent.mutateAsync(agent.id);
-          if (hasCustomChanges) {
-            const saved = await customApi.batchMutation.mutateAsync({ ...batch, restart: false });
-            setCustomDrafts(saved.data.map(connectionDraft));
-          }
-          if (hasCredentialChanges) {
-            await updateAgent.mutateAsync({ agentId: agent.id,
-              secrets: changedCredentials.filter((draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider)).map((draft) => ({ provider: draft.provider,
-                content: coerceBooleanFields(draft.provider === "github" ? expandGithubContent(draft.content) : draft.content) })),
-              sharedCredentials: changedCredentials.filter((draft) => draft.sharedCredentialId).map((draft) => ({ sharedCredentialId: draft.sharedCredentialId! })),
-              removedSecretProviders: removedProviders });
-          }
-          for (const draft of changedPolicies) {
-            await isolation.mutateAsync({ provider: draft.provider, isolated: draft.isolated ?? false, restart: false });
-          }
-          // A failed save leaves the Agent stopped; never boot with a partly saved choice.
-          if (restart) await startAgent.mutateAsync(agent.id);
+          setRestartRequired(restart);
+          await applyIntegrations.mutateAsync({
+            secrets: changedCredentials.filter((draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider)).map((draft) => ({
+              provider: draft.provider,
+              content: coerceBooleanFields(draft.provider === "github" ? expandGithubContent(draft.content) : draft.content),
+            })),
+            sharedCredentials: changedCredentials.filter((draft) => draft.sharedCredentialId).map((draft) => ({ sharedCredentialId: draft.sharedCredentialId! })),
+            removedSecretProviders: removedProviders,
+            policies: changedPolicies.map((draft) => ({ provider: draft.provider, isolated: draft.isolated ?? false })),
+            customApi: { creates: batch.creates, updates: batch.updates, deletes: batch.deletes },
+            restart,
+          });
         }
       }
       setRestartRequired(false);
       setCustomDrafts([]);
     } catch (error) {
+      if (hasCredentialChanges && hasCustomChanges) {
+        // A failed start can follow a successful save. Retain newly allocated IDs
+        // so retry updates those connections rather than trying to create duplicates.
+        const saved = await customApi.refetchConnections();
+        if (saved.data) setCustomDrafts((current) => current.map((draft) => {
+          if (draft.connection) return draft;
+          const connection = saved.data.find((item) => !previousConnectionIds.has(item.id) && item.name === draft.value.name.trim());
+          return connection ? { ...draft, connection } : draft;
+        }));
+      }
       setSaveError(error instanceof Error ? error.message : "Could not save the integration setup.");
       throw error;
     } finally {
