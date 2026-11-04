@@ -306,6 +306,25 @@ def test_runtime_matching_uploads_converge_concurrently(storage):
         assert_that(len({response.json()["id"] for response in responses}), equal_to(1))
 
 
+def test_busy_reuse_does_not_block_other_chat_admission(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        headers = runtime_auth(context)
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        row = context.client.post(path, headers=headers, json=metadata()).json()
+        repository = context.injector.get(ArtifactRepository)
+        with Session(repository.delegate.engine) as session:
+            session.exec(select(Artifact).where(Artifact.id == UUID(row["id"])).with_for_update()).one()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                busy = pool.submit(context.client.post, path, headers=headers, json=metadata())
+                try:
+                    assert_that(busy.result(timeout=5).status_code, equal_to(409))
+                    other = pool.submit(context.client.post, path, headers=headers, json=metadata(filename="other.csv"))
+                    assert_that(other.result(timeout=5).status_code, equal_to(201))
+                finally:
+                    session.rollback()
+
+
 @pytest.mark.parametrize("fail_first", [False, True])
 def test_concurrent_runtime_cli_uploads_recover_shared_publication(storage, tmp_path, monkeypatch, fail_first):
     env, _ = storage

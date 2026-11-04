@@ -13,7 +13,8 @@ SCRIPT = Path(__file__).parents[2] / "domains/agents/scripts/agentbarn_artifacts
 
 
 @pytest.mark.parametrize(
-    "first_state, first_failure", [("READY", None), ("UPLOADING", 409), ("UPLOADING", 404), ("UPLOADING", 503)]
+    "first_state, first_failure",
+    [("READY", None), ("BUSY", 409), ("UPLOADING", 409), ("UPLOADING", 404), ("UPLOADING", 503)],
 )
 def test_upload_reuses_ready_or_recovers_shared_staging(tmp_path, first_state, first_failure):
     calls = []
@@ -32,6 +33,9 @@ def test_upload_reuses_ready_or_recovers_shared_staging(tmp_path, first_state, f
             self.rfile.read(int(self.headers["Content-Length"]))
             calls.append("POST")
             state = first_state if calls.count("POST") == 1 else "READY"
+            if state == "BUSY":
+                self.reply(first_failure, {"detail": "retry"})
+                return
             self.reply(201, {"id": "first" if state == "UPLOADING" else "final", "state": state})
 
         def do_PUT(self):
@@ -69,5 +73,5 @@ def test_upload_reuses_ready_or_recovers_shared_staging(tmp_path, first_state, f
         thread.join()
     assert_that(result.returncode, equal_to(0), result.stderr)
     assert_that(json.loads(result.stdout)["artifact"]["id"], equal_to("final"))
-    expected = ["POST"] if first_state == "READY" else ["POST", "PUT", "POST"]
+    expected = {"READY": ["POST"], "BUSY": ["POST", "POST"]}.get(first_state, ["POST", "PUT", "POST"])
     assert_that(calls, equal_to([*expected, "/artifacts/final/download-link"]))

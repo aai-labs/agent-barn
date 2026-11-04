@@ -166,23 +166,28 @@ class ArtifactRepository:
                     sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                     {"key": f"chat-artifact:{agent.organization_id}:{agent.id}"},
                 )
-                existing = session.exec(
-                    self.scoped(agent_id, scope)
-                    .where(
-                        col(Artifact.bucket) == bucket,
-                        col(Artifact.filename) == payload.filename,
-                        col(Artifact.size) == payload.size,
-                        col(Artifact.checksum) == payload.checksum,
-                        col(Artifact.expires_at) > datetime.now(UTC),
-                        sa.or_(
-                            col(Artifact.state) == "READY",
-                            sa.and_(col(Artifact.source) == "chat", col(Artifact.state) == "UPLOADING"),
-                        ),
-                    )
-                    .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
-                    .limit(1)
-                    .with_for_update(of=Artifact)
-                ).first()
+                try:
+                    existing = session.exec(
+                        self.scoped(agent_id, scope)
+                        .where(
+                            col(Artifact.bucket) == bucket,
+                            col(Artifact.filename) == payload.filename,
+                            col(Artifact.size) == payload.size,
+                            col(Artifact.checksum) == payload.checksum,
+                            col(Artifact.expires_at) > datetime.now(UTC),
+                            sa.or_(
+                                col(Artifact.state) == "READY",
+                                sa.and_(col(Artifact.source) == "chat", col(Artifact.state) == "UPLOADING"),
+                            ),
+                        )
+                        .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
+                        .limit(1)
+                        .with_for_update(of=Artifact, nowait=True)
+                    ).first()
+                except OperationalError as exc:
+                    if (getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)) == "55P03":
+                        raise PublicationBusy() from exc
+                    raise
                 if existing is not None:
                     retention = (
                         timedelta(days=self.config.artifact_retention_days)

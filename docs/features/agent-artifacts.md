@@ -160,7 +160,9 @@ migration or legacy access path is implemented.
 ## Publication and immutable handoff
 
 1. `POST /organizations/{organization_id}/agents/{agent_id}/artifacts` stages
-   filename, content type, byte size and lowercase SHA-256, returning UPLOADING.
+   filename, content type, byte size and lowercase SHA-256. It returns UPLOADING
+   for a staged file or READY when a matching chat upload reuses a published file.
+   A busy matching row returns retryable 409.
 2. `PUT .../artifacts/{artifact_id}/content` accepts bounded raw bytes. The API
    computes size and SHA-256, writes only matching content, then reads it back
    from S3 and verifies it before committing READY. The service serializes
@@ -172,11 +174,11 @@ migration or legacy access path is implemented.
    File locks use NOWAIT in both byte writing and finalization; concurrent publication
    returns retryable 409 without marking the artifact failed. A finalizer never waits
    on another S3 writer while holding the run lock. Retry the same artifact ID after
-   contention; changed bytes
-   cannot replace it. After a failed/uncertain upload, stage a new ID to retry.
-   A crash after S3 write leaves UPLOADING metadata for cleanup; it is never
-   exposed as a file. Staging expires after one hour. Interrupted/oversized
-   request bodies remain unavailable and expire through the same cleanup path.
+   contention; changed bytes cannot replace it. After a failed upload, a new ID
+   may be staged; after an uncertain upload, chat POST may reuse the same UPLOADING
+   ID. A later chat upload can adopt a row left by a crash and renew its one-hour
+   staging window. UPLOADING files are not exposed; abandoned staging and
+   interrupted/oversized request bodies expire through cleanup.
 
 The default file limit is 25 MiB, configurable from 1 byte to 100 MiB. Uploads
 are buffered within that bound; choose API concurrency/memory limits accordingly.
@@ -198,7 +200,9 @@ Upload roots are `/workspace` on Hermes and
 `/home/node/.openclaw/workspace` on OpenClaw. Retrieval verifies the expected
 checksum and refuses to overwrite a destination. Workflow prompts provide only
 `--attempt-id`; the CLI's Agent credential supplies publication authority, not the
-completion bearer. The service rejects superseded/expired/unauthorized attempts.
+completion bearer. The service rejects publication into superseded, expired or
+unauthorized attempts. A runtime PUT of matching bytes to an already READY file
+returns 200 even when its original attempt is superseded.
 With storage unconfigured, prompts omit the file-tool instructions. HTTP failures
 include their status code without echoing credentials, URLs or response bodies.
 

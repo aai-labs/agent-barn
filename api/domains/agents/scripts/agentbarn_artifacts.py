@@ -86,10 +86,11 @@ def main() -> int:
             ).encode()
             deadline = time.monotonic() + 30
             while True:
-                artifact = request("/artifacts" + query, "POST", metadata, {"Content-Type": "application/json"})
-                if artifact["state"] == "READY":
-                    break
+                artifact = None
                 try:
+                    artifact = request("/artifacts" + query, "POST", metadata, {"Content-Type": "application/json"})
+                    if artifact["state"] == "READY":
+                        break
                     artifact = request(
                         "/artifacts/" + artifact["id"] + "/content",
                         "PUT",
@@ -100,7 +101,8 @@ def main() -> int:
                 except urllib.error.HTTPError as exc:
                     # A shared chat staging row can be busy or invalidated by a
                     # failed publisher. Restage so another attempt can recover.
-                    if args.attempt_id or exc.code not in {404, 409, 503} or time.monotonic() >= deadline:
+                    retryable = exc.code == 409 or (artifact is not None and exc.code in {404, 503})
+                    if args.attempt_id or not retryable or time.monotonic() >= deadline:
                         raise
                     time.sleep(min(1, max(0, deadline - time.monotonic())))
             print(json.dumps(request("/artifacts/" + artifact["id"] + "/download-link")))
