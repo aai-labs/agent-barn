@@ -86,6 +86,10 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails
 
+- Fixed: a start withdraws the offer to update without a backup. The `BACKUP_FAILED` outcome was
+  cleared only by the next update, so after a start, days of use and an unrelated stop, the page
+  showed the old failure again and the server accepted an update with no backup over the newer
+  data. A start now clears that outcome; the Agent keeps its pin.
 - Delivered: `skip_backup` on the restore request and on `POST .../managed-update`. The UI offers
   it after the automatic backup fails ("Restore without backup snapshot" / "Update without backup
   snapshot"). The restore offer lives only in the browser. The update offer sits in the note that

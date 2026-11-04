@@ -913,6 +913,26 @@ def test_an_update_without_a_backup_that_succeeds_clears_the_pin_the_failed_back
             assert_that(stored.pinned_runtime_image, equal_to(""))
 
 
+def test_starting_the_agent_withdraws_the_offer_a_failed_backup_left():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _pin(context, _OLD_IMAGE)
+        _backup_failed(context)
+
+        with when("the user starts the Agent instead, and later stops it for another reason"):
+            started = context.client.post(f"{_agent_url(context)}/start", headers=_auth(context))
+            stopped = context.client.post(f"{_agent_url(context)}/stop", headers=_auth(context))
+            skipped = _skip_backup(context)
+
+        with then("the failed backup is no longer reported, nor can the update skip one"):
+            assert_that(started.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(stopped.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(skipped.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(_read_agent(context)["last_managed_update"], none())
+
+        with then("the Agent kept the version it was on"):
+            assert_that(_stored_agent(context).pinned_runtime_image, equal_to(_OLD_IMAGE))
+
+
 def test_skipping_the_backup_is_refused_unless_a_backup_just_failed():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         with when("I skip the backup on a running Agent"):

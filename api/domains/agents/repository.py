@@ -1141,6 +1141,18 @@ class AgentRepository:
             values["pinned_runtime_image"] = pinned_runtime_image
         self._update_agent(agent_id, values)
 
+    def clear_backup_failed_outcome(self, agent_id: UUID) -> None:
+        """Withdraw a failed backup's outcome, and with it the offer to update without one."""
+        self._update_agent(
+            agent_id,
+            {
+                "managed_update_outcome": None,
+                "managed_update_restore_point_id": None,
+                "managed_update_failure_reason": None,
+            },
+            col(Agent.managed_update_outcome) == ManagedUpdateOutcome.BACKUP_FAILED,
+        )
+
     def _update_agent(self, agent_id: UUID, values: dict[str, Any], *conditions: Any) -> None:
         with Session(self.delegate.engine) as session:
             session.exec(sa.update(Agent).where(col(Agent.id) == agent_id, *conditions).values(**values))
