@@ -17,6 +17,7 @@ export class CustomApiDataSupport {
   }[] = [];
 
   readonly lifecycleRequests: string[] = [];
+  readonly savedConnectionId = mockCustomApiConnection.id;
 
   constructor(private page: Page) {}
 
@@ -30,6 +31,7 @@ export class CustomApiDataSupport {
       fail?: boolean;
       loadError?: boolean;
       failStartOnce?: boolean;
+      withGithub?: boolean;
 
     } = {},
   ) {
@@ -42,14 +44,18 @@ export class CustomApiDataSupport {
     await data.organizations.interceptGetOrganizationLlmBudget({
       organizationId: TEST_ORG_ID,
     });
-    await data.agents.interceptGetAgentRequest({
-      body: {
-        ...mockAgent,
-        status: options.failed ? "ERROR" : options.running ? "RUNNING" : "STOPPED",
-        allowed_actions: options.actions ?? mockAgentAllowedActions,
-        update_in_progress: options.updating ?? false,
-      },
-    });
+    const agent = {
+      ...mockAgent,
+      status: options.failed ? "ERROR" : options.running ? "RUNNING" : "STOPPED",
+      allowed_actions: options.actions ?? mockAgentAllowedActions,
+      update_in_progress: options.updating ?? false,
+      secrets: options.withGithub ? [{ provider: "github", secret_name: "GitHub credential", isolation: {
+        desired: false, applied: false, switch_available: true, supported_modes: ["direct", "isolated"],
+        direct_description: "The Agent receives the GitHub credential.",
+        isolated_description: "The GitHub credential stays outside the Agent.",
+      } }] : [],
+    };
+    await data.agents.interceptGetAgentRequest({ body: agent });
     for (const operation of ["stop", "start"]) {
       await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/${operation}`, (route) => {
         this.lifecycleRequests.push(operation);
@@ -61,6 +67,10 @@ export class CustomApiDataSupport {
       const body = route.request().postDataJSON();
       this.requests.push({ method: route.request().method(), body, url: route.request().url() });
       if (options.failStartOnce && this.requests.length === 1) {
+        agent.status = "ERROR";
+        agent.secrets = agent.secrets.map((secret) => ({ ...secret, isolation: { ...secret.isolation,
+          desired: body.policies.find((policy: { provider: string }) => policy.provider === secret.provider)?.isolated ?? secret.isolation.desired,
+        } }));
         connections = body.custom_api.creates.map((data: Record<string, unknown>) => ({ ...mockCustomApiConnection, ...data }));
         return route.fulfill({ status: 503, json: { detail: "The runtime could not start" } });
       }

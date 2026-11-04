@@ -17,6 +17,10 @@ export class CustomApiPage {
     await this.section.getByPlaceholder("github_pat_… or ghp_…").fill("fixture-token");
     await this.section.getByPlaceholder("owner-or-org").fill("fixture-org");
   }
+  async changeGithubIsolation() {
+    await this.section.locator("summary").filter({ hasText: "GitHub" }).click();
+    await this.section.getByRole("switch", { name: "GitHub credential isolation" }).click();
+  }
   async expandConnection() { await this.section.locator("summary").filter({ hasText: "Custom API · Inventory API" }).click(); }
   async selectAuth(name: string) {
     await this.field("Authentication").click();

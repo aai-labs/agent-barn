@@ -195,23 +195,37 @@ test.describe("Custom API integrations", () => {
     });
   }
 
-  test("retry after a mixed save and failed start updates the newly saved connection", async ({ page }) => {
-    const data = new CustomApiDataSupport(page);
-    const ui = new CustomApiPage(page);
-    await data.open({ running: true, empty: true, failStartOnce: true });
-    await ui.beginEditing();
-    await ui.addGithubCredential();
-    await ui.add.click();
-    await ui.field("Connection name").fill("Inventory API");
-    await ui.field("Allowed base URL").fill("https://api.example.com/v1");
-    await ui.confirmApply();
-    await expect(ui.section.getByRole("alert")).toContainText("runtime could not start");
-    await ui.confirmApply();
-    await expect(ui.form).toHaveCount(0);
-    expect(data.requests).toHaveLength(2);
-    expect(data.requests[1].body).toMatchObject({ restart: true, custom_api: { creates: [], updates: [{ data: { name: "Inventory API" } }] } });
-    expect(data.lifecycleRequests).toEqual([]);
-  });
+  for (const policyOnly of [false, true]) {
+    test(`retry after ${policyOnly ? "a policy" : "a credential"} save and failed start reuses the saved connection ID`, async ({ page }) => {
+      const data = new CustomApiDataSupport(page);
+      const ui = new CustomApiPage(page);
+      await data.open({ running: true, empty: true, failStartOnce: true, withGithub: policyOnly });
+      await ui.beginEditing();
+      if (policyOnly) await ui.changeGithubIsolation();
+      else await ui.addGithubCredential();
+      await ui.add.click();
+      await ui.field("Connection name").fill("Inventory API");
+      await ui.field("Allowed base URL").fill("https://api.example.com/v1");
+      await ui.confirmApply();
+      await expect(ui.section.getByRole("alert")).toContainText("runtime could not start");
+      await ui.confirmApply();
+      await expect(ui.form).toHaveCount(0);
+      expect(data.requests).toHaveLength(2);
+      const retry = data.requests[1];
+      if (policyOnly) {
+        expect(retry.method).toBe("POST");
+        expect(retry.url).toContain(`/custom-api-connections/${data.savedConnectionId}/apply`);
+        expect(retry.body).toMatchObject({ restart: true, name: "Inventory API" });
+        expect(retry.body).not.toHaveProperty("creates");
+        expect(retry.body).not.toHaveProperty("deletes");
+      } else {
+        expect(retry.body).toMatchObject({ restart: true, custom_api: {
+          creates: [], deletes: [], updates: [{ id: data.savedConnectionId, data: { name: "Inventory API" } }],
+        } });
+      }
+      expect(data.lifecycleRequests).toEqual([]);
+    });
+  }
 
   test("failed saves retain edits and do not restart", async ({ page }) => {
     const data = new CustomApiDataSupport(page);

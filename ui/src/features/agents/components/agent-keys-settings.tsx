@@ -130,13 +130,15 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
       setRestartRequired(false);
       setCustomDrafts([]);
     } catch (error) {
-      if (hasCredentialChanges && hasCustomChanges) {
+      if (hasCustomChanges) {
         // A failed start can follow a successful save. Retain newly allocated IDs
         // so retry updates those connections rather than trying to create duplicates.
-        const saved = await customApi.refetchConnections();
-        if (saved.data) setCustomDrafts((current) => current.map((draft) => {
+        // Status can change the query observer during failure. Read the response
+        // directly so recovery cannot receive a different observer's pending result.
+        const saved = await customApi.readConnections().catch(() => null);
+        if (saved) setCustomDrafts((current) => current.map((draft) => {
           if (draft.connection) return draft;
-          const connection = saved.data.find((item) => !previousConnectionIds.has(item.id) && item.name === draft.value.name.trim());
+          const connection = saved.find((item) => !previousConnectionIds.has(item.id) && item.name === draft.value.name.trim());
           return connection ? { ...draft, connection } : draft;
         }));
       }

@@ -300,6 +300,8 @@ preflight endpoint remains available to API clients. Configuration writes across
 built-in providers and Custom API connections do not share one database transaction;
 validation failures occur before any writes, while persistence failures can leave
 partially saved settings. Failed mixed saves retain the restart choice in the editor.
+Retries reuse the IDs of Custom API connections already saved before startup
+failed, including when the other edits change only provider isolation policies.
 
 Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
 use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.
