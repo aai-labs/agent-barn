@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { useCustomApi } from "@/features/custom-api/hooks/use-custom-api";
 import { ConnectionIntegrations } from "@/features/custom-api/components/connection-integrations";
 import { connectionDraft, connectionPayload, type ConnectionDraft } from "@/features/custom-api/components/connection-drafts";
+import { ApiError } from "@/shared/api/error/errors";
 
 import { AgentConfigurationSection } from "./agent-configuration-section";
 import { IntegrationsStep } from "./hire-dialog-steps";
@@ -51,6 +52,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const [drafts, setDrafts] = useState<IntegrationDraft[]>(() => setupDrafts(agent));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [credentialError, setCredentialError] = useState<{ provider: string; message: string } | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
   const secrets = agent.secrets ?? [];
   const sharepointAccess = useSharePointAccess(agent.id, {
@@ -77,6 +79,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
     setDrafts(setupDrafts(agent));
     setCustomDrafts((customApi.connections ?? []).map(connectionDraft));
     setSaveError(null);
+    setCredentialError(null);
     setRestartRequired(false);
     onEdit();
   }
@@ -85,6 +88,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
     if (!hasChanges || hasIncompleteIntegration(drafts)) return;
     if (!formRef.current?.reportValidity()) throw new Error("Complete the integration fields before applying.");
     setSaveError(null);
+    setCredentialError(null);
     setSaving(true);
     const previousConnectionIds = new Set((customApi.connections ?? []).map((connection) => connection.id));
     try {
@@ -136,7 +140,12 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
           return connection ? { ...draft, connection } : draft;
         }));
       }
-      setSaveError(error instanceof Error ? error.message : "Could not save the integration setup.");
+      if (error instanceof ApiError && error.code === "INTEGRATION_VALIDATION_FAILED"
+        && typeof error.details?.detail?.provider === "string") {
+        setCredentialError({ provider: error.details.detail.provider, message: error.message });
+      } else {
+        setSaveError(error instanceof Error ? error.message : "Could not save the integration setup.");
+      }
       throw error;
     } finally {
       setSaving(false);
@@ -145,8 +154,9 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
 
   return (
     <AgentConfigurationSection title="Integrations" description="Runtime integration credentials are separate from communication connection credentials. Secret values remain write-only and encrypted at rest."
+      errorsShownInline
       canEdit={canEdit && !customApi.isLoadingConnections && !customApi.connectionsError} editing={editing} onEdit={beginEditing} onApply={applyChanges}
-      onCancel={() => { setCustomDrafts([]); setDrafts(setupDrafts(agent)); setSaveError(null); setRestartRequired(false); onEdit(); }} onApplied={onEdit}
+      onCancel={() => { setCustomDrafts([]); setDrafts(setupDrafts(agent)); setSaveError(null); setCredentialError(null); setRestartRequired(false); onEdit(); }} onApplied={onEdit}
       applyDisabled={customApi.isLoadingConnections || Boolean(customApi.connectionsError) || agent.updateInProgress || !hasChanges || hasIncompleteIntegration(drafts) || pending || (restart && !canRestart)} restartOnApply={restart}>
       {!editing || !canEdit ? (
         <div className="flex flex-col gap-3">
@@ -162,11 +172,13 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-        {saveError && <p role="alert" className="m-0 text-sm" style={{ color: "var(--err)" }}>{saveError}</p>}
+        {(saveError || credentialError) && <p role="alert" className="m-0 text-sm" style={{ color: "var(--err)" }}>
+          {credentialError ? `No changes were saved.${agent.status === "RUNNING" ? " Your agent is still running." : ""}` : saveError}
+        </p>}
         {customApi.connectionsError && <div role="alert">Could not load Custom API connections. Cancel and retry before editing.</div>}
         <form ref={formRef} onInvalidCapture={(event) => { const details = (event.target as HTMLElement).closest("details"); if (details) details.open = true; }} onSubmit={(event) => event.preventDefault()}>
         <fieldset disabled={pending || customApi.isLoadingConnections || Boolean(customApi.connectionsError)} className="m-0 min-w-0 border-0 p-0">
-        <IntegrationsStep agentId={agent.id}
+        <IntegrationsStep agentId={agent.id} credentialError={credentialError?.message} credentialErrorProvider={credentialError?.provider}
           onAddCustomApi={() => setCustomDrafts((current) => [...current, connectionDraft()])}
           extraIntegrations={<ConnectionIntegrations agent={agent} drafts={customDrafts} onChange={setCustomDrafts} />} integrations={drafts} onChange={(next) => setDrafts(next.map((draft) => ({ ...draft, isolated: draft.isolated ?? savedSecret(draft)?.isolation?.desired ?? newSecret(draft.provider).isolation?.desired ?? false })))}
           canRemoveProvider={(provider) => provider !== "sharepoint" || (!sharepointAccess.isPending && !sharepointAccess.isError && sharepointAccess.data?.mode !== "selected_sites")}

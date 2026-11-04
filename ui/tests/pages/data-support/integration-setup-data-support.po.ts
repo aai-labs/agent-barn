@@ -30,8 +30,11 @@ export class IntegrationSetupDataSupport {
     const save = async (route: import("@playwright/test").Route) => {
       const body = route.request().postDataJSON();
       this.requests.push(body);
-      if (reject && body.secrets?.[0]?.content?.api_token !== "accepted-key") {
-        return route.fulfill({ status: 400, json: { detail: "Invalid API key" } });
+      const apollo = body.secrets?.find((secret: { provider: string }) => secret.provider === "apollo");
+      if (reject && apollo?.content?.api_token !== "accepted-key") {
+        return route.fulfill({ status: 400, json: { detail: {
+          code: "INTEGRATION_VALIDATION_FAILED", provider: "apollo", message: "Apollo credential: Invalid API key",
+        } } });
       }
       agent = { ...agent, status: body.restart ? "RUNNING" : "STOPPED" };
       return route.fulfill({ json: agent });

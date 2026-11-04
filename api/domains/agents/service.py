@@ -2073,13 +2073,26 @@ class AgentService:
             (item, _enrich_atlassian_content(validate_content(item.provider, item.content)))
             for item in data.secrets or []
         ]
-        for item, content in manual_upserts:
-            self._validate_live_integration(item.provider, content)
         credential_overrides = {item.provider: content for item, content in manual_upserts}
         for credential in shared_upserts:
-            content = self._decrypt_shared_credential(credential)
-            self._validate_live_integration(credential.provider, content)
-            credential_overrides[SecretProvider(credential.provider)] = content
+            credential_overrides[SecretProvider(credential.provider)] = self._decrypt_shared_credential(credential)
+        for provider, content in credential_overrides.items():
+            try:
+                self._validate_live_integration(provider, content)
+            except HTTPException as exc:
+                if not (data.restart or data.policies or data.custom_api is not None):
+                    raise
+                # This error can only occur before any writes or runtime teardown.
+                raise HTTPException(
+                    exc.status_code,
+                    detail={
+                        "code": "INTEGRATION_VALIDATION_FAILED",
+                        "provider": provider.value,
+                        "message": f"{PROVIDER_DISPLAY_NAMES[provider]}: {exc.detail}"
+                        if exc.status_code == 400
+                        else exc.detail,
+                    },
+                ) from exc
         if data.restart or data.policies or data.custom_api is not None:
             stored_providers = {
                 SecretProvider(secret.provider) for secret in self.repository.get_secrets_for_agent(agent_id)

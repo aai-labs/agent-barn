@@ -18,8 +18,27 @@ export class AgentConfigurationPage {
     await this.apolloKey().fill(key);
   }
 
+  integrationCard(name: string): Locator {
+    return this.integrationsSection().locator("details").filter({ has: this.page.locator("summary").getByText(name, { exact: true }) });
+  }
+
+  integrationKey(name: string): Locator {
+    return this.integrationCard(name).locator("label").filter({ hasText: /^API key$/ }).locator("..").locator("input");
+  }
+
   apolloKey(): Locator {
-    return this.integrationsSection().locator("label").filter({ hasText: /^API key$/ }).locator("..").locator("input");
+    return this.integrationKey("Apollo");
+  }
+
+  async addFirecrawlCredential(key: string) {
+    await this.integrationsSection().getByRole("button", { name: "Edit", exact: true }).click();
+    await this.integrationsSection().getByRole("button", { name: "Firecrawl", exact: true }).click();
+    await this.integrationKey("Firecrawl").fill(key);
+  }
+
+  async appendApolloCredential(key: string) {
+    await this.integrationsSection().getByRole("button", { name: "Apollo", exact: true }).click();
+    await this.apolloKey().fill(key);
   }
 
   async applyIntegrations() {

@@ -111,6 +111,10 @@ def test_rejected_credential_keeps_agent_running_and_preserves_all_settings(shar
                 response = _apply(context, **body)
         with then("validation does not stop it, save any settings, or rotate its runtime"):
             assert response.status_code == (400 if failure == "invalid" else 503), response.text
+            detail = response.json()["detail"]
+            assert detail["code"] == "INTEGRATION_VALIDATION_FAILED"
+            assert detail["provider"] == "apollo"
+            assert "Apollo" in detail["message"]
             assert repository.get_by_id(context.agent.id).status == AgentStatus.RUNNING
             assert repository.get_secret(context.agent.id, SecretProvider.APOLLO).content == original_content
             assert not cluster.delete_deployment.called
@@ -292,5 +296,50 @@ def test_runtime_preflight_failure_keeps_previous_credentials_and_agent_running(
         assert response.status_code == 400, response.text
         repository = context.injector.get(AgentRepository)
         assert repository.get_by_id(context.agent.id).status == AgentStatus.RUNNING
+        assert repository.get_secret(context.agent.id, SecretProvider.APOLLO) is None
+        assert not cluster.delete_deployment.called
+
+
+def test_multiple_changed_credentials_report_the_failing_provider_without_saving_the_accepted_one():
+    with given(_GIVEN) as context:
+        cluster = _start(context)
+        validated = []
+
+        def accept_github(content):
+            validated.append("github")
+            return IntegrationValidationResult(valid=True)
+
+        def reject_apollo(content):
+            validated.append("apollo")
+            return IntegrationValidationResult(valid=False, error="Invalid API key")
+
+        with patch.dict(
+            "api.domains.agents.service.PROVIDER_VALIDATORS",
+            {
+                SecretProvider.GITHUB: accept_github,
+                SecretProvider.APOLLO: reject_apollo,
+            },
+        ):
+            response = _apply(
+                context,
+                restart=True,
+                secrets=[
+                    {
+                        "provider": "github",
+                        "content": {"token": "fixture-token", "owner": "acme", "org": "acme", "repos": []},
+                    },
+                    _secret("rejected-key"),
+                ],
+            )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"] == {
+            "code": "INTEGRATION_VALIDATION_FAILED",
+            "provider": "apollo",
+            "message": "Apollo credential: Invalid API key",
+        }
+        assert validated == ["github", "apollo"]
+        repository = context.injector.get(AgentRepository)
+        assert repository.get_by_id(context.agent.id).status == AgentStatus.RUNNING
+        assert repository.get_secret(context.agent.id, SecretProvider.GITHUB) is None
         assert repository.get_secret(context.agent.id, SecretProvider.APOLLO) is None
         assert not cluster.delete_deployment.called
