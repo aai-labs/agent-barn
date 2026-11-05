@@ -128,6 +128,18 @@ _Avoid_: Organization Owner, permanent Agent authority
 An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections or Agent Webhooks.
 _Avoid_: bot, pod
 
+**Persona**:
+A named identity inside one Agent, with its own name, emoji, versioned prompt, sessions and built-in memory, reached through that Agent's own pod and Connections. Personas share their Agent's Runtime, model key, Agent Secrets, Agent Memory and trust boundary, so a Persona is not a security boundary; hard isolation means a separate Agent. Not yet available; see [Agent Personas](docs/features/agent-personas.md).
+_Avoid_: bot, profile, sub-agent
+
+**Default Persona**:
+The Agent itself, acting as a Persona. Its identity comes from the Agent's pinned Template Version or Agent Template Override Version, and it is not stored as a Persona row.
+_Avoid_: main Persona, base profile
+
+**Persona Version**:
+An immutable saved snapshot of one Persona's SOUL and IDENTITY text. Editing and saving appends a new version.
+_Avoid_: Template Version, Persona draft
+
 **Configured Model**:
 The model currently selected for an Agent. It describes present configuration, not necessarily every model the Agent used historically.
 _Avoid_: model usage, observed model
@@ -453,6 +465,7 @@ _Avoid_: webhook
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
+- An **Agent** always has one **Default Persona** and may have other **Personas**, each with one or more **Persona Versions**. Its one pinned Template supplies the operating rules all of them share.
 - An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Playbook Extraction** reads one source **Agent** and writes into one **Organization Skill**'s **Skill Draft**; a **Playbook** may be refreshed by later extractions from the same or other Agents.
