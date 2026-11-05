@@ -9,7 +9,7 @@ Agent tasks and their notes live in our own tables in the application Postgres, 
 ## Decision
 
 - **Own tables.** Tasks carry their Organization and Agent, so visibility follows `AgentAuthorization` and deletion happens in the same transaction as the Agent's soft delete.
-- **Files are Artifacts.** An Agent publishes a file as an Artifact ([`../features/agent-artifacts.md`](../features/agent-artifacts.md)) and attaches it to a task by id. The task keeps a reference and the file's name, type and size; the bytes stay in the Agent's private bucket. Each attachment pins its Artifact, so it does not expire while the task has it.
+- **Files are Artifacts.** An Agent publishes a file as an Artifact ([`../features/agent-artifacts.md`](../features/agent-artifacts.md)) and attaches it to a task by id. The task keeps a reference and the file's name, type and size; the bytes stay in the Agent's private bucket. Each attachment pins its Artifact while the task is unfinished; finishing the task releases the pins, so its files expire a normal Artifact retention later. An Agent keeps at most 500 pinned task files, releasing its oldest past that, so a looping Agent cannot hold storage indefinitely.
 
 ## Considered alternatives
 

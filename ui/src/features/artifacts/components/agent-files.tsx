@@ -149,7 +149,7 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canManageF
         open={fileToDelete !== null}
         onOpenChange={open => { if (!open) { setFileToDelete(null); deleteFile.reset(); } }}
         title="Delete file?"
-        description={<>Delete “{fileToDelete?.filename}” from this Agent’s files? This cannot be undone. Files used by an active run or review cannot be deleted.</>}
+        description={<>Delete “{fileToDelete?.filename}” from this Agent’s files? This cannot be undone. Files used by an active run, a review or a task cannot be deleted.</>}
         confirmLabel="Delete file"
         pendingLabel="Deleting…"
         variant="destructive"

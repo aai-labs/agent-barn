@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4, uuid7
 
 import pytest
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, equal_to, has_item
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
@@ -24,13 +24,14 @@ from api.domains.agent_tasks.models import (
 from api.domains.agent_tasks.service import AgentTaskService
 from api.domains.agents.repository import AgentRepository
 from api.domains.artifacts.models import Artifact
+from api.domains.artifacts.repository import ArtifactRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.steps.agent_memory import agent_memory_api_setup, two_agents
 
 
-def _record_work(context, agent) -> None:
+def _record_work(context, agent) -> Artifact:
     service: AgentTaskService = context.injector.get(AgentTaskService)
     task = service.create_task(agent.organization_id, agent.id, AgentTaskCreate(title=f"{agent.name} work"))
     service.add_note(agent.organization_id, agent.id, task.id, AgentTaskNoteCreate(body="Started"))
@@ -51,6 +52,7 @@ def _record_work(context, agent) -> None:
         session.add(artifact)
         session.commit()
     service.attach_file(agent.organization_id, agent.id, task.id, AgentTaskFileCreate(artifact_id=artifact.id))
+    return artifact
 
 
 def _counts(context, agent) -> tuple[int, ...]:
@@ -76,6 +78,20 @@ def test_deleting_an_agent_removes_its_tasks_notes_and_files():
 
             with then("none of its Task records remain"):
                 assert_that((response.status_code, _counts(context, context.billing)), equal_to((204, (0, 0, 0))))
+
+
+def test_a_deleted_agents_task_files_are_purged_although_pinned():
+    with given(agent_memory_api_setup(two_agents())) as context:
+        artifact = _record_work(context, context.billing)
+
+        with when("the Agent is deleted"):
+            context.client.delete(
+                f"/api/v1/organizations/{{organization_id}}/agents/{context.billing.id}",
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+
+            with then("the Task File's Artifact is up for purge"):
+                assert_that(context.injector.get(ArtifactRepository).cleanup_candidates(), has_item(artifact.id))
 
 
 def test_deleting_an_agent_keeps_other_agents_tasks():
