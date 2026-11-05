@@ -159,6 +159,26 @@ class PersonaRepository:
         self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)
         return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
 
+    def load_for_start(self, agent_id: UUID) -> tuple[list[tuple[AgentPersona, AgentPersonaVersion]], list[str]]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentPersona)
+                .where(col(AgentPersona.agent_id) == agent_id)
+                .order_by(col(AgentPersona.created_at), col(AgentPersona.id))
+            ).all()
+            active = []
+            for persona in rows:
+                if persona.deleted_at is not None:
+                    continue
+                version = session.exec(
+                    select(AgentPersonaVersion).where(
+                        col(AgentPersonaVersion.persona_id) == persona.id,
+                        col(AgentPersonaVersion.version) == persona.current_version,
+                    )
+                ).one()
+                active.append((persona, version))
+            return active, [persona.key for persona in rows if persona.deleted_at is not None]
+
     def get_version(self, persona_id: UUID, version: int) -> AgentPersonaVersion | None:
         with Session(self.delegate.engine) as session:
             return session.exec(

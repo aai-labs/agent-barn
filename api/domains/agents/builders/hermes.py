@@ -1,4 +1,6 @@
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -37,6 +39,8 @@ _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 _SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
+HERMES_PERSONA_FOOTER: str = (_SCRIPTS / "persona-bootloader-footer.md").read_text()
+HERMES_PERSONA_SETUP_PY: str = (_SCRIPTS / "persona-setup.py").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
 HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
@@ -94,6 +98,15 @@ HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 # Persistent working directory for the agent's terminal and messaging layer.
 HERMES_WORKSPACE_DIR = "/workspace"
+PERSONA_ENV_VOLUME = "persona-env"
+PERSONA_ENV_DIR = "/run/agentbarn/env"
+
+
+@dataclass(frozen=True)
+class HermesPersona:
+    key: str
+    soul_md: str
+    identity_md: str
 
 
 def _hermes_config_core(
@@ -421,6 +434,9 @@ def build_hermes_config_map(
     skills_json: str | None = None,
     memory_enabled: bool = False,
     artifacts_enabled: bool = False,
+    personas: Sequence[HermesPersona] = (),
+    deleted_persona_keys: Sequence[str] = (),
+    default_env_names: Sequence[str] = (),
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -468,6 +484,18 @@ def build_hermes_config_map(
         data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
+    if personas or deleted_persona_keys:
+        data["personas.json"] = json.dumps(
+            {
+                "active": [{"key": persona.key} for persona in personas],
+                "deleted_keys": list(deleted_persona_keys),
+                "default_env_names": list(default_env_names),
+            }
+        )
+        data["persona-setup.py"] = HERMES_PERSONA_SETUP_PY
+    for persona in personas:
+        data[f"persona-{persona.key}-SOUL.md"] = persona.soul_md + HERMES_PERSONA_FOOTER.replace("{key}", persona.key)
+        data[f"persona-{persona.key}-IDENTITY.md"] = persona.identity_md
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -527,6 +555,7 @@ def build_hermes_deployment(
     image_pull_secret: str = "",
     *,
     resources: client.V1ResourceRequirements,
+    multiplex: bool = False,
 ) -> client.V1Deployment:
     """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
 
@@ -607,6 +636,7 @@ def build_hermes_deployment(
                                 # ocbw sets both alongside terminal.cwd — mirror it.
                                 client.V1EnvVar(name="TERMINAL_CWD", value=HERMES_WORKSPACE_DIR),
                                 client.V1EnvVar(name="MESSAGING_CWD", value=HERMES_WORKSPACE_DIR),
+                                *([client.V1EnvVar(name="GATEWAY_MULTIPLEX_PROFILES", value="1")] if multiplex else []),
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
@@ -631,6 +661,11 @@ def build_hermes_deployment(
                                     mount_path=HERMES_WORKSPACE_DIR,
                                     sub_path="workspace",
                                 ),
+                                *(
+                                    [client.V1VolumeMount(name=PERSONA_ENV_VOLUME, mount_path=PERSONA_ENV_DIR)]
+                                    if multiplex
+                                    else []
+                                ),
                             ],
                         )
                     ],
@@ -644,6 +679,16 @@ def build_hermes_deployment(
                         client.V1Volume(
                             name="data",
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=name),
+                        ),
+                        *(
+                            [
+                                client.V1Volume(
+                                    name=PERSONA_ENV_VOLUME,
+                                    empty_dir=client.V1EmptyDirVolumeSource(medium="Memory", size_limit="1Mi"),
+                                )
+                            ]
+                            if multiplex
+                            else []
                         ),
                     ],
                 ),

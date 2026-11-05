@@ -1,9 +1,10 @@
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_length, is_not, none
+from hamcrest import assert_that, contains_string, equal_to, has_length, is_not, none
 from sqlmodel import Session, select
 
 from api.domains.agents.models import Agent, AgentStatus, AgentType
@@ -20,6 +21,8 @@ from api.domains.conversations.models import AgentChatMessage
 from api.domains.events.catalog import AGENT_UPDATED
 from api.domains.events.models import OutboxMessage
 from api.domains.personas.models import AgentPersona, AgentPersonaVersion
+from api.infrastructure.crypto import encrypt_token
+from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import (
@@ -613,3 +616,154 @@ def test_deleting_emits_agent_updated():
         assert_that(
             events[-1].payload["field_changes"], equal_to({"personas.sales": {"previous": None, "new": "deleted"}})
         )
+
+
+def _start(context):
+    return context.client.post(f"{BASE}/{context.agent.id}/start", headers=_auth(context))
+
+
+def _started_resources(context):
+    k8s = context.injector.get(KubernetesClient)
+    config_map = k8s.create_config_map.call_args.args[1]
+    secret = k8s.create_secret.call_args.args[1]
+    deployment = k8s.create_deployment.call_args.args[1]
+    return config_map.data, secret.string_data, deployment.spec.template.spec
+
+
+def _multiplex(pod) -> bool:
+    return "GATEWAY_MULTIPLEX_PROFILES" in [env.name for env in pod.containers[0].env]
+
+
+def test_starting_with_no_personas_is_unchanged():
+    with given(_given()) as context:
+        assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
+
+        data, _, pod = _started_resources(context)
+
+        assert_that("personas.json" in data, equal_to(False))
+        assert_that("persona-setup.py" in data, equal_to(False))
+        assert_that(_multiplex(pod), equal_to(False))
+
+
+def test_starting_renders_each_personas_current_version_and_turns_on_multiplex():
+    with given(_given()) as context:
+        _seed(context, "sales", versions=2)
+        _seed(context, "gone", deleted=True)
+
+        assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
+
+        data, _, pod = _started_resources(context)
+        manifest = json.loads(data["personas.json"])
+        assert_that(manifest["active"], equal_to([{"key": "sales"}]))
+        assert_that(manifest["deleted_keys"], equal_to(["gone"]))
+        assert_that(data["persona-sales-SOUL.md"].startswith("sales soul v2"), equal_to(True))
+        assert_that(data["persona-sales-IDENTITY.md"], equal_to("sales identity v2"))
+        assert_that("persona-gone-SOUL.md" in data, equal_to(False))
+        assert_that(_multiplex(pod), equal_to(True))
+
+
+def test_the_flag_being_off_does_not_stop_existing_personas_from_running():
+    with given(_given(flag="false")) as context:
+        _seed(context, "sales")
+
+        _start(context)
+
+        assert_that(_multiplex(_started_resources(context)[2]), equal_to(True))
+
+
+def test_deleting_the_last_persona_turns_off_multiplex_but_still_cleans_up():
+    with given(_given()) as context:
+        _seed(context, "gone", deleted=True)
+
+        assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
+
+        data, _, pod = _started_resources(context)
+        manifest = json.loads(data["personas.json"])
+        assert_that(manifest["active"], equal_to([]))
+        assert_that(manifest["deleted_keys"], equal_to(["gone"]))
+        assert_that(_multiplex(pod), equal_to(False))
+
+
+def test_an_openclaw_agent_never_gets_persona_files():
+    with given(_given(agent_type=AgentType.OPENCLAW)) as context:
+        _seed(context, "sales")
+
+        _start(context)
+
+        assert_that("personas.json" in _started_resources(context)[0], equal_to(False))
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("telegram", {"TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"}),
+        ("slack", {"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_ALLOW_ALL_USERS", "AGENTBARN_SLACK_DM_POLICY"}),
+    ],
+)
+def test_a_connected_platforms_settings_reach_the_default_env_names(platform, expected):
+    with given(_given()) as context:
+        credentials = {"bot_token": "123:token", "app_token": "xapp-token"}
+        settings = {"channel_ids": ["C1"], "group_policy": "allowlist", "dm_policy": "off"}
+        if platform == "telegram":
+            credentials = {"bot_token": "123:token"}
+            settings = {"allowed_chat_ids": ["-1001"], "dm_policy": "allowlist", "allowed_user_ids": ["111"]}
+        context.postgres_delegate.save(
+            CommunicationConnection(
+                organization_id=context.organization.id,
+                agent_id=context.agent.id,
+                platform_key=platform,
+                display_name="Native",
+                settings=settings,
+                credentials_encrypted=encrypt_token(json.dumps(credentials), TEST_ENCRYPTION_KEY),
+            )
+        )
+        _seed(context, "sales")
+
+        assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
+
+        data, secret, _ = _started_resources(context)
+        names = set(json.loads(data["personas.json"])["default_env_names"])
+        platform_prefixes = ("SLACK_", "AGENTBARN_SLACK_", "TELEGRAM_")
+        assert_that(names, equal_to({name for name in secret if name.startswith(platform_prefixes)}))
+        assert_that(expected <= names, equal_to(True))
+
+
+def test_a_secret_value_with_a_newline_refuses_the_start_naming_only_the_key():
+    with given(
+        [
+            set_env_variable({"AGENT_FIRECRAWL_API_KEY": "line1\nline2", "AGENT_FIRECRAWL_BASE_URL": "http://fc"}),
+            *_given(),
+        ]
+    ) as context:
+        _seed(context, "sales")
+        k8s = context.injector.get(KubernetesClient)
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("FIRECRAWL_API_KEY"))
+        assert_that("line1" in response.text, equal_to(False))
+        assert_that(k8s.create_deployment.called, equal_to(False))
+        assert_that(k8s.delete_config_map.called, equal_to(False))
+
+
+def test_a_secret_value_with_a_newline_is_ignored_without_personas():
+    with given(
+        [
+            set_env_variable({"AGENT_FIRECRAWL_API_KEY": "line1\nline2", "AGENT_FIRECRAWL_BASE_URL": "http://fc"}),
+            *_given(),
+        ]
+    ) as context:
+        assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_an_oversized_config_map_refuses_the_start_with_personas():
+    with given(_given(soul_md="x" * 1_100_000)) as context:
+        _seed(context, "sales")
+        k8s = context.injector.get(KubernetesClient)
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("too large"))
+        assert_that(k8s.delete_config_map.called, equal_to(False))

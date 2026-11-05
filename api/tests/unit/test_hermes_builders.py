@@ -20,7 +20,12 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
+from api.domains.agents.builders.hermes import (
+    HERMES_BOOTLOADER_FOOTER,
+    HERMES_DEFAULT_MAX_TURNS,
+    HERMES_START_SH,
+    HermesPersona,
+)
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
 from api.domains.file_sync.rules import rules_manifest
@@ -576,3 +581,105 @@ def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
         _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", {}
     )
     assert "Files and download links" not in config_map.data["AGENTS.md"]
+
+
+def _config_map_with_personas(**fields):
+    return build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+        **fields,
+    )
+
+
+def _persona_deployment(**fields):
+    return build_hermes_deployment(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "hermes:test",
+        resources=STANDARD,
+        **fields,
+    )
+
+
+def test_an_agent_with_no_personas_gets_no_persona_files_or_multiplex() -> None:
+    data = _config_map_with_personas().data
+    container = _persona_deployment().spec.template.spec.containers[0]
+    volumes = _persona_deployment().spec.template.spec.volumes
+
+    assert not any(name.startswith("persona") for name in data)
+    assert "GATEWAY_MULTIPLEX_PROFILES" not in [env.name for env in container.env]
+    assert "persona-env" not in [volume.name for volume in volumes]
+
+
+def test_active_personas_are_rendered_into_the_config_map() -> None:
+    data = _config_map_with_personas(
+        personas=[HermesPersona(key="sales", soul_md="Sales soul", identity_md="Sales identity")],
+        deleted_persona_keys=["gone"],
+        default_env_names=["SLACK_BOT_TOKEN"],
+    ).data
+
+    assert json.loads(data["personas.json"]) == {
+        "active": [{"key": "sales"}],
+        "deleted_keys": ["gone"],
+        "default_env_names": ["SLACK_BOT_TOKEN"],
+    }
+    assert "persona-setup.py" in data
+    assert data["persona-sales-IDENTITY.md"] == "Sales identity"
+    assert data["persona-sales-SOUL.md"].startswith("Sales soul")
+
+
+def test_a_persona_footer_points_only_at_that_personas_own_files() -> None:
+    soul = _config_map_with_personas(
+        personas=[HermesPersona(key="sales", soul_md="Sales soul", identity_md="Sales identity")],
+    ).data["persona-sales-SOUL.md"]
+
+    assert "/opt/data/profiles/sales/IDENTITY.md" in soul
+    assert "/opt/data/profiles/sales/memories/USER.md" in soul
+    assert "/opt/data/profiles/sales/memories/MEMORY.md" in soul
+    assert "/workspace/personas/sales/memory/YYYY-MM-DD.md" in soul
+    assert "/workspace/AGENTS.md" in soul
+    assert "/workspace/IDENTITY.md" not in soul
+    assert "/opt/data/memories" not in soul
+    assert "{key}" not in soul
+
+
+def test_only_deleted_personas_still_ship_the_clean_up() -> None:
+    data = _config_map_with_personas(deleted_persona_keys=["gone"]).data
+
+    assert json.loads(data["personas.json"])["active"] == []
+    assert "persona-setup.py" in data
+
+
+def test_multiplex_adds_the_env_and_an_in_memory_volume() -> None:
+    pod = _persona_deployment(multiplex=True).spec.template.spec
+    container = pod.containers[0]
+
+    assert {env.name: env.value for env in container.env}["GATEWAY_MULTIPLEX_PROFILES"] == "1"
+    volume = next(item for item in pod.volumes if item.name == "persona-env")
+    assert volume.empty_dir.medium == "Memory"
+    assert volume.empty_dir.size_limit == "1Mi"
+    mount = next(item for item in container.volume_mounts if item.name == "persona-env")
+    assert mount.mount_path == "/run/agentbarn/env"
+
+
+def test_start_script_runs_the_persona_steps_in_the_right_order() -> None:
+    script = HERMES_START_SH
+    sync = script.index("persona-setup.py --sync-allowlists")
+    merge = script.index("config-merge.py /app/config/hermes-config.yaml")
+    hindsight = script.index('export HINDSIGHT_API_KEY="$MEMORY_API_KEY"')
+    setup = script.index("python3 /app/config/persona-setup.py\n")
+    file_sync = script.index("file-sync.py --once")
+    gateway = script.index("exec hermes gateway run")
+
+    assert sync < merge < hindsight < setup < file_sync < gateway
+    assert script.count("[ -f /app/config/personas.json ]") == 2

@@ -15,6 +15,9 @@ if [ ! -f /opt/data/memories/USER.md ]; then
 fi
 
 cp /app/config/SOUL.md /opt/data/SOUL.md
+if [ -f /app/config/personas.json ]; then
+    python3 /app/config/persona-setup.py --sync-allowlists || true
+fi
 python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/config.yaml \
     || cp /app/config/hermes-config.yaml /opt/data/config.yaml
 
@@ -27,6 +30,10 @@ python3 /app/config/memory-setup.py
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   export HINDSIGHT_API_KEY="$MEMORY_API_KEY"
   python3 /app/config/memory-gateway-ready.py || true
+fi
+
+if [ -f /app/config/personas.json ]; then
+    python3 /app/config/persona-setup.py
 fi
 
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml

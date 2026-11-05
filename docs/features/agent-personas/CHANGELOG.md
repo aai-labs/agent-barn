@@ -6,9 +6,9 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create, edit and delete, with creation behind the `personas_enabled` flag, which is off by default. The boot script `persona-setup.py` exists but nothing runs it yet, so the runtime still ignores Persona rows.
+- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create, edit and delete, with creation behind the `personas_enabled` flag, which is off by default. An Agent with Personas now starts them as Hermes profiles under multiplex, but nothing routes messages to them yet, and this hasn't run against a real pod.
 - In transition: nothing.
-- Next: runtime wiring: builders, the start flow and `start.sh`.
+- Next: Restore Point exclusions.
 - Note: the re-check that refuses a send for a Persona deleted in the meantime arrives with the Communications slice, which is also what first writes `persona_id` on messages.
 - Blockers: none.
 
@@ -49,6 +49,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona runtime wiring
+
+- Delivered: the start flow loads Personas and renders them into the ConfigMap with `personas.json`, each current SOUL and IDENTITY, and a per-Persona footer pointing at its own paths. An active Persona adds `GATEWAY_MULTIPLEX_PROFILES=1` and the in-memory volume. `default_env_names` carries every connected platform's settings. `start.sh` runs both `persona-setup.py` steps only when `personas.json` exists. Starting is refused with 409, before anything is torn down, when a secret value has a line break or the ConfigMap would exceed 1,000,000 bytes.
+- Changed: `AgentService` gains a `PersonaRepository`. The runtime digest moves, so running Agents will report an available update.
+- Follow-up: Restore Point exclusions, then image-level tests.
 
 ### 2026-11-05 — AF-425 — Persona boot script
 
