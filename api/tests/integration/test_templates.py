@@ -2035,12 +2035,13 @@ def test_seed_predefined_templates_does_not_duplicate_skill_rows():
             assert_that(len(skill_map), equal_to(2))
 
 
-def test_seed_predefined_templates_code_reviewer_requires_github_or_bitbucket():
+def test_seed_predefined_templates_code_reviewer_requires_a_code_host():
     with given(
         [
             *_GIVEN,
             there_is_a_skill(name="GitHub", global_skill=True),
             there_is_a_skill(name="Bitbucket", global_skill=True),
+            there_is_a_skill(name="GitLab", global_skill=True),
         ]
     ) as context:
         service: TemplateService = context.injector.get(TemplateService)
@@ -2049,14 +2050,14 @@ def test_seed_predefined_templates_code_reviewer_requires_github_or_bitbucket():
         with when("I seed the global predefined catalogue"):
             service.seed_predefined_templates()
 
-        with then("code-reviewer requires GitHub or Bitbucket as an 'at least one of' group"):
+        with then("code-reviewer requires GitHub, Bitbucket or GitLab as an 'at least one of' group"):
             response = client.get(f"{_BASE}/code-reviewer", headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             required_skills = response.json()["required_skills"]
             skill_names = {s["name"] for s in required_skills}
-            assert_that(skill_names, equal_to({"GitHub", "Bitbucket"}))
+            assert_that(skill_names, equal_to({"GitHub", "Bitbucket", "GitLab"}))
             group_keys = {s["group_key"] for s in required_skills}
-            assert_that(group_keys, equal_to({"github-or-bitbucket"}))
+            assert_that(group_keys, equal_to({"github-or-bitbucket-or-gitlab"}))
 
 
 def test_seed_predefined_templates_code_reviewer_seeds_partial_group_when_only_one_host_skill_exists():
@@ -2078,7 +2079,7 @@ def test_seed_predefined_templates_code_reviewer_seeds_partial_group_when_only_o
             required_skills = response.json()["required_skills"]
             assert_that(len(required_skills), equal_to(1))
             assert_that(required_skills[0]["name"], equal_to("GitHub"))
-            assert_that(required_skills[0]["group_key"], equal_to("github-or-bitbucket"))
+            assert_that(required_skills[0]["group_key"], equal_to("github-or-bitbucket-or-gitlab"))
 
 
 def test_seed_predefined_templates_does_not_restore_cleared_skills_on_existing_lineage():
@@ -2127,7 +2128,9 @@ def test_seed_predefined_templates_is_idempotent_for_group_keys():
             assert template is not None
             skill_map = repository.get_platform_required_skill_map(template.id)
             assert_that(len(skill_map), equal_to(2))
-            assert_that({group_key for _, group_key in skill_map.values()}, equal_to({"github-or-bitbucket"}))
+            assert_that(
+                {group_key for _, group_key in skill_map.values()}, equal_to({"github-or-bitbucket-or-gitlab"})
+            )
 
 
 def test_predefined_content_keeps_raw_placeholders():

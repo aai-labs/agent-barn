@@ -356,6 +356,7 @@ def test_gitlab_keeps_encoded_paths_and_stays_on_public_addresses():
 
 def test_existing_providers_keep_their_decoded_paths_and_open_egress():
     with given(_ALL_AAI_GIVEN) as context:
+        _github_secret(context)
         token = _token_for(context, SecretProvider.GITHUB)
 
         with when("an agent sends an encoded path to a provider that did not opt in"):
