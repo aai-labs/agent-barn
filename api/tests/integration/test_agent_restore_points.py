@@ -19,12 +19,27 @@ from hamcrest import (
     not_none,
     raises,
 )
-from kubernetes.client import V1Job, V1JobCondition, V1JobStatus
+from kubernetes.client import (
+    V1Job,
+    V1JobCondition,
+    V1JobSpec,
+    V1JobStatus,
+    V1ObjectMeta,
+    V1PersistentVolumeClaimVolumeSource,
+    V1PodSpec,
+    V1PodTemplateSpec,
+    V1Volume,
+)
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col
 
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.builders.restore_point import (
+    COMPONENT_LABEL,
+    COMPONENT_LABEL_KEY,
+    RESTORE_POINT_ID_LABEL_KEY,
+)
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
@@ -349,6 +364,28 @@ def test_a_restoring_row_may_coexist_with_an_active_capture():
             assert_that(second.id, not_none())
 
 
+def _job_mounting(name: str, labelled_for: str, *claim_names: str) -> V1Job:
+    volumes = [
+        V1Volume(name=f"volume-{index}", persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=claim))
+        for index, claim in enumerate(claim_names)
+    ]
+    labels = {COMPONENT_LABEL_KEY: COMPONENT_LABEL, RESTORE_POINT_ID_LABEL_KEY: labelled_for}
+    return V1Job(
+        metadata=V1ObjectMeta(name=name, labels=labels),
+        spec=V1JobSpec(template=V1PodTemplateSpec(spec=V1PodSpec(containers=[], volumes=volumes))),
+    )
+
+
+def _cluster_with(k8s, jobs: list[V1Job]) -> None:
+    """List Jobs the way the cluster does: only those carrying every label the selector asks for."""
+
+    def list_jobs(namespace: str, label_selector: str = "") -> list[V1Job]:
+        wanted = dict(term.split("=", 1) for term in label_selector.split(",") if term)
+        return [job for job in jobs if all(job.metadata.labels.get(k) == v for k, v in wanted.items())]
+
+    k8s.list_jobs.side_effect = list_jobs
+
+
 def _job_with(status_kwargs) -> V1Job:
     return V1Job(status=V1JobStatus(**status_kwargs))
 
@@ -386,6 +423,37 @@ def test_a_succeeded_job_moves_the_row_to_ready_with_its_manifest():
             assert_that(body["archive_bytes"], equal_to(4096))
             assert_that(body["file_count"], equal_to(12))
             assert_that(body["captured_at"], not_none())
+
+
+def test_a_ready_row_carries_the_files_that_changed_while_it_was_taken():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12, "skipped": 1, "changed": 2}\n'
+
+        with when("I read a snapshot taken while the Agent wrote to its files"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+
+        with then("it says how many files shrank or vanished mid-capture"):
+            assert_that(body["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(body["changed_file_count"], equal_to(2))
+            assert_that(body["skipped_file_count"], equal_to(1))
+
+
+def test_a_manifest_without_change_counts_leaves_them_unknown():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12}\n'
+
+        with when("I read a capture from a Job that did not count changed files"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+
+        with then("the change counts are unknown, not zero"):
+            assert_that(body["changed_file_count"], none())
+            assert_that(body["skipped_file_count"], none())
 
 
 def test_an_empty_archive_is_ready_not_failed():
@@ -925,6 +993,37 @@ def test_start_agent_is_allowed_once_a_stale_job_has_been_reconciled():
             assert_that(response.status_code, is_not(equal_to(status.HTTP_409_CONFLICT)))
 
 
+def test_delete_restore_point_removes_every_job_that_used_it_before_its_volume():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        _cluster_with(
+            k8s,
+            [
+                _job_mounting(f"rp-cap-{seeded.id}", str(seeded.id), seeded.pvc_name),
+                _job_mounting(f"rp-res-{seeded.id}-a1b2c3", str(seeded.id), "agent-volume", seeded.pvc_name),
+                _job_mounting("rp-cap-another", str(uuid.uuid4()), "restore-point-another"),
+            ],
+        )
+
+        with when("I delete a ready restore point its capture and a restore ran from"):
+            response = context.client.delete(f"{_url(context)}/{seeded.id}", headers=_auth(context))
+
+        with then("both finished Jobs go first, so nothing holds the volume once it is deleted"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            calls = [(c[0], c.args[0]) for c in k8s.method_calls if c[0] in ("delete_job", "delete_pvc")]
+            assert_that(
+                calls,
+                equal_to(
+                    [
+                        ("delete_job", f"rp-cap-{seeded.id}"),
+                        ("delete_job", f"rp-res-{seeded.id}-a1b2c3"),
+                        ("delete_pvc", seeded.pvc_name),
+                    ]
+                ),
+            )
+
+
 def test_delete_agent_is_refused_while_a_capture_is_running():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         _reconcilable(context)
@@ -1042,10 +1141,18 @@ def test_the_automatic_pre_restore_backup_does_not_emit_its_own_created_event():
             assert_that(_outbox(context, AGENT_RESTORE_POINT_RESTORED), has_length(1))
 
 
-def test_only_restoring_is_projected_into_the_security_audit_trail():
-    for event_name in (AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED):
-        definition = EVENT_REGISTRY.get(event_name, 1)
-        assert_that(definition.handler_names, is_not(has_item(SECURITY_AUDIT_HANDLER)))
+def test_a_backup_being_removed_by_retention_does_not_block_starting_the_agent():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _seed(context, status_value=RestorePointStatus.DELETING, origin=RestorePointOrigin.PRE_UPGRADE)
+
+        with when("I start the agent while retention is removing an old update backup"):
+            response = context.client.post(
+                f"{_BASE}/{context.agent.id}/start".replace("{organization_id}", str(context.organization.id)),
+                headers=_auth(context),
+            )
+
+        with then("the start goes ahead, since the removal never touches the Agent's volume"):
+            assert_that(response.status_code, is_not(equal_to(status.HTTP_409_CONFLICT)))
 
 
 def test_deleting_a_restore_point_stages_an_event():

@@ -46,6 +46,7 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+    SCHEDULED = "SCHEDULED"
 
 
 class ManagedUpdateOutcome(str, enum.Enum):
@@ -827,6 +828,9 @@ class AgentRestorePoint(BaseModel, table=True):
     job_name: str | None = SqlField(default=None, nullable=True, max_length=253)
     archive_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     file_count: int | None = SqlField(default=None, nullable=True)
+    # Files that shrank (zero-padded) or vanished while a live capture read them.
+    changed_file_count: int | None = SqlField(default=None, nullable=True)
+    skipped_file_count: int | None = SqlField(default=None, nullable=True)
     config_manifest: dict[str, Any] = SqlField(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
