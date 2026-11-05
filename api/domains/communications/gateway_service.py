@@ -162,6 +162,16 @@ class CommunicationsGatewayService:
         )
         return True
 
+    def announce_cancelled(self, agent_id: UUID, delivery_ids: list[UUID]) -> None:
+        for delivery_id in delivery_ids:
+            self._publish_signal(
+                agent_id,
+                CommunicationSignal(
+                    type=CommunicationSignalType.DELIVERY_CANCELLED,
+                    delivery_id=delivery_id,
+                ),
+            )
+
     def _publish_signal(self, agent_id: UUID, signal: CommunicationSignal) -> None:
         try:
             self.signals.publish(agent_id, signal)

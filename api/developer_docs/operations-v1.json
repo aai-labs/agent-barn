@@ -36,6 +36,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/personas/{key}",
+    "delete_agent_persona_organizations__organization_id__agents__agent_id__personas__key__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points/{restore_point_id}",
     "delete_restore_point_organizations__organization_id__agents__agent_id__restore_points__restore_point_id__delete"
   ],

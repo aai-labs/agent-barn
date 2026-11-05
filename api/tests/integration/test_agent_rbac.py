@@ -1075,10 +1075,12 @@ def _persona_write(context, method: str):
     url = f"{_BASE}/{context.agent.id}/personas"
     if method == "post":
         return context.client.post(url, json=_PERSONA_BODY, headers=_auth(context))
+    if method == "delete":
+        return context.client.delete(f"{url}/sales", headers=_auth(context))
     return context.client.put(f"{url}/sales", json={**_PERSONA_BODY, "expected_version": 1}, headers=_auth(context))
 
 
-@pytest.mark.parametrize("method", ["post", "put"])
+@pytest.mark.parametrize("method", ["post", "put", "delete"])
 def test_viewer_cannot_change_personas(method):
     with given(_PERSONA_GIVEN) as context:
         _switch_to_member()(context)
@@ -1094,9 +1096,10 @@ def test_editor_can_create_a_persona():
 
         assert_that(_persona_write(context, "post").status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(_persona_write(context, "put").status_code, equal_to(status.HTTP_200_OK))
+        assert_that(_persona_write(context, "delete").status_code, equal_to(status.HTTP_204_NO_CONTENT))
 
 
-@pytest.mark.parametrize("method", ["post", "put"])
+@pytest.mark.parametrize("method", ["post", "put", "delete"])
 def test_member_without_access_gets_404_when_changing_personas(method):
     with given(_PERSONA_GIVEN) as context:
         _switch_to_member()(context)
@@ -1104,7 +1107,7 @@ def test_member_without_access_gets_404_when_changing_personas(method):
         assert_that(_persona_write(context, method).status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-@pytest.mark.parametrize("method", ["post", "put"])
+@pytest.mark.parametrize("method", ["post", "put", "delete"])
 def test_another_organizations_agent_gets_404_when_changing_personas(method):
     with given([set_env_variable({"PERSONAS_ENABLED": "true"}), *_GIVEN]) as context:
         other_organization = Organization(name="Other organization")
@@ -1114,7 +1117,7 @@ def test_another_organizations_agent_gets_404_when_changing_personas(method):
         assert_that(_persona_write(context, method).status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-@pytest.mark.parametrize("method", ["post", "put"])
+@pytest.mark.parametrize("method", ["post", "put", "delete"])
 def test_a_deleted_agent_gets_404_when_changing_personas(method):
     with given(
         [

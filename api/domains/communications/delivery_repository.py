@@ -316,6 +316,30 @@ class CommunicationDeliveryRepository:
             session.commit()
             return delivery.status
 
+    @staticmethod
+    def cancel_open_for_persona(session: Session, persona_id: UUID, now: datetime) -> list[UUID]:
+        deliveries = session.exec(
+            select(CommunicationDelivery)
+            .join(AgentChatMessage, col(AgentChatMessage.id) == col(CommunicationDelivery.message_id))
+            .where(
+                col(AgentChatMessage.persona_id) == persona_id,
+                col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
+                col(CommunicationDelivery.status).in_(
+                    (CommunicationDeliveryStatus.PENDING, CommunicationDeliveryStatus.PROCESSING)
+                ),
+            )
+            .with_for_update(of=CommunicationDelivery)
+        ).all()
+        for delivery in deliveries:
+            delivery.cancel_requested_at = now
+            if delivery.status == CommunicationDeliveryStatus.PENDING:
+                delivery.status = CommunicationDeliveryStatus.CANCELLED
+                delivery.completed_at = now
+                delivery.last_error_code = "CANCELLED"
+                delivery.last_error_message = "Persona was deleted"
+            session.add(delivery)
+        return [delivery.id for delivery in deliveries]
+
     def reclaim_expired_inbound(
         self,
         *,

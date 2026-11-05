@@ -7,6 +7,9 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.models import CommunicationConnection
+from api.domains.communications.plugins.web import WebPlatformPlugin
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import AGENT_UPDATED, EVENT_REGISTRY
 from api.domains.events.repository import OutboxMessageRepository
@@ -102,6 +105,31 @@ class PersonaRepository:
             deliveries = self._stage_change(session, persona.key, "updated", agent, actor, actor_display)
             session.commit()
             return persona, deliveries
+
+    def soft_delete_with_event(
+        self,
+        persona_id: UUID,
+        agent: Agent,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> tuple[list[UUID], list[UUID]]:
+        now = datetime.now(UTC)
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            session.exec(
+                select(CommunicationConnection)
+                .where(
+                    col(CommunicationConnection.agent_id) == agent.id,
+                    col(CommunicationConnection.platform_key) == WebPlatformPlugin.key,
+                )
+                .with_for_update()
+            ).all()
+            persona = session.get_one(AgentPersona, persona_id)
+            persona.deleted_at = now
+            session.add(persona)
+            cancelled = CommunicationDeliveryRepository.cancel_open_for_persona(session, persona_id, now)
+            deliveries = self._stage_change(session, persona.key, "deleted", agent, actor, actor_display)
+            session.commit()
+            return deliveries, cancelled
 
     def _stage_change(
         self,

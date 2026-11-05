@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from fastapi import status
@@ -6,6 +7,16 @@ from hamcrest import assert_that, equal_to, has_length, is_not, none
 from sqlmodel import Session, select
 
 from api.domains.agents.models import Agent, AgentStatus, AgentType
+from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
+from api.domains.communications.models import (
+    CommunicationConnection,
+    CommunicationDelivery,
+    CommunicationDeliveryStatus,
+    CommunicationSender,
+    ConversationLocation,
+    NormalizedCommunicationEnvelope,
+)
+from api.domains.conversations.models import AgentChatMessage
 from api.domains.events.catalog import AGENT_UPDATED
 from api.domains.events.models import OutboxMessage
 from api.domains.personas.models import AgentPersona, AgentPersonaVersion
@@ -436,3 +447,169 @@ def test_saving_identical_values_changes_nothing_and_emits_nothing():
 
         assert_that(response.json()["current_version"], equal_to(1))
         assert_that(_persona_events(context), has_length(1))
+
+
+def _delete(context, key="sales"):
+    return context.client.delete(_url(context, f"/{key}"), headers=_auth(context))
+
+
+def _web_connection(context) -> CommunicationConnection:
+    connection = CommunicationConnection(
+        organization_id=context.organization.id,
+        agent_id=context.agent.id,
+        platform_key="web",
+        display_name="Web Chat",
+        credentials_encrypted="unused",
+    )
+    context.postgres_delegate.save(connection)
+    return connection
+
+
+def _inbound(context, connection, persona_id, name) -> UUID:
+    envelope = NormalizedCommunicationEnvelope(
+        provider_message_id=name,
+        occurred_at=datetime.now(UTC),
+        location=ConversationLocation(id=f"user-{name}", type="DM", thread_id="main"),
+        sender=CommunicationSender(id="user", display_name="User"),
+        text="hello",
+    )
+    repository = context.injector.get(CommunicationDeliveryRepository)
+    accepted = repository.accept_inbound(connection_id=connection.id, envelope=envelope)
+    with Session(context.postgres_delegate.engine) as session:
+        message = session.get_one(AgentChatMessage, accepted.message_id)
+        message.persona_id = persona_id
+        session.add(message)
+        session.commit()
+    return accepted.delivery_id
+
+
+def _delivery(context, delivery_id) -> CommunicationDelivery:
+    with Session(context.postgres_delegate.engine) as session:
+        return session.get_one(CommunicationDelivery, delivery_id)
+
+
+def test_deleting_a_persona_hides_it_but_keeps_its_row_and_versions():
+    with given(_given()) as context:
+        persona = _seed(context, "sales", versions=2)
+
+        response = _delete(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        keys = [item["key"] for item in context.client.get(_url(context), headers=_auth(context)).json()["personas"]]
+        assert_that(keys, equal_to(["default"]))
+        assert_that(context.client.get(_url(context, "/sales"), headers=_auth(context)).status_code, equal_to(404))
+        with Session(context.postgres_delegate.engine) as session:
+            stored = session.get_one(AgentPersona, persona.id)
+            versions = session.exec(
+                select(AgentPersonaVersion).where(AgentPersonaVersion.persona_id == persona.id)
+            ).all()
+        assert_that(stored.deleted_at, is_not(none()))
+        assert_that(versions, has_length(2))
+
+
+def test_a_deleted_personas_slot_is_freed_and_its_key_is_not_reused():
+    with given(_given()) as context:
+        for name in ("sales", "two", "three", "four", "five"):
+            _create(context, name)
+        assert_that(_create(context, "six").status_code, equal_to(status.HTTP_409_CONFLICT))
+
+        _delete(context)
+
+        response = _create(context, "sales")
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.json()["key"], equal_to("sales-2"))
+
+
+def test_deleting_twice_or_an_unknown_persona_is_not_found():
+    with given(_given()) as context:
+        _seed(context, "sales")
+
+        assert_that(_delete(context).status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(_delete(context).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_delete(context, "nosuch").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_deleting_the_default_is_refused():
+    with given(_given()) as context:
+        assert_that(_delete(context, "default").status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_deleting_while_running_is_refused():
+    with given(_given()) as context:
+        _seed(context, "sales")
+        _set_agent(context, status=AgentStatus.RUNNING)
+
+        assert_that(_delete(context).status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_deleting_on_openclaw_is_refused_with_400():
+    with given(_given(agent_type=AgentType.OPENCLAW)) as context:
+        assert_that(_delete(context).status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_deleting_still_works_when_the_flag_is_off():
+    with given(_given(flag="false")) as context:
+        _seed(context, "sales")
+
+        assert_that(_delete(context).status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_deleting_cancels_only_that_personas_open_deliveries():
+    with given(_given()) as context:
+        sales = _seed(context, "sales")
+        lawyer = _seed(context, "lawyer")
+        connection = _web_connection(context)
+        _set_agent(context, status=AgentStatus.RUNNING)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        processing = _inbound(context, connection, sales.id, "processing")
+        assert_that(repository.claim_next_inbound(agent_id=context.agent.id).delivery_id, equal_to(processing))
+        pending = _inbound(context, connection, sales.id, "pending")
+        other_persona = _inbound(context, connection, lawyer.id, "other")
+        default = _inbound(context, connection, None, "default")
+        _set_agent(context, status=AgentStatus.STOPPED)
+
+        assert_that(_delete(context).status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+        cancelled = _delivery(context, pending)
+        assert_that(cancelled.status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+        assert_that(cancelled.completed_at, is_not(none()))
+        flagged = _delivery(context, processing)
+        assert_that(flagged.status, equal_to(CommunicationDeliveryStatus.PROCESSING))
+        assert_that(flagged.cancel_requested_at, is_not(none()))
+        for untouched in (other_persona, default):
+            row = _delivery(context, untouched)
+            assert_that(row.status, equal_to(CommunicationDeliveryStatus.PENDING))
+            assert_that(row.cancel_requested_at, none())
+
+
+def test_a_flagged_processing_delivery_ends_cancelled_when_its_lease_expires():
+    with given(_given()) as context:
+        sales = _seed(context, "sales")
+        connection = _web_connection(context)
+        _set_agent(context, status=AgentStatus.RUNNING)
+        repository = context.injector.get(CommunicationDeliveryRepository)
+        delivery_id = _inbound(context, connection, sales.id, "processing")
+        repository.claim_next_inbound(agent_id=context.agent.id)
+        _set_agent(context, status=AgentStatus.STOPPED)
+
+        _delete(context)
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get_one(CommunicationDelivery, delivery_id)
+            row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.add(row)
+            session.commit()
+        repository.reclaim_expired_inbound(agent_id=context.agent.id)
+
+        assert_that(_delivery(context, delivery_id).status, equal_to(CommunicationDeliveryStatus.CANCELLED))
+
+
+def test_deleting_emits_agent_updated():
+    with given(_given()) as context:
+        _create(context)
+        _delete(context)
+
+        events = _persona_events(context)
+
+        assert_that(
+            events[-1].payload["field_changes"], equal_to({"personas.sales": {"previous": None, "new": "deleted"}})
+        )

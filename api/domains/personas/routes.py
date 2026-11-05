@@ -45,6 +45,16 @@ def update_agent_persona(
     return service.update_persona(agent_id, key, payload, context)
 
 
+@personas_router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent_persona(
+    agent_id: UUID,
+    key: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[PersonaService, Injected(PersonaService)],
+) -> None:
+    service.delete_persona(agent_id, key, context)
+
+
 @personas_router.get("/{key}", response_model=PersonaRead)
 def get_agent_persona(
     agent_id: UUID,

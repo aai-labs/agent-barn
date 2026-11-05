@@ -6,9 +6,10 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create and edit, with creation behind the `personas_enabled` flag, which is off by default. The runtime ignores Persona rows until the runtime slices land.
+- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create, edit and delete, with creation behind the `personas_enabled` flag, which is off by default. The runtime ignores Persona rows until the runtime slices land.
 - In transition: nothing.
-- Next: delete and delivery cancellation.
+- Next: `persona-setup.py`, the per-profile boot step.
+- Note: the re-check that refuses a send for a Persona deleted in the meantime arrives with the Communications slice, which is also what first writes `persona_id` on messages.
 - Blockers: none.
 
 ## Runtime evidence
@@ -48,6 +49,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona delete
+
+- Delivered: `DELETE .../personas/{key}` under `agent.update`, a soft delete with the same guards as edit. The key stays taken and versions stay stored, and it frees a slot. It cancels that Persona's open inbound deliveries in the same transaction: PENDING becomes CANCELLED, and PROCESSING is flagged and ends CANCELLED when its lease is reclaimed. Other Personas and the Default are untouched.
+- Changed: one operation added to the public API inventory.
+- Follow-up: the boot step.
 
 ### 2026-11-05 — AF-425 — Persona create and edit
 

@@ -13,6 +13,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.selection import ensure_personas_supported
 from api.domains.agents.service import AgentService, _refuse_during_managed_update
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.events import resolve_actor_identity
 from api.domains.personas.keys import derive_key
 from api.domains.personas.models import (
@@ -42,6 +43,7 @@ class PersonaService:
     authorization: AgentAuthorization
     agents: AgentRepository
     lifecycle: AgentService
+    gateway: CommunicationsGatewayService
     config: Config
 
     def list_personas(self, agent_id: UUID, context: CurrentUserContext) -> PersonaList:
@@ -158,6 +160,24 @@ class PersonaService:
             )
         self.lifecycle.event_delivery_dispatcher.enqueue_immediate(deliveries)
         return self._read(updated)
+
+    def delete_persona(self, agent_id: UUID, key: str, context: CurrentUserContext) -> None:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        ensure_personas_supported(agent.agent_type)
+        if key == DEFAULT_PERSONA_KEY:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "The Default Persona can't be deleted")
+        with self.agents.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(status.HTTP_409_CONFLICT, "An Agent lifecycle operation is already in progress")
+            agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+            persona = self._require_active(agent, key, context)
+            self._require_changeable(agent)
+            actor = resolve_actor_identity(context, agent.organization_id)
+            deliveries, cancelled = self.repository.soft_delete_with_event(
+                persona.id, agent, actor, self._actor_display(context)
+            )
+        self.lifecycle.event_delivery_dispatcher.enqueue_immediate(deliveries)
+        self.gateway.announce_cancelled(agent.id, cancelled)
 
     def _require_changeable(self, agent: Agent) -> None:
         _refuse_during_managed_update(agent)
