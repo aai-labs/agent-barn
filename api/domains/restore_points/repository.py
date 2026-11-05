@@ -250,6 +250,13 @@ class RestorePointRepository:
             },
         )
 
+    def mark_restore_retryable(self, restore_point_id: UUID, reason: str) -> bool:
+        return self._conditional_update(
+            restore_point_id,
+            (RestorePointStatus.RESTORING,),
+            {"status": RestorePointStatus.READY, "failure_reason": reason, "job_name": None},
+        )
+
     def mark_failed_restore_target_ready(self, restore_point_id: UUID) -> bool:
         return self._conditional_update(
             restore_point_id,
@@ -337,6 +344,7 @@ class RestorePointRepository:
         actor: ActorIdentity,
         payload: dict,
         reapply_configuration: bool = False,
+        backup_skipped_by_user: bool = False,
         restored_by_user_id: UUID | None = None,
         restored_by_display: str | None = None,
     ) -> RestorePointEventResult | None:
@@ -357,6 +365,7 @@ class RestorePointRepository:
             # are written together, and reconciliation can find it later.
             row.reapply_configuration = reapply_configuration
             row.configuration_error = None
+            row.backup_skipped_by_user = backup_skipped_by_user
             row.restored_by_user_id = restored_by_user_id
             row.restored_by_display = restored_by_display
             row.updated_at = datetime.now(UTC)
