@@ -90,7 +90,7 @@ Every write path in both catalogues maps to exactly one Outcome Type: 90 aai-cli
 
 | Outcome Type | Default minutes | Covers (examples) |
 |---|---|---|
-| `PULL_REQUEST_OPENED` | 20 | github/bitbucket `prs create` |
+| `PULL_REQUEST_OPENED` | 20 | github/bitbucket `prs create`, gitlab `mrs create` |
 | `DOCUMENT_AUTHORED` | 20 | confluence `pages create`/`update`, excel `workbook create`, gog `sheets create` |
 | `COMMENT_POSTED` | 5 | jira `issues comments create`, github `prs reviews create`, confluence `pages comments create`, gog `drive comments create`/`reply` |
 | `MESSAGE_SENT` | 5 | microsoft `mail send`, apollo `emails send-now`, gog `gmail send`/`reply`/`reply-all`/`forward`/`autoreply`/`drafts send` |

@@ -252,7 +252,7 @@ Each template has a guided setup at
 
 Skills are what agents can actually do:
 
-Apollo · Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot ·
+Apollo · Bitbucket · Confluence · Excel · GitHub · GitLab · Google Drive · HubSpot ·
 Jira · Merkys · OpenPanel · Pipedrive · PostHog · Zoho Mail
 
 Each mounts documentation into the agent's workspace and is gated on the
