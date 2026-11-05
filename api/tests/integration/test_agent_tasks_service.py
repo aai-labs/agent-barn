@@ -20,6 +20,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PERMISSION_ID_BY_KEY, PermissionKey
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
 from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.shared.models import Pagination
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
@@ -58,6 +59,18 @@ def _member_is_signed_in():
     def step(context):
         there_is_a_user(
             email=f"member-{uuid7()}@example.com", role=OrganizationRole.MEMBER, organization_id=context.organization.id
+        )(context)
+
+    return step
+
+
+def _pending_member_is_signed_in():
+    def step(context):
+        there_is_a_user(
+            email=f"pending-{uuid7()}@example.com",
+            role=OrganizationRole.MEMBER,
+            organization_id=context.organization.id,
+            email_verified=False,
         )(context)
 
     return step
@@ -306,6 +319,59 @@ def test_the_organization_list_shows_only_tasks_on_agents_the_member_can_read():
         page = _service(context).list_organization_tasks(context.current_user_context, AgentTaskFilter(), _FIRST_PAGE)
 
         assert_that(([task.title for task in page.items], page.total), equal_to((["Shared work"], 1)))
+
+
+def test_a_pending_member_gets_no_tasks_through_general_access():
+    with given([*_GIVEN, there_is_an_agent(), _pending_member_is_signed_in()]) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.general_access_role_id = AGENT_VIEWER_ROLE_ID
+        repository.delegate.save(context.agent)
+        task = _create(context, context.agent.id)
+
+        page = _service(context).list_organization_tasks(context.current_user_context, AgentTaskFilter(), _FIRST_PAGE)
+
+        assert_that(
+            (
+                page.total,
+                _status_code(
+                    lambda: _service(context).get_task(context.agent.id, task.id, context.current_user_context)
+                ),
+            ),
+            equal_to((0, status.HTTP_404_NOT_FOUND)),
+        )
+
+
+def test_a_removed_member_loses_the_tasks_they_could_read():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            _member_is_signed_in(),
+            there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID),
+        ]
+    ) as context:
+        _create(context, context.agent.id)
+        before = _service(context).list_organization_tasks(context.current_user_context, AgentTaskFilter(), _FIRST_PAGE)
+
+        with when("the member is removed from the Organization"):
+            context.injector.get(OrganizationUserRepository).delete(context.organization_user)
+            page = _service(context).list_organization_tasks(
+                context.current_user_context, AgentTaskFilter(), _FIRST_PAGE
+            )
+
+            with then("their Agent access went with the Membership, so no Tasks are listed"):
+                assert_that((before.total, page.total), equal_to((1, 0)))
+
+
+def test_the_organization_list_hides_tasks_on_agents_the_member_cannot_read():
+    with given([*_GIVEN, there_is_an_agent(), _member_is_signed_in()]) as context:
+        role = _custom_role(context, {PermissionKey.TASK_READ})
+        there_is_agent_access(access_role_id=role.id)(context)
+        _create(context, context.agent.id, title="Hidden work")
+
+        page = _service(context).list_organization_tasks(context.current_user_context, AgentTaskFilter(), _FIRST_PAGE)
+
+        assert_that((page.items, page.total), equal_to(([], 0)))
 
 
 def test_the_organization_list_shows_an_admin_every_agents_tasks_but_no_other_organizations():

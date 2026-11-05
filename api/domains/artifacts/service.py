@@ -13,7 +13,7 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.artifacts.buckets import ArtifactBucketRepository
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead, ArtifactStorageRead
-from api.domains.artifacts.references import pin_published, release
+from api.domains.artifacts.references import pin_published, release, release_beyond_newest
 from api.domains.artifacts.repository import ArtifactRepository, PublicationBusy
 from api.domains.artifacts.storage import (
     ArtifactCredentialsUnavailable,
@@ -191,6 +191,10 @@ class ArtifactService:
     def release(self, session: Session, kind: str, owner_id: UUID) -> None:
         """Let `owner_id`'s pinned Artifacts expire again, a full retention from now, in the caller's transaction."""
         release(session, kind, owner_id, self.config.artifact_retention_days)
+
+    def keep_newest_pins(self, session: Session, kind: str, agent_id: UUID, keep: int) -> None:
+        """Release the Agent's `kind` pins past its newest `keep`, in the caller's transaction."""
+        release_beyond_newest(session, kind, agent_id, keep, self.config.artifact_retention_days)
 
     def ready(self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope) -> Artifact:
         row = self.repository.get(artifact_id, agent_id, scope)

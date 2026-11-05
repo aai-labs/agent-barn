@@ -2,6 +2,8 @@
 each attachment keeps its Artifact from expiring for as long as the Task has it."""
 
 import hashlib
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
@@ -9,10 +11,13 @@ import pytest
 from fastapi import HTTPException, status
 from hamcrest import assert_that, equal_to, has_item, has_properties, is_not
 from injector import Module, provider, singleton
+from sqlalchemy import text
 from sqlmodel import Session, col, select
 
-from api.domains.agent_tasks.models import AgentTaskCreate, AgentTaskFileCreate
+from api.domains.agent_tasks import service as task_service
+from api.domains.agent_tasks.models import AgentTaskCreate, AgentTaskFileCreate, AgentTaskStatus
 from api.domains.agent_tasks.service import AgentTaskService
+from api.domains.agents.models import Agent
 from api.domains.artifacts.models import Artifact, ArtifactReference
 from api.domains.artifacts.repository import ArtifactRepository
 from api.domains.artifacts.service import ArtifactService
@@ -115,11 +120,35 @@ def _attach(context, task, artifact: Artifact, agent=None):
     )
 
 
+def _set_status(context, task, task_status: AgentTaskStatus, agent=None):
+    agent = agent or context.agent
+    return _service(context).update_status(agent.organization_id, agent.id, task.id, task_status)
+
+
+def _pinned(context, artifact_id: UUID) -> bool:
+    return any(ref.released_at is None for ref in _references(context, artifact_id))
+
+
+def _expires_at(context, artifact_id: UUID) -> datetime:
+    with Session(context.postgres_delegate.engine) as session:
+        return session.get_one(Artifact, artifact_id).expires_at
+
+
 def _references(context, artifact_id: UUID) -> list[ArtifactReference]:
     with Session(context.postgres_delegate.engine) as session:
         return list(
             session.exec(select(ArtifactReference).where(col(ArtifactReference.artifact_id) == artifact_id)).all()
         )
+
+
+def _waits_for_a_row_lock(context) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with Session(context.postgres_delegate.engine) as session:
+            if session.connection().execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar():
+                return
+        time.sleep(0.05)
+    raise AssertionError("nothing waited for the row lock")
 
 
 def _status_code(call) -> int:
@@ -202,6 +231,48 @@ def test_one_artifact_can_be_attached_to_two_tasks():
             {ref.owner_id for ref in _references(context, artifact.id)},
             equal_to({first.id, second.id}),
         )
+
+
+def test_an_artifact_that_starts_deleting_during_the_attach_is_not_attached():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+
+        with when("a deletion holds the Artifact while the Agent attaches it"):
+            with Session(context.postgres_delegate.engine) as deleting:
+                row = deleting.exec(select(Artifact).where(col(Artifact.id) == artifact.id).with_for_update()).one()
+                row.state = "DELETING"
+                deleting.add(row)
+                deleting.flush()
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    attempt = pool.submit(_status_code, lambda: _attach(context, task, artifact))
+                    _waits_for_a_row_lock(context)
+                    deleting.commit()
+                    code = attempt.result(timeout=10)
+
+            with then("the attach sees the deletion: not found, and nothing is pinned"):
+                assert_that((code, _references(context, artifact.id)), equal_to((status.HTTP_404_NOT_FOUND, [])))
+
+
+def test_an_attach_that_waits_on_the_agents_deletion_is_refused():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+
+        with when("the Agent's deletion holds its row while the Agent attaches a file"):
+            with Session(context.postgres_delegate.engine) as deleting:
+                agent = deleting.exec(select(Agent).where(col(Agent.id) == context.agent.id).with_for_update()).one()
+                agent.deleted_at = datetime.now(UTC)
+                deleting.add(agent)
+                deleting.flush()
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    attempt = pool.submit(_status_code, lambda: _attach(context, task, artifact))
+                    _waits_for_a_row_lock(context)
+                    deleting.commit()
+                    code = attempt.result(timeout=10)
+
+            with then("the attach finds no Agent, and nothing is pinned"):
+                assert_that((code, _references(context, artifact.id)), equal_to((status.HTTP_404_NOT_FOUND, [])))
 
 
 def test_an_artifact_that_is_still_uploading_cannot_be_attached():
@@ -303,3 +374,85 @@ def test_an_artifact_attached_to_a_task_cannot_be_deleted():
                 (status.HTTP_409_CONFLICT, "This file is in use by a run, review or Task, so it cannot be deleted")
             ),
         )
+
+
+@pytest.mark.parametrize("finished", [AgentTaskStatus.DONE, AgentTaskStatus.FAILED])
+def test_finishing_a_task_lets_its_files_expire_a_full_retention_later(finished):
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+        _attach(context, task, artifact)
+
+        with when(f"the Task is marked {finished.value}"):
+            _set_status(context, task, finished)
+
+            with then("the pin is released and the file expires a full retention from now"):
+                assert_that(_pinned(context, artifact.id), equal_to(False))
+                assert_that(
+                    _expires_at(context, artifact.id) > datetime.now(UTC) + timedelta(days=29),
+                    equal_to(True),
+                )
+
+
+def test_a_task_still_in_progress_keeps_its_files_pinned():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+        _attach(context, task, artifact)
+
+        _set_status(context, task, AgentTaskStatus.IN_PROGRESS)
+
+        assert_that(_pinned(context, artifact.id), equal_to(True))
+
+
+def test_a_file_attached_to_a_finished_task_gets_the_usual_retention():
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+        task = _task(context)
+        _set_status(context, task, AgentTaskStatus.DONE)
+        artifact = _artifact(context)
+
+        stored = _attach(context, task, artifact)
+
+        detail = _service(context).get_task(context.agent.id, task.id, context.current_user_context)
+        assert_that((detail.files, _pinned(context, artifact.id)), equal_to(([stored], False)))
+
+
+def test_reopening_a_task_keeps_its_files_expiry():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+        _attach(context, task, artifact)
+        _set_status(context, task, AgentTaskStatus.DONE)
+
+        _set_status(context, task, AgentTaskStatus.OPEN)
+
+        assert_that(_pinned(context, artifact.id), equal_to(False))
+
+
+def test_past_the_pinned_file_limit_the_agents_oldest_file_is_released(monkeypatch):
+    monkeypatch.setattr(task_service, "MAX_PINNED_FILES_PER_AGENT", 2)
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        oldest, middle, newest = (_artifact(context, filename=f"{name}.csv") for name in ("a", "b", "c"))
+        _attach(context, _task(context), oldest)
+        _attach(context, _task(context), middle)
+
+        with when("the Agent attaches one file more than the limit"):
+            stored = _attach(context, _task(context), newest)
+
+            with then("the attach succeeds and only the oldest file is released"):
+                assert_that(
+                    (stored.artifact_id, [_pinned(context, a.id) for a in (oldest, middle, newest)]),
+                    equal_to((newest.id, [False, True, True])),
+                )
+
+
+def test_the_pinned_file_limit_counts_each_agent_separately(monkeypatch):
+    monkeypatch.setattr(task_service, "MAX_PINNED_FILES_PER_AGENT", 1)
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        first = _artifact(context)
+        _attach(context, _task(context), first)
+        there_is_an_agent(name="Second")(context)
+
+        _attach(context, _task(context), _artifact(context))
+
+        assert_that(_pinned(context, first.id), equal_to(True))

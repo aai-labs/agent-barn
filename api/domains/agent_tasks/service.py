@@ -27,6 +27,9 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 # The Artifact pin kind for Task Files; each pin's owner is the File's id.
 _TASK_FILE_PIN = "task"
 
+# Files on unfinished Tasks stay pinned; past this many for one Agent, its oldest are released.
+MAX_PINNED_FILES_PER_AGENT = 500
+
 
 def _task_not_found(task_id: UUID) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Task {task_id} not found")
@@ -55,7 +58,13 @@ class AgentTaskService:
     def update_status(
         self, organization_id: UUID, agent_id: UUID, task_id: UUID, task_status: AgentTaskStatus
     ) -> AgentTaskRead:
-        task = self.repository.update_status(organization_id, agent_id, task_id, task_status)
+        task = self.repository.update_status(
+            organization_id,
+            agent_id,
+            task_id,
+            task_status,
+            lambda session, file_id: self.artifacts.release(session, _TASK_FILE_PIN, file_id),
+        )
         if task is None:
             raise _task_not_found(task_id)
         return AgentTaskRead.model_validate(task)
@@ -79,6 +88,10 @@ class AgentTaskService:
             data.artifact_id,
             lambda session, file_id: self.artifacts.pin(
                 session, data.artifact_id, agent_id, organization_id, _TASK_FILE_PIN, file_id
+            ),
+            lambda session, file_id: self.artifacts.release(session, _TASK_FILE_PIN, file_id),
+            lambda session: self.artifacts.keep_newest_pins(
+                session, _TASK_FILE_PIN, agent_id, MAX_PINNED_FILES_PER_AGENT
             ),
         )
         if stored is None:
@@ -141,8 +154,13 @@ class AgentTaskService:
         task_filter: AgentTaskFilter,
         pagination: Pagination,
     ) -> PaginatedItems[AgentTaskRead]:
-        scope = self.agent_authorization.authorization_scope(context, PermissionKey.TASK_READ)
-        return self.repository.find_in_organization(task_filter, pagination, scope)
+        """Tasks on every Agent the person may both see and read Tasks on, as the per-Agent reads require."""
+        return self.repository.find_in_organization(
+            task_filter,
+            pagination,
+            self.agent_authorization.authorization_scope(context, PermissionKey.TASK_READ),
+            self.agent_authorization.authorization_scope(context, PermissionKey.AGENT_READ),
+        )
 
     def get_task(self, agent_id: UUID, task_id: UUID, context: CurrentUserContext) -> AgentTaskDetail:
         scope = self._agent_read_scope(agent_id, context)
