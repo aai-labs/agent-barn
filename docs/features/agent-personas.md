@@ -36,7 +36,7 @@ The working directory `/workspace` is shared too, because Hermes sets it once pe
 - **Changes need a stopped Agent.** Create, edit and delete are refused while the Agent runs, as other runtime configuration is. The UI wraps them in Apply & Restart.
 - **Authorization follows the Agent.** Reading needs `agent.read`, and changes need `agent.update`. There is no per-Persona access and no new Permission. See the [RBAC brief](rbac/IMPLEMENTATION-BRIEF.md).
 - **Hermes only in v1.** Changing Personas on an OpenClaw Agent is refused with 400.
-- **A deployment flag gates the feature** until the UI is complete.
+- **A deployment flag gates the feature** until the UI is complete: `PERSONAS_ENABLED` (chart value `personasEnabled`), off by default. The Persona list reports it as `enabled`, which is always false for OpenClaw.
 - **Multiplex only with Personas.** An Agent with no active Persona keeps its single-profile boot, with no `.env` file and no in-memory volume.
 - **A Persona message never runs as the Default.** With multiplex off, Hermes silently answers an unknown `/p/<key>` as the Default, and it serves any profile folder it finds, so the adapter only addresses keys on the active list and fails any other.
 - **Bot tokens never go in a Persona's `.env`.** Hermes refuses the duplicate adapter, but the Persona never needs them.

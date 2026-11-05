@@ -431,6 +431,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/personas",
+    "list_agent_personas_organizations__organization_id__agents__agent_id__personas_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/personas/{key}",
+    "get_agent_persona_organizations__organization_id__agents__agent_id__personas__key__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/personas/{key}/versions",
+    "list_agent_persona_versions_organizations__organization_id__agents__agent_id__personas__key__versions_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
     "list_agent_playbook_extractions_organizations__organization_id__agents__agent_id__playbook_extractions_get"
   ],

@@ -2,11 +2,14 @@ from datetime import datetime
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
 
+DEFAULT_PERSONA_KEY = "default"
 PERSONA_KEY_MAX_LENGTH = 40
 PERSONA_EMOJI_MAX_LENGTH = 16
 
@@ -62,3 +65,33 @@ class AgentPersonaVersion(BaseModel, table=True):
         nullable=True,
         ondelete="SET NULL",
     )
+
+
+class PersonaSummary(PydanticBaseModel):
+    id: UUID | None
+    key: str
+    display_name: str
+    emoji: str | None
+    is_default: bool
+    current_version: int | None
+    updated_at: datetime
+
+
+class PersonaList(PydanticBaseModel):
+    enabled: bool
+    personas: list[PersonaSummary]
+
+
+class PersonaRead(PersonaSummary):
+    soul_md: str
+    identity_md: str
+
+
+class PersonaVersionRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    version: int
+    soul_md: str
+    identity_md: str
+    author_user_id: UUID | None
+    created_at: datetime

@@ -47,6 +47,8 @@ SENDER_EMAIL=
 # installation_environment=local with a local-<id> name; set false to opt out.
 ANALYTICS_ENABLED=true
 
+PERSONAS_ENABLED=false
+
 # Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
 # Communication Connections; nothing else changes. Both are required on top of the three
 # values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email

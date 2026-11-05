@@ -6,9 +6,9 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, the `agent_persona` and `agent_persona_version` tables, and `persona_id` on messages and threads. Nothing reads or writes them yet, and no product behaviour has changed.
+- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and read-only Persona routes behind the `personas_enabled` flag, which is off by default. Personas can't be created yet, so the routes return only the Default in practice.
 - In transition: nothing.
-- Next: Persona read API and the `personas_enabled` flag.
+- Next: create and edit.
 - Blockers: none.
 
 ## Runtime evidence
@@ -48,6 +48,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona read API
+
+- Delivered: `GET .../personas`, `GET .../personas/{key}` and `GET .../personas/{key}/versions` under `agent.read`. The list starts with the Default and leaves out SOUL and IDENTITY. `default` returns the pinned Template's rendered text. OpenClaw Agents only have the Default.
+- Changed: new `personas_enabled` setting (`PERSONAS_ENABLED`, chart value `personasEnabled`), three operations added to the public API inventory.
+- Follow-up: create and edit.
 
 ### 2026-11-05 — AF-425 — Persona columns on messages and threads
 

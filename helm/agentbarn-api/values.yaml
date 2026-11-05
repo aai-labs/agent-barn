@@ -46,6 +46,7 @@ senderEmail: ""
 # are never sent. The webAppUrl hostname labels remote installs; local hosts use local-<short UUID>.
 # See docs/features/product-analytics.md.
 analyticsEnabled: true
+personasEnabled: false
 
 # Hourly message counts per Agent, platform and direction (no content), sent for the
 # previous closed hour. The CronJob exists only while analyticsEnabled is "true".

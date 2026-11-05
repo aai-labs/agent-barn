@@ -1016,3 +1016,47 @@ def test_agent_list_metadata_queries_exclude_hidden_cross_org_and_deleted_agents
         assert_that(secrets[visible.id][0].secret_name, equal_to("GitHub"))
         assert_that(set(creators), equal_to({visible.id}))
         assert_that(messages, equal_to({visible.id: occurred_at}))
+
+
+PERSONA_READ_SUFFIXES = ["", "/default", "/default/versions"]
+
+
+@pytest.mark.parametrize("suffix", PERSONA_READ_SUFFIXES)
+def test_viewer_can_read_personas(suffix):
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.get(f"{_BASE}/{context.agent.id}/personas{suffix}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+@pytest.mark.parametrize("suffix", PERSONA_READ_SUFFIXES)
+def test_member_without_access_gets_404_for_personas(suffix):
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _switch_to_member()(context)
+
+        response = context.client.get(f"{_BASE}/{context.agent.id}/personas{suffix}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("suffix", PERSONA_READ_SUFFIXES)
+def test_another_organizations_agent_gets_404_for_personas(suffix):
+    with given(_GIVEN) as context:
+        other_organization = Organization(name="Other organization")
+        context.postgres_delegate.save(other_organization)
+        there_is_an_agent(organization_id=other_organization.id)(context)
+
+        response = context.client.get(f"{_BASE}/{context.agent.id}/personas{suffix}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("suffix", PERSONA_READ_SUFFIXES)
+def test_a_deleted_agent_gets_404_for_personas(suffix):
+    with given([*_GIVEN, there_is_an_agent(deleted=True)]) as context:
+        response = context.client.get(f"{_BASE}/{context.agent.id}/personas{suffix}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

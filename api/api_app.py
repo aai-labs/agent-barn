@@ -60,6 +60,7 @@ from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
 from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
+from api.domains.personas.routes import personas_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.playbooks.platform_routes import platform_playbooks_router
 from api.domains.playbooks.routes import agent_playbook_extractions_router, playbook_extractions_router
@@ -152,6 +153,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
+    subapi.include_router(personas_router)
     subapi.include_router(agent_artifacts_router)
     subapi.include_router(workflows_router)
     subapi.include_router(workflow_runs_router)
