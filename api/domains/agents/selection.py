@@ -75,6 +75,11 @@ def ensure_approval_mode_supported(agent_type: AgentType, approval_mode: Command
         )
 
 
+def ensure_personas_supported(agent_type: AgentType) -> None:
+    if agent_type != AgentType.HERMES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Personas are Hermes-only.")
+
+
 def ensure_max_turns_supported(agent_type: AgentType, max_turns: int | None) -> None:
     """Only the Hermes builder maps max_turns onto a runtime setting. A value for
     an OpenClaw Agent would be stored and never read, so it is rejected.

@@ -12,6 +12,7 @@ from api.domains.agents.models import (
     AgentFilter,
     AgentRestorePoint,
     AgentStatus,
+    AgentType,
     RestorePointOrigin,
     RestorePointStatus,
 )
@@ -1060,3 +1061,66 @@ def test_a_deleted_agent_gets_404_for_personas(suffix):
         response = context.client.get(f"{_BASE}/{context.agent.id}/personas{suffix}", headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+_PERSONA_BODY = {"display_name": "Sales", "soul_md": "Soul", "identity_md": "Identity"}
+_PERSONA_GIVEN = [
+    set_env_variable({"PERSONAS_ENABLED": "true"}),
+    *_GIVEN,
+    there_is_an_agent(agent_type=AgentType.HERMES),
+]
+
+
+def _persona_write(context, method: str):
+    url = f"{_BASE}/{context.agent.id}/personas"
+    if method == "post":
+        return context.client.post(url, json=_PERSONA_BODY, headers=_auth(context))
+    return context.client.put(f"{url}/sales", json={**_PERSONA_BODY, "expected_version": 1}, headers=_auth(context))
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_viewer_cannot_change_personas(method):
+    with given(_PERSONA_GIVEN) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        assert_that(_persona_write(context, method).status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_editor_can_create_a_persona():
+    with given(_PERSONA_GIVEN) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_EDITOR_ROLE_ID)(context)
+
+        assert_that(_persona_write(context, "post").status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(_persona_write(context, "put").status_code, equal_to(status.HTTP_200_OK))
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_member_without_access_gets_404_when_changing_personas(method):
+    with given(_PERSONA_GIVEN) as context:
+        _switch_to_member()(context)
+
+        assert_that(_persona_write(context, method).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_another_organizations_agent_gets_404_when_changing_personas(method):
+    with given([set_env_variable({"PERSONAS_ENABLED": "true"}), *_GIVEN]) as context:
+        other_organization = Organization(name="Other organization")
+        context.postgres_delegate.save(other_organization)
+        there_is_an_agent(organization_id=other_organization.id, agent_type=AgentType.HERMES)(context)
+
+        assert_that(_persona_write(context, method).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_a_deleted_agent_gets_404_when_changing_personas(method):
+    with given(
+        [
+            set_env_variable({"PERSONAS_ENABLED": "true"}),
+            *_GIVEN,
+            there_is_an_agent(agent_type=AgentType.HERMES, deleted=True),
+        ]
+    ) as context:
+        assert_that(_persona_write(context, method).status_code, equal_to(status.HTTP_404_NOT_FOUND))

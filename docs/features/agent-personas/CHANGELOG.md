@@ -6,9 +6,9 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and read-only Persona routes behind the `personas_enabled` flag, which is off by default. Personas can't be created yet, so the routes return only the Default in practice.
+- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create and edit, with creation behind the `personas_enabled` flag, which is off by default. The runtime ignores Persona rows until the runtime slices land.
 - In transition: nothing.
-- Next: create and edit.
+- Next: delete and delivery cancellation.
 - Blockers: none.
 
 ## Runtime evidence
@@ -48,6 +48,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona create and edit
+
+- Delivered: `POST .../personas` and `PUT .../personas/{key}` under `agent.update`. Keys are derived from the name by the server and never reused. At most 5 active Personas, and SOUL and IDENTITY capped at 32 KiB each in UTF-8 bytes. Text changes append a Persona Version; a stale `expected_version` gets 409. Refused while the Agent runs, during a managed update or a restore, and with 400 on OpenClaw. Each change emits `agent.updated` without any prompt text.
+- Changed: two operations added to the public API inventory.
+- Follow-up: delete.
 
 ### 2026-11-05 — AF-425 — Persona read API
 

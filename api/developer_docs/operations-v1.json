@@ -1231,6 +1231,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/personas",
+    "create_agent_persona_organizations__organization_id__agents__agent_id__personas_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
     "create_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions_post"
   ],
@@ -1538,6 +1543,11 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/memory",
     "set_agent_memory_organizations__organization_id__agents__agent_id__memory_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/personas/{key}",
+    "update_agent_persona_organizations__organization_id__agents__agent_id__personas__key__put"
   ],
   [
     "PUT",

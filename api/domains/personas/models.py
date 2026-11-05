@@ -1,9 +1,10 @@
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field, StringConstraints, field_validator
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -12,6 +13,9 @@ from api.infrastructure.postgres.models import BaseModel
 DEFAULT_PERSONA_KEY = "default"
 PERSONA_KEY_MAX_LENGTH = 40
 PERSONA_EMOJI_MAX_LENGTH = 16
+PERSONA_NAME_MAX_LENGTH = 255
+PERSONA_TEXT_MAX_BYTES = 32 * 1024
+MAX_ACTIVE_PERSONAS = 5
 
 
 class AgentPersona(BaseModel, table=True):
@@ -32,7 +36,7 @@ class AgentPersona(BaseModel, table=True):
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     agent_id: UUID = SqlField(nullable=False)
     key: str = SqlField(nullable=False, max_length=PERSONA_KEY_MAX_LENGTH)
-    display_name: str = SqlField(nullable=False, max_length=255)
+    display_name: str = SqlField(nullable=False, max_length=PERSONA_NAME_MAX_LENGTH)
     emoji: str | None = SqlField(default=None, nullable=True, max_length=PERSONA_EMOJI_MAX_LENGTH)
     current_version: int = SqlField(nullable=False)
     deleted_at: datetime | None = SqlField(
@@ -65,6 +69,35 @@ class AgentPersonaVersion(BaseModel, table=True):
         nullable=True,
         ondelete="SET NULL",
     )
+
+
+class PersonaCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=PERSONA_NAME_MAX_LENGTH)
+    ]
+    emoji: str | None = Field(default=None, max_length=PERSONA_EMOJI_MAX_LENGTH)
+    soul_md: str
+    identity_md: str
+
+    @field_validator("soul_md")
+    @classmethod
+    def has_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("soul_md", "identity_md")
+    @classmethod
+    def fits_the_size_cap(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > PERSONA_TEXT_MAX_BYTES:
+            raise ValueError(f"must be at most {PERSONA_TEXT_MAX_BYTES} bytes")
+        return value
+
+
+class PersonaUpdate(PersonaCreate):
+    expected_version: int
 
 
 class PersonaSummary(PydanticBaseModel):
