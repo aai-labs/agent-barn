@@ -6,9 +6,9 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create, edit and delete, with creation behind the `personas_enabled` flag, which is off by default. The runtime ignores Persona rows until the runtime slices land.
+- Delivered: terminology, the feature contract, the ADR, the tables and `persona_id` columns, and Persona routes to read, create, edit and delete, with creation behind the `personas_enabled` flag, which is off by default. The boot script `persona-setup.py` exists but nothing runs it yet, so the runtime still ignores Persona rows.
 - In transition: nothing.
-- Next: `persona-setup.py`, the per-profile boot step.
+- Next: runtime wiring: builders, the start flow and `start.sh`.
 - Note: the re-check that refuses a send for a Persona deleted in the meantime arrives with the Communications slice, which is also what first writes `persona_id` on messages.
 - Blockers: none.
 
@@ -49,6 +49,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona boot script
+
+- Delivered: `scripts/hermes/persona-setup.py`, tested on its own. It lays out each Persona's profile, writes the `.env` files to the in-memory folder and links them, removes deleted Personas' folders, and with `--sync-allowlists` copies the newest-saved approvals to every profile. A failure on one Persona is logged and the others continue; a failure writing the Default's `.env` stops the boot. Values with a newline or `${` are left out by name.
+- Changed: nothing runs the script yet. The tests skip on machines that can't create symlinks.
+- Follow-up: wire it into the builders and `start.sh`.
 
 ### 2026-11-05 — AF-425 — Persona delete
 
