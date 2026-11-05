@@ -241,12 +241,13 @@ class CredentialGatewayService:
         if content is None:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
+        path = (plugin.preserve_encoded_path and request.encoded_path) or request.path
         try:
             outbound = plugin.apply_upstream_auth(
                 content,
                 OutboundRequest(
                     method=request.method,
-                    path=request.path,
+                    path=path,
                     headers=sanitize_request_headers(request.headers),
                     query=dict(request.params),
                 ),
@@ -268,7 +269,7 @@ class CredentialGatewayService:
             raise UpstreamUnreachable("provider authorization could not be established") from exc
         except ValueError as exc:
             raise GatewayForwardRefused(f"invalid upstream configuration for {plugin.key}") from exc
-        url = f"{base}/{request.path.lstrip('/')}"
+        url = f"{base}/{path.lstrip('/')}"
         slot = self._upstream_slot(plugin)
         if slot is not None and not slot.acquire(blocking=False):
             raise UpstreamBusy(plugin.key)
@@ -281,6 +282,7 @@ class CredentialGatewayService:
                 content=request.body,
                 sensitive_headers=outbound.sensitive_headers,
                 timeout=plugin.upstream_timeout_seconds,
+                public_only=plugin.upstream_public_only,
             )
         finally:
             if slot is not None:
@@ -428,3 +430,5 @@ class ForwardRequest:
     headers: dict[str, str]
     params: dict[str, str]
     body: bytes
+    #: ``path`` before URL decoding, when the route could recover it.
+    encoded_path: str | None = None
