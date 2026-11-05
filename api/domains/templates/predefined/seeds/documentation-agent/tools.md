@@ -6,7 +6,7 @@ This file records integration-specific notes for the Documentation Agent.
 
 - Jira: read a task for context — description, acceptance criteria, links — using
   the Jira key found on a pull request.
-- Source control (GitHub or Bitbucket): find merged pull requests and read what
+- Source control (GitHub, Bitbucket or GitLab): find merged pull requests and read what
   shipped — the changed files, the diff, the commits under a PR, and file
   contents (including md files) at a ref. Whichever host is configured is used.
 - Confluence: create and update documentation pages and the changelog, and check
@@ -22,7 +22,8 @@ skill file first:
 - Jira: `./skills/aai-jira/SKILL.md` for `aai-cli jira` (always pass
   `--profile jira-work`).
 - Source control — use whichever host is configured (see the Integrations block
-  in AGENTS.md). Both expose the same capabilities:
+  in AGENTS.md). All expose the same capabilities, under different commands on
+  GitLab:
   - GitHub: `./skills/aai-github/SKILL.md`, `--profile github-work`. Key
     commands: `repos get` (default branch), `prs list --sort updated` (then filter
     to merged), `prs files` (files changed), `prs diff`, `prs commits`,
@@ -31,6 +32,10 @@ skill file first:
     Key commands: `repos get` (mainline branch), `prs list --sort updated` (then
     filter to merged), `prs diffstat` (files changed), `prs diff`, `prs commits`,
     `source get`.
+  - GitLab: `./skills/aai-gitlab/SKILL.md`, `--profile gitlab-work`. Merge requests
+    are `mrs`, and repos are projects passed with `--project <group/project>`. Key
+    commands: `projects get` (`default_branch`), `mrs list --state merged`,
+    `mrs diffs` (files changed and diff), `mrs commits`, `source get`.
   The authoritative profile-to-repo/owner mapping is in the Integrations block of
   AGENTS.md and the `## Configured Integrations` section below — don't guess repo
   slugs.

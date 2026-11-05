@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 from hamcrest import assert_that, equal_to, is_, is_not
 
 from api.domains.agents.models import (
@@ -397,3 +399,23 @@ def test_a_missing_raw_path_is_ignored():
     request = MagicMock()
     request.scope = {}
     assert_that(encoded_upstream_path(request, "gitlab", "projects/1"), equal_to(None))
+
+
+def test_a_real_request_keeps_the_encoded_slash_the_router_decodes():
+    # Pins what the helper relies on: the router decoding %2F, and the ASGI scope not.
+    app = FastAPI()
+
+    @app.get("/gateway/v1/p/{provider_key}/{upstream_path:path}")
+    def forward(provider_key: str, upstream_path: str, request: Request) -> dict[str, str | None]:
+        return {
+            "decoded": upstream_path,
+            "encoded": encoded_upstream_path(request, provider_key, upstream_path),
+        }
+
+    response = TestClient(app).get("/gateway/v1/p/gitlab/projects/group%2Fsub%2Fapp/repository/files/a%20b%2Fc.rs/raw")
+
+    assert_that(response.json()["decoded"], equal_to("projects/group/sub/app/repository/files/a b/c.rs/raw"))
+    assert_that(
+        response.json()["encoded"],
+        equal_to("projects/group%2Fsub%2Fapp/repository/files/a%20b%2Fc.rs/raw"),
+    )

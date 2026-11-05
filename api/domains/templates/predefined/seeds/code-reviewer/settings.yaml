@@ -4,3 +4,4 @@ required_skills:
 - any_of:
   - GitHub
   - Bitbucket
+  - GitLab

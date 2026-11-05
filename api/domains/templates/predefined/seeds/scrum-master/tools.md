@@ -9,6 +9,7 @@ This file records integration-specific notes for the Scrum-Master Agent.
 - Confluence: project documentation, meeting notes, decisions, rollout plans, whiteboards, and discussion context.
 - GitHub: pull requests, reviews, checks, branches, issues, commits, comments, and repository activity.
 - Bitbucket: pull requests, reviews, checks, branches, commits, comments, and repository activity.
+- GitLab: merge requests, approvals, pipelines, branches, commits, notes, issues, and project activity.
 
 ## Skill Index
 
@@ -20,11 +21,12 @@ Read the relevant skill file first:
 - Confluence: `./skills/aai-confluence/SKILL.md` for the `aai-cli confluence` commands (always pass `--profile confluence-work`).
 - GitHub: `./skills/aai-github/SKILL.md` for the `aai-cli github` commands (always pass `--profile github-work`).
 - Bitbucket: `./skills/aai-bitbucket/SKILL.md` for the `aai-cli bitbucket` commands (always pass `--profile bitbucket-work`).
+- GitLab: `./skills/aai-gitlab/SKILL.md` for the `aai-cli gitlab` commands (always pass `--profile gitlab-work`).
 - Slack: use the built-in Slack integration configured during agent setup.
 
 ## CLI Policy
 
-External Jira, Confluence, GitHub, and Bitbucket access is performed through the `aai-cli` tool, documented by the skill files above. From the agent's perspective, the skill file plus the relevant `aai-cli` command is the supported interface.
+External Jira, Confluence, GitHub, Bitbucket, and GitLab access is performed through the `aai-cli` tool, documented by the skill files above. From the agent's perspective, the skill file plus the relevant `aai-cli` command is the supported interface.
 
 Prefer commands that return normalized JSON. For reads, use `--json` when the skill supports it. For writes or comments, follow the approval rules below and the service-specific skill instructions.
 

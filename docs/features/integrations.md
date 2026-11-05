@@ -18,7 +18,7 @@ Plugins are trusted release artifacts, not dynamically installed packages: addin
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Gmail, Gmail with an app password, Firecrawl, Pipedrive, SharePoint, Apollo, and Merkys. Gmail is a read-only integration beside Google Workspace: one sign-in on the shared Google client, Gmail only, reached through aai-cli's `email` commands. Gmail with an app password is a separate read-only provider for accounts that connect with a Google app password instead; see [Gmail app password](#gmail-app-password). The per-service Google Calendar and Google Sheets providers are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, GitLab, Google Workspace, Gmail, Gmail with an app password, Firecrawl, Pipedrive, SharePoint, Apollo, and Merkys. Gmail is a read-only integration beside Google Workspace: one sign-in on the shared Google client, Gmail only, reached through aai-cli's `email` commands. Gmail with an app password is a separate read-only provider for accounts that connect with a Google app password instead; see [Gmail app password](#gmail-app-password). The per-service Google Calendar and Google Sheets providers are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace, including both Gmail providers) or gog (Google Workspace only). For Gmail with an app password, aai-cli only carries the request: the credential gateway reads the inbox itself. The two have separate runtime artifacts, secret stores, and agent policy blocks. Commands run through either CLI are recorded as Business Actions (see [`business-value.md`](business-value.md)).
 
@@ -26,7 +26,7 @@ Providers reach their service through one of two CLIs: aai-cli (all of the above
 
 Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
 
-- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Merkys. OAuth-based providers (Google Workspace, SharePoint) are excluded.
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, GitLab, Merkys. OAuth-based providers (Google Workspace, SharePoint) are excluded.
 - An agent gets either a shared credential or a per-agent secret for a given provider, not both.
 - Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
 - Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
@@ -46,6 +46,18 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
 - Application deployment secrets, Agent Secrets, Shared Credentials, and Communication Connection credentials are distinct credential classes with different ownership and lifecycles. Connection credentials are owned and validated by shipped Platform Plugins and never become runtime Integration secrets.
 - Firecrawl is an infrastructure capability with an operator-default binding and an optional stored override. Their source ownership, independent isolation choices and endpoint rules are defined under [Platform-default Firecrawl](#platform-default-firecrawl).
+
+## GitLab
+
+GitLab is the one provider whose host the user chooses freely: gitlab.com by default, or any self-hosted instance. The instance is stored on the credential, reduced to a bare https origin, and subpath installs such as `https://example.com/gitlab` are not supported.
+
+Because the API server and the gateway would otherwise send requests to a user-chosen host, `GitlabPlugin` sets `upstream_public_only`. The gateway resolves the host on every hop, redirects included, refuses it unless every answer is a public address over https, and pins the connection to the checked address while TLS and `Host` keep the real name. That is what stops a public name from resolving to, or redirecting into, the cluster. The live validator uses the same pin and follows no redirects, so a private instance is refused when the credential is saved, in direct and isolated mode alike. This is deliberate: a GitLab reachable only over a VPN cannot be connected.
+
+The refusal is a property of the destination, not of the URL's text, and the check in `GitlabContent` for `localhost` is only a typo guard.
+
+`GitlabPlugin` also sets `preserve_encoded_path`, because GitLab addresses projects, files and branches by a single encoded segment (`projects/group%2Fapp`). The router decodes paths, so the gateway recovers the raw path and forwards that. Lists page with `page=N` rather than following `Link` headers, whose URLs name the upstream host and would step around the gateway.
+
+aai-cli's profile `base_url` is the API root (`https://<host>/api/v4`), so a gateway profile can replace it whole. GitLab's `--project` flag takes a full path, stored in the profile's `repo` field.
 
 ## Google OAuth
 
@@ -152,7 +164,7 @@ An isolated provider whose Integration Plugin declares `EgressMode.GATEWAY_PROXY
 
 Redirects retain provider credential headers only within the same origin (scheme, host and effective port). Changing the port or downgrading HTTPS to HTTP strips credentials, and a later redirect back does not restore them.
 
-The existing gateway-routed aai-cli providers use this mode: GitHub, Jira, Confluence, Bitbucket, Pipedrive, and Apollo. Credential-owned Jira and Confluence upstream URLs are restricted to their provider hosts before forwarding, because `site_url` is user-supplied and becomes the forward target. Isolated bindings are excluded from the aai-cli secret store, so their real credentials are in neither the pod Secret nor `aai-secrets.enc.json`. The plugin's `egress_mode` declares its isolated route; the binding's policy selects direct or isolated materialization without a deployment allowlist.
+The existing gateway-routed aai-cli providers use this mode: GitHub, Jira, Confluence, Bitbucket, GitLab, Pipedrive, and Apollo. Credential-owned Jira and Confluence upstream URLs are restricted to their provider hosts before forwarding, because `site_url` is user-supplied and becomes the forward target. Isolated bindings are excluded from the aai-cli secret store, so their real credentials are in neither the pod Secret nor `aai-secrets.enc.json`. The plugin's `egress_mode` declares its isolated route; the binding's policy selects direct or isolated materialization without a deployment allowlist.
 
 Credential isolation does not impose an agent egress policy. Hermes and OpenClaw retain unrestricted internet access; the gateway changes where provider credentials live and where authenticated provider requests are executed, not which unrelated destinations an agent may reach.
 

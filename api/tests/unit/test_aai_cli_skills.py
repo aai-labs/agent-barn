@@ -15,6 +15,7 @@ _EXPECTED_PROVIDER_NAMES = {
     "Jira",
     "Confluence",
     "GitHub",
+    "GitLab",
     "Gmail",
     "Bitbucket",
     "Google Drive",
