@@ -26,11 +26,29 @@ class WebChatThread(BaseModel, table=True):
 
     __tablename__: str = "web_chat_thread"
     __table_args__ = (
-        sa.UniqueConstraint(
+        sa.ForeignKeyConstraint(
+            ["persona_id"],
+            ["agent_persona.id"],
+            name="fk_web_chat_thread_persona",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.Index(
+            "uq_web_chat_thread_default",
             "connection_id",
             "channel_id",
             "thread_id",
-            name="uq_web_chat_thread_connection_channel_thread",
+            unique=True,
+            postgresql_where=sa.text("persona_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_web_chat_thread_persona",
+            "connection_id",
+            "channel_id",
+            "persona_id",
+            "thread_id",
+            unique=True,
+            postgresql_where=sa.text("persona_id IS NOT NULL"),
         ),
         sa.Index("ix_web_chat_thread_connection_channel", "connection_id", "channel_id"),
     )
@@ -42,6 +60,7 @@ class WebChatThread(BaseModel, table=True):
     )
     channel_id: str = SqlField(nullable=False, max_length=512)
     thread_id: str = SqlField(nullable=False, max_length=128)
+    persona_id: UUID | None = SqlField(default=None, nullable=True)
     display_name: str | None = SqlField(default=None, nullable=True, max_length=255)
     deleted_at: datetime | None = SqlField(
         default=None,

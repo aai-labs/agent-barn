@@ -3,8 +3,6 @@
 Revision ID: b7d2e94c1a30
 Revises: 3680352c132d
 Create Date: 2026-11-05
-
-AF-425: named identities inside one Agent. The Default Persona is the Agent itself and has no row.
 """
 
 import sqlalchemy as sa

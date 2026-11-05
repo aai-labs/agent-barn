@@ -6,9 +6,9 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, and the `agent_persona` and `agent_persona_version` tables. Nothing reads or writes them yet, and no product behaviour has changed.
+- Delivered: terminology, the feature contract, the ADR, the `agent_persona` and `agent_persona_version` tables, and `persona_id` on messages and threads. Nothing reads or writes them yet, and no product behaviour has changed.
 - In transition: nothing.
-- Next: `persona_id` on messages and threads, with the two-step foreign key.
+- Next: Persona read API and the `personas_enabled` flag.
 - Blockers: none.
 
 ## Runtime evidence
@@ -48,6 +48,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona columns on messages and threads
+
+- Delivered: nullable `persona_id` on `agent_chat_message` and `web_chat_thread`, where null means the Default. A message can only name a Persona of its own Agent. The Default and each Persona can each have a thread of the same name. A Persona with history can't be removed on its own, and deleting its Agent or Organization still works.
+- Changed: migrations `c1a84f7e2b60` and `d9e36b05a7c2`. Both foreign keys are `DEFERRABLE INITIALLY DEFERRED`, because a plain `NO ACTION` key failed Organization deletion in testing. The spike timed the two-step migration before this change, without the deferred option and with a different column set.
+- Follow-up: the read API.
 
 ### 2026-11-05 — AF-425 — Persona tables
 

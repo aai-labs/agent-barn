@@ -8,6 +8,7 @@ from pydantic import ConfigDict
 from sqlmodel import Column, Enum
 from sqlmodel import Field as SqlField
 
+import api.domains.personas.models  # noqa: F401
 from api.infrastructure.postgres.models import BaseModel
 
 
@@ -46,6 +47,19 @@ class AgentChatMessage(BaseModel, table=True):
         sa.Index("ix_agent_chat_message_occurred_at_direction", "occurred_at", "direction", "agent_id"),
         sa.Index("ix_agent_chat_message_agent_direction_occurred", "agent_id", "direction", "occurred_at"),
         sa.Index("ix_agent_chat_message_created_at", "created_at"),
+        sa.ForeignKeyConstraint(
+            ["persona_id", "agent_id"],
+            ["agent_persona.id", "agent_persona.agent_id"],
+            name="fk_agent_chat_message_persona",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.Index(
+            "ix_agent_chat_message_persona",
+            "persona_id",
+            "agent_id",
+            postgresql_where=sa.text("persona_id IS NOT NULL"),
+        ),
     )
 
     agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
@@ -68,6 +82,7 @@ class AgentChatMessage(BaseModel, table=True):
     channel_name: str | None = SqlField(default=None, nullable=True)
     content: str = SqlField(nullable=False)
     occurred_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    persona_id: UUID | None = SqlField(default=None, nullable=True)
 
 
 class ConversationMessageRead(PydanticBaseModel):
