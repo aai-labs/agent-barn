@@ -6,9 +6,9 @@ Related context: [`../agent-personas.md`](../agent-personas.md), [`../../adr/202
 
 ## Current state
 
-- Delivered: terminology, the feature contract and the ADR. No product behaviour has changed.
+- Delivered: terminology, the feature contract, the ADR, and the `agent_persona` and `agent_persona_version` tables. Nothing reads or writes them yet, and no product behaviour has changed.
 - In transition: nothing.
-- Next: `agent_persona` and `agent_persona_version` tables and models, and the `docs/INDEX.md` entry for the new domain.
+- Next: `persona_id` on messages and threads, with the two-step foreign key.
 - Blockers: none.
 
 ## Runtime evidence
@@ -48,6 +48,12 @@ From a spike against Hermes `v2026.8.19` in local k3d. Later slices may rely on 
 **Not proven:** real Slack, Telegram and Discord connections (offline adapter and gate checks only; the Slack check skipped approval buttons); real Hindsight (stub only); the Firecrawl browser (not configured locally); web search on the Default; skill-declared passthrough variables; `agentbarn-observer` under multiplex; cron `deliver: local` and `origin` completing; Restore Point capture of a multi-Persona volume.
 
 ## Changes
+
+### 2026-11-05 — AF-425 — Persona tables
+
+- Delivered: `agent_persona` and `agent_persona_version`. A key is unique per Agent, including deleted rows, and capped at 40 characters. Foreign keys tie each row to its Agent's Organization. Deleting an Agent removes its Personas and versions; removing a version's author keeps the version.
+- Changed: migration `b7d2e94c1a30`, new domain `api/domains/personas/`, models only.
+- Follow-up: message and thread columns.
 
 ### 2026-11-05 — AF-425 — docs groundwork
 

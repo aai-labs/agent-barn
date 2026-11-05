@@ -28,6 +28,7 @@ import api.domains.file_sync.models
 import api.domains.integrations.models
 import api.domains.onboarding.models
 import api.domains.organizations.models
+import api.domains.personas.models
 import api.domains.playbooks.models
 import api.domains.playbooks.platform_models
 import api.domains.rbac.models
