@@ -8,6 +8,7 @@ export const SHARED_CREDENTIAL_PROVIDER_LABELS: Record<string, string> = {
   jira: "Jira",
   confluence: "Confluence",
   bitbucket: "Bitbucket",
+  gitlab: "GitLab",
   merkys: "Merkys",
 };
 

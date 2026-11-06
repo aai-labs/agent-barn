@@ -23,7 +23,13 @@ def test_foundation_default_preserves_current_route(provider):
         read.desired,
         is_(
             provider
-            not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO, SecretProvider.GMAIL, SecretProvider.MERKYS}
+            not in {
+                SecretProvider.SHAREPOINT,
+                SecretProvider.APOLLO,
+                SecretProvider.GMAIL,
+                SecretProvider.MERKYS,
+                SecretProvider.GITLAB,
+            }
         ),
     )
     assert_that(read.switch_available, is_(ISOLATION_CAPABILITIES[provider].supports_isolated))
