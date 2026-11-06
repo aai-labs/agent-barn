@@ -354,6 +354,34 @@ def test_gitlab_keeps_encoded_paths_and_stays_on_public_addresses():
             assert_that(call.kwargs["headers"]["Authorization"], equal_to("Bearer glpat-real"))
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "%2e%2e/%2e%2e/admin",
+        "..%2F..%2Fadmin",
+        "projects/%2E%2E/%2E%2E/%2E%2E/admin",
+        "projects/group%2F..%2F..%2Fadmin",
+        "projects/%252e%252e/%252e%252e/admin",
+        "%2e/user",
+    ],
+)
+def test_gitlab_refuses_paths_that_climb_out_of_the_api(path):
+    with given(_ALL_AAI_GIVEN) as context:
+        _provider_secret(
+            context,
+            SecretProvider.GITLAB,
+            GitlabContent(base_url="https://gitlab.example.com", token="glpat-real"),
+        )
+        token = _token_for(context, SecretProvider.GITLAB)
+
+        with when("the agent sends a path with encoded dot segments"):
+            response = context.gateway_client.get(f"/gateway/v1/p/gitlab/{path}", headers=_auth(token))
+
+        with then("the gateway refuses and the token never leaves"):
+            assert_that(response.status_code, is_not(equal_to(status.HTTP_200_OK)))
+            assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
+
+
 def test_existing_providers_keep_their_decoded_paths_and_open_egress():
     with given(_ALL_AAI_GIVEN) as context:
         _github_secret(context)

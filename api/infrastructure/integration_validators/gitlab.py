@@ -11,23 +11,27 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 10
 
 
-def validate_gitlab(content: GitlabContent) -> IntegrationValidationResult:
+def _get(content: GitlabContent, path: str) -> httpx.Response:
     # The URL is user-supplied and this runs on the API server, so it goes through the same
     # public-address pin as the gateway, and redirects are refused rather than followed.
+    pinned = pin_to_public_address(f"{content.base_url}/api/v4{path}")
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
+        return client.request(
+            "GET",
+            pinned.url,
+            headers={**pinned.headers, "Authorization": f"Bearer {content.token}"},
+            extensions=pinned.extensions,
+        )
+
+
+def validate_gitlab(content: GitlabContent) -> IntegrationValidationResult:
     try:
-        pinned = pin_to_public_address(f"{content.base_url}/api/v4/user")
+        resp = _get(content, "/user")
+        # /user accepts read_user, which can't reach a project.
+        scope_check = _get(content, "/projects?membership=true&per_page=1") if resp.status_code == 200 else None
     except NonPublicDestination as exc:
         logger.warning("GitLab validation refused %s: %s", content.base_url, exc)
         return IntegrationValidationResult(valid=False, error="GitLab must be reachable at a public https address.")
-
-    try:
-        with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
-            resp = client.request(
-                "GET",
-                pinned.url,
-                headers={**pinned.headers, "Authorization": f"Bearer {content.token}"},
-                extensions=pinned.extensions,
-            )
     except Exception as exc:
         logger.warning("GitLab validation could not reach %s: %s", content.base_url, exc)
         return IntegrationValidationResult(valid=False, error="Could not reach GitLab. Check the URL.")
@@ -45,5 +49,10 @@ def validate_gitlab(content: GitlabContent) -> IntegrationValidationResult:
     # A reverse proxy or the wrong host can answer 200 with HTML.
     if not isinstance(body, dict) or "username" not in body:
         return IntegrationValidationResult(valid=False, error="The URL did not respond like a GitLab API")
+    if scope_check is not None and scope_check.status_code == 403:
+        return IntegrationValidationResult(valid=False, error="The token needs the read_api or api scope")
+    if scope_check is not None and scope_check.status_code != 200:
+        status_code = scope_check.status_code
+        return IntegrationValidationResult(valid=False, error=f"GitLab returned unexpected status {status_code}")
     name = body.get("name", "")
     return IntegrationValidationResult(valid=True, identity=f"{name} (@{body['username']})")

@@ -86,7 +86,7 @@ Exit evidence comes from different places in each runtime:
 
 ## Outcome Types
 
-Every write path in both catalogues maps to exactly one Outcome Type: 90 aai-cli paths and 109 gog paths today. gog writes use the same 10 Outcome Types. **The default minutes are placeholders until the product owner signs them off.** The sign-off is tracked as a blocker in [`business-value/CHANGELOG.md`](business-value/CHANGELOG.md).
+Every write path in both catalogues maps to exactly one Outcome Type: 143 aai-cli paths and 109 gog paths today. gog writes use the same 10 Outcome Types. **The default minutes are placeholders until the product owner signs them off.** The sign-off is tracked as a blocker in [`business-value/CHANGELOG.md`](business-value/CHANGELOG.md).
 
 | Outcome Type | Default minutes | Covers (examples) |
 |---|---|---|
