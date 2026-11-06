@@ -126,7 +126,15 @@ _Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
 An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections or Agent Webhooks.
-_Avoid_: bot, pod
+_Avoid_: bot (except a Bot), pod
+
+**Bot**:
+An Agent created inside a Parent Agent. It has its own Template, Skills, Agent Secrets, Communication Connections, Configured Model, Agent Memory and Agent Access, and runs as a Hermes profile in its Parent Agent's pod. Bots share their Parent Agent's trust boundary, so a Bot is not a security boundary. Not yet available; see [Agent Bots](docs/features/agent-bots.md).
+_Avoid_: persona, profile, sub-agent, child Agent
+
+**Parent Agent**:
+An Agent that holds Bots. Its pod serves itself and every Bot, and its lifecycle, Agent Size, Restore Points and logs cover them all.
+_Avoid_: host Agent, main Agent
 
 **Configured Model**:
 The model currently selected for an Agent. It describes present configuration, not necessarily every model the Agent used historically.
@@ -453,6 +461,7 @@ _Avoid_: webhook
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
+- A **Parent Agent** holds up to five **Bots**, all Hermes and in its Organization. A **Bot** never holds Bots, counts toward the Organization's Agent limit, and cannot share a Platform family with its **Parent Agent**.
 - An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Playbook Extraction** reads one source **Agent** and writes into one **Organization Skill**'s **Skill Draft**; a **Playbook** may be refreshed by later extractions from the same or other Agents.
@@ -476,6 +485,7 @@ _Avoid_: webhook
 - The API field `agent_type` represents the **Runtime**, while product documentation uses “runtime.” Treat Runtime as the domain term; changing the API field requires a compatibility decision.
 - The persisted field `openclaw_msg_id` stores the runtime-external message identifier for both OpenClaw and Hermes messages. Its name is narrower than its current meaning.
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
+- “Bot” names both a **Bot** (an Agent inside a Parent Agent) and the bot account or app installed on a Platform for a Communication Connection. Use **Bot** for the Agent and "bot install" for the Platform account.
 - “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.
 - “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.
 
