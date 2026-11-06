@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 from uuid import UUID
 
@@ -13,7 +13,8 @@ from api.domains.events.catalog import WORKFLOW_CONTROLLER_HANDLER, WORKFLOW_RUN
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.handlers import EventDeliveryContext, SupportedEvent
 from api.domains.events.models import DomainEventEnvelope
-from api.domains.workflows.run_models import TERMINAL_STATES, WorkflowRun
+from api.domains.workflows import config as workflow_config
+from api.domains.workflows.run_models import TERMINAL_STATES, AttemptFailure, WorkflowRun
 from api.domains.workflows.run_repository import WorkflowRunRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 TRIGGER_PORT = 8082
 STEPS_PATH = "/agent-triggers/v1/workflow-steps"
+TRANSIENT_REJECTIONS = {408, 409, 425, 429}
 
 
 @inject
@@ -74,6 +76,19 @@ class WorkflowController:
         # 409 means the Agent already holds this attempt (a lost acknowledgement).
         if status in (202, 409):
             self.repository.mark_dispatched(attempt.id)
+        elif (
+            status is not None
+            and 400 <= status < 500
+            and status not in TRANSIENT_REJECTIONS
+            # An Agent that is still restarting can answer 404; only a persistent refusal is definitive.
+            and datetime.now(UTC) - attempt.created_at > timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
+        ):
+            delivery_ids = self.repository.fail(
+                attempt.id,
+                self.repository.token(attempt.id),
+                AttemptFailure(reason=f"The Agent did not accept the step (HTTP {status})", retryable=False),
+            )
+            self.dispatcher.enqueue_immediate(delivery_ids)
 
     def _send(self, run: WorkflowRun, path: str, payload: dict) -> int | None:
         agent_id = self.repository.owning_agent_id(run.workflow_id)

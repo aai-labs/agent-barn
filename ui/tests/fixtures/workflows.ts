@@ -30,7 +30,6 @@ export const workflowDraft = {
       required: true,
     },
   ],
-  final_artifact_description: "Weekly Markdown summary",
   review_destination: "web",
 };
 export function workflowFixture(agentId: string, viewer = false) {

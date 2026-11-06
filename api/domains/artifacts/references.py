@@ -64,11 +64,13 @@ def attempt_files(session: Session, attempt_id: UUID) -> list[dict]:
 
 def release(session: Session, kind: str, owner_id: UUID, retention_days: int) -> None:
     refs = session.exec(
-        select(ArtifactReference).where(
+        select(ArtifactReference)
+        .where(
             col(ArtifactReference.kind) == kind,
             col(ArtifactReference.owner_id) == owner_id,
             col(ArtifactReference.released_at).is_(None),
         )
+        .order_by(col(ArtifactReference.artifact_id))
     ).all()
     _release_references(session, refs, retention_days)
 

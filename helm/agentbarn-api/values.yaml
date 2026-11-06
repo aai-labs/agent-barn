@@ -154,6 +154,17 @@ restorePoints:
     # capture timeout above, so a row is only swept once its Job has genuinely had
     # time to finish.
     schedule: "*/10 * * * *"
+  # Scheduled snapshots of running Agents. The CronJob checks often; each Agent gets a
+  # snapshot once its newest is older than intervalMinutes (0 turns the schedule off).
+  # maxPerAgent is how many each Agent keeps; maxConcurrent caps snapshots running at
+  # once across the namespace, since each capture Job's memory limit counts against
+  # the namespace quota.
+  schedule:
+    enabled: true
+    cron: "*/5 * * * *"
+    intervalMinutes: 360
+    maxPerAgent: 4
+    maxConcurrent: 2
 
 # Managed updates (the Update button): how long the new pod has to report ready
 # before the update rolls back. Covers pulling an image the node has not seen.

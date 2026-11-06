@@ -156,7 +156,8 @@ def _parse_conventions(value: Any) -> tuple[Convention, ...]:
 
 def skill_markdown(slug: str, playbook: Playbook) -> str:
     """SKILL.md with the same frontmatter the bundled Skills use."""
-    description = playbook.description.replace('"', "'")
+    # A double-quoted YAML scalar: a backslash would start an escape sequence.
+    description = playbook.description.replace("\\", "\\\\").replace('"', "'")
     return f'---\nname: {slug}\ndescription: "{description}"\n---\n\n{playbook.body}\n'
 
 

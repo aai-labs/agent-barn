@@ -34,6 +34,8 @@ class PlaybookExtractionProcessor:
     def process(self, extraction_id: UUID) -> None:
         extraction = self.repository.claim(extraction_id)
         if extraction is None:
+            # A redelivered message after a worker died: fail the run it left behind.
+            self.repository.expire_abandoned(extraction_id=extraction_id)
             return
         try:
             self.pipeline.run(extraction, self._require_authority(extraction))
@@ -44,6 +46,12 @@ class PlaybookExtractionProcessor:
             # Exception text can quote transcripts or model output; log only its type.
             logger.error("Playbook extraction %s failed unexpectedly: %s", extraction.id, type(exc).__name__)
             self.repository.fail(extraction.id, PlaybookExtractionError.INTERNAL_ERROR)
+        except BaseException as exc:
+            # Dramatiq's time limit and worker shutdown raise BaseException subclasses.
+            # Record the run as interrupted, then let the worker handle the interruption.
+            logger.warning("Playbook extraction %s interrupted: %s", extraction.id, type(exc).__name__)
+            self.repository.fail(extraction.id, PlaybookExtractionError.INTERRUPTED)
+            raise
 
     def _require_authority(self, extraction: PlaybookExtraction) -> AuthorizationScope:
         """The requester's Agent visibility scope, if they still hold both Permissions."""

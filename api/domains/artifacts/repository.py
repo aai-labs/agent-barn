@@ -104,6 +104,20 @@ class ArtifactRepository:
             ).all()
             return list(rows), total
 
+    def authorize_workflow_read(self, artifact_id: UUID, attempt_id: UUID, agent_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            run, _ = self.workflows.artifact_attempt(session, attempt_id, agent_id)
+            reference = session.exec(
+                select(ArtifactReference).where(
+                    col(ArtifactReference.artifact_id) == artifact_id,
+                    col(ArtifactReference.kind) == "run",
+                    col(ArtifactReference.owner_id) == run.id,
+                    col(ArtifactReference.released_at).is_(None),
+                )
+            ).first()
+            if reference is None:
+                raise HTTPException(404, "Workflow file not found")
+
     def create(
         self,
         agent_id: UUID,
@@ -137,6 +151,7 @@ class ArtifactRepository:
                     }
                     for item in files
                 ]
+                entries.extend(value for value in run.inputs.values() if isinstance(value, dict))
                 entries.append(
                     {
                         "artifact_id": str(agent_id),
@@ -159,6 +174,45 @@ class ArtifactRepository:
                 bucket = self.buckets.ready_name(agent.id, agent.organization_id, session)
             except ValueError:
                 raise HTTPException(503, "Agent file storage is initializing; retry shortly") from None
+            if source == "chat":
+                # Serialize admission for this Agent so simultaneous identical uploads
+                # share one staging identity before either has finished publishing.
+                session.connection().execute(
+                    sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": f"chat-artifact:{agent.organization_id}:{agent.id}"},
+                )
+                try:
+                    existing = session.exec(
+                        self.scoped(agent_id, scope)
+                        .where(
+                            col(Artifact.bucket) == bucket,
+                            col(Artifact.filename) == payload.filename,
+                            col(Artifact.size) == payload.size,
+                            col(Artifact.checksum) == payload.checksum,
+                            col(Artifact.expires_at) > datetime.now(UTC),
+                            sa.or_(
+                                col(Artifact.state) == "READY",
+                                sa.and_(col(Artifact.source) == "chat", col(Artifact.state) == "UPLOADING"),
+                            ),
+                        )
+                        .order_by(sa.case((col(Artifact.state) == "READY", 0), else_=1), col(Artifact.created_at))
+                        .limit(1)
+                        .with_for_update(of=Artifact, nowait=True)
+                    ).first()
+                except OperationalError as exc:
+                    if (getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)) == "55P03":
+                        raise PublicationBusy() from exc
+                    raise
+                if existing is not None:
+                    retention = (
+                        timedelta(days=self.config.artifact_retention_days)
+                        if existing.state == "READY"
+                        else timedelta(hours=1)
+                    )
+                    existing.expires_at = max(existing.expires_at, datetime.now(UTC) + retention)
+                    session.add(existing)
+                    session.commit()
+                    return existing
             row = Artifact(
                 **payload.model_dump(),
                 organization_id=agent.organization_id,

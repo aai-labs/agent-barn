@@ -27,12 +27,12 @@ Hard aggregate deletion cascades to the authoring records.
 
 Creation explicitly saves immutable v1. A version is the complete schema-v1
 snapshot: name, outcome description, ordered step identities/names/goals,
-completion criteria, required inputs, optional per-step and final artifact
+required inputs, optional per-step artifact
 descriptions, capability requirements and review destination. Step order is array
 order. Step UUIDs and input keys must be unique. Canonical UUID-shaped step identities
 use the same GUID validation in the UI and API; the manual builder assigns fresh
 step identities when steps are added. A workflow needs 1–50 steps;
-inputs are bounded to 30 with lowercase keys, text/number/boolean type and a
+inputs are bounded to 30 with lowercase keys, text/number/boolean/file type and a
 required flag. Keys start with a letter and allow lowercase letters, digits,
 hyphens and underscores, up to 64 characters. The editor derives an internal key
 from the label: accents fold to ASCII, text becomes lowercase, apostrophes drop,
@@ -44,10 +44,17 @@ to fit. Blank labels remain invalid. Normalization collisions are reported on th
 later input label, naming the first matching input; suffixes reduce collisions
 but uniqueness is still validated rather than assumed. Keys stay hidden in both
 editing and saved inspection. Existing saved keys remain unchanged until their
-label is edited. Names and descriptions cannot be blank and have bounded lengths.
+label is edited. Names cannot be blank. The workflow description is optional;
+descriptions have bounded lengths.
 Unknown fields and unsupported input/capability/destination codes are rejected.
-Artifact descriptions are free text intentions, not generated files or format
-support promises. Authoring does not compile or admit execution capabilities.
+Artifact descriptions describe what the user wants to receive. The Agent uses the
+step output descriptions to choose a useful format and publishes any
+generated files as downloadable artifacts. Authors do not configure file-format
+switches. Descriptions do not validate semantic content or promise format support;
+the Agent must honestly report unmet criteria or publication failure. Authoring
+does not compile or admit execution capabilities.
+Step instructions can include success criteria. Older saved completion criteria
+remain visible and are passed to the Agent; new steps do not require them.
 The descriptive capability vocabulary is reasoning/business_action/native_command.
 It is descriptive only: it neither enables nor restricts what a step may do when run.
 
@@ -222,10 +229,10 @@ exactly what the Agent can do in chat, under the same rules, including acting
 unattended wherever the Agent may act unattended in chat. [Agent artifacts](agent-artifacts.md)
 adds optional shared chat/workflow files with private Garage/S3 bytes, scoped
 publication, immutable ID/checksum handoff, attachments and retention. The saved
-`artifact_description` and `final_artifact_description` fields guide the requested
+step `artifact_description` fields guide the requested
 output; text-only results remain supported without storage. Every completed step
 reports its actual result in its summary, bounded to 4,000 characters, including
-facts later steps need. The last step's summary also serves as the final result.
+facts later steps need. Summaries are requested as readable Markdown without expiring artifact download links; users download published files from the attachments. The last step's summary also serves as the final result.
 
 Execution is independent of the authoring setting. An Editor explicitly reviews
 a saved version's typed inputs and starts it. The Agent must be running. A run
@@ -237,7 +244,7 @@ archive, while changed actor/version/inputs return 409. Starts serialize per Age
 Workflow admission does not impose an active-run concurrency cap; multiple runs
 can execute as separate sessions in the owning Agent.
 Declared step capabilities do not gate admission. All subordinate reads use current Agent visibility before
-totals/pagination; start/cancel require `agent.update`, including custom and
+totals/pagination; start/re-run/cancel require `agent.update`, including custom and
 general Agent Access. Read-only keys cannot mutate. Viewers can inspect run
 progress, summaries and history. Run detail defaults to the overall run view,
 labelled Result ready after success and Run overview otherwise. The navigation card
@@ -247,14 +254,23 @@ in the numbered rail replaces the main panel with that step’s persisted Markdo
 result, or its current waiting/in-progress/no-result state. The overall-view
 control stays visible so users can return to the final summary. Selection stays
 within the current run; changing runs resets to the overall view. Results use the
-shared chat Markdown viewer. A compact Time taken card replaces the activity log. Each completed step shows
+shared chat Markdown viewer. A compact Time taken card shows durations. Each completed step shows
 wall-clock time from its first attempt admission to its persisted checkpoint,
-including dispatch waiting and retries. The API exposes nullable `started_at` and
+including dispatch waiting and any attempts recorded by older versions. The API exposes nullable `started_at` and
 `completed_at` fields derived from existing attempts/checkpoints; no migration is
 needed. Unfinished steps show their status, and missing timestamps are unavailable
 rather than zero. Total run time spans run creation through settlement and includes
-queueing and retries. Selecting a completed step also shows its duration. The
-history API remains available, but the run screen no longer fetches the event log. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
+queueing and any earlier attempts. Selecting a completed step also shows its duration. The
+run screen also lists the run's history newest first as Activity (one `history?newest_first=true` read,
+refreshed when the run's revision changes), so a failed attempt's
+reason stays visible after an attempt ends; a completed step shows only
+"Step completed" there, since its summary belongs to the step. While a step runs, the
+single-run read includes `attempt` (number, start, deadline and
+`server_time` (the API's clock, which the screen uses for elapsed and remaining time so a
+skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
+not accepted the step after 60 seconds). The
+rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
+shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
 Runs control clears only the selected run and selects the owning workflow’s Runs
 view. Overview, Runs and Version history use `workflowView=overview|runs|history`
 as their source of truth; an absent or invalid view falls back to Overview. Tab
@@ -266,6 +282,36 @@ workflow layout stays consistent across its overview, list, history and run deta
 so returning to Runs does not reintroduce the surrounding Agent header.
 
 
+### Run again
+
+`POST /workflow-runs/{id}/re-run` takes only a `client_request_id` (a body with
+anything else is rejected with 422) and returns 202 with a new run. The server
+copies the original run's pinned version and inputs, so a caller cannot change
+either; the run's own version is used even when a newer one has been saved. It
+follows the start path: `agent.update`, a running Agent, a non-archived workflow
+and the same admission, ledger and wakeup. Only a settled run (Completed, Failed
+or Cancelled) can be repeated (409 otherwise), and not one whose inputs retention
+has already removed (409). The original run, its history and its revision are not
+touched.
+
+The new run is a separate run with its own history. `workflow_run.rerun_of_run_id`
+(nullable, self-referencing, `ON DELETE SET NULL`) records the original, exposed as
+`rerun_of_run_id`; its first history entry has kind `RERUN_STARTED` and reads
+"Re-run of run 12345678 using version N", where the id is the original's first
+eight characters. The initiating User is whoever requests the re-run. A request
+identity is unique per definition as for starts, and for a re-run it is bound to the
+original run and the actor rather than to inputs: a retry with the same identity and
+original returns the same run, even after retention has removed the original's inputs;
+reusing it for another run or by another actor returns 409. The server advertises `rerun` in `allowed_actions` for a settled run
+whose inputs remain, while its Agent is running and its workflow is not archived. A
+BLOCKED or PAUSED run is still live and has no re-run; cancel it first.
+
+In the UI, settled runs with `rerun` in `allowed_actions` show **Run again** in the
+header when the overview's Run workflow would also be enabled (execution enabled and
+available, and `agent.update`). It asks for confirmation, keeps one request identity
+across retries from that run page, then opens the new run. A re-run shows "Re-run of
+run …" linking to the original, and the Runs list marks it "Re-run".
+
 The PostgreSQL ledger comprises `workflow_run`, `workflow_attempt`,
 `workflow_checkpoint` and `workflow_history`. Each transition stages a safe
 `workflow.run.changed` Domain Event in the same transaction. After commit, the
@@ -273,9 +319,13 @@ service or controller immediately enqueues the staged delivery IDs; a broker
 outage leaves durable pending deliveries for recovery. Its handler advances
 the run and sends a newly admitted step to the Agent's private trigger server
 (`POST /agent-triggers/v1/workflow-steps` on port 8082, authenticated with the
-Agent's trigger key). The scheduled pass recovers missed wakeups once per minute.
+Agent's trigger key). The scheduled pass recovers missed wakeups once per minute, rotating bounded active and parked scans separately so parked runs cannot starve active runs and lifecycle/authority changes are still audited.
 Each attempt is sent at most once: `dispatched_at` records the Agent's acceptance,
-and the trigger server also refuses a second start for an attempt it holds. Each
+and the trigger server commits an attempt receipt in its existing PVC-backed SQLite
+journal before file I/O or runtime execution. The same attempt is refused even
+after callback loss or process restart. A crash after receipt commit can leave
+unexecuted work blocked; it does not authorize replay. Receipts contain only
+attempt UUIDs and remain with the Agent volume. Each
 completed step checkpoints its summary and step identity. Subsequent attempts
 receive those summaries and the pinned inputs within a bounded context packet;
 completed steps are never replayed to reconstruct context. Oversized context is
@@ -284,13 +334,16 @@ rejected rather than silently truncated.
 The trigger server starts a new runtime session (`workflow-<attempt id>`): Hermes
 through `/v1/runs` with its event stream, OpenClaw through
 `/v1/chat/completions`. The Agent replies with a JSON summary; plain prose is
-accepted as the summary. Machine routes at `/workflow-runtime/v1/attempts/{id}`
+accepted as the summary. Malformed result envelopes receive one correction turn in the same session, instructing the Agent not to repeat work or use tools. If correction fails, the attempt reports a non-retryable failure rather than recording malformed output as successful prose. Machine routes at `/workflow-runtime/v1/attempts/{id}`
 (`handoff`, `result`, `failure`) are outside the product API and public discovery.
 A derived capability binds one attempt/generation. Handoff and outcome admission
 check current initiator authority, Agent lifecycle, generation, attempt state and
-deadline under the run lock. A reported failure or unmet criteria retries the step
-with a fresh attempt; at most three attempts per unfinished step are admitted, and
-an attempt that exceeds its 15-minute deadline counts as lost. When the Agent asks
+deadline under the run lock. An explicit non-retryable failure fails and settles the run; an approval request or retryable failure blocks it for inspection.
+An attempt exceeding its 15-minute deadline is fenced, a stop is requested and
+the run blocks with an uncertain-outcome reason. No unfinished step is automatically
+replayed: session end, callback loss and stop acknowledgement do not prove absence
+of external effects. Inspect effects before explicitly starting another run;
+there is no generic resume/reconciliation API in this slice. When the Agent asks
 for a command approval, the session is stopped and the run becomes BLOCKED with the
 reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
 approval handling arrives with WF03. Agent stop or lost initiator authority pauses
@@ -316,9 +369,10 @@ and metadata remain. File retention and purge are independent and follow the
 
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
 `workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
-`POST /workflow-runs/{id}/cancel` with `expected_revision`. Collections retain the
-standard 20/100 pagination bounds. Server-derived `allowed_actions` controls
-cancellation with independent backend authorization. Artifact routes, generic
+`POST /workflow-runs/{id}/cancel` with `expected_revision`, and
+`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)). Collections retain the
+standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`) controls
+those actions with independent backend authorization. Artifact routes, generic
 resume and approvals are not exposed in WF02.
 
 The Workflows UI includes explicit input review, a Runs view, durable step
@@ -343,12 +397,80 @@ Dedicated preview pages, approvals and messaging remain follow-ups.
 ## AF-389 acceptance dependencies
 
 PR [#326](https://github.com/aai-labs/agent-barn/pull/326) is merged into
-staging. The current controller still automatically retries failed/expired
-unfinished attempts. Live planning supersedes the earlier reasoning-only
-assumption: uncertain external effects must block replay until safe non-execution,
-verified idempotency or audited reconciliation is established. That AF-389 gap,
-actual OpenClaw session execution and session-stop/quiescence acceptance remain
-unresolved by AF-415. Callback/storage fencing does not prove that tools stopped
-or that external writes are safe to repeat. Artifact reads follow the explicitly
-approved `agent.read` boundary; AF-389 retains its separate read-policy acceptance
-coordination.
+staging. This local integration slice closes automatic replay of failed/expired
+attempts and repeat trigger admission after restart. Live Agent-session execution,
+OpenClaw stop/quiescence and run-read-policy coordination still need acceptance.
+Callback/storage fencing does not prove tools stopped or that external writes are
+safe to repeat. Artifact and run reads retain the current `agent.read` boundary.
+
+## File workflow inputs and results
+
+A saved input with `type: "file"` accepts exactly `{artifact_id, checksum}` at run
+start. People select a READY artifact belonging to the same Agent or upload through
+the existing human artifact stage/content endpoints. Upload does not start a run;
+leaving the start screen keeps a successfully uploaded Agent artifact under ordinary
+retention. Failed uploads never become selectable. The start screen retains prior
+selections after upload/start failure and disables starting during uploads.
+File inputs span the form width, with separate artifact-selection and upload
+actions. A selected shadcn Attachment card exposes download and removal; removal
+clears the input without deleting the stored Agent artifact. Uploads show their
+pending attachment state without replacing a prior selection until publication
+succeeds. The native file control is hidden behind the labeled upload action.
+
+Run start checks `agent.update`, resolves current scoped ownership and READY state,
+validates the lowercase SHA-256, and acquires run pins in the same transaction as
+run creation and its outbox event. Any invalid selection rolls back all pins and
+the run. It records canonical filenames/sizes alongside IDs/checksums in immutable
+`inputs`; callers cannot supply those metadata fields. Same-request retries reuse
+the original run; changed file identity/checksum conflicts. At most 16 file inputs
+and the shared 16,000-byte run file-reference budget apply. No database migration
+is needed: existing immutable JSON snapshots/inputs and artifact references carry
+the additive fields; schema-v1 text definitions keep their behavior.
+
+Each handoff contains a deduplicated manifest of run inputs and accepted earlier
+checkpoint outputs. The trigger retrieves actual bytes into a fresh hidden
+workspace directory (`.workflow-files-*`) using UUID filenames, checks each pinned
+checksum, and supplies verified local paths to the step. Retrieval requests carry the attempt ID and must
+find an active pin for that run; current initiator, Agent, generation and deadline
+are checked before each new link and again after downloads before runtime start.
+Download, integrity or admission failure prevents starting the session and parks
+the run rather than silently substituting summaries. The final assembled prompt must fit 64,000 UTF-8 bytes and is checked before downloads. Up to four files are retrieved concurrently within a shared 120-second deadline; every manifest file remains required because the workflow has no per-step file selection. A failed or unavailable file therefore prevents that step from starting. Temporary inputs are removed when the trigger finishes and abandoned directories are cleaned at trigger startup. A directory deletion failure logs a warning and leaves that directory for a later startup to retry, while cleanup of other directories and trigger server startup continue;
+the owning Agent remains a shared filesystem/trust boundary, not a session sandbox.
+Hidden temporary inputs follow the [file-sync exclusion rules](sync-provider/README.md#what-syncs):
+the sync helper does not mirror them or offer provider edits to that transient path.
+Already issued bearer URLs and bytes already read retain the existing artifact
+revocation limitations.
+
+Completion persists exact published output references and the step output
+description in the accepted checkpoint. Every published file is downloadable,
+regardless of whether a description was supplied. The Agent chooses whether the
+requested deliverable needs files and reports unmet criteria if it cannot produce
+or publish them. There is no author-selected file type or file-count completion
+gate. Earlier files are available as inputs; they are not silently promoted to
+final outputs. The service verifies published bytes, not whether a file's content
+satisfies free-text criteria. `steps[].artifacts` exposes accepted checkpoint outputs;
+`final_artifacts` contains only the successful last checkpoint's files and
+`final_output_description` reflects the last step's output description. Failed/unfinished
+attempt publications remain visible separately as attachments, never as accepted
+or final results.
+
+The result view shows Run input files and Final outputs. A selected step shows
+Step input files (including earlier accepted outputs) and Step outputs. Each
+output appears once within its view, using the same icon cards as Agent Artifacts
+and input selection; checksums remain internal to immutable references and byte
+verification. Fresh authorized downloads retain file-specific failures. An
+**All artifacts** navigation item below the steps opens the run-wide publication
+collection, including unfinished-attempt files, with accepted step/final outputs
+labeled. This collection is separate from the summary/step panes.
+The selected view is one continuous bordered panel: summary/detail, file sections
+and timing are grouped inside it with internal separators. The panel stretches to
+at least the navigation height, so a desktop connector always meets its visible
+edge even when file sections are absent or the artifact collection is short.
+Connectors are hidden in the stacked mobile layout.
+Run input and output pins use the shared artifact lifecycle: paused/blocked runs
+retain them; success/cancellation releases them transactionally and starts the
+ordinary retention period. Cancelling or losing access fences new handoffs,
+workflow links, publication and completion without undoing tools or retracting
+previously issued bearer links. Cancel a parked run to release its pins. Text-only
+workflows continue without storage. The Agent must not present an unpublished
+path or prose as a downloadable file when publication fails.

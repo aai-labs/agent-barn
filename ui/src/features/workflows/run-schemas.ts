@@ -1,5 +1,18 @@
 import { z } from "zod";
 
+export const WorkflowFileSchema = z.object({
+  artifactId: z.uuid(),
+  checksum: z.string(),
+  filename: z.string(),
+  size: z.number(),
+});
+export type WorkflowFile = z.infer<typeof WorkflowFileSchema>;
+export type WorkflowInputValue =
+  | string
+  | number
+  | boolean
+  | Pick<WorkflowFile, "artifactId" | "checksum">;
+
 export const WorkflowRunSchema = z.object({
   id: z.uuid(),
   workflowId: z.uuid(),
@@ -7,7 +20,10 @@ export const WorkflowRunSchema = z.object({
   versionNumber: z.number(),
   name: z.string(),
   initiatingUserId: z.uuid().nullable(),
-  inputs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  inputs: z.record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean(), WorkflowFileSchema]),
+  ),
   state: z.enum([
     "QUEUED",
     "RUNNING",
@@ -26,17 +42,45 @@ export const WorkflowRunSchema = z.object({
       id: z.uuid(),
       name: z.string(),
       state: z.enum(["PENDING", "RUNNING", "COMPLETED"]),
+      outputDescription: z.string().nullable().optional(),
+      artifacts: z.array(WorkflowFileSchema).optional(),
       summary: z.string().nullable().optional(),
       startedAt: z.string().nullable().optional(),
       completedAt: z.string().nullable().optional(),
     }),
   ),
   reason: z.string().nullable(),
+  finalOutputDescription: z.string().nullable().optional(),
+  finalArtifacts: z.array(WorkflowFileSchema).optional(),
   finalSummary: z.string().nullable().optional(),
   createdAt: z.string(),
   settledAt: z.string().nullable(),
-  allowedActions: z.array(z.literal("cancel")),
+  allowedActions: z.array(z.enum(["cancel", "rerun"])),
+  /** The run this one repeats, when it was started with Run again. */
+  rerunOfRunId: z.uuid().nullable().optional(),
+  attempt: z
+    .object({
+      number: z.number(),
+      startedAt: z.string(),
+      expiresAt: z.string(),
+      serverTime: z.string(),
+      agentUnresponsive: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
+export const WorkflowRunHistorySchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.uuid(),
+      createdAt: z.string(),
+      kind: z.string(),
+      detail: z.string(),
+    }),
+  ),
+  total: z.number(),
+});
+export type WorkflowRunHistory = z.infer<typeof WorkflowRunHistorySchema>;
 export const WorkflowRunListSchema = z.object({
   items: z.array(WorkflowRunSchema),
   total: z.number(),

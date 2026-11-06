@@ -162,6 +162,11 @@ RESTORE_POINT_SIZE=1Gi
 # Manual restore points retained per Agent. The Job image is not configured here
 # — the chart derives it from the API image so both are always the same build.
 RESTORE_POINT_MAX_PER_AGENT=5
+# Scheduled snapshots of running Agents: one every this many minutes (0 turns them
+# off), this many kept per Agent, and at most this many running at once.
+RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES=360
+RESTORE_POINT_SCHEDULED_MAX_PER_AGENT=4
+RESTORE_POINT_SCHEDULE_MAX_CONCURRENT=2
 
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
@@ -170,6 +175,10 @@ FIRECRAWL_API_KEY=
 # Optional: random key protecting the BullMQ admin dashboard. Defaults to '@'.
 # Not needed for production since Firecrawl is on ClusterIP (internal only).
 # FIRECRAWL_BULL_AUTH_KEY=
+# Optional: memory limits for the Firecrawl API and its RabbitMQ queue. Empty keeps
+# the chart defaults (2Gi and 512Mi). Raise them if either container is OOMKilled.
+FIRECRAWL_API_MEMORY_LIMIT=
+FIRECRAWL_RABBITMQ_MEMORY_LIMIT=
 
 # ── Postgres (Firecrawl DB) ──────────────────────────────────────────────────
 POSTGRES_FIRECRAWL_USER=firecrawl

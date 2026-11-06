@@ -104,14 +104,20 @@ API_IMAGE=
 # Size of each restore point's own PVC. Must be at least the agent PVC size
 # (1Gi) — a capture that fills this volume fails and is reclaimed.
 RESTORE_POINT_SIZE=1Gi
-# Manual restore points retained per Agent. Automatic pre-restore backups do not
-# count against it, so an Agent at the cap can still roll back. Failed captures
-# release their volume and are not counted either.
+# Restore points kept per Agent outside the schedule. A user's own capture is
+# refused at the limit; backups taken before an update or a restore are never
+# refused, and the oldest of them is removed once the limit is passed. Failed
+# captures release their volume and are not counted.
 RESTORE_POINT_MAX_PER_AGENT=5
 # Deadlines for the capture and restore Jobs. Restore does a capture's work plus
 # an extraction, so it is given longer.
 RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
 RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+# Scheduled snapshots of running Agents: one every this many minutes (0 turns them
+# off), this many kept per Agent, and at most this many running at once.
+RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES=360
+RESTORE_POINT_SCHEDULED_MAX_PER_AGENT=4
+RESTORE_POINT_SCHEDULE_MAX_CONCURRENT=2
 # Managed updates: how long the new pod has to report ready before the update
 # rolls back to the captured restore point, and how often it is checked. The
 # window includes pulling the new image. Defaults to 600 and 5 when unset.

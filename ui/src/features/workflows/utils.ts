@@ -56,7 +56,7 @@ export function changedByOthers(
   if (differs(base.name, latest.name))
     lines.push(`Name is now “${shown(latest.name)}”`);
   if (differs(base.description, latest.description))
-    lines.push(`Outcome is now “${shown(latest.description)}”`);
+    lines.push(`Description is now “${shown(latest.description)}”`);
   if (differs(base.steps, latest.steps))
     lines.push(
       `Steps are now: ${latest.steps.map((step) => step.name || "Untitled step").join(", ") || "none"}`,
@@ -64,10 +64,6 @@ export function changedByOthers(
   if (differs(base.inputs, latest.inputs))
     lines.push(
       `Inputs are now: ${latest.inputs.map((input) => input.label).join(", ") || "none"}`,
-    );
-  if (differs(base.finalArtifactDescription, latest.finalArtifactDescription))
-    lines.push(
-      `Final output is now “${shown(latest.finalArtifactDescription)}”`,
     );
   return lines;
 }

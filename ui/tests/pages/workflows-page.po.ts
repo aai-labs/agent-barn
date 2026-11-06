@@ -10,7 +10,7 @@ export class WorkflowsPage {
   }
   async create(outcome: string) {
     await this.page.getByRole("button", { name: "+ Create workflow" }).click();
-    await this.page.getByLabel("Your outcome").fill(outcome);
+    await this.page.getByLabel("Description (optional)").fill(outcome);
   }
   async buildExample() {
     await this.page.getByLabel("Workflow name").fill(workflowDraft.name);
@@ -23,15 +23,9 @@ export class WorkflowsPage {
         .getByLabel(`Step ${index + 1}`, { exact: true })
         .fill(step.name);
       await panel.getByLabel("What should the Agent do?").fill(step.goal);
-      await panel
-        .getByLabel("When is this step complete?")
-        .fill(step.completion_criteria);
       if (step.artifact_description !== null) {
         await panel
-          .getByRole("checkbox", { name: "Preserve an output from this step" })
-          .check();
-        await panel
-          .getByLabel("Describe the output")
+          .getByLabel("Output from this step (optional)")
           .fill(step.artifact_description);
       }
     }
@@ -43,13 +37,6 @@ export class WorkflowsPage {
         .getByLabel(`Input ${index + 1} description`)
         .fill(input.description);
     }
-    await this.selectSection("Outputs & review");
-    await this.page
-      .getByRole("checkbox", { name: "Preserve a final output" })
-      .check();
-    await this.page
-      .getByLabel("Describe the final output")
-      .fill(workflowDraft.final_artifact_description);
     await this.selectSection("Workflow details");
   }
   step(index: number) {
@@ -69,6 +56,11 @@ export class WorkflowsPage {
       .getByRole("navigation", { name: "Workflow sections" })
       .getByRole("button", { name, exact: true })
       .click();
+  }
+  async useFileInput() {
+    await this.selectSection("Required inputs");
+    await this.page.getByRole("combobox", { name: "Input 1 type" }).click();
+    await this.page.getByRole("option", { name: "File", exact: true }).click();
   }
   async history() {
     await this.page.getByRole("tab", { name: "Version history" }).click();

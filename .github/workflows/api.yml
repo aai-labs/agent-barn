@@ -46,6 +46,7 @@ jobs:
         with:
           version: v3.19.0
       - run: make check-memory
+      - run: make check-restore-points
 
   test:
     if: inputs.run_checks

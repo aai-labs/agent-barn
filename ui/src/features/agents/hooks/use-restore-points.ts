@@ -80,6 +80,8 @@ export function useRestorePoints(agentId: string, enabled = true) {
     total: first?.total ?? 0,
     cap: first?.cap ?? 0,
     manualCount: first?.manualCount ?? 0,
+    scheduledCap: first?.scheduledCap ?? 0,
+    scheduleIntervalMinutes: first?.scheduleIntervalMinutes ?? 0,
     // Before the first page arrives, cap and manualCount are placeholder zeros —
     // indistinguishable from an Agent with room to spare.
     hasCapacityData: first !== undefined,
