@@ -92,8 +92,6 @@ ANALYTICS_ENABLED=true
 # Privacy: user email and name are never sent.
 # The WEB_APP_URL hostname labels this install in PostHog.
 
-PERSONAS_ENABLED=false
-
 # ── Per-Agent email addresses ────────────────────────────────────────────────
 # Leave blank to keep the Email platform disabled; Agent Barn then refuses new Email
 # Communication Connections and nothing else changes. Both are required on top of the

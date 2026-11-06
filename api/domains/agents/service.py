@@ -29,7 +29,6 @@ from api.domains.agents.builders import (
     HERMES_DEFAULT_MAX_TURNS,
     HERMES_WORKSPACE_DIR,
     OPENCLAW_WORKSPACE_DIR,
-    HermesPersona,
     agentbarn_telegram_channel,
     agentbarn_telegram_channel_env,
     agentbarn_telegram_env,
@@ -176,7 +175,6 @@ from api.domains.integrations.runtime import (
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.organizations.settings_service import OrganizationSettingsService
-from api.domains.personas.repository import PersonaRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
 from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
@@ -233,7 +231,6 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
 )
 
 MANAGED_UPDATE_BACKUP_LABEL = "Automatic backup before managed update"
-PERSONA_CONFIG_MAP_MAX_BYTES = 1_000_000
 # How long a managed update waits for the stopped pod to let go of the volume.
 # Capture and restore wait only the pod's default 30s grace period themselves.
 MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS = 120
@@ -375,7 +372,6 @@ class AgentService:
     plugins: PlatformPluginRegistry
     agentbarn_telegram_secrets: AgentBarnTelegramService
     agent_sizes: AgentSizeLookupService
-    personas: PersonaRepository
     artifact_buckets: ArtifactBucketRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -2369,15 +2365,7 @@ class AgentService:
             memory_request_bytes=size.memory_request_bytes,
             memory_limit_bytes=size.memory_limit_bytes,
         )
-        persona_rows: list[HermesPersona] = []
-        deleted_persona_keys: list[str] = []
-        platform_env: dict[str, str] = {}
         if agent.agent_type == AgentType.HERMES:
-            active_personas, deleted_persona_keys = self.personas.load_for_start(agent.id)
-            persona_rows = [
-                HermesPersona(key=persona.key, soul_md=version.soul_md, identity_md=version.identity_md)
-                for persona, version in active_personas
-            ]
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
             native_discord = self._native_connection_configuration(agent.id, "discord")
@@ -2410,16 +2398,15 @@ class AgentService:
                 approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
             if native_slack is not None:
-                platform_env.update(native_slack_env(*native_slack))
+                secret.string_data.update(native_slack_env(*native_slack))
             if native_discord is not None:
-                platform_env.update(native_discord_env(native_discord.settings, native_discord.credentials))
+                secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
             if native_telegram is not None:
-                platform_env.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
+                secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
             if runtime_teams is not None:
-                platform_env.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
+                secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
             if agentbarn_telegram is not None:
-                platform_env.update(agentbarn_telegram_env(agentbarn_telegram))
-            secret.string_data.update(platform_env)
+                secret.string_data.update(agentbarn_telegram_env(agentbarn_telegram))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2427,7 +2414,6 @@ class AgentService:
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
                 resources=resources,
-                multiplex=bool(persona_rows),
             )
         else:
             native_channels: dict[str, dict] = {}
@@ -2771,9 +2757,6 @@ class AgentService:
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
-                personas=persona_rows,
-                deleted_persona_keys=deleted_persona_keys,
-                default_env_names=sorted(platform_env),
             )
         else:
             config_map = build_config_map(
@@ -2799,21 +2782,6 @@ class AgentService:
             )
 
         config_map.data["AGENTS.md"] += custom_artifacts.policy_md
-
-        if persona_rows or deleted_persona_keys:
-            config_map_bytes = sum(len(key.encode()) + len(value.encode()) for key, value in config_map.data.items())
-            if config_map_bytes > PERSONA_CONFIG_MAP_MAX_BYTES:
-                raise AgentProvisioningPrecondition(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="This Agent's configuration is too large; shorten its Personas or Skills.",
-                )
-        if persona_rows:
-            for key, value in secret.string_data.items():
-                if "\n" in value or "\r" in value:
-                    raise AgentProvisioningPrecondition(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"{key} contains a line break, which an Agent with Personas can't use.",
-                    )
 
         if preflight:
             return previous_status

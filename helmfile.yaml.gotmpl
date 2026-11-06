@@ -250,8 +250,6 @@ releases:
         value: {{ env "SENDER_EMAIL" | default "" | quote }}
       - name: analyticsEnabled
         value: {{ env "ANALYTICS_ENABLED" | default "true" | quote }}
-      - name: personasEnabled
-        value: {{ env "PERSONAS_ENABLED" | default "false" | quote }}
       - name: agentEmailDomain
         value: {{ env "AGENT_EMAIL_DOMAIN" | default "" | quote }}
       - name: emailInboundSecret

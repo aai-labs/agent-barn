@@ -20,8 +20,6 @@ Revision `921deb774e01` joins staging's file-sync and workflow re-run histories
 (`63c0e8364607` and `c7d4e2a91b58`) into one head. It has no schema or data
 operations, and preserves both parent histories on upgrade and downgrade.
 
-Migrations `c1a84f7e2b60` and `d9e36b05a7c2` add `persona_id` to `agent_chat_message` and `web_chat_thread` in two steps, so message writes keep flowing on a large table. The first holds its lock only briefly and sets `lock_timeout` to 3 seconds, so if a long-running reader blocks it, the migration fails instead of queuing every message write: rerun it. The second runs outside a transaction, which makes it the repo's first `CONCURRENTLY` migration. It validates the foreign key and builds the index, and a failed run resumes from that step on retry. Downgrading deletes Persona thread rows and **merges Persona messages into the Default's threads**. See [Agent Personas](../features/agent-personas.md).
-
 Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
 left behind by Zoho provider retirement. It runs automatically on upgrade and
 does nothing on installations without that lineage (including new installs).
