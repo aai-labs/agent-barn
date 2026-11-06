@@ -1,7 +1,7 @@
 import datetime
 import uuid as uuid_mod
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from cryptography.fernet import Fernet
@@ -183,6 +183,25 @@ def use_org_for_auth():
         from api.tests.core.givenpy import LambdaWith
 
         return LambdaWith(lambda: None, cleanup)
+
+    return step
+
+
+def providers_accept_credentials():
+    """Every provider with a live validator accepts the credential being saved.
+
+    Creating or updating an Agent live-validates the credentials it sets. Tests about
+    something else save placeholder credentials, which must not reach real providers.
+    """
+
+    def step(context):
+        from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
+        from api.infrastructure.integration_validators.result import IntegrationValidationResult
+
+        return patch.dict(
+            "api.domains.agents.service.PROVIDER_VALIDATORS",
+            dict.fromkeys(PROVIDER_VALIDATORS, lambda _content: IntegrationValidationResult(valid=True)),
+        )
 
     return step
 

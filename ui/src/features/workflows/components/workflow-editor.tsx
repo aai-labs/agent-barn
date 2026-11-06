@@ -17,7 +17,6 @@ export function emptyStep(): WorkflowStep {
     id: crypto.randomUUID(),
     name: "",
     goal: "",
-    completionCriteria: "",
     artifactDescription: null,
     requiredCapabilities: ["reasoning"],
   };
@@ -29,7 +28,6 @@ export function emptyDraft(description: string): WorkflowDraft {
     description,
     steps: [emptyStep()],
     inputs: [],
-    finalArtifactDescription: null,
     reviewDestination: "web",
   };
 }
@@ -150,7 +148,7 @@ export function WorkflowEditor({
               {...field("name")}
             />
             <Field
-              label="Your outcome"
+              label="Description (optional)"
               value={draft.description}
               onChange={(description) => onChange({ ...draft, description })}
               {...field("description")}
@@ -195,42 +193,19 @@ export function WorkflowEditor({
                       {...field(stepField(step.id, "goal"))}
                       area
                     />
+                    <p className="-mt-2 mb-4 text-xs text-[var(--ink-3)]">
+                      Include any specific criteria for success in the instructions.
+                    </p>
                     <Field
-                      label="When is this step complete?"
-                      value={step.completionCriteria}
-                      onChange={(completionCriteria) =>
-                        updateStep(step.id, {
-                          completionCriteria,
-                        })
-                      }
-                      {...field(stepField(step.id, "completionCriteria"))}
+                      label="Output from this step (optional)"
+                      value={step.artifactDescription ?? ""}
+                      onChange={(value) => updateStep(step.id, { artifactDescription: value || null })}
+                      {...field(stepField(step.id, "artifactDescription"))}
                       area
                     />
-                    <label className="flex gap-2 items-center mb-4 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={step.artifactDescription !== null}
-                        onChange={(e) =>
-                          updateStep(step.id, {
-                            artifactDescription: e.target.checked ? "" : null,
-                          })
-                        }
-                      />
-                      Preserve an output from this step
-                    </label>
-                    {step.artifactDescription !== null && (
-                      <Field
-                        label="Describe the output"
-                        value={step.artifactDescription}
-                        onChange={(artifactDescription) =>
-                          updateStep(step.id, {
-                            artifactDescription,
-                          })
-                        }
-                        {...field(stepField(step.id, "artifactDescription"))}
-                        area
-                      />
-                    )}
+                    <p className="-mt-2 mb-4 text-xs text-[var(--ink-3)]">
+                      Describe what you want the Agent to produce. Files produced by the last step are the workflow’s final outputs.
+                    </p>
                     <div className="flex gap-2 flex-wrap">
                       <button
                         className="af-btn af-btn-sm"
@@ -293,35 +268,8 @@ export function WorkflowEditor({
         {selected === "outputs" && (
           <section className="af-card p-6">
             <h2 className="text-xl font-semibold mb-4">
-              Final output & review destination
+              Review destination
             </h2>
-            <label className="flex gap-2 items-center mb-4 text-sm">
-              <input
-                type="checkbox"
-                checked={draft.finalArtifactDescription !== null}
-                onChange={(e) =>
-                  onChange({
-                    ...draft,
-                    finalArtifactDescription: e.target.checked ? "" : null,
-                  })
-                }
-              />
-              Preserve a final output
-            </label>
-            {draft.finalArtifactDescription !== null && (
-              <Field
-                label="Describe the final output"
-                value={draft.finalArtifactDescription}
-                onChange={(finalArtifactDescription) =>
-                  onChange({
-                    ...draft,
-                    finalArtifactDescription,
-                  })
-                }
-                {...field("finalArtifactDescription")}
-                area
-              />
-            )}
             <p className="text-sm font-medium">
               Where should review notifications go?
             </p>

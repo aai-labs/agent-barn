@@ -155,6 +155,10 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-update-outcome");
   }
 
+  updateSkipBackupButton(): Locator {
+    return this.page.getByTestId("agent-update-skip-backup-button");
+  }
+
   updateReleasesLink(): Locator {
     return this.page.getByTestId("agent-update-releases-link");
   }
