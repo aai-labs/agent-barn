@@ -48,11 +48,14 @@ def pin_to_public_address(url: str) -> PinnedRequest:
         raise NonPublicDestination("Destination must be an https URL")
     try:
         addresses = public_addresses(target.host, target.port or 443)
-    except socket.gaierror as exc:
+    except (socket.gaierror, UnicodeError) as exc:
+        # getaddrinfo raises UnicodeError for names it can't encode, such as an empty label.
         raise NonPublicDestination("Destination could not be resolved") from exc
+    # Only one address is tried, and IPv4 is the family a pod is most likely able to reach.
+    address = min(addresses, key=lambda candidate: (":" in candidate, candidate))
     host_header = f"{target.host}:{target.port}" if target.port else target.host
     return PinnedRequest(
-        url=str(target.copy_with(host=addresses[0])),
+        url=str(target.copy_with(host=address)),
         headers={"Host": host_header},
         extensions={"sni_hostname": target.host},
     )

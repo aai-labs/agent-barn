@@ -79,3 +79,16 @@ def test_an_ipv6_answer_is_pinned_in_brackets():
     with _resolves_to("2606:4700:4700::1111"):
         pinned = pin_to_public_address("https://gitlab.example.com/api/v4/user")
     assert_that(pinned.url, equal_to("https://[2606:4700:4700::1111]/api/v4/user"))
+
+
+def test_a_dual_stack_host_is_pinned_to_ipv4():
+    # A pod without IPv6 can't reach an AAAA answer, and only one address is tried.
+    with _resolves_to("2606:4700:4700::1111", "8.8.8.8"):
+        pinned = pin_to_public_address("https://gitlab.example.com/api/v4/user")
+    assert_that(pinned.url, equal_to("https://8.8.8.8/api/v4/user"))
+
+
+@pytest.mark.parametrize("url", ["https://a..b/api/v4/user", f"https://{'a' * 64}.example.com/", "https://[bad/"])
+def test_a_host_that_cannot_be_looked_up_is_refused(url):
+    with pytest.raises(NonPublicDestination):
+        pin_to_public_address(url)

@@ -34,8 +34,10 @@ skill file first:
     `source get`.
   - GitLab: `./skills/aai-gitlab/SKILL.md`, `--profile gitlab-work`. Merge requests
     are `mrs`, and repos are projects passed with `--project <group/project>`. Key
-    commands: `projects get` (`default_branch`), `mrs list --state merged`,
-    `mrs diffs` (files changed and diff), `mrs commits`, `source get`.
+    commands: `projects get` (`default_branch`), `request get` on
+    `merge_requests` (merged, ordered by `updated_at`; see the doc-scan cron),
+    `mrs diffs --limit 1000` (files changed and diff; if `truncated` is true, raise
+    the limit), `mrs commits`, `source get`.
   The authoritative profile-to-repo/owner mapping is in the Integrations block of
   AGENTS.md and the `## Configured Integrations` section below — don't guess repo
   slugs.

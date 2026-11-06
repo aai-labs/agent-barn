@@ -35,7 +35,8 @@ Look at the GitHub, Bitbucket and GitLab entries in the Integrations block:
   set — no need to ask.
 - **If a host only names an owner/workspace** (no repo configured), ask the
   operator which repo slug(s) to document, and write them to USER.md's **Repos to
-  document**. Validate each with a cheap `repos get <slug>`; if it errors, re-ask.
+  document**. Validate each with a cheap `repos get <slug>` (`projects get <group/project>` on
+  GitLab); if it errors, re-ask.
 
 Document across every configured host — if more than one is set up, cover them
 all.
@@ -101,12 +102,16 @@ maintained by BOOT.md on each startup.
 
 1. For each repo in scope (see Resolving Repos and Mainline), on its configured
    host:
-   a. Determine the default (mainline) branch (`repos get`).
+   a. Determine the default (mainline) branch (`repos get`; on GitLab, `projects get`).
    b. `prs list --sort updated` (most-recently-updated first), then keep only PRs
       that are **merged** and whose **destination is the default branch**. Always
       pass `--sort updated`: a merge bumps a PR's updated time, so a PR opened long
       ago but merged recently rises to the top instead of staying buried in
       creation order past `--limit` — without it, late-merged old PRs get missed.
+      GitLab's `mrs list` can't sort, so there use `aai-cli gitlab request get
+      projects/<encoded-project>/merge_requests --query state=merged --query
+      target_branch=<default> --query order_by=updated_at --query per_page=50
+      --profile gitlab-work`, where `<encoded-project>` is `group%2Fapp`.
       Bound how far back you go by the **start point** ("Document from" in
       USER.md):
       - **Hard floor:** never document a PR merged *before* the start point — it
@@ -131,8 +136,8 @@ maintained by BOOT.md on each startup.
       id from the doc link in that changelog entry — the `/pages/<id>/` segment).
    c. Read what shipped — the changed files (`prs files` on GitHub, `prs diffstat`
       on Bitbucket), the diff (`prs diff`), and the commits (`prs commits`). On
-      GitLab, `mrs diffs` gives both the files and the diff, and `mrs commits` the
-      commits. Use
+      GitLab, `mrs diffs --limit 1000` gives both the files and the diff (if `truncated`
+      is true, raise the limit), and `mrs commits` the commits. Use
       `source get` to read the contents of any added/changed md files at the PR's
       head. **Read the author from the PR metadata** (`prs list`/the PR object —
       GitHub `user.login`, Bitbucket `author`, GitLab `author.username`); never guess or infer who shipped

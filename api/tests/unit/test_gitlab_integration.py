@@ -111,11 +111,44 @@ def test_a_valid_token_reports_who_it_is_over_the_pinned_address():
         result = validate_gitlab(_SELF_HOSTED)
     assert_that(result.valid, is_(True))
     assert_that(result.identity, equal_to("Review Bot (@bot)"))
-    args, kwargs = client.request.call_args
+    args, kwargs = client.request.call_args_list[0]
     assert_that(args, equal_to(("GET", "https://8.8.8.8/api/v4/user")))
     assert_that(kwargs["headers"]["Host"], equal_to("gitlab.example.com"))
     assert_that(kwargs["headers"]["Authorization"], equal_to("Bearer glpat-real"))
     assert_that(kwargs["extensions"], equal_to({"sni_hostname": "gitlab.example.com"}))
+
+
+def test_a_token_that_can_only_read_its_profile_is_refused():
+    # GET /user accepts read_user, which can't reach a single project.
+    client, http = _gitlab_answers(httpx.Response(200))
+    client.request.side_effect = [
+        httpx.Response(200, json={"username": "bot", "name": "Review Bot"}),
+        httpx.Response(403, json={"error": "insufficient_scope"}),
+    ]
+    with _resolves_to("8.8.8.8"), http:
+        result = validate_gitlab(_SELF_HOSTED)
+    assert_that(result.valid, is_(False))
+    assert_that(result.error or "", contains_string("read_api"))
+
+
+def test_a_failed_project_check_fails_validation():
+    client, http = _gitlab_answers(httpx.Response(200))
+    client.request.side_effect = [
+        httpx.Response(200, json={"username": "bot", "name": "Review Bot"}),
+        httpx.Response(500, json={}),
+    ]
+    with _resolves_to("8.8.8.8"), http:
+        result = validate_gitlab(_SELF_HOSTED)
+    assert_that(result.valid, is_(False))
+    assert_that(result.error or "", contains_string("500"))
+
+
+def test_a_host_name_that_cannot_be_looked_up_fails_validation():
+    with patch(
+        "api.infrastructure.public_http.socket.getaddrinfo", side_effect=UnicodeEncodeError("idna", "x", 0, 1, "bad")
+    ):
+        result = validate_gitlab(_SELF_HOSTED)
+    assert_that(result.valid, is_(False))
 
 
 def test_redirects_are_not_followed():

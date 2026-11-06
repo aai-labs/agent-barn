@@ -5,7 +5,7 @@ import binascii
 import datetime
 import threading
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 from injector import inject, singleton
@@ -241,6 +241,8 @@ class CredentialGatewayService:
         if content is None:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
+        if plugin.preserve_encoded_path and _has_dot_segment(request.path):
+            raise GatewayForwardRefused(f"{plugin.key} path has a dot segment")
         path = (plugin.preserve_encoded_path and request.encoded_path) or request.path
         try:
             outbound = plugin.apply_upstream_auth(
@@ -392,6 +394,18 @@ class CredentialGatewayService:
         if ciphertext is None:
             return None
         return decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
+
+
+def _has_dot_segment(path: str) -> bool:
+    """Whether ``path`` holds a ``.`` or ``..`` segment at any level of URL encoding.
+
+    A raw path is forwarded as sent, so httpx won't collapse an encoded ``..``, but a proxy
+    in front of the upstream can, which would carry the credential out of the API prefix.
+    """
+    decoded = unquote(path)
+    while decoded != path:
+        path, decoded = decoded, unquote(decoded)
+    return any(segment in {".", ".."} for segment in decoded.replace("\\", "/").split("/"))
 
 
 def _gateway_token_value(authorization: str | None) -> str | None:
