@@ -6,23 +6,19 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { api } from "@/shared/api";
 
 import { AgentOverviewSchema, type AgentOverview } from "../schemas";
-import {
-  RESOURCE_USAGE_REFETCH_MS,
-  resourceUsageKey,
-  type OverviewPeriod,
-} from "../utils";
+import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey, usageDateParams, type UsageDates } from "../utils";
 
 /**
- * Every Agent the caller can read, with status, spend over the period, and current
+ * Every Agent the caller can read, with status, spend over the days, and current
  * CPU and memory. Each figure the caller may not see comes back null, per Agent.
  */
-export function useAgentsOverview(period: OverviewPeriod) {
+export function useAgentsOverview(dates: UsageDates) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
-    queryKey: resourceUsageKey.overview(period),
+    queryKey: resourceUsageKey.overview(dates),
     queryFn: async () => {
       const response = await api.get<AgentOverview>(
-        `${orgApiBase}/agent-overview?period=${period}`,
+        `${orgApiBase}/agent-overview?${usageDateParams(dates).toString()}`,
         { schema: AgentOverviewSchema },
       );
       return response.data;

@@ -9,7 +9,8 @@ from api.domains.auth.utils import require_platform_admin
 from api.domains.resource_usage.models import (
     PlatformAgentDetailsRead,
     PlatformResourceUsageRead,
-    ResourceUsageRange,
+    UsageWindow,
+    get_usage_window,
 )
 from api.domains.resource_usage.platform_service import PlatformResourceUsageService
 
@@ -24,10 +25,10 @@ platform_resource_usage_router = APIRouter(prefix="/platform/resource-usage", ta
 def get_platform_resource_usage(
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[PlatformResourceUsageService, Injected(PlatformResourceUsageService)],
-    usage_range: Annotated[ResourceUsageRange, Query(alias="range")] = ResourceUsageRange.ONE_DAY,
+    window: Annotated[UsageWindow, Depends(get_usage_window)],
     organization_id: Annotated[UUID | None, Query()] = None,
 ):
-    return service.get_usage(usage_range, organization_id)
+    return service.get_usage(window, organization_id)
 
 
 @platform_resource_usage_router.get("/agents/{agent_id}", response_model=PlatformAgentDetailsRead)
@@ -35,6 +36,7 @@ def get_platform_agent_details(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[PlatformResourceUsageService, Injected(PlatformResourceUsageService)],
+    window: Annotated[UsageWindow, Depends(get_usage_window)],
 ):
-    """Status and last-day usage for one Agent: what a Heaviest agents row shows when opened."""
-    return service.get_agent_details(agent_id)
+    """Status and usage over a window for one Agent: what a Heaviest agents row shows when opened."""
+    return service.get_agent_details(agent_id, window)

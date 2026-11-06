@@ -15,6 +15,7 @@ import {
   mockPlatformUsageUnavailable,
 } from "../pages/data-support/resource-usage-data-support.po";
 import { PlatformResourceUsagePage } from "../pages/platform-resource-usage-page.po";
+import { dayStartIso } from "../pages/usage-date-picker.po";
 
 const GIB = 1024 ** 3;
 
@@ -208,11 +209,12 @@ test.describe("Platform resource usage (platform_admin)", () => {
   test("opens already narrowed when the URL carries an organization", async () => {
     const requests = await data.resourceUsage.interceptPlatformResourceUsage();
 
-    await usagePage.goto(`?orgId=${PLATFORM_GLOBEX_ID}&orgName=Globex&range=7d`);
+    const from = dayStartIso(6);
+    await usagePage.goto(`?orgId=${PLATFORM_GLOBEX_ID}&orgName=Globex&usageFrom=${encodeURIComponent(from)}`);
 
     await expect(usagePage.heading()).toBeVisible();
     await expect.poll(() => requests.at(-1)?.get("organization_id")).toBe(PLATFORM_GLOBEX_ID);
-    expect(requests.at(-1)?.get("range")).toBe("7d");
+    expect(requests.at(-1)?.get("from_date")).toBe(from);
   });
 
   test("the container with no live agent is not a filter", async ({ page }) => {
@@ -230,16 +232,28 @@ test.describe("Platform resource usage (platform_admin)", () => {
     expect(requests.length).toBe(before);
   });
 
-  test("a different time range is asked for from the API", async ({ page }) => {
+  test("picked days are asked for from the API", async ({ page }) => {
     const requests = await data.resourceUsage.interceptPlatformResourceUsage();
     await usagePage.goto();
     await expect(usagePage.heading()).toBeVisible();
-    expect(requests.at(0)?.get("range")).toBe("24h");
+    expect(requests.at(0)?.get("from_date")).toBeNull();
 
-    await usagePage.chooseRange("Last 7 days");
+    await usagePage.dates().chooseLastDays(7);
 
-    await expect(page).toHaveURL(/range=7d/);
-    await expect.poll(() => requests.at(-1)?.get("range")).toBe("7d");
+    await expect(page).toHaveURL(/usageFrom=/);
+    await expect.poll(() => requests.at(-1)?.get("from_date")).toBe(dayStartIso(6));
+    expect(requests.at(-1)?.get("to_date")).not.toBeNull();
+  });
+
+  test("only the last 15 days can be picked, since Prometheus keeps no more", async () => {
+    await data.resourceUsage.interceptPlatformResourceUsage();
+    await usagePage.goto();
+
+    await usagePage.dates().trigger().click();
+
+    await expect(usagePage.dates().enabledDays()).toHaveCount(15);
+    await expect(usagePage.dates().day(14)).toBeEnabled();
+    await expect(usagePage.dates().day(0)).toBeEnabled();
   });
 
   test("shows only the ten heaviest agents until asked for the rest", async ({ page }) => {
@@ -791,6 +805,18 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
     await expect(usage).toContainText("Peak memory, 24h");
     await expect(usage).toContainText("30%");
     await expect(usage.getByRole("img", { name: "Memory over time" })).toBeVisible();
+  });
+
+  test("an opened row covers the days the page is set to", async () => {
+    await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.gotoAgentResourceUsage();
+    await usagePage.dates().chooseLastDays(7);
+
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+
+    const usage = usagePage.agentDetails().getByTestId("platform-agent-usage");
+    await expect(usage).toContainText("Peak memory, 7d");
+    await expect(usage).toContainText("CPU throttled, 7d");
   });
 
   test("has no Cost panel and no links, since an organization's agent pages are not an admin's to open", async () => {

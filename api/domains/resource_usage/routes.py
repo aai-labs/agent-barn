@@ -1,13 +1,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.platform_admin.models import StatsWindow, get_stats_window
-from api.domains.resource_usage.models import AgentOverviewRead, AgentResourceUsageRead, ResourceUsageRange
+from api.domains.resource_usage.models import AgentOverviewRead, AgentResourceUsageRead, UsageWindow, get_usage_window
 from api.domains.resource_usage.service import AgentOverviewService, ResourceUsageService
 
 resource_usage_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["resource-usage"])
@@ -19,9 +19,9 @@ def get_agent_resource_usage(
     agent_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[ResourceUsageService, Injected(ResourceUsageService)],
-    usage_range: Annotated[ResourceUsageRange, Query(alias="range")] = ResourceUsageRange.ONE_DAY,
+    window: Annotated[UsageWindow, Depends(get_usage_window)],
 ):
-    return service.get_agent_resource_usage(agent_id, context, usage_range)
+    return service.get_agent_resource_usage(agent_id, context, window)
 
 
 @agent_overview_router.get("", response_model=AgentOverviewRead)

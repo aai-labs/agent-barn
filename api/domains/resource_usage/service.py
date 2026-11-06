@@ -24,9 +24,8 @@ from api.domains.resource_usage.models import (
     AgentUsageSnapshotRead,
     ResourceUsageAvailability,
     ResourceUsagePoint,
-    ResourceUsageRange,
     ResourceUsageState,
-    resolve_usage_window,
+    UsageWindow,
 )
 from api.domains.resource_usage.repository import ResourceUsageRepository
 from api.infrastructure.prometheus.client import PrometheusError
@@ -104,25 +103,23 @@ class ResourceUsageService:
         self,
         agent_id: UUID,
         context: CurrentUserContext,
-        usage_range: ResourceUsageRange,
+        window: UsageWindow,
     ) -> AgentResourceUsageRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
-        return self.usage_for(agent, usage_range)
+        return self.usage_for(agent, window)
 
-    def usage_for(self, agent: Agent, usage_range: ResourceUsageRange) -> AgentResourceUsageRead:
-        """One Agent's usage over a range, for an Agent already authorized by the caller.
+    def usage_for(self, agent: Agent, window: UsageWindow) -> AgentResourceUsageRead:
+        """One Agent's usage over a window, for an Agent already authorized by the caller.
 
         The Organization route requires `activity.read` first, and the Platform view sits
         behind `require_platform_admin`. A source that cannot be reached is an answer
         (`availability`), not an error.
         """
         now = datetime.now(UTC)
-        window = resolve_usage_window(usage_range, now)
 
         def respond(availability: ResourceUsageAvailability, **fields: Any) -> AgentResourceUsageRead:
             return AgentResourceUsageRead(
                 agent_id=agent.id,
-                range=usage_range,
                 from_date=window.start,
                 to_date=window.end,
                 step_seconds=window.step_seconds,
@@ -139,8 +136,9 @@ class ResourceUsageService:
                 agent.organization_id,
                 [agent.id],
                 at=now,
-                window_seconds=usage_range.seconds,
-                throttle_window_seconds=usage_range.seconds,
+                window_seconds=int((now - window.start).total_seconds()),
+                throttle_window_seconds=window.seconds,
+                throttle_offset_seconds=int((now - window.end).total_seconds()),
             ).get(agent.id, {})
             series = self.repository.series_fields(agent.organization_id, agent.id, window)
         except PrometheusError:

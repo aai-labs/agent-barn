@@ -10,8 +10,8 @@ Resource usage answers how much CPU and memory an Agent's container is using, ag
 
 Four surfaces show it:
 
-- The **Resource usage** tab on the Agent page: current figures, peak memory, CPU throttling, and charts over 1 hour to 14 days.
-- The **Agents overview** at `/dashboard/{org}/agents`, reached from **Usage** on the navigation rail: every Agent the viewer can read, with status, spend, CPU and memory in the row. A row opens to status, cost and resource usage in full, each linking to its own tab.
+- The **Resource usage** tab on the Agent page: current figures, peak memory, CPU throttling, and charts over the last 24 hours or the days picked on a calendar.
+- The **Agents overview** at `/dashboard/{org}/agents`, reached from **Usage** on the navigation rail: every Agent the viewer can read, with status, spend, CPU and memory in the row. A row opens to status, cost and resource usage in full, each linking to its own tab. Spend and the opened usage panel's peak memory, throttling and chart cover the same days: the last 15 when none are picked, or the days picked on the calendar. Spend could go further back, but usage cannot, and one window keeps the two figures about the same days. Longer spend is on the Costs page. The panel's labels say how long the window is ("Peak memory, 7d").
 - The **Platform Resource Usage** page at `/dashboard/platform/resource-usage`, for Platform Administrators: the same figures across every Organization, as totals, a table by Organization, and two charts. It can be narrowed to one Organization.
 - **Agent Resource Usage** at `/dashboard/platform/agents/resource-usage`, under Agents: the Heaviest agents table. It uses the same Platform Administrator authorization.
 
@@ -26,7 +26,7 @@ API              resource_usage domain ──► PromQL over HTTP, basic auth
 
 ## Invariants
 
-- The API stores no usage. Prometheus is the store, and its 15-day retention is the limit, so the longest range is 14 days. The one thing stored is the namespace quota ceilings a Platform Administrator enters (see Namespace quota below).
+- The API stores no usage. Prometheus is the store, and its 15-day retention is the limit. The usage routes take `from_date` and `to_date` (the last 24 hours when left out) and cut them to the last 15 days and to now; the response's `from_date` and `to_date` say what was read. A window entirely older than 15 days is a 422. Every page's calendar (`UsageDatePicker`) offers only today and the 14 days before it, and keeps its days in `usageFrom` and `usageTo`, apart from the `from` and `to` the Agent page's Costs and Activity tabs use. The one thing stored is the namespace quota ceilings a Platform Administrator enters (see Namespace quota below).
 - Each Agent's own healthz server reads the container's cgroup v2 files on every scrape and appends these series to its existing `/metrics`. Both runtimes emit the same series, with the same help text, in the same order; a test compares them.
 
   | Series | Meaning |
@@ -54,13 +54,13 @@ API              resource_usage domain ──► PromQL over HTTP, basic auth
 
 ## Platform view
 
-The **Platform Resource Usage** page at `/dashboard/platform/resource-usage` shows totals, Organizations, capacity and charts. **Agent Resource Usage** at `/dashboard/platform/agents/resource-usage`, under Agents, shows only the Heaviest agents table. Both use `GET /api/v1/platform/resource-usage?range=&organization_id=`, behind `require_platform_admin`, with its own service (`PlatformResourceUsageService`) and read models, so the Organization surface has no path to another Organization's figures. Classing this as oversight data is recorded in [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md).
+The **Platform Resource Usage** page at `/dashboard/platform/resource-usage` shows totals, Organizations, capacity and charts. **Agent Resource Usage** at `/dashboard/platform/agents/resource-usage`, under Agents, shows only the Heaviest agents table. Both use `GET /api/v1/platform/resource-usage?from_date=&to_date=&organization_id=`, behind `require_platform_admin`, with its own service (`PlatformResourceUsageService`) and read models, so the Organization surface has no path to another Organization's figures. Classing this as oversight data is recorded in [`2026-10-01-resource-usage-as-platform-oversight-data.md`](../adr/2026-10-01-resource-usage-as-platform-oversight-data.md).
 
 - It makes one platform-wide instant query (`{job="agent"}`) and one range query, plus one database read of every live Agent. Readings are keyed by the `app` label alone. The Agent, its name and its Organization come from the database, never from the `org_id`, `org_name` or `agent_name` labels, so a wrong label cannot move an Agent or rename an Organization.
 - A container that reports but belongs to no live Agent (deleted, or never known here) is not dropped. It becomes its own row with no Organization, listed last and not selectable as a filter, so the Organization rows add up to the platform total and a leaked container is visible. In the Agent table it is named `agent-<first 8 characters of its id>`, enough to find its Deployment.
 - A stopped Agent counts as having no container even if a reading arrives for a few minutes after it stops, as on the Organization overview. `agents_with_container` is the database's count of running and errored Agents, so it is there when Prometheus is not.
 - The API's Organization list is always platform-wide, whatever the filter, and the page decides how much of it to show: only the selected Organization when one is chosen, otherwise the top five by memory with a note of how many more there are. The no-live-Agent row is kept beside the top five, so it does not use up one of them; a narrowed page leaves it out, as its totals do. Totals, the Agent list and the chart follow the filter. The filtered chart selects by the Agent ids the database places in that Organization, so it counts the Agents the totals count. A deleted Agent's history is in the platform chart but not in an Organization's.
-- A Heaviest agents row opens to the same **Status** and **Resource usage** panels the Organization Usage page shows, without the Cost panel and without links, since a Platform Administrator has no Membership and an Organization's agent pages are not theirs to open. One request per opened row, `GET /api/v1/platform/resource-usage/agents/{agent_id}`, refreshed every minute while it stays open, and none for a closed row. Usage covers the last 24 hours, as on the Organization panel, whatever the page's range is.
+- A Heaviest agents row opens to the same **Status** and **Resource usage** panels the Organization Usage page shows, without the Cost panel and without links, since a Platform Administrator has no Membership and an Organization's agent pages are not theirs to open. One request per opened row, `GET /api/v1/platform/resource-usage/agents/{agent_id}`, refreshed every minute while it stays open, and none for a closed row. Its peak memory, throttling and chart cover the page's days (`from_date` and `to_date`, the last 24 hours when left out).
   - The panels are the same components (`agent-detail-panels.tsx`). Each page reads its own data and hands it in, so they cannot drift in how they look.
   - The response is an explicit allowlist (`PlatformAgentDetailsRead`). It carries the status word only, never the healthz `reason`, and never log text: `AgentService.runtime_restarts` asks the cluster for restarts with `include_logs=False`. An Agent in ERROR shows the fixed-copy summary of its failure, rebuilt from the stored category, never the stored message or detail.
   - A health or cluster read that cannot be answered leaves its fields empty and the rest of the row in place: an unreachable healthz server, a Kubernetes error from asking about the pod, or a failed restart read. The Organization route answers 503 for the healthz case.
@@ -102,7 +102,7 @@ The monitoring chart owns Prometheus, the `agent` scrape job and the labels it a
 ## Known gaps
 
 - "CPU now" is a five-minute rate. Prometheus divides the increase by the whole window, so a series that is only seconds old reads low. In the contract test an Agent using half a core read about 0.003 when it was seconds old. It converges over a few minutes, so a freshly started Agent shows low CPU at first.
-- History stops at 14 days, and CPU on the charts is averaged per step, so a short spike is smoothed away. Memory uses the highest reading in each step.
+- History stops at 15 days, and CPU on the charts is averaged per step, so a short spike is smoothed away. Memory uses the highest reading in each step.
 - The overview polls each running row's health every 30 seconds, one request per row. Beyond the 100-Agent cap it would need pagination and a batch health endpoint.
 - OpenClaw's Node heap grows toward the 1 GiB limit by design, so high memory is not proof of a leak.
 - The usage charts use the reader's local time. The Costs charts use UTC because they bucket by calendar day.
@@ -121,7 +121,7 @@ Local Docker Compose has no Prometheus, so the views say resource usage is not c
 | Exported series (OpenClaw)       | `../../api/domains/agents/scripts/openclaw/healthz-server.js` |
 | Scrape job and labels            | `../../helm/monitoring/values.yaml` (`job_name: agent`) |
 | Prometheus client                | `../../api/infrastructure/prometheus/client.py` |
-| Read models, ranges, windows     | `../../api/domains/resource_usage/models.py` |
+| Read models, windows             | `../../api/domains/resource_usage/models.py` |
 | PromQL and result mapping        | `../../api/domains/resource_usage/promql.py` |
 | Queries against the client       | `../../api/domains/resource_usage/repository.py` |
 | Authorization and assembly       | `../../api/domains/resource_usage/service.py` |
@@ -141,7 +141,7 @@ Local Docker Compose has no Prometheus, so the views say resource usage is not c
 
 ## Change impact
 
-Renaming a series, or changing its help text or order, touches both healthz scripts, `promql.py`, and the script, query, contract and in-image tests together. Changing the labels the `agent` scrape job adds means changing the selectors. A new read of per-Agent resource data on an Organization route must go through `AgentAuthorization` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`. A new field on the Platform route is a data-classification decision under the oversight ADR, not an automatic addition. Changing Prometheus retention changes the longest safe range in `ResourceUsageRange`. Changing what `state` means changes the notices in `resource-usage-notice.tsx`. Adding another quota ceiling adds a typed nullable column, its change Event setting name, a field in the dialog and a card; the committed figure for it must exist in kube-state-metrics. Changing what an agent's pod asks for (its `AGENT_RESOURCES`, or an init container) changes what every agent costs the quota, so check the committed figures against a dry-run of the quota after the next deploy.
+Renaming a series, or changing its help text or order, touches both healthz scripts, `promql.py`, and the script, query, contract and in-image tests together. Changing the labels the `agent` scrape job adds means changing the selectors. A new read of per-Agent resource data on an Organization route must go through `AgentAuthorization` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`. A new field on the Platform route is a data-classification decision under the oversight ADR, not an automatic addition. Changing Prometheus retention changes `USAGE_RETENTION` in `models.py` and `USAGE_RETENTION_DAYS` in the UI's `utils.ts` together. Changing what `state` means changes the notices in `resource-usage-notice.tsx`. Adding another quota ceiling adds a typed nullable column, its change Event setting name, a field in the dialog and a card; the committed figure for it must exist in kube-state-metrics. Changing what an agent's pod asks for (its `AGENT_RESOURCES`, or an init container) changes what every agent costs the quota, so check the committed figures against a dry-run of the quota after the next deploy.
 
 ## Related decisions
 
