@@ -77,6 +77,7 @@ export const AgentPermissionKeySchema = z.enum([
   "cost.read",
   // Held by Organization Owners and Admins through their role; no Agent Access Role grants it.
   "agent.size.manage",
+  "task.read",
 ]);
 
 export const AgentAccessRoleReadSchema = z.object({

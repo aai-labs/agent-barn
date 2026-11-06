@@ -302,6 +302,7 @@ def test_general_access_makes_agent_visible_with_role_permissions():
                 PermissionKey.AGENT_READ.value,
                 PermissionKey.ACTIVITY_READ.value,
                 PermissionKey.COST_READ.value,
+                PermissionKey.TASK_READ.value,
             ),
         )
         assert_that(
@@ -459,6 +460,7 @@ def test_direct_and_general_access_permissions_are_additive():
                 PermissionKey.AGENT_READ.value,
                 PermissionKey.ACTIVITY_READ.value,
                 PermissionKey.COST_READ.value,
+                PermissionKey.TASK_READ.value,
             ),
         )
         assert_that(
