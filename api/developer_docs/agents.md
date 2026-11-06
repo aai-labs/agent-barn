@@ -79,3 +79,7 @@ Platform Administrators manage installation-wide authoring through
 `authoring_enabled` and nullable `updated_at`. A saved choice overrides the
 initial off default without granting Agent permissions. Disabling authoring
 retains API inspection and history. Execution has its own deployment admission flag.
+
+For integration changes, `PATCH /{agent_id}` accepts `restart: true` to validate proposed credentials while the Agent runs, then stop, save and start under one lifecycle lock. Omit `restart` to retain stopped-only update behavior. Credential changes require `agent.secret.manage` alongside `agent.update`; restarting additionally requires `agent.lifecycle.manage`. Optional isolation `policies` and a `custom_api` batch are validated in the same request before runtime teardown. Invalid credentials leave a running Agent and its previous settings untouched. A persistence or startup failure after validation can leave saved changes and a stopped or failed Agent; inspect its current state before retrying. The restart option is limited to integration changes.
+
+Live credential validation failures on integration apply requests return `detail: {"code": "INTEGRATION_VALIDATION_FAILED", "provider": "apollo", "message": "Apollo credential: Invalid API key"}` (400 for a rejected credential, 503 if validation is unavailable). This code identifies a failure before writes or runtime teardown, so no requested changes were saved. The first failed validation ends the request. Ordinary stopped-only PATCH requests retain their existing error format.

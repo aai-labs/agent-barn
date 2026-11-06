@@ -39,6 +39,7 @@ from api.domains.agents.service import AgentService
 from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.custom_api.service import CustomApiService
 from api.domains.integrations.service import IntegrationIsolationService
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -304,8 +305,9 @@ def update_agent(
     data: AgentUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    custom_api: Annotated[CustomApiService, Injected(CustomApiService)],
 ):
-    return service.update_agent(agent_id, data, context)
+    return service.update_agent(agent_id, data, context, custom_api=custom_api)
 
 
 @agents_router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)

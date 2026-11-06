@@ -7,12 +7,13 @@ import secrets
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
@@ -164,7 +165,7 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
-from api.domains.integrations.isolation import isolation_read, legacy_isolation
+from api.domains.integrations.isolation import default_isolation, isolation_read, legacy_isolation
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.integrations.runtime import (
     RuntimeBinding,
@@ -204,6 +205,10 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+if TYPE_CHECKING:
+    from api.domains.custom_api.service import CustomApiService
+
 
 logger = logging.getLogger(__name__)
 
@@ -1894,25 +1899,47 @@ class AgentService:
             credentials.append(credential)
         return credentials
 
-    def update_agent(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+    def update_agent(
+        self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext, *, custom_api: CustomApiService
+    ) -> AgentRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        if data.restart or data.policies or data.custom_api is not None:
+            if _CREDENTIAL_FIELDS & data.model_fields_set or data.policies or data.custom_api is not None:
+                self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+            if data.restart:
+                self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+            self.restore_points.reconcile_agent(agent_id)
         with self.repository.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
-            return self._update_agent_locked(agent_id, data, context)
+            return self._update_agent_locked(agent_id, data, context, custom_api=custom_api)
 
-    def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
+    def _update_agent_locked(
+        self,
+        agent_id: UUID,
+        data: AgentUpdate,
+        context: CurrentUserContext,
+        *,
+        custom_api: CustomApiService,
+    ) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         updated = data.model_dump(exclude_unset=True)
-        if _CREDENTIAL_FIELDS & updated.keys():
+        if _CREDENTIAL_FIELDS & updated.keys() or data.policies or data.custom_api is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
 
-        if agent.status == AgentStatus.RUNNING:
+        if agent.status == AgentStatus.RUNNING and not data.restart:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
+
+        if data.restart or data.policies or data.custom_api is not None:
+            _refuse_during_managed_update(agent)
+            if self.restore_points.has_blocking_operation(agent_id):
+                raise HTTPException(409, "An Agent restore operation is in progress")
+        if data.restart:
+            self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
             self._refuse_forgetting_granted_sites(agent.id)
@@ -2036,6 +2063,14 @@ class AgentService:
         if data.skill_ids or data.removed_secret_providers:
             self._validate_skill_update(agent, data, org_id)
 
+        changes = custom_api._prepare_changes(agent_id, data.custom_api, context) if data.custom_api is not None else []
+        policies = {policy.provider: policy.isolated for policy in data.policies}
+        try:
+            for provider, isolated in policies.items():
+                select_egress_mode(provider, isolated=isolated)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
         secret_actor = resolve_actor_identity(context, org_id)
         secret_actor_display = context.user.full_name or context.user.email
         secret_delivery_ids: list[UUID] = []
@@ -2051,10 +2086,61 @@ class AgentService:
             (item, _enrich_atlassian_content(validate_content(item.provider, item.content)))
             for item in data.secrets or []
         ]
-        for item, content in manual_upserts:
-            self._validate_live_integration(item.provider, content)
+        credential_overrides = {item.provider: content for item, content in manual_upserts}
         for credential in shared_upserts:
-            self._validate_live_integration(credential.provider, self._decrypt_shared_credential(credential))
+            credential_overrides[SecretProvider(credential.provider)] = self._decrypt_shared_credential(credential)
+        for provider, content in credential_overrides.items():
+            try:
+                self._validate_live_integration(provider, content)
+            except HTTPException as exc:
+                if not (data.restart or data.policies or data.custom_api is not None):
+                    raise
+                # This error can only occur before any writes or runtime teardown.
+                raise HTTPException(
+                    exc.status_code,
+                    detail={
+                        "code": "INTEGRATION_VALIDATION_FAILED",
+                        "provider": provider.value,
+                        "message": f"{PROVIDER_DISPLAY_NAMES[provider]}: {exc.detail}"
+                        if exc.status_code == 400
+                        else exc.detail,
+                    },
+                ) from exc
+        if data.restart or data.policies or changes:
+            stored_providers = {
+                SecretProvider(secret.provider) for secret in self.repository.get_secrets_for_agent(agent_id)
+            }
+            providers = (stored_providers - set(data.removed_secret_providers or [])) | credential_overrides.keys()
+            effective_policies = {
+                provider: default_isolation(provider) for provider in credential_overrides.keys() - stored_providers
+            }
+            effective_policies.update(policies)
+            if self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url:
+                providers.add(SecretProvider.FIRECRAWL)
+            if policies.keys() - providers:
+                raise HTTPException(404, "Integration not configured")
+            try:
+                self._provision_and_start(
+                    agent,
+                    preflight=True,
+                    credential_overrides=credential_overrides,
+                    removed_providers=data.removed_secret_providers or (),
+                    isolation_overrides=effective_policies,
+                    custom_api_overrides={
+                        row.id: None if operation == "deleted" else row for row, operation in changes
+                    },
+                )
+            except ValueError, TypeError:
+                raise HTTPException(400, "Invalid integration runtime configuration") from None
+
+            if agent.status == AgentStatus.RUNNING:
+                self._observe_integration_readiness(agent)
+                agent = self._stop_agent_unchecked(agent, secret_actor)
+            elif agent.status == AgentStatus.ERROR and data.restart:
+                name = f"agent-{agent_id}"
+                self.k8s.delete_deployment(name, self.config.k8s_namespace)
+                self.k8s.wait_for_termination(name, self.config.k8s_namespace)
+                self.credential_gateway.revoke_for_agent(agent_id, agent.organization_id)
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
@@ -2151,8 +2237,23 @@ class AgentService:
         update_result = self.repository.update_scalar_fields_with_event(
             agent, actor=secret_actor, actor_display=secret_actor_display
         )
+        try:
+            if changes:
+                secret_delivery_ids += custom_api.repository.mutate_many_with_events(
+                    changes, secret_actor, secret_actor_display
+                )
+        except IntegrityError:
+            raise HTTPException(409, "A connection identifier is already in use") from None
+        for provider, isolated in policies.items():
+            source = "agent_secret" if self.repository.get_secret(agent_id, provider) else "platform_default"
+            secret_delivery_ids += self.integrations.set_policy(
+                agent_id, provider, isolated, source, actor=secret_actor, actor_display=secret_actor_display
+            )
         self.event_delivery_dispatcher.enqueue_immediate(update_result.delivery_ids + secret_delivery_ids)
-        return self._get_agent_read(update_result.agent, context)
+        agent = update_result.agent
+        if data.restart:
+            agent = self._start_agent_unchecked(agent, secret_actor)
+        return self._get_agent_read(agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
@@ -2307,6 +2408,8 @@ class AgentService:
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+        credential_overrides: Mapping[SecretProvider, Any] | None = None,
+        removed_providers: Collection[SecretProvider] = (),
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
@@ -2502,6 +2605,8 @@ class AgentService:
         decrypted = {}
         for s in agent_secrets:
             provider = SecretProvider(s.provider)
+            if preflight and (provider in (credential_overrides or {}) or provider in removed_providers):
+                continue
             if s.shared_credential_id and s.shared_credential_id in shared_by_id:
                 ciphertext = shared_by_id[s.shared_credential_id].content
             else:
@@ -2521,6 +2626,10 @@ class AgentService:
                         f"({_validation_problems(exc)}). Edit the integration and save it again."
                     ),
                 ) from exc
+        if preflight:
+            decrypted.update(
+                {provider: content.model_copy(deep=True) for provider, content in (credential_overrides or {}).items()}
+            )
         self._backfill_google_client_credentials(decrypted)
         # A Google refresh token is useless without the client it was issued under: either
         # the credential's own, or the server-owned one backfilled just above.
@@ -3623,6 +3732,7 @@ class AgentService:
         a live validator still receive schema validation;
         their credentials remain eligible for the existing on-demand validation endpoint.
         """
+        provider = SecretProvider(provider)
         validator = PROVIDER_VALIDATORS.get(provider)
         if validator is None:
             return

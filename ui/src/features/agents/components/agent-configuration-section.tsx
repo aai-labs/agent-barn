@@ -23,6 +23,7 @@ export function AgentConfigurationSection({
   onCancel?: () => void;
   onApplied?: () => void;
   applyDisabled?: boolean;
+  errorsShownInline?: boolean;
   restartOnApply?: boolean;
   actionsRenderer?: (actions: ReactNode) => ReactNode;
   unstyled?: boolean;
