@@ -46,6 +46,7 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+    SCHEDULED = "SCHEDULED"
 
 
 class ManagedUpdateOutcome(str, enum.Enum):
@@ -54,6 +55,9 @@ class ManagedUpdateOutcome(str, enum.Enum):
     SUCCEEDED = "SUCCEEDED"
     # The automatic backup could not be taken. The Agent was stopped but not changed.
     BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy and, with no backup, nothing was rolled back.
+    # The Agent was stopped.
+    UPDATE_FAILED = "UPDATE_FAILED"
     # The new version never became healthy; the backup and the old image are back.
     ROLLED_BACK = "ROLLED_BACK"
     # The rollback did not finish. The backup holds the pre-update state.
@@ -636,6 +640,10 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    file_sync_enabled: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
     # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
     # Organization's default Agent limit. Never above the Organization's own limit.
     llm_budget_usd: float | None = SqlField(default=None, nullable=True)
@@ -820,6 +828,9 @@ class AgentRestorePoint(BaseModel, table=True):
     job_name: str | None = SqlField(default=None, nullable=True, max_length=253)
     archive_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     file_count: int | None = SqlField(default=None, nullable=True)
+    # Files that shrank (zero-padded) or vanished while a live capture read them.
+    changed_file_count: int | None = SqlField(default=None, nullable=True)
+    skipped_file_count: int | None = SqlField(default=None, nullable=True)
     config_manifest: dict[str, Any] = SqlField(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
@@ -829,6 +840,9 @@ class AgentRestorePoint(BaseModel, table=True):
     # The configuration is written only after the Job confirms the volume is back,
     # so the intent has to outlive the request that made it.
     reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Set when the user chose to restore without a safety copy. A failed or lost restore
+    # then leaves this archive restorable, since nothing else holds the Agent's old files.
+    backup_skipped_by_user: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
     # Why the recorded configuration did not land, once the volume already has.
     configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
     # Who asked for the restore, which is who authorized the configuration write that
@@ -1166,6 +1180,7 @@ class AgentCreate(PydanticBaseModel):
     verbose_mode: bool = False
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
+    file_sync_enabled: bool = True
     # None, or the default's id, follows the platform default. Anything else needs
     # agent.size.manage and a size the Organization may choose.
     agent_size_id: UUID | None = None
@@ -1545,6 +1560,12 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 
 
 AgentModelSource = Literal["default", "override"]
+
+
+class AgentManagedUpdateRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skip_backup: bool = False
 
 
 class AgentManagedUpdateRead(PydanticBaseModel):

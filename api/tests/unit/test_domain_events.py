@@ -3,6 +3,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from hamcrest import assert_that, equal_to, is_in
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.domains.events import (
@@ -449,3 +450,54 @@ def test_organization_model_allowlist_changed_payload_carries_a_diff_not_full_li
 
     assert event.payload["added"] == added_models
     assert event.payload["removed"] == removed_models
+
+
+def _file_sync_payload(organization_id, agent_id, **extra) -> dict[str, object]:
+    return {
+        "organization_id": str(organization_id),
+        "agent_id": str(agent_id),
+        "actor_display": "Ana",
+        "subject_display": "Sales Bot",
+        **extra,
+    }
+
+
+def _build_file_sync_event(event_name: str, payload: dict[str, object], organization_id, agent_id):
+    return EVENT_REGISTRY.build_event(
+        event_name=event_name,
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=organization_id,
+        actor=_actor(organization_id),
+        subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id),
+        correlation_id=uuid4(),
+        payload=payload,
+    )
+
+
+@pytest.mark.parametrize("event_name", ["agent.file_sync.enabled", "agent.file_sync.disabled"])
+def test_file_sync_switch_payload_carries_only_scoped_ids_and_display_names(event_name):
+    organization_id = uuid4()
+    agent_id = uuid4()
+    registered = sorted(definition.event_name for definition in EVENT_REGISTRY.list_definitions())
+
+    assert_that(event_name, is_in(registered))
+
+    event = _build_file_sync_event(event_name, _file_sync_payload(organization_id, agent_id), organization_id, agent_id)
+
+    assert_that(
+        set(event.payload),
+        equal_to({"organization_id", "agent_id", "actor_display", "subject_display"}),
+    )
+
+
+@pytest.mark.parametrize("event_name", ["agent.file_sync.enabled", "agent.file_sync.disabled"])
+def test_file_sync_switch_payload_rejects_any_other_field(event_name):
+    organization_id = uuid4()
+    agent_id = uuid4()
+    payload = _file_sync_payload(organization_id, agent_id, folder_url="https://contoso.sharepoint.com/x")
+
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_file_sync_event(event_name, payload, organization_id, agent_id)
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))

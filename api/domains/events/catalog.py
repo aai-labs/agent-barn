@@ -22,6 +22,7 @@ AGENT_DELETED = "agent.deleted"
 AGENT_RESTORE_POINT_CREATED = "agent.restore_point.created"
 AGENT_RESTORE_POINT_RESTORED = "agent.restore_point.restored"
 AGENT_RESTORE_POINT_DELETED = "agent.restore_point.deleted"
+AGENT_MANAGED_UPDATE_BACKUP_SKIPPED = "agent.managed_update.backup_skipped"
 AGENT_SECRET_ADDED = "agent.secret.added"
 AGENT_SECRET_UPDATED = "agent.secret.updated"
 AGENT_SECRET_REMOVED = "agent.secret.removed"
@@ -29,6 +30,8 @@ AGENT_MEMORY_ENABLED = "agent.memory.enabled"
 AGENT_MEMORY_DISABLED = "agent.memory.disabled"
 AGENT_MEMORY_GRANT_CREATED = "agent.memory_grant.created"
 AGENT_MEMORY_GRANT_REVOKED = "agent.memory_grant.revoked"
+AGENT_FILE_SYNC_ENABLED = "agent.file_sync.enabled"
+AGENT_FILE_SYNC_DISABLED = "agent.file_sync.disabled"
 PLAYBOOK_EXTRACTION_REQUESTED = "playbook.extraction.requested"
 TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
@@ -257,6 +260,17 @@ class AgentRestorePointChangedPayload(BaseModel):
     label: str | None = None
     actor_display: str | None = None
     subject_display: str | None = None
+    backup_skipped: bool = False
+
+
+class AgentManagedUpdateBackupSkippedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    agent_name: str
+    actor_display: str
+    subject_display: str
 
 
 class AgentSecretChangedPayload(BaseModel):
@@ -279,6 +293,15 @@ class AgentSecretChangedPayload(BaseModel):
 
 
 class AgentMemoryChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class AgentFileSyncChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
@@ -929,6 +952,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (AGENT_MEMORY_DISABLED, AgentMemoryChangedPayload),
         (AGENT_MEMORY_GRANT_CREATED, AgentMemoryGrantPayload),
         (AGENT_MEMORY_GRANT_REVOKED, AgentMemoryGrantPayload),
+        (AGENT_FILE_SYNC_ENABLED, AgentFileSyncChangedPayload),
+        (AGENT_FILE_SYNC_DISABLED, AgentFileSyncChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -1000,6 +1025,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=AgentRestorePointChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.ORGANIZATION,
             )
         )
@@ -1008,6 +1034,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_RESTORE_POINT_RESTORED,
             schema_version=1,
             payload_model=AgentRestorePointChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,
+            schema_version=1,
+            payload_model=AgentManagedUpdateBackupSkippedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )

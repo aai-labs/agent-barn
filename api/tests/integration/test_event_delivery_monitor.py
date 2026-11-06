@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 from uuid import uuid4, uuid7
 
 from fastapi import status
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
 from starlette.testclient import TestClient
 
+from api.domains.events.catalog import EVENT_REGISTRY
 from api.domains.events.constants import (
     EVENT_DELIVERY_PROCESSING_STALE_SECONDS,
     EVENT_DELIVERY_RECONCILIATION_ENQUEUED_STALE_SECONDS,
@@ -633,15 +635,24 @@ def test_status_since_derives_from_the_matching_state_clock():
 
 
 def test_event_types_endpoint_excludes_handlerless_event_definitions():
+    handlerless = DomainEventDefinition(
+        event_name="test.monitor.handlerless",
+        schema_version=1,
+        payload_model=_SamplePayload,
+        event_scope=EventScope.ORGANIZATION,
+    )
     with given(_base_given()) as context:
         client: TestClient = context.client
 
-        response = client.get(f"{MONITOR_BASE}/event-types", headers=_auth_headers(context))
+        with patch.object(
+            EVENT_REGISTRY, "list_definitions", return_value=(*EVENT_REGISTRY.list_definitions(), handlerless)
+        ):
+            response = client.get(f"{MONITOR_BASE}/event-types", headers=_auth_headers(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         event_names = [entry["event_name"] for entry in response.json()]
         # organization.role.changed has a registered handler and must be offered as a
-        # filter option; agent.restore_point.created has zero handlers and can never
-        # produce an Event Delivery, so it must not appear.
+        # filter option; an event with zero handlers can never produce an Event
+        # Delivery, so it must not appear.
         assert_that(event_names, has_item("organization.role.changed"))
-        assert_that("agent.restore_point.created" in event_names, equal_to(False))
+        assert_that(handlerless.event_name in event_names, equal_to(False))

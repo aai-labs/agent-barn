@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 from hamcrest import assert_that, close_to, contains_inanyorder, equal_to, none
@@ -7,6 +8,7 @@ from api.domains.file_sync.engine import FileSyncEngine
 from api.domains.file_sync.models import SyncAgentFolder
 from api.domains.file_sync.repository import FileSyncRepository
 from api.domains.sync_provider.models import SyncProviderConnection
+from api.domains.sync_provider.plugins.base import ProviderUnavailable, RemoteItemLocked
 from api.domains.sync_provider.repository import SyncProviderRepository
 from api.tests.core.givenpy import given
 from api.tests.core.modules import prepare_injector
@@ -145,6 +147,34 @@ def test_pending_and_disconnected_connections_are_not_synced():
 
         assert_that(_folder_names(context, connection), equal_to([]))
         assert_that(_connection(context, connection).sync_retry_at, none())
+
+
+def test_an_unreachable_provider_does_not_pause_the_connection():
+    with given(_BASE) as context:
+        connection = _connected_organization(context, "First", "Sales Bot")
+        fake_drive(context).fail_call("create_folder", ProviderUnavailable("Test Drive couldn't be reached."))
+
+        _run_pass(context)
+
+        assert_that(_connection(context, connection).sync_retry_at, none())
+        _run_pass(context)
+        assert_that(_folder_names(context, connection), equal_to(["Sales Bot"]))
+
+
+def test_an_item_open_for_editing_is_retried_on_the_next_pass_without_an_error(caplog):
+    with given(_BASE) as context:
+        connection = _connected_organization(context, "First", "Sales Bot")
+        fake_drive(context).fail_call("create_folder", RemoteItemLocked("open in Word"))
+
+        with caplog.at_level(logging.INFO, logger="api.domains.file_sync.engine"):
+            _run_pass(context)
+
+        assert_that(
+            [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING], equal_to([])
+        )
+        assert_that(_connection(context, connection).sync_retry_at, none())
+        _run_pass(context)
+        assert_that(_folder_names(context, connection), equal_to(["Sales Bot"]))
 
 
 def test_a_pass_reports_progress_for_each_connection_and_each_page_of_changes():

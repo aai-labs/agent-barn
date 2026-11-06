@@ -153,9 +153,37 @@ New Connections, including lazy Web Chat creation, no longer mint gateway driver
 
 ## Mention gating
 
+Native Hermes Slack rejects group DMs (`mpim`) for incoming messages and gated button
+interactions, including approvals. One-to-one DMs require a D-prefixed channel
+ID. For G-prefixed IDs, which can identify legacy private channels or group DMs,
+the plugin verifies Slack conversation metadata before message intake or gated
+button handling. Only a confirmed private channel may use the channel policy;
+failed or inconclusive lookups deny access. Confirmed private-channel identities
+are cached for the runtime process.
+
 Shared-room admission is a Platform Plugin concern. Plugin settings define provider-specific restrictions. Discord exposes Hermes' native user, role, and channel gates plus an explicit Allow all users switch. A user allowlist applies in DMs and server messages; channel and role gates apply in server messages. There are no separate guild or DM policy switches. Server messages always require a mention of the bot, in parent channels and on Hermes in threads too; there is no Connection setting to lift it. Native Hermes receives those gates directly and owns Discord admission; native OpenClaw receives them as a wildcard `guilds["*"]` entry (users, roles, channels) plus a DM `allowFrom`. The Agent Barn observer is telemetry-only on both. Native Telegram keeps the DM and group policies and requires a mention or reply to the bot in groups, never in DMs, except in listen-in groups, where privacy mode must be off so the bot sees every message. Runtime-owned Teams keeps policy enforcement at the authenticated public relay because the runtimes must accept the activity unchanged for Bot Framework lifecycle and Adaptive Card handling. Slack channel messages require a direct bot mention and expose a schema-driven thread policy: `every_message` requires a mention on every thread reply, while `start_only` admits unmentioned replies only after a matching Connection-scoped thread has persisted Agent state. Slack admission runs in the native gateway using the projected Connection restrictions; observers remain telemetry-only. Updating a native Connection restarts a running Agent because its credentials and policy are projected only at boot; Web Chat and Email changes keep their Communications configuration path.
 
 Listen-in channels let an Agent read every message in chosen shared rooms without a mention and post only when it has something useful to add. Each Connection lists them as provider IDs, which must also be allowed channels under an allowlist; the builder never widens an allowlist. On OpenClaw every Agent with native Slack, Discord, or Telegram sets `messages.groupChat.unmentionedInbound` to `room_event`, and every other Agent sets it explicitly to `user_request`, because `init-openclaw.js` deep-merges `messages` into the persisted config. A listen-in room gets `requireMention: false` and a `systemPrompt` listing when to stay silent and when to speak. Unmentioned messages there become room events: the final text stays private and the Agent posts only through the message tool. Mentions, and Slack start-only replies in the Agent's own thread, remain normal requests. Rooms that require a mention drop unmentioned messages before routing, so the switch changes nothing there. Each listened-to message runs one model turn and is recorded as an inbound Conversation Message, whether or not the Agent speaks. Hermes ignores listen-in channels and Teams has none; see the [silent contributors change log](../features/silent-contributors/CHANGELOG.md).
+
+Native Hermes Slack enforces channel and DM access independently through the
+`agentbarn-slack-access` runtime plugin. It scopes the gateway's authorization
+method before adapter attachment fetching and final dispatch: channel access
+checks `group_policy` and `channel_ids`, while DMs check `dm_policy` and
+`dm_user_ids`. An empty allowlist admits nobody in that scope. Native pairing
+grants and global user allowlists cannot bypass the Connection policy. The
+plugin delegates other Platforms to Hermes' original authorization method;
+Slack's native mention and thread gates still apply. Its files ship in the
+Agent ConfigMap and are enabled only for native Slack. Deploy the API change
+and restart affected Agents to rebuild this configuration. Apply the current
+migration head before deployment as described in the [operations guide](../guidelines/operations.md#database-migrations);
+no base-image rebuild is required. Existing empty channel allowlists become
+closed on restart; review them before rollout as described in the
+[Communications changelog](../features/communications/CHANGELOG.md).
+
+`SLACK_ALLOW_ALL_USERS=true` delegates Hermes' native user gate to the mandatory
+Connection-policy plugin and suppresses the otherwise misleading startup warning
+about having no user allowlists. The plugin remains authoritative for Slack;
+this flag does not widen the Connection policy or another Platform's access.
 
 ## Processing feedback
 
