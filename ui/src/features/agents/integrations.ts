@@ -126,7 +126,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   {
     id: "gitlab",
     label: "GitLab",
-    scopeNote: "Personal, group or project access token. Use the api scope, or read_api if the agent only reads. A self-hosted GitLab must be reachable at a public address.",
+    scopeNote: "Personal access token, or a service account token so the agent has its own GitLab identity. Use the api scope, or read_api if the agent only reads. A self-hosted GitLab must be reachable at a public address.",
     fields: [
       { key: "baseUrl", label: "GitLab URL", type: "text", required: false, placeholder: "https://gitlab.com", hint: "Leave empty for gitlab.com. For a self-hosted GitLab, enter its address." },
       { key: "repos", label: "Projects", type: "repo-list", required: false, placeholder: "group/project", hint: "Leave empty to allow access to any project the token can reach — the agent will need to name a project explicitly." },

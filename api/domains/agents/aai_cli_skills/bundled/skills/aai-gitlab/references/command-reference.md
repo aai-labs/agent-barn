@@ -67,6 +67,8 @@ aai-cli gitlab mrs unapprove IID [--project P]
 aai-cli gitlab mrs approvals IID [--project P]
 ```
 
+`mrs approve` returns 401 (`auth_error`) when this user can't approve that merge request, usually because they wrote it and the project blocks self-approval. The token is fine, so don't retry or report it as broken. Run `mrs approvals IID` and check `user_can_approve`: if it is false, tell the user someone else needs to approve.
+
 There is no `mrs merge` command. If merging is genuinely part of the task, use `gitlab request put projects/<encoded-project>/merge_requests/<iid>/merge --allow-write`.
 
 ### Notes and discussions

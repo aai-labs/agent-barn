@@ -51,6 +51,8 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 
 GitLab is the one provider whose host the user chooses freely: gitlab.com by default, or any self-hosted instance. The instance is stored on the credential, reduced to a bare https origin, and subpath installs such as `https://example.com/gitlab` are not supported.
 
+The token is a personal access token, either a person's or one issued to a [service account](https://docs.gitlab.com/user/profile/service_accounts/). A service account is the better fit for an agent: its activity shows under its own name, its reach is the projects it is added to, and it does not depend on a person staying at the company. Both are plain bearer tokens, so nothing in agent barn tells them apart.
+
 Because the API server and the gateway would otherwise send requests to a user-chosen host, `GitlabPlugin` sets `upstream_public_only`. The gateway resolves the host on every hop, redirects included, refuses it unless every answer is a public address over https, and pins the connection to the checked address while TLS and `Host` keep the real name. That is what stops a public name from resolving to, or redirecting into, the cluster. The live validator uses the same pin and follows no redirects, so a private instance is refused when the credential is saved, in direct and isolated mode alike. This is deliberate: a GitLab reachable only over a VPN cannot be connected.
 
 The refusal is a property of the destination, not of the URL's text, and the check in `GitlabContent` for `localhost` is only a typo guard.
