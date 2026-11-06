@@ -492,9 +492,27 @@ class Agent(BaseModel, table=True):
             name="ck_agent_template_pin_state",
         ),
         sa.CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_agent_llm_budget_non_negative"),
+        sa.ForeignKeyConstraint(
+            ["parent_agent_id", "organization_id"],
+            ["agent.id", "agent.organization_id"],
+            name="fk_agent_parent_agent",
+            ondelete="CASCADE",
+        ),
+        sa.CheckConstraint("(parent_agent_id IS NULL) = (bot_slot IS NULL)", name="ck_agent_bot_slot_with_parent"),
+        sa.CheckConstraint("bot_slot IS NULL OR bot_slot BETWEEN 1 AND 5", name="ck_agent_bot_slot_range"),
+        sa.CheckConstraint("parent_agent_id IS NULL OR parent_agent_id <> id", name="ck_agent_not_own_parent"),
+        sa.Index(
+            "uq_agent_live_bot_slot",
+            "parent_agent_id",
+            "bot_slot",
+            unique=True,
+            postgresql_where=sa.text("parent_agent_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    parent_agent_id: UUID | None = SqlField(default=None, nullable=True)
+    bot_slot: int | None = SqlField(default=None, sa_column=Column(sa.SmallInteger, nullable=True))
     created_by_user_id: UUID | None = SqlField(
         default=None,
         foreign_key="user.id",

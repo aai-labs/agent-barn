@@ -6,9 +6,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
 
 ## Current state
 
-- Delivered: terminology, the feature contract and the ADR. No Bot code exists yet.
+- Delivered: terminology, the feature contract, the ADR, and the schema: `agent.parent_agent_id` and `agent.bot_slot`, with the database refusing a Bot in another Organization, a Bot of a Bot, a non-Hermes Parent Agent or Bot, a changed parent link, and a sixth live Bot. Nothing writes these columns yet.
 - In transition: nothing.
-- Next: the schema for a Bot's parent link and slot.
+- Next: the pod resolver, lifecycle lock, Bot visibility and inherited access, and `GET /bots`.
 - Blockers: none.
 
 ## Runtime evidence
@@ -42,6 +42,15 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-06 — AF-425 — Bot schema
+
+- Delivered: migration `e5b81c3d9a27`.
+  - `parent_agent_id` uses a composite foreign key to `agent(id, organization_id)` with `ON DELETE CASCADE`.
+  - `bot_slot` is set exactly when there is a parent, ranges 1–5, and is unique per Parent Agent among live Agents.
+  - Trigger `trg_agent_bot_parent` refuses a changed parent link, a Bot of a Bot, and a non-Hermes Parent Agent or Bot.
+- Changed: `Agent` model gains `parent_agent_id` and `bot_slot`.
+- Follow-up: resolver, visibility and access.
 
 ### 2026-11-06 — AF-425 — Bots documentation
 
