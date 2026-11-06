@@ -63,6 +63,15 @@ def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> N
     assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
 
 
+def test_native_slack_env_ignores_listen_in_channels() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
+    settings = {"group_policy": "allowlist", "channel_ids": ["C1"]}
+
+    assert native_slack_env({**settings, "listen_in_channel_ids": ["C1"]}, credentials) == native_slack_env(
+        settings, credentials
+    )
+
+
 def test_native_slack_env_maps_connection_policy() -> None:
     credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
 
@@ -109,15 +118,10 @@ def test_native_slack_env_maps_connection_policy() -> None:
 
 
 def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
-    config = build_hermes_gateway_config(
-        "litellm/gpt-5",
-        "http://litellm:4000",
-        native_discord=True,
-        discord_require_mention=False,
-    )
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_discord=True)
 
     assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
-    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
+    assert config["discord"] == {"require_mention": True, "thread_require_mention": True}
     assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
 
     verbose = build_hermes_gateway_config(
@@ -126,6 +130,14 @@ def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
     assert verbose["display"]["platforms"]["discord"]["tool_progress"] == "all"
     assert verbose["display"]["platforms"]["discord"]["tool_progress_grouping"] == "accumulate"
     assert verbose["display"]["platforms"]["discord"]["interim_assistant_messages"] is True
+
+
+def test_native_discord_config_follows_require_mention() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_discord=True, discord_require_mention=False
+    )
+
+    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
 
 
 def test_native_discord_env_maps_hermes_authorization_gates() -> None:
@@ -146,6 +158,15 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert env["DISCORD_ALLOWED_ROLES"] == "role-1"
     assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
     assert "AGENTBARN_DISCORD_POLICY" not in env
+
+
+def test_native_discord_env_ignores_listen_in_channels() -> None:
+    credentials = {"bot_token": "discord-token"}
+    settings = {"allowed_channel_ids": ["channel-1"]}
+
+    assert native_discord_env({**settings, "listen_in_channel_ids": ["channel-1"]}, credentials) == native_discord_env(
+        settings, credentials
+    )
 
 
 def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
@@ -200,6 +221,16 @@ def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_menti
         "TELEGRAM_GROUP_ALLOWED_CHATS": "-1001",
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
     }
+
+
+def test_native_telegram_ignores_listen_in_groups() -> None:
+    settings = {"allowed_chat_ids": ["-1001"]}
+    listening = {**settings, "listen_in_chat_ids": ["-1001"]}
+
+    assert native_telegram_env(listening, _TELEGRAM_TOKEN) == native_telegram_env(settings, _TELEGRAM_TOKEN)
+    assert build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", telegram_settings=listening
+    ) == build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", telegram_settings=settings)
 
 
 def test_native_telegram_env_opens_groups_and_dms() -> None:
