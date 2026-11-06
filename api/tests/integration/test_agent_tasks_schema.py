@@ -44,6 +44,7 @@ from api.tests.steps.organization import there_is_an_organization
 PRE_AF411_REVISION = "a4e9c2d7b615"
 AF411_TASK_TABLES_REVISION = "b7d4e1a9c362"
 AF411_TASK_READ_REVISION = "d2f8a6c41e07"
+AF412_TASK_ORIGIN_REVISION = "e5a1c9f3d208"
 AF411_ARTIFACTS_MERGE_REVISION = "c41a7e2d9b10"
 AF411_TASK_FILES_REVISION = "e8b3f1a2c4d5"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
@@ -265,3 +266,23 @@ def _remember_agent():
         context.own_agent = context.agent
 
     return step
+
+
+def _origin_column(engine) -> dict | None:
+    columns = {column["name"]: column for column in inspect(engine).get_columns("agent_task")}
+    return columns.get("origin")
+
+
+def test_task_origin_defaults_existing_tasks_to_the_agent_and_downgrades_cleanly(scratch_database):
+    command.upgrade(scratch_database.config, AF411_TASK_READ_REVISION)
+    command.upgrade(scratch_database.config, AF412_TASK_ORIGIN_REVISION)
+    scratch_database.engine.dispose()
+    origin = _origin_column(scratch_database.engine)
+    assert origin is not None
+    assert_that((origin["nullable"], str(origin["default"])), equal_to((False, "'agent'::agenttaskorigin")))
+
+    command.downgrade(scratch_database.config, AF411_TASK_READ_REVISION)
+    scratch_database.engine.dispose()
+    with scratch_database.engine.connect() as connection:
+        enum_left = connection.execute(text("SELECT 1 FROM pg_type WHERE typname = 'agenttaskorigin'")).first()
+    assert_that((_origin_column(scratch_database.engine), enum_left), equal_to((None, None)))

@@ -35,6 +35,9 @@ cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.
 mkdir -p /opt/data/plugins/agentbarn-observer
 cp /app/config/agentbarn-observer-plugin.yaml /opt/data/plugins/agentbarn-observer/plugin.yaml
 cp /app/config/agentbarn-observer-init.py /opt/data/plugins/agentbarn-observer/__init__.py
+mkdir -p /opt/data/plugins/agentbarn-tasks
+cp /app/config/agentbarn-tasks-plugin.yaml /opt/data/plugins/agentbarn-tasks/plugin.yaml
+cp /app/config/agentbarn-tasks-init.py /opt/data/plugins/agentbarn-tasks/__init__.py
 mkdir -p /opt/data/plugins/agentbarn-slack-access
 cp /app/config/slack-access-plugin.yaml /opt/data/plugins/agentbarn-slack-access/plugin.yaml
 cp /app/config/slack-access-init.py /opt/data/plugins/agentbarn-slack-access/__init__.py

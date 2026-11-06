@@ -156,6 +156,34 @@ class AgentTaskRepository:
             session.commit()
             return stored
 
+    def remove_file(
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        task_id: UUID,
+        file_id: UUID,
+        release: Callable[[Session, UUID], None],
+    ) -> bool:
+        """Delete one of the Agent's own Files, releasing its Artifact pin in the same transaction."""
+        with Session(self.delegate.engine) as session:
+            if not _lock_live_agent(session, organization_id, agent_id):
+                return False
+            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+                return False
+            stored = session.exec(
+                select(AgentTaskFile).where(
+                    col(AgentTaskFile.id) == file_id,
+                    col(AgentTaskFile.task_id) == task_id,
+                    col(AgentTaskFile.organization_id) == organization_id,
+                )
+            ).first()
+            if stored is None:
+                return False
+            release(session, stored.id)
+            session.delete(stored)
+            session.commit()
+            return True
+
     def get_file(
         self,
         agent_id: UUID,
@@ -218,8 +246,10 @@ class AgentTaskRepository:
         pagination: Pagination,
         authorization_scope: AuthorizationScope,
         visible_scope: AuthorizationScope | None = None,
+        recently_changed_first: bool = False,
     ) -> PaginatedItems[AgentTaskRead]:
-        """Tasks newest first; with `visible_scope`, only on Agents that scope may also see."""
+        """Tasks newest or most recently changed first; with `visible_scope`, only on Agents it also sees."""
+        order = col(AgentTask.updated_at) if recently_changed_first else col(AgentTask.created_at)
         where = [
             col(AgentTask.organization_id) == authorization_scope.organization_id,
             *agent_scope_predicates(authorization_scope),
@@ -244,7 +274,7 @@ class AgentTaskRepository:
                 select(AgentTask)
                 .join(Agent, col(Agent.id) == col(AgentTask.agent_id))
                 .where(*where)
-                .order_by(col(AgentTask.created_at).desc(), col(AgentTask.id).desc())
+                .order_by(order.desc(), col(AgentTask.id).desc())
                 .offset((pagination.page - 1) * pagination.size)
                 .limit(pagination.size)
             ).all()
