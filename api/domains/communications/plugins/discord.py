@@ -22,14 +22,6 @@ class DiscordValidationConfig(Protocol):
 
 
 class DiscordSettings(PlatformSettings):
-    @model_validator(mode="before")
-    @classmethod
-    def discard_legacy_require_mention(cls, values: object) -> object:
-        """Accept old Connection rows while retiring the removed setting."""
-        if isinstance(values, dict) and "require_mention" in values:
-            return {key: value for key, value in values.items() if key != "require_mention"}
-        return values
-
     allowed_channel_ids: list[str] = Field(
         default_factory=list,
         title="Allowed channels",
@@ -51,6 +43,14 @@ class DiscordSettings(PlatformSettings):
         description=(
             "Allow messages from every Discord user in DMs and server channels. "
             "When disabled, the native Discord adapter uses the configured user, role, and channel allowlists."
+        ),
+    )
+    require_mention: bool = Field(
+        default=True,
+        title="Require @mention",
+        description=(
+            "Only respond in servers when directly @mentioned. Listen-in channels ignore this. On OpenClaw Agents it "
+            "can't be off while the Agent has listen-in channels."
         ),
     )
     home_channel_id: str | None = Field(
@@ -88,7 +88,7 @@ class DiscordCredentials(PlatformCredentials):
 class DiscordPlatformPlugin(PlatformPlugin):
     key = "discord"
     display_name = "Discord"
-    schema_version = 3
+    schema_version = 2
     setup_hint = (
         "## Create and configure a bot\n\n"
         "1. In [Discord Developer Portal](https://discord.com/developers/applications), create or open an Application and "
@@ -106,7 +106,7 @@ class DiscordPlatformPlugin(PlatformPlugin):
         "1. Paste the Bot Token into this Connection and save it.\n"
         "2. The bot must view every allowed channel. Enable **Developer Mode** to copy channel, user, and role IDs.\n"
         "3. By default the bot denies users not covered by an allowed user, role, or channel. Enable **Allow all users** "
-        "only when anyone may use the bot. People must mention the bot in server messages."
+        "only when anyone may use the bot. When **Require @mention** is on, people must mention the bot in server messages."
     )
     capabilities = frozenset(
         {

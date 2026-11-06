@@ -32,11 +32,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Added: Slack Connections offer **Listen-in channels**, a list of channel IDs that must also be Allowed channels under an allowlist. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; Hermes ignores the list. The Connection form browses Slack channels for it, as it does for Allowed channels.
 - Changed: every OpenClaw Agent's config sets `messages.groupChat.unmentionedInbound` explicitly: `room_event` with native Slack, Discord, or Telegram, otherwise `user_request`. The runtime configuration digest changes, so running OpenClaw Agents report an update. See [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating).
 
-### 2026-10-28 — MDP-118 — Retire Discord's Require @mention setting — PR pending
+### 2026-11-06 — MDP-118 — Discord keeps Require @mention — PR pending
 
-- Removed: Discord Connections no longer offer **Require @mention**. Server messages always require a mention of the bot on both runtimes, in parent channels and Hermes threads, as Slack and Telegram already do. Turning the setting off had made Agents answer every message in every allowed channel. Listen-in channels ([silent contributors](../silent-contributors/CHANGELOG.md)) replace it.
-- Changed: Discord's Connection schema advances to version 3. Migration `16ac819db080` removes `require_mention` from persisted Discord Connection settings. Validation temporarily discards that one legacy key, so Connections written by an older replica stay usable during a rolling deployment. Other unknown settings remain rejected. Connections that had it off become mention-only at the Agent's next start.
-
+- Kept: Discord Connections keep **Require @mention** (on by default), which an earlier MDP-118 change had removed before it shipped. Listen-in channels ignore it. Migration `16ac819db080` no longer changes stored settings, so saved values survive; development databases that already ran its earlier version fall back to on. The Discord schema stays at version 2.
+- Added: on an OpenClaw Agent, saving a Connection is refused while Discord's Require @mention is off and any enabled Connection lists listen-in rooms, because OpenClaw applies one rule for unmentioned messages to the whole Agent. Hermes Agents allow it.
+- Changed: OpenClaw sets `messages.groupChat.unmentionedInbound` to `room_event` only when the Agent has a listen-in room, so Require @mention off makes it answer every message. The runtime configuration digest changes.
 ### 2026-10-29 — Separate native Hermes Slack channel and DM access — [PR #275](https://github.com/aai-labs/agent-barn/pull/275)
 
 - Fixed: a Slack Connection with open channel access and a DM sender allowlist

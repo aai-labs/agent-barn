@@ -254,15 +254,26 @@ def test_native_channels_enable_installed_plugins_and_the_observer() -> None:
     assert "agentbarn-observer" not in build_openclaw_gateway_config("litellm/gpt-5", "http://x")["plugins"]["allow"]
 
 
-def test_gateway_config_turns_unmentioned_chatter_into_room_events_on_listen_in_platforms() -> None:
-    for key in ("slack", "discord", "telegram"):
-        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {key: {"enabled": True}})
+def test_gateway_config_turns_unmentioned_chatter_into_room_events_with_listen_in_rooms() -> None:
+    listening = {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C1"]}),
+        "discord": native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]}),
+        "telegram": native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-100"]}),
+    }
+    for key, channel in listening.items():
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {key: channel})
 
         assert config["messages"] == {"groupChat": {"unmentionedInbound": "room_event"}}
 
 
-def test_gateway_config_writes_user_requests_explicitly_without_a_listen_in_platform() -> None:
-    for channels in (None, {"msteams": {"enabled": True}}):
+def test_gateway_config_answers_unmentioned_messages_without_listen_in_rooms() -> None:
+    for channels in (
+        None,
+        {"msteams": {"enabled": True}},
+        {"slack": native_slack_channel({"group_policy": "open"})},
+        {"discord": native_discord_channel({"allow_all_users": True, "require_mention": False})},
+        {"telegram": native_telegram_channel({"group_policy": "open"})},
+    ):
         config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels)
 
         assert config["messages"] == {"groupChat": {"unmentionedInbound": "user_request"}}
@@ -330,7 +341,7 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
     assert gated["groupPolicy"] == "allowlist"
     assert gated["guilds"] == {
         "*": {
-            "requireMention": True,
+            "requireMention": False,
             "users": ["u1"],
             "roles": ["r1"],
             "channels": {"c1": {"enabled": True, "autoThread": True}},
@@ -357,6 +368,15 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
     closed = native_discord_channel({})
     assert (closed["groupPolicy"], closed["dmPolicy"]) == ("disabled", "disabled")
     assert "guilds" not in closed
+
+
+def test_native_discord_channel_listen_in_rooms_ignore_require_mention() -> None:
+    listen_in = {"enabled": True, "autoThread": True, "requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+
+    gated = native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]})
+
+    assert gated["guilds"]["*"]["requireMention"] is True
+    assert gated["guilds"]["*"]["channels"]["c9"] == listen_in
 
 
 def test_native_discord_channel_listens_in_on_chosen_channels() -> None:

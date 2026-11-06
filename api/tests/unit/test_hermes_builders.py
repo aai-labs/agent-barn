@@ -132,6 +132,14 @@ def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
     assert verbose["display"]["platforms"]["discord"]["interim_assistant_messages"] is True
 
 
+def test_native_discord_config_follows_require_mention() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_discord=True, discord_require_mention=False
+    )
+
+    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
+
+
 def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     settings = {
         "allowed_channel_ids": ["channel-1"],

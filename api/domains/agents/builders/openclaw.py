@@ -56,7 +56,6 @@ LISTEN_IN_SYSTEM_PROMPT = (
     "Messages that @mention you are normal requests; answer those as usual."
 )
 _LISTEN_IN_ROOM = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
-_ROOM_EVENT_PLATFORMS = frozenset({"slack", "discord", "telegram"})
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
@@ -156,6 +155,22 @@ _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
+def _listen_in_rooms(channels: dict[str, dict]) -> dict[str, list[str]]:
+    rooms_by_platform = {
+        "slack": (channels.get("slack") or {}).get("channels") or {},
+        "discord": {
+            channel_id: room
+            for guild in ((channels.get("discord") or {}).get("guilds") or {}).values()
+            for channel_id, room in (guild.get("channels") or {}).items()
+        },
+        "telegram": (channels.get("telegram") or {}).get("groups") or {},
+    }
+    return {
+        platform: [room_id for room_id, room in rooms.items() if room.get("systemPrompt") == LISTEN_IN_SYSTEM_PROMPT]
+        for platform, rooms in rooms_by_platform.items()
+    }
+
+
 def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -165,7 +180,7 @@ def build_openclaw_gateway_config(
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
-    unmentioned = "room_event" if _ROOM_EVENT_PLATFORMS & channels.keys() else "user_request"
+    unmentioned = "room_event" if any(_listen_in_rooms(channels).values()) else "user_request"
     config["messages"] = {"groupChat": {"unmentionedInbound": unmentioned}}
     config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
     if memory_enabled:
@@ -244,7 +259,7 @@ def native_discord_channel(settings: dict) -> dict:
     roles = _setting_ids(settings, "allowed_role_ids")
     channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
-    guild: dict = {"requireMention": True}
+    guild: dict = {"requireMention": bool(settings.get("require_mention", True))}
     if not allow_all:
         if users:
             guild["users"] = users
