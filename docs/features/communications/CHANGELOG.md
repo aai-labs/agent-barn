@@ -42,10 +42,39 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Added: Slack Connections offer **Listen-in channels**, a list of channel IDs that must also be Allowed channels under an allowlist. On OpenClaw the Agent reads every message there without a mention and posts only when it has something useful to add; Hermes ignores the list. The Connection form browses Slack channels for it, as it does for Allowed channels.
 - Changed: every OpenClaw Agent's config sets `messages.groupChat.unmentionedInbound` explicitly: `room_event` with native Slack, Discord, or Telegram, otherwise `user_request`. The runtime configuration digest changes, so running OpenClaw Agents report an update. See [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating).
 
-### 2026-10-28 — MDP-118 — Retire Discord's Require @mention setting — PR pending
+### 2026-11-06 — MDP-118 — Discord keeps Require @mention — PR pending
 
-- Removed: Discord Connections no longer offer **Require @mention**. Server messages always require a mention of the bot on both runtimes, in parent channels and Hermes threads, as Slack and Telegram already do. Turning the setting off had made Agents answer every message in every allowed channel. Listen-in channels ([silent contributors](../silent-contributors/CHANGELOG.md)) replace it.
-- Changed: Discord's Connection schema advances to version 3. Migration `16ac819db080` removes `require_mention` from persisted Discord Connection settings. Validation temporarily discards that one legacy key, so Connections written by an older replica stay usable during a rolling deployment. Other unknown settings remain rejected. Connections that had it off become mention-only at the Agent's next start.
+- Kept: Discord Connections keep **Require @mention** (on by default), which an earlier MDP-118 change had removed before it shipped. Listen-in channels ignore it. Migration `16ac819db080` no longer changes stored settings, so saved values survive; development databases that already ran its earlier version fall back to on. The Discord schema stays at version 2.
+- Added: on an OpenClaw Agent, saving a Connection is refused while Discord's Require @mention is off and any enabled Connection lists listen-in rooms, because OpenClaw applies one rule for unmentioned messages to the whole Agent. Hermes Agents allow it.
+- Changed: OpenClaw sets `messages.groupChat.unmentionedInbound` to `room_event` only when the Agent has a listen-in room, so Require @mention off makes it answer every message. The runtime configuration digest changes.
+### 2026-10-29 — Separate native Hermes Slack channel and DM access — [PR #275](https://github.com/aai-labs/agent-barn/pull/275)
+
+- Fixed: a Slack Connection with open channel access and a DM sender allowlist
+  no longer rejects channel mentions from users outside that DM list. An empty
+  DM allowlist closes DMs without closing channels; an empty channel allowlist
+  closes channels without closing permitted DMs.
+- Changed: the ConfigMap-shipped `agentbarn-slack-access` runtime plugin enforces
+  the Connection policy at Hermes' early authorization seam, before attachment
+  fetching. Native mention and thread controls continue to apply. See
+  [runtime admission](../../architecture/runtime-and-deployment.md#mention-gating).
+- Verified: the real-image regression fails on the previous projection and
+  covers open, closed, populated, and empty allowlists through Slack message intake,
+  and verifies thread-history trust tags against the channel policy.
+- Fixed: native Hermes Slack rejects group DMs for incoming messages and approval,
+  slash-confirm, and clarification buttons. Legacy private channels retain their
+  channel policy after Slack metadata confirms they are not group DMs; failed
+  or inconclusive metadata lookups deny access.
+- Fixed: the generated Slack manifest enables a writable Messages tab again.
+- Operations: before restarting, review existing Slack Connections with Channel
+  access set to Allowlist and no allowed channels (the default). Hermes formerly
+  treated that empty list as unrestricted when the DM sender gate admitted the
+  user; after restart it admits no channel messages. Select Open to retain access
+  to every channel the bot is in, or populate the allowed channels to restrict it.
+  Deploy the API and restart affected Agents. Existing Slack apps
+  must also enable Messages Tab and untick read-only under Slack app settings →
+  App Home, or re-paste the updated manifest. Restarting does not update the
+  installed Slack app. Apply the current migration head before deploying; no
+  base-image change is required.
 
 ### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
 

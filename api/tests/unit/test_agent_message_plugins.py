@@ -66,13 +66,15 @@ def test_telegram_listen_in_groups_must_be_allowed_groups():
     assert_that(TelegramSettings().listen_in_chat_ids, equal_to([]))
 
 
-def test_discord_settings_retire_require_mention_and_discard_legacy_values():
+def test_discord_settings_offer_require_mention_on_by_default():
     schema = DiscordSettings.model_json_schema()
 
-    assert_that(schema["properties"], not_(has_key("require_mention")))
-    legacy_settings = DiscordSettings.model_validate({"require_mention": False})
-    assert_that(legacy_settings.model_dump(), not_(has_key("require_mention")))
-    assert_that(DiscordPlatformPlugin(CONFIG).descriptor.schema_version, equal_to(3))
+    assert_that(schema["properties"]["require_mention"]["title"], equal_to("Require @mention"))
+    assert_that(DiscordSettings.model_validate({}).require_mention, equal_to(True))
+    assert_that(
+        DiscordSettings.model_validate({"require_mention": False}).model_dump()["require_mention"], equal_to(False)
+    )
+    assert_that(DiscordPlatformPlugin(CONFIG).descriptor.schema_version, equal_to(2))
 
 
 def test_slack_resolves_channel_thread_and_rejects_ambiguous_names():

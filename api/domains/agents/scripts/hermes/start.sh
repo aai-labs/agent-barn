@@ -39,6 +39,9 @@ cp /app/config/agentbarn-observer-init.py /opt/data/plugins/agentbarn-observer/_
 mkdir -p /opt/data/plugins/agentbarn-listen-in
 cp /app/config/agentbarn-listen-in-plugin.yaml /opt/data/plugins/agentbarn-listen-in/plugin.yaml
 cp /app/config/agentbarn-listen-in-init.py /opt/data/plugins/agentbarn-listen-in/__init__.py
+mkdir -p /opt/data/plugins/agentbarn-slack-access
+cp /app/config/slack-access-plugin.yaml /opt/data/plugins/agentbarn-slack-access/plugin.yaml
+cp /app/config/slack-access-init.py /opt/data/plugins/agentbarn-slack-access/__init__.py
 python3 /app/config/listen-in-check.py /opt/data/config.yaml
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do

@@ -1012,8 +1012,13 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByText("Slack manifest copied", { exact: true })).toBeVisible();
     const copiedManifest = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as {
       display_information: { name: string; description: string };
-      features: { bot_user: { display_name: string } };
+      features: {
+        bot_user: { display_name: string };
+        app_home: { messages_tab_enabled: boolean; messages_tab_read_only_enabled: boolean };
+      };
     };
+    expect(copiedManifest.features.app_home.messages_tab_enabled).toBe(true);
+    expect(copiedManifest.features.app_home.messages_tab_read_only_enabled).toBe(false);
     expect(copiedManifest.display_information.name).toBe("Maya Smith");
     expect(copiedManifest.display_information.description).toBe("Onboards and offboards people");
     expect(copiedManifest.features.bot_user.display_name).toBe("maya-smith");

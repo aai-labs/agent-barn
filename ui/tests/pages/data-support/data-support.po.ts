@@ -8,6 +8,7 @@ import { CommunicationConnectionDataSupport } from "./communication-connection-d
 import { CostDataSupport } from "./cost-data-support.po";
 import { EnvironmentHealthDataSupport } from "./environment-health-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
+import { FileSyncDataSupport } from "./file-sync-data-support.po";
 import { KpisDataSupport } from "./kpis-data-support.po";
 import { OnboardingDataSupport } from "./onboarding-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
@@ -34,6 +35,7 @@ export class DataSupport {
   public costs: CostDataSupport;
   public environmentHealth: EnvironmentHealthDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
+  public fileSync: FileSyncDataSupport;
   public kpis: KpisDataSupport;
   public syncProviders: SyncProviderDataSupport;
   public orgTemplates: OrgTemplateDataSupport;
@@ -56,6 +58,7 @@ export class DataSupport {
     this.costs = new CostDataSupport(page);
     this.environmentHealth = new EnvironmentHealthDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
+    this.fileSync = new FileSyncDataSupport(page);
     this.kpis = new KpisDataSupport(page);
     this.syncProviders = new SyncProviderDataSupport(page);
     this.orgTemplates = new OrgTemplateDataSupport(page);

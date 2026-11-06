@@ -571,6 +571,24 @@ def test_agent_memory_migration_leaves_existing_agents_opted_out(legacy_database
     assert_that(column, equal_to(("NO", "false")))
 
 
+def test_file_sync_migration_leaves_existing_agents_syncing(legacy_database):
+    command.upgrade(legacy_database.config, "heads")
+    with legacy_database.engine.connect() as connection:
+        column = connection.execute(
+            text(
+                "SELECT is_nullable, column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'agent' AND column_name = 'file_sync_enabled'"
+            )
+        ).one_or_none()
+
+    assert_that(column, equal_to(("NO", "true")))
+
+    with legacy_database.engine.connect() as connection:
+        settings = connection.execute(text("SELECT file_sync_enabled FROM agent")).scalars().all()
+
+    assert_that(settings, equal_to([True, True, True]))
+
+
 def test_general_access_role_rejects_referenced_role_deletion(legacy_database):
     command.upgrade(legacy_database.config, "heads")
     custom_role_id = _insert_custom_agent_access_role(

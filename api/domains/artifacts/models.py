@@ -110,4 +110,5 @@ class ArtifactLinkRead(DTO):
 
 
 class ArtifactStorageRead(DTO):
+    max_bytes: int
     state: Literal["NOT_CONFIGURED", "NOT_PROVISIONED", "PROVISIONING", "READY", "FAILED"]

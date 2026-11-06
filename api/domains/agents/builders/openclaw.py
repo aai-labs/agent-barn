@@ -58,7 +58,6 @@ LISTEN_IN_SYSTEM_PROMPT = (
     "Never answer an @mention with silence: if it asks for something you cannot do here, say so briefly."
 )
 _LISTEN_IN_ROOM = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
-_ROOM_EVENT_PLATFORMS = frozenset({"slack", "discord", "telegram"})
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
@@ -200,7 +199,7 @@ def build_openclaw_gateway_config(
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
-    unmentioned = "room_event" if _ROOM_EVENT_PLATFORMS & channels.keys() else "user_request"
+    unmentioned = "room_event" if any(_listen_in_rooms(channels).values()) else "user_request"
     config["messages"] = {"groupChat": {"unmentionedInbound": unmentioned}}
     config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
     if memory_enabled:
@@ -294,7 +293,7 @@ def native_discord_channel(settings: dict) -> dict:
     roles = _setting_ids(settings, "allowed_role_ids")
     channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
-    guild: dict = {"requireMention": True}
+    guild: dict = {"requireMention": bool(settings.get("require_mention", True))}
     if not allow_all:
         if users:
             guild["users"] = users

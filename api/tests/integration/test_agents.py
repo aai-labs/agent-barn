@@ -267,6 +267,34 @@ def test_create_agent_emits_created_domain_event():
             assert_that(created_events[0].payload["created_by_user_id"], equal_to(str(context.user.id)))
 
 
+def test_create_agent_with_file_sync_turned_off_stores_it():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent with file sync turned off"):
+            response = client.post(_BASE, json={**_VALID_CREATE, "file_sync_enabled": False}, headers=_auth(context))
+
+        with then("the agent is stored with file sync turned off"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            stored = context.injector.get(AgentRepository).get_by_id(UUID(response.json()["id"]))
+            assert stored is not None
+            assert_that(stored.file_sync_enabled, equal_to(False))
+
+
+def test_create_agent_without_file_sync_choice_syncs_files():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an agent without choosing file sync"):
+            response = client.post(_BASE, json=_VALID_CREATE, headers=_auth(context))
+
+        with then("the agent is stored with file sync turned on"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            stored = context.injector.get(AgentRepository).get_by_id(UUID(response.json()["id"]))
+            assert stored is not None
+            assert_that(stored.file_sync_enabled, equal_to(True))
+
+
 def test_create_agent_missing_template_key_returns_422():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -2721,7 +2749,7 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
-            assert_that(cfg["discord"], equal_to({"require_mention": True, "thread_require_mention": True}))
+            assert_that(cfg["discord"], equal_to({"require_mention": False, "thread_require_mention": False}))
             assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
 
             secret = k8s.create_secret.call_args.args[1].string_data

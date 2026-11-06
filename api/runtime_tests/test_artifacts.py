@@ -10,6 +10,7 @@ import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -72,17 +73,21 @@ def test_real_image_cli_publishes_lists_links_and_retrieves(runtime):
         with given([set_env_variable(settings)]) as _:
             command.upgrade(AlembicConfig(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head")
             with given(_GIVEN) as context, tempfile.TemporaryDirectory(prefix="artifact-runtime-") as directory:
+                context.agent.agent_type = runtime
                 headers = runtime_auth(context)
                 root = Path(directory)
                 root.chmod(0o777)
                 (root / "agentbarn_artifacts.py").write_text(ARTIFACT_TOOL)
+                (root / "agent-trigger-server.py").write_text(
+                    (Path(__file__).parents[1] / "domains/agents/scripts/agent-trigger-server.py").read_text()
+                )
                 (root / "agentbarn-artifacts").write_text(ARTIFACT_COMMAND)
                 (root / "agentbarn-artifacts").chmod(0o555)
                 (root / "report.csv").write_bytes(CONTENT)
                 workspace = "/workspace" if runtime == "hermes" else "/home/node/.openclaw/workspace"
                 with product_listener(context.client) as url:
 
-                    def cli(*arguments):
+                    def cli(*arguments, probe=None):
                         result = subprocess.run(
                             [
                                 "docker",
@@ -91,7 +96,7 @@ def test_real_image_cli_publishes_lists_links_and_retrieves(runtime):
                                 "--network",
                                 "host",
                                 "--entrypoint",
-                                "/usr/local/bin/agentbarn-artifacts",
+                                "python3" if probe else "/usr/local/bin/agentbarn-artifacts",
                                 "-v",
                                 f"{root}:/app/config:ro",
                                 "-v",
@@ -105,7 +110,7 @@ def test_real_image_cli_publishes_lists_links_and_retrieves(runtime):
                                 "-e",
                                 f"ARTIFACT_UPLOAD_ROOTS={workspace}",
                                 image,
-                                *arguments,
+                                *(["-c", probe] if probe else arguments),
                             ],
                             capture_output=True,
                             text=True,
@@ -123,3 +128,57 @@ def test_real_image_cli_publishes_lists_links_and_retrieves(runtime):
                     )
                     cli("retrieve", artifact_id, workspace + "/retrieved.csv")
                     assert_that((root / "retrieved.csv").read_bytes(), equal_to(CONTENT))
+
+                    # Deterministic file steps execute real retrieval and publication inside each image.
+                    # This proves the byte pipeline, not live model/tool selection.
+                    from api.domains.workflows.runtime_service import WorkflowRuntimeService
+                    from api.tests.helpers.workflows import draft
+                    from api.tests.integration.test_workflow_runs import attempt, result, start
+                    from api.tests.integration.test_workflows import auth, base
+
+                    body = draft()
+                    body["inputs"][0]["type"] = "file"
+                    body["steps"].append({**body["steps"][0], "id": str(uuid4()), "name": "Transform output"})
+                    saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+                    started, _, _ = start(
+                        context,
+                        saved,
+                        inputs={
+                            "period": {
+                                "artifact_id": artifact_id,
+                                "checksum": output["artifact"]["checksum"],
+                            }
+                        },
+                    )
+                    assert started.status_code == 202, started.text
+                    previous_id = artifact_id
+                    expected = CONTENT
+                    for index in range(2):
+                        repository, current, token = attempt(context, started.json()["id"])
+                        handoff = context.injector.get(WorkflowRuntimeService).handoff(current.id, token)
+                        probe = f"""
+import importlib.util, json, pathlib, subprocess, tempfile
+spec = importlib.util.spec_from_file_location('trigger', '/app/config/agent-trigger-server.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with tempfile.TemporaryDirectory(dir={workspace!r}) as directory:
+    files = module._retrieve_workflow_files({handoff["files"]!r}, directory, {str(current.id)!r})
+    source = next(file for file in files if file['artifact_id'] == {previous_id!r})
+    content = pathlib.Path(source['path']).read_bytes() + {f"step-{index + 1}\n".encode()!r}
+    target = pathlib.Path({workspace!r}) / 'deliverable-{index}.csv'
+    target.write_bytes(content)
+    completed = subprocess.run(['/usr/local/bin/agentbarn-artifacts', 'upload', str(target), '--attempt-id', {str(current.id)!r}], capture_output=True, text=True, check=True)
+    print(completed.stdout)
+"""
+                        delivered = cli(probe=probe)["artifact"]
+                        expected += f"step-{index + 1}\n".encode()
+                        assert (root / f"deliverable-{index}.csv").read_bytes() == expected
+                        repository.complete(current.id, token, result())
+                        previous_id = delivered["id"]
+                    detail = context.client.get(
+                        base(context) + f"/workflow-runs/{started.json()['id']}", headers=auth(context)
+                    ).json()
+                    assert detail["state"] == "SUCCEEDED"
+                    assert detail["final_artifacts"][0]["artifact_id"] == previous_id
+                    cli("retrieve", previous_id, workspace + "/final.csv", "--checksum", delivered["checksum"])
+                    assert (root / "final.csv").read_bytes() == expected

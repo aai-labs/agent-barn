@@ -8,12 +8,19 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. PR 1: Discord always requires a mention on both runtimes; its "Require @mention" setting is retired (schema version 3, migration `16ac819db080`). PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes. H5: Hermes reads recent messages in Slack listen-in channels. H6: image tests pin the private Hermes code the guard and observer rely on.
-- In transition: Discord settings validation discards a legacy `require_mention` key until every replica runs schema version 3.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. Discord keeps its "Require @mention" setting; PR 1's removal was undone before it shipped, and migration `16ac819db080` is a no-op. PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes. H5: Hermes reads recent messages in Slack listen-in channels. H6: image tests pin the private Hermes code the guard and observer rely on.
+- In transition: nothing.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
+
+### 2026-11-06 — MDP-118 — Keep Discord's Require @mention
+
+- Changed: PR 1's removal is undone. Require @mention and listen-in are separate: the setting decides whether users must mention the Agent in every channel, and listen-in channels ignore it. The setting returns with its old default, on; the schema stays at version 2, and migration `16ac819db080` is now a no-op, so saved values on shared environments are kept.
+- Changed: OpenClaw turns unmentioned messages into room events only when the Agent has a listen-in room. Without one, Require @mention off answers every message, as before PR 1.
+- Added: OpenClaw applies one rule for unmentioned messages to the whole Agent, so saving a Connection is refused while Discord's Require @mention is off and any enabled listen-in room exists. Hermes enforces mentions per channel, so it allows both.
+- Merged into AF-428: its `_listen_in_rooms` block is kept, and its listen-in guard builder test now passes a listen-in room, since room events need one.
 
 ### 2026-11-03 — MDP-118 O2 — OpenClaw memory and Slack context
 

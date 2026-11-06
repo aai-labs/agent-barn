@@ -62,7 +62,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: 10m, memory: 48Mi}
+            requests: {cpu: 10m, memory: 64Mi}
             limits: {memory: 64Mi}
       containers:
         - name: garage
