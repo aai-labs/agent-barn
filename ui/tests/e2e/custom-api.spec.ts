@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { AgentConfigurationPage } from "../pages/agent-configuration-page.po";
 import { CustomApiPage } from "../pages/custom-api-page.po";
 import { CustomApiDataSupport } from "../pages/data-support/custom-api-data-support.po";
 import { mockAgentAllowedActions } from "../pages/data-support/agent-data-support.po";
@@ -192,6 +193,12 @@ test.describe("Custom API integrations", () => {
       expect(data.lifecycleRequests).toEqual([]);
       expect(data.requests[0].url).toMatch(mixed ? /\/agents\/[^/]+$/ : /\/apply$/);
       if (mixed) expect(data.requests[0].body).toHaveProperty("custom_api");
+      if (mixed) await new AgentConfigurationPage(page).removeIntegration("GitHub");
+      await ui.removeConnection("Inventory API");
+      await ui.removeConnection("Inventory/API");
+      await expect(ui.save).toBeDisabled();
+      expect(data.requests).toHaveLength(1);
+      expect(data.lifecycleRequests).toEqual([]);
     });
   }
 

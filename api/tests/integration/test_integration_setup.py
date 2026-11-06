@@ -192,6 +192,32 @@ def test_running_apply_requires_explicit_restart():
         assert not cluster.delete_deployment.called
 
 
+@pytest.mark.parametrize("empty_custom_api", [False, True])
+def test_stopped_credential_save_ignores_unrelated_start_blocker(empty_custom_api):
+    with given(_GIVEN) as context:
+        repository = context.injector.get(AgentRepository)
+        agent = repository.get_by_id(context.agent.id)
+        agent.model = "litellm/openrouter/disallowed/model"
+        repository.save(agent)
+        context.organization.allowed_models = ["openai/*"]
+        context.postgres_delegate.save(context.organization)
+        blocked = context.client.post(f"{_base(context)}/start", headers=_auth(context))
+        assert blocked.status_code == 400, blocked.text
+        assert "allowed model list" in blocked.json()["detail"]
+        body = {"secrets": [_secret("accepted-key")], "restart": False, "policies": []}
+        if empty_custom_api:
+            body["custom_api"] = {"creates": [], "updates": [], "deletes": []}
+        response = _apply(context, **body)
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "STOPPED"
+        content = decrypt_content(
+            SecretProvider.APOLLO, repository.get_secret(agent.id, SecretProvider.APOLLO).content, TEST_ENCRYPTION_KEY
+        )
+        assert isinstance(content, ApolloContent)
+        assert content.api_token == "accepted-key"
+        assert not context.injector.get(KubernetesClient).create_deployment.called
+
+
 def test_apply_while_lifecycle_lock_is_held_is_rejected():
     with given(_GIVEN) as context:
         cluster = _start(context)

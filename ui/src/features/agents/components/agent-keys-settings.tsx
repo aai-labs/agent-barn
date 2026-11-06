@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useCustomApi } from "@/features/custom-api/hooks/use-custom-api";
 import { ConnectionIntegrations } from "@/features/custom-api/components/connection-integrations";
@@ -15,6 +16,7 @@ import { useStartAgent } from "../hooks/use-start-agent";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import type { Agent, AgentSecretRead } from "../schemas";
+import { agentsKey } from "../utils";
 import { coerceBooleanFields, expandGithubContent, getIntegrationProvider, hasIncompleteIntegration, isSignInOnlyProvider, type IntegrationDraft } from "../integrations";
 
 function setupDrafts(agent: Agent): IntegrationDraft[] {
@@ -43,6 +45,7 @@ function newSecret(provider: string): AgentSecretRead {
 export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   agent: Agent; canEdit: boolean; editing: boolean; onEdit: () => void;
 }) {
+  const queryClient = useQueryClient();
   const customApi = useCustomApi(agent.id, agent.status === "RUNNING");
   const [customDrafts, setCustomDrafts] = useState<ConnectionDraft[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
@@ -112,7 +115,6 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         if (hasCustomChanges && !hasCredentialChanges && changedPolicies.length === 0) {
           await customApi.batchMutation.mutateAsync(batch);
         } else {
-          setRestartRequired(restart);
           await updateAgent.mutateAsync({
             agentId: agent.id,
             secrets: changedCredentials.filter((draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider)).map((draft) => ({
@@ -130,6 +132,10 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
       setRestartRequired(false);
       setCustomDrafts([]);
     } catch (error) {
+      // Use refreshed Agent state to retain restart intent only when the
+      // attempt left it stopped or failed.
+      const status = queryClient.getQueryData<Agent>(agentsKey.detail(agent.id))?.status;
+      setRestartRequired(restart && (status === "STOPPED" || status === "ERROR"));
       if (hasCustomChanges) {
         // A failed start can follow a successful save. Retain newly allocated IDs
         // so retry updates those connections rather than trying to create duplicates.

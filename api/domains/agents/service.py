@@ -2094,7 +2094,7 @@ class AgentService:
                         else exc.detail,
                     },
                 ) from exc
-        if data.restart or data.policies or data.custom_api is not None:
+        if data.restart or data.policies or changes:
             stored_providers = {
                 SecretProvider(secret.provider) for secret in self.repository.get_secrets_for_agent(agent_id)
             }

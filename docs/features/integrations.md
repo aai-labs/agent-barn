@@ -299,7 +299,11 @@ apply operation described in the [invariants](#invariants). The standalone Custo
 preflight endpoint remains available to API clients. Configuration writes across
 built-in providers and Custom API connections do not share one database transaction;
 validation failures occur before any writes, while persistence failures can leave
-partially saved settings. Failed mixed saves retain the restart choice in the editor.
+partially saved settings. Failed mixed saves retain the restart choice in the editor
+when the Agent is left stopped or failed. Rejections that leave the Agent running
+do not leave a pending restart after the rejected drafts are discarded. Empty
+Custom API change lists do not trigger runtime start preflight on credential-only
+saves to a stopped Agent; unrelated start blockers do not prevent those saves.
 Retries reuse the IDs of Custom API connections already saved before startup
 failed, including when the other edits change only provider isolation policies.
 

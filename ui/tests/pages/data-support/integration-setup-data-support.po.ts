@@ -10,7 +10,7 @@ export class IntegrationSetupDataSupport {
 
   constructor(private page: Page) {}
 
-  async open({ running = true, reject = true } = {}) {
+  async open({ running = true, reject = true, preflightFailure = false, savedCredential = false } = {}) {
     const data = new DataSupport(this.page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
@@ -19,7 +19,8 @@ export class IntegrationSetupDataSupport {
     await data.agents.interceptGetCustomApiConnectionsRequest();
     await data.agents.interceptGetAgentHealthRequest();
     await data.organizations.interceptGetOrganizationLlmBudget({ organizationId: TEST_ORG_ID });
-    let agent = { ...mockAgent, status: running ? "RUNNING" : "STOPPED" };
+    let agent = { ...mockAgent, status: running ? "RUNNING" : "STOPPED",
+      secrets: savedCredential ? [{ provider: "firecrawl", secretName: "Firecrawl" }] : [] };
     for (const action of ["stop", "start"]) {
       await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/${action}`, (route) => {
         this.lifecycleRequests.push(action);
@@ -30,6 +31,7 @@ export class IntegrationSetupDataSupport {
     const save = async (route: import("@playwright/test").Route) => {
       const body = route.request().postDataJSON();
       this.requests.push(body);
+      if (preflightFailure) return route.fulfill({ status: 400, json: { detail: "Invalid runtime configuration" } });
       const apollo = body.secrets?.find((secret: { provider: string }) => secret.provider === "apollo");
       if (reject && apollo?.content?.api_token !== "accepted-key") {
         return route.fulfill({ status: 400, json: { detail: {

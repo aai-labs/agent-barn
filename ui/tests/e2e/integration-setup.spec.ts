@@ -6,6 +6,23 @@ import { IntegrationSetupDataSupport } from "../pages/data-support/integration-s
 test.describe("Credential apply before restart", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
+  for (const savedCredential of [false, true]) {
+    for (const preflightFailure of [false, true]) {
+      test(`discarding a rejected draft disables apply (saved credential: ${savedCredential}, preflight: ${preflightFailure})`, async ({ page }) => {
+        const data = new IntegrationSetupDataSupport(page);
+        const ui = new AgentConfigurationPage(page);
+        await data.open({ savedCredential, preflightFailure });
+        await ui.addApolloCredential("rejected-key");
+        await ui.applyIntegrations();
+        await expect(ui.integrationsSection().getByRole("alert").first()).toBeVisible();
+        await ui.removeIntegration("Apollo");
+        await expect(ui.integrationsSection().getByRole("button", { name: "Apply & Restart", exact: true })).toBeDisabled();
+        expect(data.requests).toHaveLength(1);
+        expect(data.lifecycleRequests).toEqual([]);
+      });
+    }
+  }
+
   test("a rejected credential leaves the running Agent alone and can be corrected", async ({ page }) => {
     const data = new IntegrationSetupDataSupport(page);
     const ui = new AgentConfigurationPage(page);

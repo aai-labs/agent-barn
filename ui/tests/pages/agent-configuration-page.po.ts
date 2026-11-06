@@ -46,6 +46,10 @@ export class AgentConfigurationPage {
     await this.applyConfirmationButton().click();
   }
 
+  async removeIntegration(name: string) {
+    await this.integrationCard(name).getByRole("button", { name: `Remove ${name}`, exact: true }).click();
+  }
+
   profileHeading(): Locator {
     return this.page.getByRole("heading", { name: "Profile", exact: true });
   }
