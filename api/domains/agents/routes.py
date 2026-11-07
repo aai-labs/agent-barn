@@ -192,6 +192,15 @@ def get_agent(
     return service.get_agent(agent_id, context)
 
 
+@agents_router.get("/{agent_id}/bots", response_model=list[AgentRead])
+def list_agent_bots(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.list_bots(agent_id, context)
+
+
 @agents_router.get("/{agent_id}/llm-budget", response_model=AgentLlmBudgetRead)
 def get_agent_llm_budget(
     agent_id: UUID,

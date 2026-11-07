@@ -6,9 +6,16 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
 
 ## Current state
 
-- Delivered: terminology, the feature contract, the ADR, and the schema: `agent.parent_agent_id` and `agent.bot_slot`, with the database refusing a Bot in another Organization, a Bot of a Bot, a non-Hermes Parent Agent or Bot, a changed parent link, and a sixth live Bot. Nothing writes these columns yet.
+- Delivered: terminology, the feature contract, the ADR, the schema (`agent.parent_agent_id`, `agent.bot_slot` and the database rules), and the API's reading of Bots:
+  - `pod_agent_id`;
+  - a Bot's lifecycle lock is its Parent Agent's;
+  - Bots are left out of Agent lists and the pod-based platform queries;
+  - a Bot inherits its Parent Agent's access;
+  - the sharing floor;
+  - `GET /agents/{id}/bots`.
+  Nothing creates Bots through the API yet.
 - In transition: nothing.
-- Next: the pod resolver, lifecycle lock, Bot visibility and inherited access, and `GET /bots`.
+- Next: `POST /agents/{id}/bots`.
 - Blockers: none.
 
 ## Runtime evidence
@@ -42,6 +49,19 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-07 — AF-425 — Bot visibility and access
+
+- Delivered:
+  - `pod_agent_id(agent)`;
+  - `lifecycle_lock` locks the Parent Agent for a Bot;
+  - `GET /agents/{id}/bots` lists visible Bots in slot order;
+  - `AgentRead.parent_agent_id`;
+  - Agent lists, `find_all_running` and `find_live_for_platform_usage` return Parent Agents only, and Bots stay reachable by id;
+  - Agent Access and General Access on a Parent Agent reach its Bots, and Bot grants only add;
+  - sharing a Bot with a Member who can't read the Parent Agent, or giving a Bot General Access while its Parent Agent has none, returns 409.
+- Changed: `operations-v1.json` gains the Bots route.
+- Follow-up: Bot creation. The Platform Agents page and environment health still list Bots, until that product detail is decided.
 
 ### 2026-11-06 — AF-425 — Bot schema
 

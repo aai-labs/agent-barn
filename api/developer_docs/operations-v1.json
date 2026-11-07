@@ -311,6 +311,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/bots",
+    "list_agent_bots_organizations__organization_id__agents__agent_id__bots_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/configuration",
     "get_agent_configuration_organizations__organization_id__agents__agent_id__configuration_get"
   ],

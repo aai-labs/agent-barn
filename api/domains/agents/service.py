@@ -176,6 +176,7 @@ from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
 from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
 from api.domains.restore_points.service import (
@@ -659,6 +660,7 @@ class AgentService:
             status=agent.status,
             agent_type=agent.agent_type,
             organization_id=agent.organization_id,
+            parent_agent_id=agent.parent_agent_id,
             template_key=template_key,
             template_version=template_version,
             template_pin_type=template_pin_type,
@@ -1769,6 +1771,25 @@ class AgentService:
     ) -> PaginatedItems[AgentRead]:
         read_scope = self.authorization.require_collection_scope(context, PermissionKey.AGENT_READ)
         agents, total = self.repository.find_all_active(read_scope, agent_filter, pagination)
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=self._agent_reads(agents, read_scope, context),
+        )
+
+    def list_bots(self, agent_id: UUID, context: CurrentUserContext) -> list[AgentRead]:
+        parent = self.authorization.require_visible(context, agent_id)
+        read_scope = self.authorization.require_collection_scope(context, PermissionKey.AGENT_READ)
+        bots, _ = self.repository.find_all_active(read_scope, AgentFilter(parent_agent_id=parent.id), None)
+        return self._agent_reads(bots, read_scope, context)
+
+    def _agent_reads(
+        self,
+        agents: list[Agent],
+        read_scope: AuthorizationScope,
+        context: CurrentUserContext,
+    ) -> list[AgentRead]:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
@@ -1803,7 +1824,7 @@ class AgentService:
         effective_default_model = self.agent_settings_lookup.resolve_default_model(read_scope.organization_id)
         size_catalog = self.agent_sizes.catalog()
 
-        items = [
+        return [
             self._build_agent_read(
                 agent,
                 secrets_by_agent.get(agent.id, []),
@@ -1830,13 +1851,6 @@ class AgentService:
             )
             for agent in agents
         ]
-
-        return PaginatedItems(
-            page=pagination.page,
-            page_size=pagination.size,
-            total=total,
-            items=items,
-        )
 
     def _decrypt_shared_credential(self, credential: SharedCredential) -> Any:
         try:

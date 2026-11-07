@@ -686,6 +686,10 @@ class Agent(BaseModel, table=True):
 MANAGED_UPDATE_STALE_SECONDS = 120
 
 
+def pod_agent_id(agent: Agent) -> UUID:
+    return agent.parent_agent_id or agent.id
+
+
 def managed_update_in_flight(agent: Agent) -> bool:
     """True while a managed update is running for this Agent."""
     beat = agent.managed_update_heartbeat_at
@@ -1611,6 +1615,7 @@ class AgentRead(PydanticBaseModel):
     status: AgentStatus
     agent_type: AgentType
     organization_id: UUID
+    parent_agent_id: UUID | None = None
     template_key: str
     template_version: int
     template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED
@@ -1668,6 +1673,7 @@ class AgentRead(PydanticBaseModel):
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+    parent_agent_id: UUID | None = None
 
 
 class PlatformAgentIdentity(NamedTuple):
