@@ -28,103 +28,127 @@ def _run(steps: list[dict], tmp_path: Path) -> list:
     return json.loads(done.stdout)
 
 
-def _dispatch(kind: str, session: str = _SESSION) -> dict:
-    return {"hook": "reply_dispatch", "event": {"sessionKey": session, "ctx": {"InboundEventKind": kind}}}
+_ROOM_EVENT_MARKER = "[OpenClaw room event]"
 
 
-def _run_start(session: str = _SESSION, trigger: str = "user") -> dict:
-    return {"hook": "before_agent_run", "ctx": {"sessionKey": session, "trigger": trigger}}
+def _context(text: str) -> dict:
+    return {"role": "custom", "customType": "openclaw-runtime-context", "content": text, "display": False}
 
 
-def _tool(name: str, session: str = _SESSION) -> dict:
-    return {"hook": "before_tool_call", "event": {"toolName": name}, "ctx": {"sessionKey": session}}
+def _room_event_context() -> dict:
+    return _context(f"OpenClaw runtime context\n\n{_ROOM_EVENT_MARKER}\n\nRoom context:\nana: lunch?")
+
+
+def _run_start(run_id: str, *messages: dict, session: str = _SESSION, trigger: str = "user") -> dict:
+    return {
+        "hook": "before_agent_run",
+        "event": {"prompt": "hello", "messages": list(messages)},
+        "ctx": {"sessionKey": session, "runId": run_id, "trigger": trigger},
+    }
+
+
+def _room_event_run(run_id: str, session: str = _SESSION) -> dict:
+    return _run_start(run_id, {"role": "user", "content": "earlier"}, _room_event_context(), session=session)
+
+
+def _mention_run(run_id: str, session: str = _SESSION) -> dict:
+    return _run_start(
+        run_id, {"role": "user", "content": "earlier"}, _context("Conversation info: @bot asked"), session=session
+    )
+
+
+def _tool(name: str, run_id: str, session: str = _SESSION) -> dict:
+    return {"hook": "before_tool_call", "event": {"toolName": name}, "ctx": {"sessionKey": session, "runId": run_id}}
 
 
 @pytest.mark.parametrize("tool", ["exec", "write", "apply_patch", "cron", "sessions_history", "ask_user"])
-def test_an_unmentioned_turn_cannot_use_other_tools(tool: str, tmp_path: Path) -> None:
-    results = _run([_dispatch("room_event"), _run_start(), _tool(tool)], tmp_path)
+def test_a_room_event_run_cannot_use_other_tools(tool: str, tmp_path: Path) -> None:
+    results = _run([_room_event_run("r1"), _tool(tool, "r1")], tmp_path)
 
-    assert_that(results[2], has_entries(block=True))
+    assert_that(results[1], has_entries(block=True))
 
 
 @pytest.mark.parametrize("tool", ["message", "web_search", "web_fetch", "x_search"])
-def test_an_unmentioned_turn_can_post_and_look_things_up(tool: str, tmp_path: Path) -> None:
-    results = _run([_dispatch("room_event"), _run_start(), _tool(tool)], tmp_path)
+def test_a_room_event_run_can_post_and_look_things_up(tool: str, tmp_path: Path) -> None:
+    results = _run([_room_event_run("r1"), _tool(tool, "r1")], tmp_path)
 
-    assert_that(results[2], equal_to(None))
-
-
-def test_a_mention_keeps_every_tool(tmp_path: Path) -> None:
-    results = _run([_dispatch("user_request"), _run_start(), _tool("exec")], tmp_path)
-
-    assert_that(results[2], equal_to(None))
+    assert_that(results[1], equal_to(None))
 
 
-def test_the_guard_never_claims_the_reply(tmp_path: Path) -> None:
-    results = _run([_dispatch("room_event"), _dispatch("user_request")], tmp_path)
+def test_a_mention_run_keeps_every_tool(tmp_path: Path) -> None:
+    results = _run([_mention_run("r1"), _tool("exec", "r1")], tmp_path)
 
-    assert_that(results, equal_to([None, None]))
+    assert_that(results[1], equal_to(None))
 
 
-def test_queued_messages_each_keep_their_own_classification(tmp_path: Path) -> None:
+def test_a_marker_only_in_earlier_messages_does_not_limit_the_run(tmp_path: Path) -> None:
+    results = _run(
+        [_run_start("r1", _room_event_context(), {"role": "assistant", "content": "ok"}), _tool("exec", "r1")],
+        tmp_path,
+    )
+
+    assert_that(results[1], equal_to(None))
+
+
+def test_runs_in_one_session_keep_their_own_decision(tmp_path: Path) -> None:
     results = _run(
         [
-            _dispatch("user_request"),
-            _dispatch("room_event"),
-            _run_start(),
-            _tool("exec"),
-            _run_start(),
-            _tool("exec"),
+            _room_event_run("r1"),
+            _mention_run("r2"),
+            _room_event_run("r3"),
+            _tool("exec", "r1"),
+            _tool("exec", "r2"),
+            _tool("exec", "r3"),
         ],
         tmp_path,
     )
 
-    assert_that(results[3], equal_to(None))
+    assert_that(results[3], has_entries(block=True))
+    assert_that(results[4], equal_to(None))
     assert_that(results[5], has_entries(block=True))
 
 
-def test_a_later_message_does_not_change_the_running_turn(tmp_path: Path) -> None:
-    results = _run([_dispatch("user_request"), _run_start(), _dispatch("room_event"), _tool("exec")], tmp_path)
-
-    assert_that(results[3], equal_to(None))
-
-
-def test_sessions_do_not_share_a_classification(tmp_path: Path) -> None:
-    other = "agent:main:discord:channel:c2"
-    results = _run(
+def test_dispatched_messages_without_a_run_cannot_shift_later_runs(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    assert node is not None
+    hooks = subprocess.run(
         [
-            _dispatch("room_event"),
-            _run_start(),
-            _dispatch("user_request", other),
-            _run_start(other),
-            _tool("exec"),
-            _tool("exec", other),
+            node,
+            "--input-type=module",
+            "-e",
+            (
+                f"const m = await import({json.dumps((_PLUGIN / 'index.js').as_uri())}); const names = [];"
+                " m.default.register({ on: (name) => names.push(name) }); console.log(JSON.stringify(names));"
+            ),
         ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+
+    assert "reply_dispatch" not in json.loads(hooks.stdout)
+
+
+def test_a_tool_call_without_a_run_id_on_its_context_uses_the_event_run_id(tmp_path: Path) -> None:
+    results = _run(
+        [_room_event_run("r1"), {"hook": "before_tool_call", "event": {"toolName": "exec", "runId": "r1"}, "ctx": {}}],
         tmp_path,
     )
 
-    assert_that(results[4], has_entries(block=True))
-    assert_that(results[5], equal_to(None))
+    assert_that(results[1], has_entries(block=True))
 
 
 def test_a_scheduled_run_is_not_limited(tmp_path: Path) -> None:
     results = _run(
         [
-            _dispatch("room_event"),
-            _run_start(),
-            _run_start(trigger="cron"),
-            _tool("exec", "agent:main:cron:job"),
+            _run_start("r1", _room_event_context(), session="agent:main:cron:job", trigger="cron"),
+            _tool("exec", "r1", session="agent:main:cron:job"),
         ],
         tmp_path,
     )
 
-    assert_that(results[3], equal_to(None))
-
-
-def test_a_scheduled_run_does_not_consume_a_queued_message(tmp_path: Path) -> None:
-    results = _run([_dispatch("room_event"), _run_start(trigger="cron"), _run_start(), _tool("exec")], tmp_path)
-
-    assert_that(results[3], has_entries(block=True))
+    assert_that(results[1], equal_to(None))
 
 
 _ROOM = "C0B3K981AAK"

@@ -698,3 +698,40 @@ def test_a_room_that_only_requires_a_mention_is_not_a_listen_in_room() -> None:
 
     assert "agentbarn-listen-in" not in config["plugins"]["entries"]
     assert "statelessSessionPatterns" not in _hindsight(config)
+
+
+def _discord_rooms(config: dict) -> dict:
+    return config["channels"]["discord"]["guilds"]["*"]["channels"]
+
+
+def test_discord_does_not_auto_thread_normal_channels_while_the_agent_listens_in() -> None:
+    channels = {
+        "discord": native_discord_channel(
+            {"allowed_channel_ids": ["c1", "c9"], "allowed_user_ids": ["u1"], "listen_in_channel_ids": ["c9"]}
+        )
+    }
+
+    rooms = _discord_rooms(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels))
+
+    assert rooms["c1"]["autoThread"] is False
+    assert rooms["c9"]["autoThread"] is True
+    assert rooms["c9"]["systemPrompt"] == LISTEN_IN_SYSTEM_PROMPT
+
+
+def test_discord_stops_auto_threading_when_another_platform_listens_in() -> None:
+    channels = {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C1"]}),
+        "discord": native_discord_channel({"allow_all_users": True}),
+    }
+
+    rooms = _discord_rooms(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels))
+
+    assert rooms["*"]["autoThread"] is False
+
+
+def test_discord_keeps_auto_threads_without_listen_in_rooms() -> None:
+    channels = {"discord": native_discord_channel({"allow_all_users": True, "require_mention": False})}
+
+    rooms = _discord_rooms(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels))
+
+    assert rooms["*"]["autoThread"] is True

@@ -15,6 +15,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-11-07 — MDP-118 — OpenClaw guard decides per run; no auto-threads beside listen-in — PR pending
+
+- Fixed: the OpenClaw listen-in guard decided from a per-session queue of dispatched messages, so a mention steered into a running turn, or a command, left a stale entry that shifted every later turn: unmentioned chatter could reach `exec` and a mention could lose its tools. It now decides per run from OpenClaw's room-event marker in the run's own messages.
+- Changed: an OpenClaw Agent with listen-in rooms no longer auto-threads its other Discord channels. OpenClaw skips the mention requirement in threads it auto-created, so an untagged follow-up there became a room event, with limited tools and possible silence. Those channels now reply in place, and follow-ups need a mention.
+
 ### 2026-11-03 — MDP-118 — Limit tools on unmentioned OpenClaw turns — PR pending
 
 - Added: the `agentbarn-listen-in` OpenClaw plugin limits unmentioned room-event turns to posting and web lookups. Mentions keep every tool. It is enabled with room events, on Agents with native Slack, Discord, or Telegram.

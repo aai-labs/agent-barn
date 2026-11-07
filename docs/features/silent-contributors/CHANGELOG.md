@@ -15,6 +15,13 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Changes
 
+### 2026-11-07 — MDP-118 — Review fixes for the OpenClaw guard
+
+- Fixed: the guard queued one classification per dispatched message and took one per turn, but a mention steered into a running turn and a command never start a turn, so a leftover entry shifted every later turn in the session (found in review). It now decides per run in `before_agent_run`, from the `[OpenClaw room event]` marker that OpenClaw puts in the run's last message (its runtime context), and blocks by `runId`. Nothing is queued, so nothing can drift.
+- Evidence (OpenClaw 2026.8.2 source, embedded runtime): `before_prompt_build` runs before the room-event context is attached, so it can't see the marker; `before_agent_run` receives `hookMessagesForCurrentPrompt`, which ends with that context; older runtime contexts are stripped from history; tool calls carry the run's `runId`.
+- Changed: an Agent with listen-in rooms no longer auto-threads its other Discord channels (decided with the reviewer's second point). OpenClaw drops `requireMention` in threads it auto-created, so untagged follow-ups there were room events outside any listen-in room. Listen-in rooms keep their threads; Agents without listen-in rooms are unchanged.
+- Not verified live: one room-event message and one mention on a real Agent confirm the per-run marker.
+
 ### 2026-11-06 — MDP-118 — Keep Discord's Require @mention
 
 - Changed: PR 1's removal is undone. Require @mention and listen-in are separate: the setting decides whether users must mention the Agent in every channel, and listen-in channels ignore it. The setting returns with its old default, on; the schema stays at version 2, and migration `16ac819db080` is now a no-op, so saved values on shared environments are kept.

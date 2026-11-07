@@ -190,6 +190,15 @@ def _no_memory_saving_patterns(rooms: dict[str, list[str]]) -> list[str]:
     ]
 
 
+def _stop_auto_threads_outside_listen_in(discord: dict) -> None:
+    # OpenClaw skips requireMention in threads it auto-created, so with room events on
+    # an untagged follow-up there would become a room event outside any listen-in room.
+    for guild in (discord.get("guilds") or {}).values():
+        for room in (guild.get("channels") or {}).values():
+            if room.get("systemPrompt") != LISTEN_IN_SYSTEM_PROMPT:
+                room["autoThread"] = False
+
+
 def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -200,6 +209,8 @@ def build_openclaw_gateway_config(
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
     unmentioned = "room_event" if any(_listen_in_rooms(channels).values()) else "user_request"
+    if unmentioned == "room_event":
+        _stop_auto_threads_outside_listen_in(channels.get("discord") or {})
     config["messages"] = {"groupChat": {"unmentionedInbound": unmentioned}}
     config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
     if memory_enabled:
@@ -302,7 +313,8 @@ def native_discord_channel(settings: dict) -> dict:
     # Reply in a thread per message, as Hermes does. Threads inherit their parent
     # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
     # ponytail: OpenClaw skips requireMention inside threads the bot created, and
-    # has no switch to keep it; Hermes still requires the mention there.
+    # has no switch to keep it; Hermes still requires the mention there. With
+    # listen-in rooms the gateway config stops auto-threading the other channels.
     rooms: dict[str, dict] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
     for channel_id in _setting_ids(settings, "listen_in_channel_ids"):
         if not channel_ids or channel_id in channel_ids:
