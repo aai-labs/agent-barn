@@ -793,3 +793,18 @@ def test_the_listen_in_check_ignores_an_agent_without_the_guard(tmp_path: Path) 
 
     assert result == config
     load_failure.assert_not_called()
+
+
+def test_require_mention_off_and_listen_in_work_together() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        native_discord=True,
+        discord_require_mention=False,
+        discord_listen_in=["channel-1"],
+    )
+
+    assert config["discord"]["require_mention"] is False
+    assert config["discord"]["thread_require_mention"] is False
+    assert config["discord"]["free_response_channels"] == ["channel-1"]
+    assert "agentbarn-listen-in" in config["plugins"]["enabled"]

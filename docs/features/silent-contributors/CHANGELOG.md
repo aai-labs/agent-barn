@@ -15,6 +15,11 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Changes
 
+### 2026-11-07 — MDP-118 — Require @mention with Hermes listen-in
+
+- Verified: on Hermes, Require @mention off and listen-in rooms work together. Hermes checks the mention per channel and free-response rooms bypass it, so other Discord channels answer every message while listen-in rooms stay guarded. No code change was needed; OpenClaw still refuses the combination, because its rule for unmentioned messages covers the whole Agent.
+- Evidence: a builder test and an Agent start test through the service, both with the switch off and a listen-in channel. Breaking the builder's switch made both builder tests fail.
+
 ### 2026-11-07 — MDP-118 — Review fixes for the OpenClaw guard
 
 - Fixed: the guard queued one classification per dispatched message and took one per turn, but a mention steered into a running turn and a command never start a turn, so a leftover entry shifted every later turn in the session (found in review). It now decides per run in `before_agent_run`, from the `[OpenClaw room event]` marker that OpenClaw puts in the run's last message (its runtime context), and blocks by `runId`. Nothing is queued, so nothing can drift.

@@ -2729,6 +2729,37 @@ def test_start_hermes_agent_listens_in_chosen_rooms() -> None:
             assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-listen-in"))
 
 
+def test_start_hermes_agent_with_require_mention_off_still_listens_in() -> None:
+    import yaml as _yaml
+
+    def _connection(context) -> None:
+        context.injector.get(PostgresRepositoryDelegate).save(
+            CommunicationConnection(
+                organization_id=context.agent.organization_id,
+                agent_id=context.agent.id,
+                platform_key="discord",
+                display_name="Native Discord",
+                settings={"allow_all_users": True, "require_mention": False, "listen_in_channel_ids": ["channel-1"]},
+                credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
+            )
+        )
+
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES), _connection]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with Require @mention off and a listen-in channel"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("other channels answer without a mention and the listen-in channel stays guarded"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            cfg = _yaml.safe_load(k8s.create_config_map.call_args.args[1].data["hermes-config.yaml"])
+            assert_that(cfg["discord"]["require_mention"], equal_to(False))
+            assert_that(cfg["discord"]["thread_require_mention"], equal_to(False))
+            assert_that(cfg["discord"]["free_response_channels"], equal_to(["channel-1"]))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-listen-in"))
+
+
 def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
     import yaml as _yaml
 
