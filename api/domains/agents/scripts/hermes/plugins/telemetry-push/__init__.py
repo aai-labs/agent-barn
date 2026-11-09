@@ -311,7 +311,7 @@ def _on_session_end(**kwargs):
 def _identity():
     try:
         lines = (Path(__file__).resolve().parents[2] / ".env").read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, IndexError):
         return os.environ
     values = {}
     for line in lines:

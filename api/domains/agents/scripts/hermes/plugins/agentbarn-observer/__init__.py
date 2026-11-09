@@ -271,7 +271,7 @@ def _loop(url: str, api_key: str, home: Path) -> None:
 def _identity():
     try:
         lines = (Path(__file__).resolve().parents[2] / ".env").read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, IndexError):
         return os.environ
     values = {}
     for line in lines:

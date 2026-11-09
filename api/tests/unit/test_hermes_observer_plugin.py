@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -176,3 +177,10 @@ def test_a_parent_reads_the_gateway_status_from_its_own_home() -> None:
     plugin = _load_plugin()
 
     assert plugin._status_source(Path("/opt/data")) == (Path("/opt/data/gateway_state.json"), None)
+
+
+def test_identity_falls_back_to_the_environment_for_a_shallow_install() -> None:
+    plugin = _load_plugin()
+    plugin.__file__ = "/plugin/__init__.py"
+
+    assert plugin._identity() is os.environ
