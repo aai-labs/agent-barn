@@ -10,6 +10,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CONSTANTS = ROOT / "api/domains/restore_points/constants.py"
+RESTORE_POINT_VARIABLES = (
+    "RESTORE_POINT_SIZE",
+    "RESTORE_POINT_MAX_PER_AGENT",
+    "RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES",
+    "RESTORE_POINT_SCHEDULED_MAX_PER_AGENT",
+    "RESTORE_POINT_SCHEDULE_MAX_CONCURRENT",
+)
+# Each deploy reads its own environment's GitHub Variables. An unset variable
+# arrives empty and Helmfile's default applies, so none of them is required.
+DEPLOY_WORKFLOWS = {
+    ".github/workflows/deploy.yml": "${{{{ vars[format('{{0}}{name}', github.ref_name == 'staging' && 'STAGING_' || '')] }}}}",
+    ".github/workflows/deploy-public.yml": "${{{{ vars.PUBLIC_{name} }}}}",
+}
 
 
 def render() -> list[dict[str, Any]]:
@@ -69,7 +82,24 @@ def reconciliation_max_runtime_seconds() -> int:
     return constants.RESTORE_POINT_RECONCILIATION_MAX_RUNTIME_SECONDS
 
 
+def helmfile_sync_env(workflow: str) -> dict[str, str]:
+    document = yaml.safe_load((ROOT / workflow).read_text())
+    for job in document["jobs"].values():
+        for step in job.get("steps", []):
+            if step.get("name") == "Helmfile sync":
+                return step.get("env", {})
+    raise AssertionError(f"{workflow} has no Helmfile sync step")
+
+
+def check_deploy_passthrough() -> None:
+    for workflow, expected in DEPLOY_WORKFLOWS.items():
+        env = helmfile_sync_env(workflow)
+        for name in RESTORE_POINT_VARIABLES:
+            assert env.get(name) == expected.format(name=name), f"{workflow} does not pass {name} through"
+
+
 def main() -> None:
+    check_deploy_passthrough()
     cronjobs = {document["metadata"]["name"]: document for document in render() if document["kind"] == "CronJob"}
     for name in ("restore-points-test-restore-point-schedule", "restore-points-test-restore-point-reconciliation"):
         spec = cronjobs[name]["spec"]

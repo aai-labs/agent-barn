@@ -167,6 +167,9 @@ RESTORE_POINT_MAX_PER_AGENT=5
 RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES=360
 RESTORE_POINT_SCHEDULED_MAX_PER_AGENT=4
 RESTORE_POINT_SCHEDULE_MAX_CONCURRENT=2
+# The deploy workflows read each of these from an optional GitHub Variable of the
+# same name, prefixed STAGING_ on staging and PUBLIC_ on the public deploy (e.g.
+# STAGING_RESTORE_POINT_SCHEDULED_MAX_PER_AGENT). Unset means the value above.
 
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
