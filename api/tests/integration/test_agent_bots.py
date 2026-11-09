@@ -1,10 +1,12 @@
-from uuid import uuid7
+from datetime import UTC, datetime
+from uuid import UUID, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_not
+from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
 
 from api.domains.agents.models import AgentStatus, AgentType, pod_agent_id
 from api.domains.agents.repository import AgentRepository
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given
@@ -20,10 +22,12 @@ from api.tests.steps.agent import (
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization, there_is_an_organization_with_user_and_access_token
 from api.tests.steps.resource_usage import MockPrometheusModule
+from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
+CREATE = {"name": "Sales", "template_key": "test-template"}
 _GIVEN = [
     set_env_variable(
         {
@@ -283,3 +287,170 @@ def test_platform_pod_queries_leave_out_bots():
 
         assert_that(running, contains_inanyorder(context.parent.id))
         assert_that(live, contains_inanyorder(context.parent.id))
+
+
+def _create_bot(context, parent, **fields):
+    return context.client.post(f"{BASE}/{parent.id}/bots", json={**CREATE, **fields}, headers=_auth(context))
+
+
+def _stored(context, agent_id):
+    return context.injector.get(AgentRepository).get_by_id(UUID(str(agent_id)))
+
+
+def _organization_may_run(limit):
+    def step(context):
+        organizations = context.injector.get(OrganizationRepository)
+        organization = organizations.get(context.organization.id)
+        organization.agent_limit = limit
+        organizations.save(organization)
+
+    return step
+
+
+def test_creating_a_bot_makes_a_stopped_hermes_agent_inside_its_parent():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        body = response.json()
+        assert_that(body["parent_agent_id"], equal_to(str(context.parent.id)))
+        assert_that(body["agent_type"], equal_to("hermes"))
+        assert_that(body["status"], equal_to("STOPPED"))
+        stored = _stored(context, body["id"])
+        assert_that((stored.bot_slot, stored.file_sync_enabled), equal_to((1, False)))
+
+
+def test_a_new_bot_takes_its_parents_turn_limit():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        context.parent.max_turns = 77
+        context.injector.get(AgentRepository).save(context.parent)
+
+        response = _create_bot(context, context.parent)
+
+        assert_that(_stored(context, response.json()["id"]).max_turns, equal_to(77))
+
+
+def test_a_new_bot_takes_the_lowest_free_slot():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots(1, 3)]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(_stored(context, response.json()["id"]).bot_slot, equal_to(2))
+
+
+def test_a_deleted_bots_slot_is_reused():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots(1)]) as context:
+        context.bot.deleted_at = datetime.now(UTC)
+        context.injector.get(AgentRepository).save(context.bot)
+
+        response = _create_bot(context, context.parent)
+
+        assert_that(_stored(context, response.json()["id"]).bot_slot, equal_to(1))
+
+
+def test_a_sixth_bot_is_refused():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots(1, 2, 3, 4, 5)]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("5"))
+
+
+def test_a_bot_counts_toward_the_organizations_agent_limit():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots(1), _organization_may_run(2)]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("2 agents"))
+
+
+def test_an_openclaw_agent_cannot_hold_bots():
+    with given([*_GIVEN, there_is_a_template(), there_is_an_agent(agent_type=AgentType.OPENCLAW)]) as context:
+        response = _create_bot(context, context.agent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_a_bot_cannot_hold_bots():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots(1)]) as context:
+        response = _create_bot(context, context.bot)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("Bot"))
+
+
+def test_a_running_parent_refuses_a_new_bot():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots(status=AgentStatus.RUNNING)]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_a_parent_in_a_managed_update_refuses_a_new_bot():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        context.parent.managed_update_heartbeat_at = datetime.now(UTC)
+        context.injector.get(AgentRepository).save(context.parent)
+
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_a_parent_mid_lifecycle_refuses_a_new_bot():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        with context.injector.get(AgentRepository).lifecycle_lock(context.parent.id):
+            response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_an_unknown_template_is_not_found():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent, template_key="missing")
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.json()["detail"], contains_string("missing"))
+
+
+def test_settings_a_bot_cannot_choose_are_rejected():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        for field, value in (
+            ("agent_type", "hermes"),
+            ("file_sync_enabled", True),
+            ("agent_size_id", str(uuid7())),
+            ("max_turns", 10),
+        ):
+            response = _create_bot(context, context.parent, **{field: value})
+
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_a_viewer_of_the_parent_cannot_create_a_bot():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        _member(context)
+        _grant(context, context.parent, AGENT_VIEWER_ROLE_ID)
+        _act_as_member(context)
+
+        assert_that(_create_bot(context, context.parent).status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_a_member_with_no_access_to_the_parent_gets_not_found():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        _member(context)
+        _act_as_member(context)
+
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.json()["detail"], is_not(equal_to(ROUTE_MISSING)))
+
+
+def test_an_editor_of_the_parent_creates_a_bot_and_owns_it():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        _member(context)
+        _grant(context, context.parent, AGENT_EDITOR_ROLE_ID)
+        _act_as_member(context)
+
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.json()["allowed_actions"], has_item("agent.lifecycle.manage"))

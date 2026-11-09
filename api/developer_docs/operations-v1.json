@@ -1146,6 +1146,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/bots",
+    "create_agent_bot_organizations__organization_id__agents__agent_id__bots_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/configuration/draft",
     "start_agent_override_draft_organizations__organization_id__agents__agent_id__configuration_draft_post"
   ],

@@ -64,6 +64,7 @@ class ManagedUpdateOutcome(str, enum.Enum):
 # answer at all; the upper one keeps a runaway run inside one spend-limit window.
 MAX_TURNS_MIN = 1
 MAX_TURNS_MAX = 500
+MAX_BOTS_PER_PARENT = 5
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -1170,11 +1171,10 @@ class AgentNameSuggestionRead(PydanticBaseModel):
     first_name: str
 
 
-class AgentCreate(PydanticBaseModel):
+class AgentDefinition(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
-    agent_type: AgentType = AgentType.OPENCLAW
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_key: str = Field(min_length=1, max_length=255)
@@ -1190,6 +1190,17 @@ class AgentCreate(PydanticBaseModel):
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
     verbose_mode: bool = False
+
+    @model_validator(mode="after")
+    def validate_unique_secret_providers(self) -> Self:
+        providers = [s.provider for s in self.secrets]
+        if len(providers) != len(set(providers)):
+            raise ValueError("Duplicate secret providers are not allowed")
+        return self
+
+
+class AgentCreate(AgentDefinition):
+    agent_type: AgentType = AgentType.OPENCLAW
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
     file_sync_enabled: bool = True
@@ -1197,12 +1208,9 @@ class AgentCreate(PydanticBaseModel):
     # agent.size.manage and a size the Organization may choose.
     agent_size_id: UUID | None = None
 
-    @model_validator(mode="after")
-    def validate_unique_secret_providers(self) -> AgentCreate:
-        providers = [s.provider for s in self.secrets]
-        if len(providers) != len(set(providers)):
-            raise ValueError("Duplicate secret providers are not allowed")
-        return self
+
+class BotCreate(AgentDefinition):
+    pass
 
 
 class AgentUpdate(PydanticBaseModel):

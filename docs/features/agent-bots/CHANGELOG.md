@@ -12,10 +12,11 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - Bots are left out of Agent lists and the pod-based platform queries;
   - a Bot inherits its Parent Agent's access;
   - the sharing floor;
-  - `GET /agents/{id}/bots`.
-  Nothing creates Bots through the API yet.
-- In transition: nothing.
-- Next: `POST /agents/{id}/bots`.
+  - `GET /agents/{id}/bots`;
+  - `POST /agents/{id}/bots`.
+  Bots can be created, but nothing runs them yet, and lifecycle routes still accept a Bot.
+- In transition: until the next slice, start, stop and other pod operations are not refused on a Bot.
+- Next: refusals and redirects for pod operations on a Bot, and cascaded delete.
 - Blockers: none.
 
 ## Runtime evidence
@@ -49,6 +50,16 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Create a Bot
+
+- Delivered: `POST /agents/{id}/bots`, through the normal Agent create path.
+  - Needs `agent.create` in the Organization and `agent.update` on the Parent Agent; the creator owns the new Bot.
+  - The Bot is Hermes, stopped, with File Sync off and the Parent Agent's turn limit, in the lowest free slot.
+  - Counts toward the Organization's Agent limit.
+  - 400 for an OpenClaw parent. 409 for a Bot as parent, a sixth Bot, a running parent, a managed update, a restore operation, or a parent mid-lifecycle.
+- Changed: `AgentCreate` now shares a base, `AgentDefinition`, with `BotCreate`. `operations-v1.json` gains the route.
+- Follow-up: pod operations on a Bot.
 
 ### 2026-11-07 — AF-425 — Bot visibility and access
 

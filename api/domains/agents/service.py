@@ -57,6 +57,7 @@ from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
+    MAX_BOTS_PER_PARENT,
     PROVIDER_DISPLAY_NAMES,
     Agent,
     AgentAssignedSkillRead,
@@ -94,6 +95,7 @@ from api.domains.agents.models import (
     AgentTemplateSelection,
     AgentType,
     AgentUpdate,
+    BotCreate,
     CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
@@ -917,6 +919,44 @@ class AgentService:
         return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
+        return self._create_agent(data, context)
+
+    def create_bot(self, parent_id: UUID, data: BotCreate, context: CurrentUserContext) -> AgentRead:
+        with self.repository.lifecycle_lock(parent_id) as acquired:
+            if not acquired:
+                raise HTTPException(status.HTTP_409_CONFLICT, "An Agent lifecycle operation is already in progress")
+            parent = self.authorization.require_action(context, parent_id, PermissionKey.AGENT_UPDATE)
+            if parent.parent_agent_id is not None:
+                raise HTTPException(status.HTTP_409_CONFLICT, "A Bot cannot hold Bots")
+            if parent.agent_type != AgentType.HERMES:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only Hermes Agents can hold Bots")
+            _refuse_during_managed_update(parent)
+            if self.restore_points.has_blocking_operation(parent.id):
+                raise HTTPException(status.HTTP_409_CONFLICT, "An Agent restore operation is in progress")
+            if parent.status == AgentStatus.RUNNING:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"Agent {parent.id} must be stopped before adding a Bot")
+            taken = self.repository.live_bot_slots(parent.id)
+            slot = next((slot for slot in range(1, MAX_BOTS_PER_PARENT + 1) if slot not in taken), None)
+            if slot is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, f"A Parent Agent can have at most {MAX_BOTS_PER_PARENT} Bots"
+                )
+            definition = AgentCreate(
+                **dict(data),
+                agent_type=AgentType.HERMES,
+                max_turns=parent.max_turns,
+                file_sync_enabled=False,
+            )
+            return self._create_agent(definition, context, parent_agent_id=parent.id, bot_slot=slot)
+
+    def _create_agent(
+        self,
+        data: AgentCreate,
+        context: CurrentUserContext,
+        *,
+        parent_agent_id: UUID | None = None,
+        bot_slot: int | None = None,
+    ) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
@@ -962,6 +1002,8 @@ class AgentService:
             max_turns=data.max_turns,
             file_sync_enabled=data.file_sync_enabled,
             agent_size_id=agent_size_id,
+            parent_agent_id=parent_agent_id,
+            bot_slot=bot_slot,
         )
         self._set_pin(agent, template)
 

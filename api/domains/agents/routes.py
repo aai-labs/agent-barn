@@ -30,6 +30,7 @@ from api.domains.agents.models import (
     AgentTemplateOverrideVersionRead,
     AgentTemplateSelection,
     AgentUpdate,
+    BotCreate,
     IntegrationIsolationUpdate,
     SecretProvider,
     get_agent_filter,
@@ -190,6 +191,20 @@ def get_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.get_agent(agent_id, context)
+
+
+@agents_router.post("/{agent_id}/bots", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
+def create_agent_bot(
+    agent_id: UUID,
+    data: BotCreate,
+    background_tasks: BackgroundTasks,
+    storage: Annotated[ArtifactBucketProvisioner, Injected(ArtifactBucketProvisioner)],
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    bot = service.create_bot(agent_id, data, context)
+    background_tasks.add_task(storage.process_agent, bot.id, bot.organization_id)
+    return bot
 
 
 @agents_router.get("/{agent_id}/bots", response_model=list[AgentRead])
