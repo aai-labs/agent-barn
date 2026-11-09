@@ -21,7 +21,7 @@ from pathlib import Path
 
 BOOT_SESSION_ID = "agentbarn-boot"
 
-BOOT_FILE = Path("/workspace/BOOT.md")
+BOOT_FILE = Path(os.environ.get("BOOT_FILE", "/workspace/BOOT.md"))
 READY_TIMEOUT_SECONDS = 300
 
 

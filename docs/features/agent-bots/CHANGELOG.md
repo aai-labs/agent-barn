@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Bots can be created, and pod operations act on the Parent Agent, but nothing runs Bots yet.
 - In transition: nothing.
-- Next: the boot step that lays out each Bot as a Hermes profile (`bot-setup.py`, `bot-run.py`, `start.sh`).
+- Next: Start and stop: per-Bot keys, Secrets and ConfigMaps, status mirrored from the Parent Agent, failure handling.
 - Blockers: none.
 
 ## Runtime evidence
@@ -50,6 +50,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Bot boot step
+
+- Delivered: `bot-setup.py` lays out each Bot as a Hermes profile with its own instructions, paths, skills, plugins and in-memory `.env`, moves the Parent Agent's instructions into its SOUL, syncs approvals, and removes deleted Bots. `bot-run.py` starts each Bot's helpers with only that Bot's environment and refuses a Bot that is not served. A Bot with a missing or mismatched Secret is not served and never takes the Parent Agent's identity. Inert until a start ships `bots.json`.
+- Changed: `start.sh`, `boot-run.py` honours `BOOT_FILE`, `build_hermes_config_map(bots_manifest=...)`. The runtime digest moves.
+- Follow-up: start and stop.
 
 ### 2026-11-09 — AF-425 — Bot builders
 

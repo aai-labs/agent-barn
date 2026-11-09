@@ -27,6 +27,7 @@ from api.domains.agents.builders.hermes import (
     BOT_CONFIG_ROOT,
     BOT_ENV_DIR,
     BOT_SECRET_ROOT,
+    HERMES_BOOT_RUN_PY,
     HERMES_BOOTLOADER_FOOTER,
     HERMES_DEFAULT_MAX_TURNS,
     HERMES_START_SH,
@@ -730,3 +731,53 @@ def test_a_bot_profile_carries_telegram_settings_in_extra():
         "group_allowed_chats": ["-100", "-200"],
     }
     assert open_groups["platforms"]["telegram"]["extra"] == {"require_mention": True, "group_allowed_chats": "*"}
+
+
+def _config_map_with(**fields):
+    return build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+        **fields,
+    )
+
+
+def test_an_agent_without_bots_ships_no_bot_scripts():
+    data = _config_map_with().data
+
+    assert not {"bots.json", "bot-setup.py", "bot-run.py"} & set(data)
+
+
+def test_a_bot_manifest_ships_with_the_scripts():
+    data = _config_map_with(bots_manifest='{"bots": []}').data
+
+    assert data["bots.json"] == '{"bots": []}'
+    assert "def setup_bot" in data["bot-setup.py"]
+    assert "os.execve" in data["bot-run.py"]
+
+
+def test_start_script_runs_the_bot_steps_in_order():
+    script = HERMES_START_SH
+    sync = script.index("bot-setup.py --sync-allowlists")
+    merge = script.index("config-merge.py /app/config/hermes-config.yaml")
+    workspace_files = script.index("cp /app/config/$f /workspace/$f")
+    skills = script.index("rm -rf /workspace/skills")
+    setup = script.index("python3 /app/config/bot-setup.py\n")
+    file_sync = script.index("file-sync.py --once")
+    launch = script.index("bot-setup.py --launch")
+    gateway = script.index("exec hermes gateway run")
+
+    assert sync < merge < workspace_files < skills < setup < file_sync < launch < gateway
+    assert script.count("[ -f /app/config/bots.json ]") == 3
+
+
+def test_boot_run_reads_a_bots_own_boot_file():
+    assert 'os.environ.get("BOOT_FILE", "/workspace/BOOT.md")' in HERMES_BOOT_RUN_PY
