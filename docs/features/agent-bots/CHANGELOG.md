@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: Connection rules on Bots.
+- Next: Restore Point exclusions with globs.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,16 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Connection and settings rules
+
+- Delivered:
+  - Discord, Teams and Agent Barn Telegram are refused on a Bot (400). A Parent Agent and its Bots cannot share a platform family (409); Bots can share one with each other.
+  - Manual approval is all or none: a Bot cannot cross the line alone, and changing a Parent Agent across it moves its Bots too.
+  - A Bot's turn limit is read-only and follows its Parent Agent.
+  - Each Bot has its own `GOG_HOME`, shares one `gog` shim on the PATH, and the shim hands over to the real binary in a pod with Bots when there is no gateway token.
+- Changed: the runtime digest moves.
+- Follow-up: Restore Points. Restoring a Parent Agent's recorded configuration does not yet re-apply these rules to its Bots.
 
 ### 2026-11-09 — AF-425 — Bot trigger routing
 

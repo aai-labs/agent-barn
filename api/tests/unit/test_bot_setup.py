@@ -456,3 +456,24 @@ def test_the_aai_cli_setup_reads_the_bots_own_config(pod):
     _ok(pod.setup())
 
     assert (pod.out / "seen.toml").read_text() == "bot config"
+
+
+def test_the_gog_setup_reads_the_bots_own_files(pod):
+    pod.manifest()
+    pod.bot()
+    (pod.files / BOT_A / "gog-setup.sh").write_text(f"cp /app/config/gog-shim.sh {pod.out}/gog\n")
+    (pod.files / BOT_A / "gog-shim.sh").write_text("bot shim")
+
+    _ok(pod.setup())
+
+    assert (pod.out / "gog").read_text() == "bot shim"
+
+
+def test_a_failing_gog_setup_means_the_bot_is_not_served(pod):
+    pod.manifest()
+    pod.bot()
+    (pod.files / BOT_A / "gog-setup.sh").write_text("exit 3\n")
+
+    _ok(pod.setup())
+
+    assert pod.served() == []

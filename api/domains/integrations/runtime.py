@@ -63,6 +63,7 @@ class RuntimeContext:
     gateway_tokens: Mapping[SecretProvider, str] = field(default_factory=dict, repr=False)
     store_dir: str | None = None
     sharepoint_token_url: str | None = None
+    gog_shim_home_dir: str | None = None
 
 
 class RuntimeToolAdapter(Protocol):
@@ -149,7 +150,7 @@ class GogAdapter:
             )
         return RuntimeArtifacts(
             files={
-                "gog-setup.sh": build_gog_shim_install_sh(context.gog_home_dir),
+                "gog-setup.sh": build_gog_shim_install_sh(context.gog_shim_home_dir or context.gog_home_dir),
                 "gog-shim.sh": build_gog_shim_sh(),
             },
             env=build_gog_env(content, context.gog_home_dir, gateway_base_url=context.gateway_base_url),

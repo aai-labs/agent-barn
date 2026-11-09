@@ -9,9 +9,11 @@ from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
 
 from api.core.config import Config as AppConfig
-from api.domains.agents.models import AgentStatus, AgentType, pod_agent_id
+from api.domains.agents.models import AgentStatus, AgentType, CommandApprovalMode, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
+from api.domains.communications.models import CommunicationConnection
+from api.domains.integrations.runtime import RuntimeContext
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
@@ -19,6 +21,7 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
+from api.tests.integration.test_communication_connections import _slack_payload
 from api.tests.integration.test_organization_agent_limits import a_platform_administrator_is_signed_in
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
@@ -839,3 +842,175 @@ def test_a_cluster_failure_on_one_bot_fails_only_that_bot():
         assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
         assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
         assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def _connect(context, agent, platform):
+    context.postgres_delegate.save(
+        CommunicationConnection(
+            organization_id=agent.organization_id,
+            agent_id=agent.id,
+            platform_key=platform,
+            display_name=platform,
+            enabled=True,
+            schema_version=1,
+            settings={},
+            credentials_encrypted="",
+        )
+    )
+
+
+def _new_connection(context, agent, platform="slack"):
+    return _call(context, "post", f"{BASE}/{agent.id}/connections", {**_slack_payload(), "platform_key": platform})
+
+
+@pytest.mark.parametrize("platform", ["discord", "teams", "agentbarn_telegram"])
+def test_a_bot_cannot_use_a_platform_bots_do_not_support(platform):
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _new_connection(context, context.bot, platform)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+        assert_that(response.json()["detail"], contains_string("Bot"))
+
+
+def test_a_bot_can_connect_a_platform_its_parent_is_not_on():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _new_connection(context, context.bot)
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+
+
+def test_a_bot_cannot_share_a_platform_with_its_parent():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _connect(context, context.parent, "slack")
+
+        response = _new_connection(context, context.bot)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_a_parent_cannot_share_a_platform_with_its_bot():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _connect(context, context.bot, "slack")
+
+        response = _new_connection(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_both_telegram_kinds_count_as_one_platform():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _connect(context, context.bot, "telegram")
+
+        response = _new_connection(context, context.parent, "agentbarn_telegram")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_two_bots_can_use_the_same_platform():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        _connect(context, context.bots[0], "slack")
+
+        response = _new_connection(context, context.bots[1])
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+
+
+def test_a_retired_connection_does_not_count():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _connect(context, context.parent, "slack")
+        with context.postgres_delegate.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE communication_connection SET retired_at = now() WHERE agent_id = %s",
+                (str(context.parent.id),),
+            )
+
+        response = _new_connection(context, context.bot)
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+
+
+def _update(context, agent, **fields):
+    return _call(context, "patch", f"{BASE}/{agent.id}", fields)
+
+
+def _set_parent_approval(context, mode):
+    context.parent.approval_mode = mode
+    context.injector.get(AgentRepository).save(context.parent)
+
+
+def test_a_manual_bot_needs_a_manual_parent():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent, approval_mode="manual")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_a_manual_parent_needs_manual_bots():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        _set_parent_approval(context, CommandApprovalMode.MANUAL)
+
+        refused = _create_bot(context, context.parent)
+        allowed = _create_bot(context, context.parent, approval_mode="manual")
+
+        assert_that(refused.status_code, equal_to(status.HTTP_409_CONFLICT), refused.text)
+        assert_that(allowed.status_code, equal_to(status.HTTP_201_CREATED), allowed.text)
+
+
+def test_a_bot_cannot_cross_the_manual_line_alone():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _update(context, context.bot, approval_mode="manual")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_a_bot_can_change_between_non_manual_modes():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _update(context, context.bot, approval_mode="off")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+
+
+def test_turning_manual_on_for_a_parent_turns_it_on_for_its_bots():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        response = _update(context, context.parent, approval_mode="manual")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        for bot in context.bots:
+            assert_that(_stored(context, bot.id).approval_mode, equal_to(CommandApprovalMode.MANUAL))
+
+
+def test_turning_manual_off_for_a_parent_turns_it_off_for_its_bots():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _set_parent_approval(context, CommandApprovalMode.MANUAL)
+        context.bot.approval_mode = CommandApprovalMode.MANUAL
+        context.injector.get(AgentRepository).save(context.bot)
+
+        _update(context, context.parent, approval_mode="auto")
+
+        assert_that(_stored(context, context.bot.id).approval_mode, equal_to(CommandApprovalMode.AUTO))
+
+
+def test_a_bots_turn_limit_is_read_only():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _update(context, context.bot, max_turns=7)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_a_parents_turn_limit_reaches_its_bots():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _update(context, context.parent, max_turns=33)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, context.bot.id).max_turns, equal_to(33))
+
+
+def test_a_bots_google_state_is_its_own_and_its_shim_is_shared():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        service = context.injector.get(AgentService)
+        with patch("api.domains.agents.service.RuntimeContext", wraps=RuntimeContext) as runtime_context:
+            service._assemble_agent(context.bot, preflight=True)
+
+        args = runtime_context.call_args
+        assert_that(args.args[1], equal_to(f"/opt/data/profiles/{context.bot.id}"))
+        assert_that(args.kwargs["gog_shim_home_dir"], equal_to("/home/hermes"))

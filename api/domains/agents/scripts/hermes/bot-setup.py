@@ -186,10 +186,11 @@ def setup_bot(bot_id, passthrough):
             "HERMES_HOME": str(home),
         },
     )
-    aai_setup = files / "aai-cli-setup.sh"
-    if aai_setup.exists():
-        script = aai_setup.read_text(encoding="utf-8").replace("/app/config/", f"{files}/")
-        subprocess.run(["sh", "-c", script], check=True, env={**environment, **values})
+    for name in ("aai-cli-setup.sh", "gog-setup.sh"):
+        setup_script = files / name
+        if setup_script.exists():
+            script = setup_script.read_text(encoding="utf-8").replace("/app/config/", f"{files}/")
+            subprocess.run(["sh", "-c", script], check=True, env={**environment, **values})
     target = ENV_DIR / f"{bot_id}.env"
     write_env(target, values)
     link(target, home / ".env")

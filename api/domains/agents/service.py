@@ -275,6 +275,13 @@ def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
     return _provisioning_error_dto(normalized) if normalized is not None else None
 
 
+def _manual_mixing_refused() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Manual approval must be on for a Parent Agent and all its Bots, or none of them",
+    )
+
+
 def _refuse_during_managed_update(agent: Agent) -> None:
     if managed_update_in_flight(agent):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
@@ -966,6 +973,10 @@ class AgentService:
                 raise HTTPException(status.HTTP_409_CONFLICT, "An Agent restore operation is in progress")
             if parent.status == AgentStatus.RUNNING:
                 raise HTTPException(status.HTTP_409_CONFLICT, f"Agent {parent.id} must be stopped before adding a Bot")
+            if (data.approval_mode == CommandApprovalMode.MANUAL) != (
+                parent.approval_mode == CommandApprovalMode.MANUAL
+            ):
+                raise _manual_mixing_refused()
             taken = {bot.bot_slot for bot in self.repository.find_live_bots(parent.id)}
             slot = next((slot for slot in range(1, MAX_BOTS_PER_PARENT + 1) if slot not in taken), None)
             if slot is None:
@@ -1975,7 +1986,22 @@ class AgentService:
         with self.repository.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
-            return self._update_agent_locked(agent_id, data, context)
+            read = self._update_agent_locked(agent_id, data, context)
+            self._apply_parent_settings_to_bots(agent_id, data)
+            return read
+
+    def _apply_parent_settings_to_bots(self, parent_id: UUID, data: AgentUpdate) -> None:
+        updated = data.model_dump(exclude_unset=True)
+        if not {"approval_mode", "max_turns"} & updated.keys():
+            return
+        for bot in self.repository.find_live_bots(parent_id):
+            if "max_turns" in updated:
+                bot.max_turns = updated["max_turns"]
+            if "approval_mode" in updated and (bot.approval_mode == CommandApprovalMode.MANUAL) != (
+                updated["approval_mode"] == CommandApprovalMode.MANUAL
+            ):
+                bot.approval_mode = updated["approval_mode"]
+            self.repository.save(bot)
 
     def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -1989,6 +2015,14 @@ class AgentService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
+
+        if agent.parent_agent_id is not None:
+            if "max_turns" in updated and updated["max_turns"] != agent.max_turns:
+                raise HTTPException(status.HTTP_409_CONFLICT, "A Bot's turn limit is set on its Parent Agent")
+            if "approval_mode" in updated and (updated["approval_mode"] == CommandApprovalMode.MANUAL) != (
+                self.pod_of(agent).approval_mode == CommandApprovalMode.MANUAL
+            ):
+                raise _manual_mixing_refused()
 
         if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
             self._refuse_forgetting_granted_sites(agent.id)
@@ -2738,9 +2772,13 @@ class AgentService:
             aai_home = f"/opt/data/profiles/{agent.id}"
         aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
         gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
+        gog_shim_home_dir = None
+        if agent.parent_agent_id is not None:
+            gog_shim_home_dir, gog_home_dir = gog_home_dir, aai_home
         runtime_context = RuntimeContext(
             aai_home,
             gog_home_dir,
+            gog_shim_home_dir=gog_shim_home_dir,
             gateway_base_url=self.config.credential_gateway_base_url,
             sharepoint_token_url=f"{self.config.ingest_base_url}/agents/{agent.id}/integrations/sharepoint/token",
             store_dir=aai_store_dir,

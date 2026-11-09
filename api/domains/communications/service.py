@@ -52,6 +52,12 @@ from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+BOT_UNSUPPORTED_PLATFORMS = frozenset({"discord", "teams", "agentbarn_telegram"})
+SHARED_GATEWAY_PLATFORMS = frozenset({"slack", "discord", "telegram", "teams", "agentbarn_telegram"})
+PLATFORM_FAMILIES = {
+    "telegram": {"telegram", "agentbarn_telegram"},
+    "agentbarn_telegram": {"telegram", "agentbarn_telegram"},
+}
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 
 # A directory read talks to the provider, so a failure is usually the operator's
@@ -209,6 +215,7 @@ class CommunicationsService:
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
         self._reject_web_chat_mutation(plugin.key)
+        self._require_platform_allowed_with_bots(agent, plugin.key, plugin.display_name)
         if not plugin.is_offered():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -243,6 +250,21 @@ class CommunicationsService:
             return self._read(created)
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    def _require_platform_allowed_with_bots(self, agent: Agent, platform_key: str, display_name: str) -> None:
+        if agent.parent_agent_id is not None and platform_key in BOT_UNSUPPORTED_PLATFORMS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{display_name} is not available for a Bot",
+            )
+        if platform_key not in SHARED_GATEWAY_PLATFORMS:
+            return
+        family = PLATFORM_FAMILIES.get(platform_key, {platform_key})
+        if family & self.repository.related_bot_platform_keys(agent):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A Parent Agent and its Bots cannot share {display_name}",
+            )
 
     def _allocates_address(self, plugin) -> bool:
         return PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
