@@ -244,6 +244,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           organizationId={agent.organizationId}
           open={shareOpen}
           onOpenChange={setShareOpen}
+          parent={agent.parentAgentId ? pod : undefined}
+          isBot={agent.parentAgentId !== null}
         />
       )}
     </div>

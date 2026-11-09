@@ -14,6 +14,7 @@ import { useHireAgentForm, type HiredAgent } from "../hooks/use-hire-agent-form"
 import type { Agent } from "../schemas";
 import { canAgent } from "../utils";
 import { AgentErrorBanner } from "./agent-error-banner";
+import { BotTrustNotice } from "./bot-trust-notice";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
@@ -160,6 +161,8 @@ export function NewBotDialog({
             />
           </section>
         )}
+
+        <BotTrustNotice className="sm:col-span-2" />
 
         {running && (
           <p className="m-0 text-sm sm:col-span-2" style={{ color: "var(--ink-3)" }}>

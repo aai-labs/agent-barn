@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the UI: the access floor and the shared-trust warning.
+- Next: the full end-to-end run in local k3d on a fresh API image.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,11 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Bot sharing and trust warning
+
+- Delivered: the Share dialog on a Bot marks Members who cannot open the Parent Agent as not addable, and offers General access only when the Parent Agent has it. The server still decides when the person sharing cannot manage the Parent Agent's access. The New bot dialog, the Bot switcher and a Bot's Share dialog say that Bots in one Agent can read each other's credentials.
+- Follow-up: the full end-to-end run.
 
 ### 2026-11-09 — AF-425 — Bot pages and pod-wide controls
 

@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
+import { BotTrustNotice } from "@/features/agents/components/bot-trust-notice";
 import { AgentLifecycleMenu } from "@/features/agents/components/agent-lifecycle-menu";
 import { AgentUpdateNotice } from "@/features/agents/components/agent-update-banner";
 import { ShareDialog } from "@/features/agents/components/share-dialog";
@@ -264,6 +265,8 @@ function BotSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string;
               </DropdownMenuItem>
             </>
           )}
+          <DropdownMenuSeparator />
+          <BotTrustNotice className="px-2 py-1.5" />
         </DropdownMenuContent>
       </DropdownMenu>
       {adding && (
@@ -315,6 +318,8 @@ function AgentActionButtons({ agent, pod }: { agent: Agent; pod: Agent | undefin
             organizationId={agent.organizationId}
             open={shareOpen}
             onOpenChange={setShareOpen}
+            parent={agent.parentAgentId ? pod : undefined}
+            isBot={agent.parentAgentId !== null}
           />
         </>
       )}

@@ -1,7 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
-import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
+import {
+  MOCK_AGENT_ID,
+  mockAgent,
+  mockAssignedMember,
+  mockShareSettingsAll,
+  mockShareSettingsRestricted,
+} from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 
 const SALES_ID = "66666666-6666-4666-8666-666666666661";
@@ -379,5 +385,128 @@ test.describe("Home with bots", () => {
 
     await expect(card).toBeVisible();
     await expect(card).not.toContainText(/\d bots?/);
+  });
+});
+
+test.describe("Sharing and trust", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const TRUST_WARNING = "Bots in one Agent can read each other's credentials.";
+  const ADA = {
+    user_id: mockAssignedMember.user_id,
+    email: mockAssignedMember.email,
+    full_name: mockAssignedMember.full_name,
+    role: "MEMBER",
+    is_pending: false,
+  };
+  const GRACE = {
+    user_id: "99999999-9999-4999-8999-999999999999",
+    email: "grace@example.com",
+    full_name: "Grace Hopper",
+    role: "MEMBER",
+    is_pending: false,
+  };
+  const NO_SHARES = { general_access: { role: null }, assignments: [] };
+
+  async function openBotShare(
+    page: Page,
+    { parentShare = mockShareSettingsRestricted as unknown, agent = parent } = {},
+  ) {
+    const { data } = await setUp(page, agent);
+    await data.agents.interceptGetShareRolesRequest();
+    await data.agents.interceptGetAgentShareRequest({ body: parentShare });
+    await data.agents.interceptGetAgentShareRequest({ agentId: SALES_ID, body: NO_SHARES });
+    await data.organizations.interceptGetMembers({ members: [ADA, GRACE] });
+    await goto(page, SALES_ID);
+    await page.getByRole("button", { name: "Share", exact: true }).click();
+    return page.getByRole("dialog");
+  }
+
+  async function searchMembers(page: Page) {
+    await page.getByLabel("Search Members to grant access").fill("example");
+    await expect(page.getByRole("dialog").getByText(GRACE.email)).toBeVisible();
+  }
+
+  test("the new bot dialog warns that bots share a trust boundary", async ({ page }) => {
+    await setUp(page);
+    await goto(page);
+
+    await openNewBot(page);
+
+    await expect(page.getByText(TRUST_WARNING)).toBeVisible();
+  });
+
+  test("the bot switcher warns that bots share a trust boundary", async ({ page }) => {
+    await setUp(page);
+    await goto(page);
+
+    await switcher(page).click();
+
+    await expect(page.getByRole("menu").getByText(TRUST_WARNING)).toBeVisible();
+  });
+
+  test("sharing a bot warns that bots share a trust boundary", async ({ page }) => {
+    const dialog = await openBotShare(page);
+
+    await expect(dialog.getByText(TRUST_WARNING)).toBeVisible();
+  });
+
+  test("sharing a parent shows no bot warning", async ({ page }) => {
+    const { data } = await setUp(page);
+    await data.agents.interceptGetShareRolesRequest();
+    await data.agents.interceptGetAgentShareRequest();
+    await goto(page);
+
+    await page.getByRole("button", { name: "Share", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "Share Front Desk" })).toBeVisible();
+    await expect(page.getByRole("dialog").getByText(TRUST_WARNING)).toHaveCount(0);
+  });
+
+  test("a bot can be shared only with members who can open its parent", async ({ page }) => {
+    const dialog = await openBotShare(page);
+
+    await searchMembers(page);
+
+    await expect(dialog.getByRole("button", { name: `Add ${ADA.email}` })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: `Add ${GRACE.email}` })).toHaveCount(0);
+    await expect(dialog.getByText("Needs access to Front Desk first")).toBeVisible();
+  });
+
+  test("a parent open to the whole organization lets anyone be added", async ({ page }) => {
+    const dialog = await openBotShare(page, { parentShare: mockShareSettingsAll });
+
+    await searchMembers(page);
+
+    await expect(dialog.getByRole("button", { name: `Add ${GRACE.email}` })).toBeVisible();
+  });
+
+  test("without access management on the parent, the server decides", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().endsWith(`/agents/${MOCK_AGENT_ID}/share`)) asked.push(request.url());
+    });
+    const dialog = await openBotShare(page, {
+      agent: { ...parent, allowed_actions: ["agent.read", "activity.read"] },
+    });
+
+    await searchMembers(page);
+
+    await expect(dialog.getByRole("button", { name: `Add ${GRACE.email}` })).toBeVisible();
+    expect(asked).toEqual([]);
+  });
+
+  test("general access on a bot needs general access on its parent", async ({ page }) => {
+    const dialog = await openBotShare(page);
+
+    await expect(dialog.getByRole("option", { name: "All Organization Members" })).toBeDisabled();
+    await expect(dialog.getByText("Give Front Desk General access first.")).toBeVisible();
+  });
+
+  test("a parent with general access lets its bot have it too", async ({ page }) => {
+    const dialog = await openBotShare(page, { parentShare: mockShareSettingsAll });
+
+    await expect(dialog.getByRole("option", { name: "All Organization Members" })).toBeEnabled();
+    await expect(dialog.getByText("Give Front Desk General access first.")).toHaveCount(0);
   });
 });
