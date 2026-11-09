@@ -171,14 +171,22 @@ def _on_approval(stage: str):
     return hook
 
 
-def poll_platform_health(status_path: Path, last: dict[str, str]) -> None:
+def _status_source(home: Path) -> tuple[Path, str | None]:
+    if home.parent.name == "profiles":
+        return home.parent.parent / "gateway_state.json", home.name
+    return home / "gateway_state.json", None
+
+
+def poll_platform_health(status_path: Path, last: dict[str, str], profile: str | None = None) -> None:
     try:
         platforms = json.loads(status_path.read_text()).get("platforms") or {}
     except (OSError, ValueError):
         return
-    for platform, payload in platforms.items():
-        if ":" in platform or not isinstance(payload, dict):
-            continue  # secondary-profile entries; Agent Barn runs one profile
+    for name, payload in platforms.items():
+        owner, separator, suffix = name.partition(":")
+        if not isinstance(payload, dict) or (owner != profile if separator else profile is not None):
+            continue
+        platform = suffix if separator else name
         state = payload.get("state")
         stage = platform_stage(state)
         if stage and last.get(platform) != state:
@@ -249,10 +257,11 @@ def _loop(url: str, api_key: str, home: Path) -> None:
     health: dict[str, str] = {}
     # Start at boot so a restart does not replay the whole ledger.
     watermark = [time.time()]
+    status_path, profile = _status_source(home)
     while True:
         time.sleep(_POLL_SECONDS)
         try:
-            poll_platform_health(home / "gateway_state.json", health)
+            poll_platform_health(status_path, health, profile)
             poll_obligations(home / "state.db", watermark)
             _flush(url, api_key)
         except Exception as exc:

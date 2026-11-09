@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-09 — AF-425 — Bot connection status
+
+- Fixed: a Bot's Provider connectivity stayed on Pending. The observer now reads the Bot's own entries in the Parent Agent's `gateway_state.json`.
+- Delivered: `hermes-base/patch-bot-connected-status.py`, because Hermes `v2026.8.19` records a Bot's platform when it fails but not when it connects or reconnects. The maintainer accepted this one patch on 2026-11-09. It fails the image build if the Hermes source changes.
+- Changed: `docs/architecture/runtime-and-deployment.md`.
+
 ### 2026-11-09 — AF-425 — Bot sharing and trust warning
 
 - Delivered: the Share dialog on a Bot marks Members who cannot open the Parent Agent as not addable, and offers General access only when the Parent Agent has it. The server still decides when the person sharing cannot manage the Parent Agent's access. The New bot dialog, the Bot switcher and a Bot's Share dialog say that Bots in one Agent can read each other's credentials.

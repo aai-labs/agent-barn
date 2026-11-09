@@ -119,3 +119,60 @@ def test_delivered_obligation_is_mirrored_when_attempting_was_not_observed(tmp_p
             "occurred_at": payload["messages"][0]["occurred_at"],
         }
     ]
+
+
+def _status_file(tmp_path: Path, platforms: dict) -> Path:
+    path = tmp_path / "gateway_state.json"
+    path.write_text(json.dumps({"platforms": platforms}), encoding="utf-8")
+    return path
+
+
+def _stages(plugin) -> list[tuple[str, str]]:
+    return [(entry["stage"], entry["platform"]) for entry in plugin._buffer]
+
+
+def test_a_bot_reports_only_its_own_platforms(tmp_path) -> None:
+    plugin = _load_plugin()
+    status = _status_file(
+        tmp_path,
+        {
+            "api_server": {"state": "connected"},
+            "bot-a:slack": {"state": "connected"},
+            "bot-b:telegram": {"state": "fatal", "error_code": "invalid_token"},
+        },
+    )
+
+    plugin.poll_platform_health(status, {}, "bot-a")
+
+    assert _stages(plugin) == [("connection_connected", "slack")]
+
+
+def test_a_bot_reports_a_failure_and_its_recovery(tmp_path) -> None:
+    plugin = _load_plugin()
+    health: dict[str, str] = {}
+
+    plugin.poll_platform_health(_status_file(tmp_path, {"bot-a:slack": {"state": "fatal"}}), health, "bot-a")
+    plugin.poll_platform_health(_status_file(tmp_path, {"bot-a:slack": {"state": "connected"}}), health, "bot-a")
+
+    assert _stages(plugin) == [("connection_error", "slack"), ("connection_connected", "slack")]
+
+
+def test_a_parent_ignores_its_bots_platforms(tmp_path) -> None:
+    plugin = _load_plugin()
+    status = _status_file(tmp_path, {"slack": {"state": "connected"}, "bot-a:telegram": {"state": "connected"}})
+
+    plugin.poll_platform_health(status, {})
+
+    assert _stages(plugin) == [("connection_connected", "slack")]
+
+
+def test_a_bot_reads_the_gateway_status_from_its_parents_home() -> None:
+    plugin = _load_plugin()
+
+    assert plugin._status_source(Path("/opt/data/profiles/bot-a")) == (Path("/opt/data/gateway_state.json"), "bot-a")
+
+
+def test_a_parent_reads_the_gateway_status_from_its_own_home() -> None:
+    plugin = _load_plugin()
+
+    assert plugin._status_source(Path("/opt/data")) == (Path("/opt/data/gateway_state.json"), None)
