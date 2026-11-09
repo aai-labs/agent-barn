@@ -1,17 +1,23 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
 
+from api.core.config import Config as AppConfig
 from api.domains.agents.models import AgentStatus, AgentType, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.repository import OrganizationRepository
-from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_VIEWER_ROLE_ID
+from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
+from api.tests.integration.test_organization_agent_limits import a_platform_administrator_is_signed_in
 from api.tests.steps.agent import (
+    FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
@@ -28,6 +34,22 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
 CREATE = {"name": "Sales", "template_key": "test-template"}
+RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
+POD_OPERATIONS = [
+    ("post", "/start", None),
+    ("post", "/stop", None),
+    ("post", "/managed-update", None),
+    ("put", "/agent-size", {"agent_size_id": None}),
+    ("post", "/restore-points", {}),
+    ("post", f"/restore-points/{RESTORE_POINT}/restore", {}),
+    ("delete", f"/restore-points/{RESTORE_POINT}", None),
+    ("get", "/logs", None),
+    ("get", "/logs/history", None),
+    ("get", "/logs/stream", None),
+    ("get", "/diagnostics", None),
+    ("get", "/resource-usage", None),
+    ("put", "/file-sync", {"enabled": True}),
+]
 _GIVEN = [
     set_env_variable(
         {
@@ -454,3 +476,167 @@ def test_an_editor_of_the_parent_creates_a_bot_and_owns_it():
 
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
         assert_that(response.json()["allowed_actions"], has_item("agent.lifecycle.manage"))
+
+
+def _k8s(context):
+    return context.injector.get(KubernetesClient)
+
+
+def _call(context, method, path, body=None):
+    kwargs = {} if body is None else {"json": body}
+    return context.client.request(method, path, headers=_auth(context), **kwargs)
+
+
+def _deleted_names(mock_method):
+    return [call.args[0] for call in mock_method.call_args_list]
+
+
+@pytest.mark.parametrize(("method", "suffix", "body"), POD_OPERATIONS)
+def test_a_pod_operation_on_a_bot_is_refused_and_names_its_parent(method, suffix, body):
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        response = _call(context, method, f"{BASE}/{context.bot.id}{suffix}", body)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), suffix)
+        assert_that(response.json()["detail"], contains_string(str(context.parent.id)))
+        assert_that(_k8s(context).create_deployment.called, equal_to(False))
+        assert_that(_k8s(context).delete_deployment.called, equal_to(False))
+
+
+def test_a_pod_operation_on_a_bot_stays_hidden_from_someone_with_no_access():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _act_as_member(context)
+
+        response = _call(context, "post", f"{BASE}/{context.bot.id}/start")
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_a_platform_administrator_cannot_resize_or_restart_a_bot():
+    with given([*_GIVEN, _parent_with_bots(1), a_platform_administrator_is_signed_in()]) as context:
+        size = _call(context, "put", f"/api/v1/platform/agents/{context.bot.id}/agent-size", {"agent_size_id": None})
+        restart = _call(context, "post", f"/api/v1/platform/agents/{context.bot.id}/restart")
+
+        assert_that(size.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(restart.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_a_bots_health_comes_from_its_parents_pod():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        _k8s(context).fetch_agent_healthz.return_value = {"status": "ok"}
+
+        response = _call(context, "get", f"{BASE}/{context.bot.id}/healthz")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(_k8s(context).fetch_agent_healthz.call_args.args[0], equal_to(f"agent-{context.parent.id}"))
+        assert_that(_k8s(context).get_pod_readiness.call_args.args[0], equal_to(f"agent-{context.parent.id}"))
+
+
+def _firecrawl_configured(context):
+    config = context.injector.get(AppConfig)
+    config.agent_firecrawl_api_key = "fc-platform-fixture"
+    config.agent_firecrawl_base_url = "https://configured.firecrawl.example/v1"
+
+
+def _apply_isolation(context):
+    return _call(
+        context,
+        "put",
+        f"{BASE}/{context.bot.id}/integrations/firecrawl/isolation",
+        {"isolated": True, "restart": True},
+    )
+
+
+def _apply_custom_api(context):
+    return _call(
+        context,
+        "post",
+        f"{BASE}/{context.bot.id}/custom-api-connections/apply",
+        {
+            "creates": [
+                {
+                    "name": "Inventory",
+                    "base_url": "https://api.example.com/v1",
+                    "auth": {"type": "bearer", "token": "fixture-private-token"},
+                }
+            ],
+            "restart": True,
+        },
+    )
+
+
+@pytest.mark.parametrize("apply", [_apply_isolation, _apply_custom_api])
+def test_applying_a_change_on_a_bot_restarts_its_parent(apply):
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        _firecrawl_configured(context)
+
+        response = apply(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(set(_deleted_names(_k8s(context).delete_deployment)), equal_to({f"agent-{context.parent.id}"}))
+        created = _k8s(context).create_deployment.call_args.args[1]
+        assert_that(created.metadata.name, equal_to(f"agent-{context.parent.id}"))
+
+
+@pytest.mark.parametrize("apply", [_apply_isolation, _apply_custom_api])
+def test_restarting_through_a_bot_needs_lifecycle_on_the_parent(apply):
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        _firecrawl_configured(context)
+        _member(context)
+        _grant(context, context.parent, AGENT_VIEWER_ROLE_ID)
+        _grant(context, context.bot, AGENT_OWNER_ROLE_ID)
+        _act_as_member(context)
+
+        response = apply(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN), response.text)
+        assert_that(_k8s(context).delete_deployment.called, equal_to(False))
+
+
+@pytest.mark.parametrize("apply", [_apply_isolation, _apply_custom_api])
+def test_a_parent_in_a_managed_update_refuses_a_change_on_its_bot(apply):
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        _firecrawl_configured(context)
+        context.parent.managed_update_heartbeat_at = datetime.now(UTC)
+        context.injector.get(AgentRepository).save(context.parent)
+
+        response = apply(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_deleting_a_bot_leaves_the_running_pod_alone():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        response = _call(context, "delete", f"{BASE}/{context.bot.id}")
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(_stored(context, context.bot.id), equal_to(None))
+        assert_that(_stored(context, context.parent.id) is not None, equal_to(True))
+        for method in ("delete_deployment", "delete_service", "delete_pvc", "delete_secret", "delete_config_map"):
+            assert_that(getattr(_k8s(context), method).called, equal_to(False), method)
+        context.injector.get(LiteLLMClient).block_key.assert_called_once_with(FAKE_LITELLM_KEY)
+
+
+def test_a_parent_in_a_managed_update_refuses_deleting_its_bot():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        context.parent.managed_update_heartbeat_at = datetime.now(UTC)
+        context.injector.get(AgentRepository).save(context.parent)
+
+        response = _call(context, "delete", f"{BASE}/{context.bot.id}")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_deleting_a_parent_deletes_its_bots():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        response = _call(context, "delete", f"{BASE}/{context.parent.id}")
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        for agent in [context.parent, *context.bots]:
+            assert_that(_stored(context, agent.id), equal_to(None))
+        names = [f"agent-{context.parent.id}", *[f"agent-{bot.id}" for bot in context.bots]]
+        assert_that(_deleted_names(_k8s(context).delete_deployment), equal_to(names[:1]))
+        assert_that(_deleted_names(_k8s(context).delete_pvc), equal_to(names[:1]))
+        assert_that(_deleted_names(_k8s(context).delete_secret), contains_inanyorder(*names))
+        assert_that(_deleted_names(_k8s(context).delete_config_map), contains_inanyorder(*names))
+        assert_that(context.injector.get(LiteLLMClient).block_key.call_count, equal_to(3))

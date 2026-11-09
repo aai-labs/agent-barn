@@ -54,7 +54,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
+from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition, refuse_on_bot
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     MAX_BOTS_PER_PARENT,
@@ -110,6 +110,7 @@ from api.domains.agents.models import (
     decrypt_content,
     encrypt_content,
     managed_update_in_flight,
+    pod_agent_id,
     validate_content,
 )
 from api.domains.agents.naming import choose_first_name
@@ -723,8 +724,17 @@ class AgentService:
             updated_at=agent.updated_at,
         )
 
+    def pod_of(self, agent: Agent) -> Agent:
+        if agent.parent_agent_id is None:
+            return agent
+        parent = self.repository.get_by_id(agent.parent_agent_id)
+        if parent is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Agent {agent.parent_agent_id} not found")
+        return parent
+
     def _observe_integration_readiness(self, agent: Agent, readiness: str | None = None) -> None:
         runtime = self.integrations.runtime(agent.id)
+        pod_name = f"agent-{pod_agent_id(agent)}"
         if (
             agent.status == AgentStatus.RUNNING
             and runtime is not None
@@ -732,7 +742,7 @@ class AgentService:
             and (runtime.state == "provisioned" or bool(runtime.bindings))
         ):
             if readiness is None:
-                readiness, _ = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
+                readiness, _ = self.k8s.get_pod_readiness(pod_name, self.config.k8s_namespace)
             if readiness == "ready" and runtime.state == "provisioned" and runtime.authentication_complete:
                 self.integrations.set_state(agent.id, "ready", runtime.generation, expected_state="provisioned")
             elif readiness == "crashed" and runtime.bindings:
@@ -751,15 +761,13 @@ class AgentService:
                         or latest.state not in {"provisioned", "ready"}
                     ):
                         return
-                    observed, reason = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
-                    if observed != "crashed" or not self.k8s.runtime_has_exited(
-                        f"agent-{agent.id}", self.config.k8s_namespace
-                    ):
+                    observed, reason = self.k8s.get_pod_readiness(pod_name, self.config.k8s_namespace)
+                    if observed != "crashed" or not self.k8s.runtime_has_exited(pod_name, self.config.k8s_namespace):
                         return
                     if (
                         latest.state == "ready"
                         and reason == "CrashLoopBackOff"
-                        and not self._failed_for_good(f"agent-{agent.id}", reason)
+                        and not self._failed_for_good(pod_name, reason)
                     ):
                         return
                     self._record_provisioning_failure(current, RuntimeError("Agent runtime exited"))
@@ -935,7 +943,7 @@ class AgentService:
                 raise HTTPException(status.HTTP_409_CONFLICT, "An Agent restore operation is in progress")
             if parent.status == AgentStatus.RUNNING:
                 raise HTTPException(status.HTTP_409_CONFLICT, f"Agent {parent.id} must be stopped before adding a Bot")
-            taken = self.repository.live_bot_slots(parent.id)
+            taken = {bot.bot_slot for bot in self.repository.find_live_bots(parent.id)}
             slot = next((slot for slot in range(1, MAX_BOTS_PER_PARENT + 1) if slot not in taken), None)
             if slot is None:
                 raise HTTPException(
@@ -1192,6 +1200,7 @@ class AgentService:
             PermissionKey.AGENT_SIZE_MANAGE,
             detail="You don't have permission to change this agent's size.",
         )
+        refuse_on_bot(agent)
         # The Organization grant, which the Agent check above takes for granted from an
         # Owner or Admin role.
         self._require_size_manage(context, agent.organization_id)
@@ -2200,6 +2209,7 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        refuse_on_bot(agent)
         actor = resolve_actor_identity(context, agent.organization_id)
         # Complete deferred replay before taking the lock it also needs. The
         # check under the lock still catches any newly started restore.
@@ -2908,6 +2918,7 @@ class AgentService:
         tail_lines: int = 100,
     ) -> AgentLogsRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        refuse_on_bot(agent)
 
         latest_snapshot = self.repository.get_latest_log_snapshot(agent_id)
         has_snapshots = latest_snapshot is not None
@@ -2941,6 +2952,7 @@ class AgentService:
         tail_lines: int = 0,
     ) -> Iterator[str]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        refuse_on_bot(agent)
         if agent.status != AgentStatus.RUNNING:
             return iter(())
         return self.k8s.stream_pod_logs(
@@ -2955,7 +2967,7 @@ class AgentService:
         context: CurrentUserContext,
         snapshot_id: UUID | None = None,
     ) -> AgentLogHistoryRead:
-        self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        refuse_on_bot(self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ))
 
         if snapshot_id is not None:
             snapshot = self.repository.get_snapshot_by_id(agent_id, snapshot_id)
@@ -3012,6 +3024,7 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        refuse_on_bot(agent)
         actor = resolve_actor_identity(context, agent.organization_id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
@@ -3036,6 +3049,7 @@ class AgentService:
         agent = self.repository.get_by_id(agent_id)
         if agent is None or agent.deleted_at is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        refuse_on_bot(agent)
         actor = resolve_actor_identity(context, agent.organization_id)
         self.restore_points.reconcile_agent(agent.id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
@@ -3103,6 +3117,7 @@ class AgentService:
         service keeps no FastAPI request-scoped dependency.
         """
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        refuse_on_bot(agent)
         # The rollback replays the recorded configuration, which restore authorizes
         # as an Agent update. Settle that here: refused in the background task, it
         # would only show up as an Agent left in ERROR.
@@ -3432,9 +3447,8 @@ class AgentService:
     def delete_agent(self, agent_id: UUID, context: CurrentUserContext) -> None:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_DELETE)
         ns = self.config.k8s_namespace
-        name = f"agent-{agent.id}"
 
-        self.restore_points.reconcile_agent(agent.id)
+        self.restore_points.reconcile_agent(pod_agent_id(agent))
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(
@@ -3444,33 +3458,47 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
-            _refuse_during_managed_update(current)
-            if self.restore_points.has_blocking_operation(current.id):
+            pod = self.pod_of(current)
+            _refuse_during_managed_update(pod)
+            if self.restore_points.has_blocking_operation(pod.id):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
                 )
 
-            self.k8s.delete_deployment(name, ns)
-            self.k8s.delete_service(name, ns)
-            self.k8s.delete_pvc(name, ns)
-            self.k8s.delete_secret(name, ns)
-            self.k8s.delete_config_map(name, ns)
-            self.restore_points.purge_agent(current.id)
+            bots: list[Agent] = []
+            if current.parent_agent_id is None:
+                bots = self.repository.find_live_bots(current.id)
+                name = f"agent-{current.id}"
+                self.k8s.delete_deployment(name, ns)
+                self.k8s.delete_service(name, ns)
+                self.k8s.delete_pvc(name, ns)
+                self.k8s.delete_secret(name, ns)
+                self.k8s.delete_config_map(name, ns)
+                for bot in bots:
+                    self.k8s.delete_secret(f"agent-{bot.id}", ns)
+                    self.k8s.delete_config_map(f"agent-{bot.id}", ns)
+                self.restore_points.purge_agent(current.id)
 
-            delete_result = self.repository.soft_delete_with_event(
-                current,
-                actor=resolve_actor_identity(context, agent.organization_id),
-                actor_display=context.user.full_name or context.user.email,
-            )
-        self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
+            removed = [*bots, current]
+            actor = resolve_actor_identity(context, agent.organization_id)
+            actor_display = context.user.full_name or context.user.email
+            delivery_ids = [
+                delivery_id
+                for target in removed
+                for delivery_id in self.repository.soft_delete_with_event(
+                    target, actor=actor, actor_display=actor_display
+                ).delivery_ids
+            ]
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
-        if agent.litellm_key_encrypted:
-            try:
-                plaintext_key = decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
-                self.litellm.block_key(plaintext_key)
-            except Exception:
-                logger.warning("Could not block LiteLLM key for agent %s", agent_id)
+        for target in removed:
+            if target.litellm_key_encrypted:
+                try:
+                    plaintext_key = decrypt_token(target.litellm_key_encrypted, self.config.agent_token_encryption_key)
+                    self.litellm.block_key(plaintext_key)
+                except Exception:
+                    logger.warning("Could not block LiteLLM key for agent %s", target.id)
 
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
         """Returns the allowlisted OpenRouter models as picker options.
@@ -3625,6 +3653,7 @@ class AgentService:
 
     def get_runtime_diagnostics(self, agent_id: UUID, context: CurrentUserContext) -> AgentRuntimeDiagnosticsRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        refuse_on_bot(agent)
         if agent.status != AgentStatus.RUNNING:
             return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
         try:
@@ -3664,7 +3693,7 @@ class AgentService:
             stored = _stored_provisioning_error(agent)
             return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
 
-        name = f"agent-{agent.id}"
+        name = f"agent-{pod_agent_id(agent)}"
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)

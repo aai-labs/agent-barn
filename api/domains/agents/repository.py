@@ -1772,12 +1772,15 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
-    def live_bot_slots(self, parent_id: UUID) -> set[int]:
+    def find_live_bots(self, parent_id: UUID) -> list[Agent]:
         with Session(self.delegate.engine) as session:
-            slots = session.exec(
-                select(Agent.bot_slot).where(col(Agent.parent_agent_id) == parent_id, col(Agent.deleted_at).is_(None))
-            ).all()
-        return {slot for slot in slots if slot is not None}
+            return list(
+                session.exec(
+                    select(Agent)
+                    .where(col(Agent.parent_agent_id) == parent_id, col(Agent.deleted_at).is_(None))
+                    .order_by(col(Agent.bot_slot).asc())
+                ).all()
+            )
 
     def find_all_running(self) -> list[Agent]:
         """Live Agents currently eligible for an operator lifecycle cutover."""

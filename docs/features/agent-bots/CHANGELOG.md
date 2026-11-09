@@ -14,9 +14,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - the sharing floor;
   - `GET /agents/{id}/bots`;
   - `POST /agents/{id}/bots`.
-  Bots can be created, but nothing runs them yet, and lifecycle routes still accept a Bot.
-- In transition: until the next slice, start, stop and other pod operations are not refused on a Bot.
-- Next: refusals and redirects for pod operations on a Bot, and cascaded delete.
+  Bots can be created, and pod operations act on the Parent Agent, but nothing runs Bots yet.
+- In transition: nothing.
+- Next: extract `_assemble_agent` with no behaviour change.
 - Blockers: none.
 
 ## Runtime evidence
@@ -50,6 +50,15 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Pod operations on a Bot
+
+- Delivered:
+  - Start, stop, managed update, Agent Size, Restore Point create, restore and delete, logs, diagnostics, resource usage, File Sync and the platform size and restart routes return 409 on a Bot, naming its Parent Agent.
+  - Health, integration readiness, and isolation and Custom API changes use the Parent Agent's pod, guards and `agent.lifecycle.manage`.
+  - Deleting a Bot soft-deletes it, retires its Connections and blocks its key without touching the pod. Deleting a Parent Agent also deletes its Bots.
+- Changed: `refuse_on_bot`, `AgentService.pod_of`, `AgentRepository.find_live_bots`.
+- Follow-up: start path extraction.
 
 ### 2026-11-09 — AF-425 — Create a Bot
 

@@ -287,13 +287,14 @@ class CustomApiService:
     ) -> None:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
-        self.lifecycle.restore_points.reconcile_agent(agent.id)
-        _refuse_during_managed_update(agent)
-        if self.lifecycle.restore_points.has_blocking_operation(agent.id):
+        pod = self.lifecycle.pod_of(agent)
+        self.lifecycle.restore_points.reconcile_agent(pod.id)
+        _refuse_during_managed_update(pod)
+        if self.lifecycle.restore_points.has_blocking_operation(pod.id):
             raise HTTPException(409, "An Agent restore operation is in progress")
-        running = agent.status == AgentStatus.RUNNING
+        running = pod.status == AgentStatus.RUNNING
         if running or restart:
-            self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+            self.authorization.require_action_for_visible(context, pod, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         if running and not restart:
             raise HTTPException(409, "Applying to a running Agent requires an explicit restart")
         try:
@@ -312,13 +313,13 @@ class CustomApiService:
             return
         actor = resolve_actor_identity(context, agent.organization_id)
         if running:
-            self.lifecycle._observe_integration_readiness(agent)
-            agent = self.lifecycle._stop_agent_unchecked(agent, actor)
-        elif agent.status == AgentStatus.ERROR and restart:
-            name = f"agent-{agent.id}"
+            self.lifecycle._observe_integration_readiness(pod)
+            pod = self.lifecycle._stop_agent_unchecked(pod, actor)
+        elif pod.status == AgentStatus.ERROR and restart:
+            name = f"agent-{pod.id}"
             self.lifecycle.k8s.delete_deployment(name, self.lifecycle.config.k8s_namespace)
             self.lifecycle.k8s.wait_for_termination(name, self.lifecycle.config.k8s_namespace)
-            self.lifecycle.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
+            self.lifecycle.credential_gateway.revoke_for_agent(pod.id, pod.organization_id)
         try:
             deliveries = self.repository.mutate_many_with_events(
                 changes, actor, context.user.full_name or context.user.email
@@ -327,7 +328,7 @@ class CustomApiService:
             raise HTTPException(409, "A connection identifier is already in use") from None
         self.lifecycle.event_delivery_dispatcher.enqueue_immediate(deliveries)
         if running or restart:
-            self.lifecycle._start_agent_unchecked(agent, actor)
+            self.lifecycle._start_agent_unchecked(pod, actor)
 
     def _persist(self, row: CustomApiConnection, context: CurrentUserContext, operation: str) -> None:
         agent = self.authorization.require_visible(context, row.agent_id)

@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.exceptions import refuse_on_bot
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
@@ -155,6 +156,7 @@ class AgentFileSyncService:
             PermissionKey.AGENT_UPDATE,
             detail="You don't have permission to change file sync for this Agent.",
         )
+        refuse_on_bot(agent)
         delivery_ids = self.repository.set_enabled_with_event(
             agent.id,
             agent.organization_id,

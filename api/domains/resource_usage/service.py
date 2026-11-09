@@ -9,6 +9,7 @@ from injector import inject, singleton
 
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.exceptions import refuse_on_bot
 from api.domains.agents.models import Agent, AgentFilter, AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
@@ -107,6 +108,7 @@ class ResourceUsageService:
         usage_range: ResourceUsageRange,
     ) -> AgentResourceUsageRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        refuse_on_bot(agent)
         return self.usage_for(agent, usage_range)
 
     def usage_for(self, agent: Agent, usage_range: ResourceUsageRange) -> AgentResourceUsageRead:
