@@ -1573,6 +1573,8 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before selecting a Template Version",
             )
 
+        updated = data.model_dump(exclude_unset=True)
+        self._refuse_bot_setting_changes(agent, updated)
         resolved = self.selection.resolve(agent, data, org_id)
 
         try:
@@ -1594,6 +1596,7 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        self.selection.apply_parent_settings_to_bots(agent.id, updated)
         return self._get_agent_read(selected_agent, context)
 
     def _validate_incoming_skill_providers(
@@ -1987,21 +1990,19 @@ class AgentService:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
             read = self._update_agent_locked(agent_id, data, context)
-            self._apply_parent_settings_to_bots(agent_id, data)
+            self.selection.apply_parent_settings_to_bots(agent_id, data.model_dump(exclude_unset=True))
             return read
 
-    def _apply_parent_settings_to_bots(self, parent_id: UUID, data: AgentUpdate) -> None:
-        updated = data.model_dump(exclude_unset=True)
-        if not {"approval_mode", "max_turns"} & updated.keys():
+    def _refuse_bot_setting_changes(self, agent: Agent, updated: Mapping[str, Any]) -> None:
+        if agent.parent_agent_id is None:
             return
-        for bot in self.repository.find_live_bots(parent_id):
-            if "max_turns" in updated:
-                bot.max_turns = updated["max_turns"]
-            if "approval_mode" in updated and (bot.approval_mode == CommandApprovalMode.MANUAL) != (
-                updated["approval_mode"] == CommandApprovalMode.MANUAL
-            ):
-                bot.approval_mode = updated["approval_mode"]
-            self.repository.save(bot)
+        if "max_turns" in updated and updated["max_turns"] != agent.max_turns:
+            raise HTTPException(status.HTTP_409_CONFLICT, "A Bot's turn limit is set on its Parent Agent")
+        approval_mode = updated.get("approval_mode")
+        if approval_mode is not None and (approval_mode == CommandApprovalMode.MANUAL) != (
+            self.pod_of(agent).approval_mode == CommandApprovalMode.MANUAL
+        ):
+            raise _manual_mixing_refused()
 
     def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
@@ -2016,13 +2017,7 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
-        if agent.parent_agent_id is not None:
-            if "max_turns" in updated and updated["max_turns"] != agent.max_turns:
-                raise HTTPException(status.HTTP_409_CONFLICT, "A Bot's turn limit is set on its Parent Agent")
-            if "approval_mode" in updated and (updated["approval_mode"] == CommandApprovalMode.MANUAL) != (
-                self.pod_of(agent).approval_mode == CommandApprovalMode.MANUAL
-            ):
-                raise _manual_mixing_refused()
+        self._refuse_bot_setting_changes(agent, updated)
 
         if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
             self._refuse_forgetting_granted_sites(agent.id)

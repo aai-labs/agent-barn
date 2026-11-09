@@ -16,6 +16,7 @@ from api.domains.communications.models import CommunicationConnection
 from api.domains.integrations.runtime import RuntimeContext
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
+from api.domains.templates.repository import TemplateRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -1058,6 +1059,56 @@ def test_a_parents_turn_limit_reaches_its_bots():
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(_stored(context, context.bot.id).max_turns, equal_to(33))
+
+
+def _select_template(context, agent, **fields):
+    stored = _stored(context, agent.id)
+    pinned = context.injector.get(TemplateRepository).get_pinned_template(stored)
+    return _call(
+        context,
+        "post",
+        f"{BASE}/{agent.id}/configuration/select",
+        {
+            "selection_type": "organization",
+            "template_key": pinned.template_key,
+            "template_version": pinned.version,
+            "expected_agent_updated_at": stored.updated_at.isoformat(),
+            **fields,
+        },
+    )
+
+
+def test_selecting_a_template_cannot_change_a_bots_turn_limit():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _select_template(context, context.bot, max_turns=7)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(_stored(context, context.bot.id).max_turns, equal_to(None))
+
+
+def test_selecting_a_template_cannot_take_a_bot_across_the_manual_line():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _select_template(context, context.bot, approval_mode="manual")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(_stored(context, context.bot.id).approval_mode, is_not(equal_to(CommandApprovalMode.MANUAL)))
+
+
+def test_selecting_a_template_without_those_settings_still_works_on_a_bot():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _select_template(context, context.bot)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+
+
+def test_settings_from_a_parents_template_selection_reach_its_bots():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _select_template(context, context.parent, max_turns=44, approval_mode="manual")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        bot = _stored(context, context.bot.id)
+        assert_that(bot.max_turns, equal_to(44))
+        assert_that(bot.approval_mode, equal_to(CommandApprovalMode.MANUAL))
 
 
 def test_a_bots_google_state_is_its_own_and_its_shim_is_shared():

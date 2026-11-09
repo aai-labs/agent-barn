@@ -670,6 +670,7 @@ class RestorePointService:
             scalar_updates=resolved.scalar_updates,
             restored_configuration_id=target.id,
         )
+        self.selection.apply_parent_settings_to_bots(agent.id, selection.model_dump(exclude_unset=True))
 
     def apply_recorded_configuration(
         self,

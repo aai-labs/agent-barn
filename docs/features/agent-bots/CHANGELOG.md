@@ -52,6 +52,10 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-09 — AF-425 — Bot rules on template selection and restore
+
+- Fixed: selecting a Template now applies the Bot rules for approval mode and the turn limit, as editing an Agent does. A Parent Agent's selection and a Restore Point's recorded configuration now pass those settings to its Bots.
+
 ### 2026-11-09 — AF-425 — Discord on Bots
 
 - Delivered: a Bot can connect its own Discord bot. Its token and access lists reach its `.env`, and its mention setting is written to `platforms.discord.extra`, which Hermes reads before the process environment.
