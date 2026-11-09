@@ -57,13 +57,17 @@ function json(route: Route, status: number, body: unknown) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
+/** One page of the Tasks matching a list request, read from `tasks` as it is now. */
 function filtered(tasks: Json[], url: URL) {
   const status = url.searchParams.get("status");
   const agentId = url.searchParams.get("agent_id");
-  const items = tasks.filter(
+  const page = Number(url.searchParams.get("page") ?? 1);
+  const pageSize = Number(url.searchParams.get("page_size") ?? 20);
+  const matching = tasks.filter(
     (task) => (!status || task.status === status) && (!agentId || task.agent_id === agentId),
   );
-  return { page: 1, page_size: 20, total: items.length, items };
+  const items = matching.slice((page - 1) * pageSize, page * pageSize);
+  return { page, page_size: pageSize, total: matching.length, items };
 }
 
 export class TaskDataSupport {
@@ -74,12 +78,26 @@ export class TaskDataSupport {
     tasks = [mockTask()],
     detail = mockTaskDetail(),
     fileBody = "invoice,amount\n1,10\n",
-  }: { tasks?: Json[]; detail?: Json; fileBody?: string } = {}): Promise<TaskMock> {
+    failingPages = [],
+    link,
+  }: {
+    /** Read on every request, so a test can change it while the page is open. */
+    tasks?: Json[];
+    detail?: Json;
+    fileBody?: string;
+    /** List pages that answer with a server error. */
+    failingPages?: number[];
+    /** A refusal for the download link, in place of a signed link. */
+    link?: { status: number; detail: string };
+  } = {}): Promise<TaskMock> {
     const listRequests: URL[] = [];
 
     await this.page.route("**/api/v1/organizations/*/tasks**", async (route) => {
       const url = new URL(route.request().url());
       listRequests.push(url);
+      if (failingPages.includes(Number(url.searchParams.get("page") ?? 1))) {
+        return json(route, 500, { detail: "Server error" });
+      }
       return json(route, 200, filtered(tasks, url));
     });
 
@@ -88,10 +106,14 @@ export class TaskDataSupport {
       const path = url.pathname.replace(/.*\/agents\/[^/]+\/tasks/, "");
       if (path === "") {
         listRequests.push(url);
+        if (failingPages.includes(Number(url.searchParams.get("page") ?? 1))) {
+          return json(route, 500, { detail: "Server error" });
+        }
         const agentId = url.pathname.match(/\/agents\/([^/]+)\/tasks/)![1];
         return json(route, 200, filtered(tasks.filter((task) => task.agent_id === agentId), url));
       }
       if (/^\/[^/]+\/files\/[^/]+\/download-link$/.test(path)) {
+        if (link) return json(route, link.status, { detail: link.detail });
         const agentId = url.pathname.match(/\/agents\/([^/]+)\/tasks/)![1];
         return json(route, 200, {
           artifact: {

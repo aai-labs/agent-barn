@@ -30,5 +30,5 @@ export function useAllAgents() {
       }
     },
   });
-  return { agents: query.data ?? [], isLoading: query.isPending };
+  return { agents: query.data ?? [], isLoading: query.isPending, error: query.error, refetch: query.refetch };
 }

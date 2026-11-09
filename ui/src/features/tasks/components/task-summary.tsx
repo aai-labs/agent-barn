@@ -24,6 +24,7 @@ export function TaskSummaryMeta({ task, agentName }: { task: AgentTaskSummary; a
         style={{ color: "var(--ink-3)" }}
       >
         {agentName && <span className="font-medium">{agentName}</span>}
+        {task.origin === "automatic" && <span>Recorded automatically</span>}
         <time dateTime={task.updatedAt} title={formatDate(task.updatedAt)}>
           {formatRelativeTime(task.updatedAt)}
         </time>

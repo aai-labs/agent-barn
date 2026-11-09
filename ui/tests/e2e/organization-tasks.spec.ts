@@ -164,3 +164,28 @@ test("Agents past the first page of the Agents list are named and offered as a f
   await page.getByRole("combobox", { name: "Agent" }).click();
   await expect(page.getByRole("option", { name: "Rex" })).toBeVisible();
 });
+
+test("Agents that could not be loaded are reported with a retry", async ({ page }) => {
+  const data = new DataSupport(page);
+  await data.auth.interceptRefreshRequest();
+  await data.users.interceptGetUserContextRequest();
+  await data.users.interceptGetOrganizationsRequest();
+  await data.agents.interceptGetAgentsRequest({ status: 500 });
+  await data.tasks.intercept();
+  const tasksPage = new TasksPage(page);
+
+  await tasksPage.gotoOrganization();
+
+  await expect(page.getByText("Could not load your Agents")).toBeVisible();
+  await expect(page.getByRole("button", { name: /retry|try again/i }).first()).toBeVisible();
+  await expect(tasksPage.cards()).toHaveCount(1);
+});
+
+test("a malformed Agent filter in the link is ignored", async ({ page }) => {
+  const { mock, tasksPage } = await open(page);
+
+  await page.goto(`/dashboard/${TEST_ORG_ID}/tasks?agent=abc`);
+
+  await expect(tasksPage.cards()).toHaveCount(2);
+  expect(mock.listRequests.some((url) => url.searchParams.get("agent_id") === "abc")).toBe(false);
+});

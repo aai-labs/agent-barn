@@ -22,7 +22,10 @@ function TaskBoardColumn({
   agentName?: (agentId: string) => string | undefined;
   onOpen: (task: AgentTaskSummary) => void;
 }) {
-  const { tasks, total, isLoading, error, refetch, hasMore, loadMore, isLoadingMore } = useTasks(scope, status);
+  const { tasks, total, isLoading, error, refetch, hasMore, loadMore, isLoadingMore, loadMoreError } = useTasks(
+    scope,
+    status,
+  );
   const label = TASK_STATUS_LABEL[status];
 
   return (
@@ -67,6 +70,11 @@ function TaskBoardColumn({
             </li>
           ))}
         </ul>
+      )}
+      {loadMoreError && (
+        <div className="mt-2 p-1">
+          <AppErrorState error={loadMoreError} title="Could not load more tasks" onRetry={() => void loadMore()} />
+        </div>
       )}
       {hasMore && (
         <button

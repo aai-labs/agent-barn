@@ -22,7 +22,10 @@ export function TaskList({
   agentName?: (agentId: string) => string | undefined;
   onOpen: (task: AgentTaskSummary) => void;
 }) {
-  const { tasks, isLoading, error, refetch, hasMore, loadMore, isLoadingMore } = useTasks(scope, status);
+  const { tasks, isLoading, error, refetch, hasMore, loadMore, isLoadingMore, loadMoreError } = useTasks(
+    scope,
+    status,
+  );
 
   return (
     <section className="af-card overflow-hidden" aria-label="Tasks">
@@ -63,6 +66,11 @@ export function TaskList({
             </li>
           ))}
         </ul>
+      )}
+      {loadMoreError && (
+        <div className="border-t p-5" style={{ borderColor: "var(--line)" }}>
+          <AppErrorState error={loadMoreError} title="Could not load more tasks" onRetry={() => void loadMore()} />
+        </div>
       )}
       {hasMore && (
         <footer className="border-t px-5 py-3" style={{ borderColor: "var(--line)" }}>

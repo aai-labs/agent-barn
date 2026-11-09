@@ -2,13 +2,14 @@
 
 import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 
+import { AppErrorState } from "@/components/app-error-state";
 import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
 import { canAgent } from "@/features/agents/utils";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import { useOpenTask } from "../hooks/use-open-task";
 import type { AgentTaskStatus } from "../schemas";
-import { TASK_STATUSES, TASK_STATUS_OPTIONS, TASK_VIEWS, type TaskView } from "../utils";
+import { isUuid, TASK_STATUSES, TASK_STATUS_OPTIONS, TASK_VIEWS, type TaskView } from "../utils";
 import { TaskBoard } from "./task-board";
 import { TaskDetailDialog } from "./task-detail-dialog";
 import { TaskFilterSelect } from "./task-filter-select";
@@ -29,10 +30,11 @@ export function OrganizationTasksPage() {
   );
   const [openTask, setOpenTask] = useOpenTask();
   const { selectedOrganization } = useOrganizationContext();
-  const { agents } = useAllAgents();
+  const { agents, error: agentsError, refetch: refetchAgents } = useAllAgents();
   const taskAgents = agents.filter((agent) => canAgent(agent, "task.read"));
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
-  const scope = { kind: "organization", agentId: filters.agent } as const;
+  const agentFilter = isUuid(filters.agent) ? filters.agent : null;
+  const scope = { kind: "organization", agentId: agentFilter } as const;
   const agentName = (agentId: string) => agentNames.get(agentId);
   const open = (task: { agentId: string; id: string }) => setOpenTask({ agentId: task.agentId, taskId: task.id });
 
@@ -51,7 +53,7 @@ export function OrganizationTasksPage() {
           <TaskFilterSelect
             label="Agent"
             allLabel="All agents"
-            value={filters.agent}
+            value={agentFilter}
             options={taskAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
             onChange={(agent) => void setFilters({ agent })}
           />
@@ -72,10 +74,20 @@ export function OrganizationTasksPage() {
           />
         </div>
       </div>
+      {/* Tasks still load without their Agents' names; say so rather than show them unnamed. */}
+      {agentsError && (
+        <div className="mb-4">
+          <AppErrorState
+            error={agentsError}
+            title="Could not load your Agents"
+            onRetry={() => void refetchAgents()}
+          />
+        </div>
+      )}
       {filters.view === "board" ? (
         <TaskBoard
           scope={scope}
-          emptyMessage={filters.agent ? "This Agent hasn't recorded any tasks yet." : EMPTY}
+          emptyMessage={agentFilter ? "This Agent hasn't recorded any tasks yet." : EMPTY}
           columnHeading="h2"
           agentName={agentName}
           onOpen={open}
@@ -85,7 +97,7 @@ export function OrganizationTasksPage() {
           scope={scope}
           status={filters.status}
           agentName={agentName}
-          emptyMessage={filters.agent || filters.status ? "No tasks match these filters." : EMPTY}
+          emptyMessage={agentFilter || filters.status ? "No tasks match these filters." : EMPTY}
           onOpen={open}
         />
       )}

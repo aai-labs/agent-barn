@@ -2,12 +2,16 @@ import { z } from "zod";
 
 export const AgentTaskStatusSchema = z.enum(["open", "in_progress", "done", "failed"]);
 
+/** `automatic` when the Agent's runtime recorded work the Agent left unrecorded. */
+export const AgentTaskOriginSchema = z.enum(["agent", "automatic"]);
+
 export const AgentTaskSchema = z.object({
   id: z.string().uuid(),
   agentId: z.string().uuid(),
   title: z.string(),
   description: z.string().nullable(),
   status: AgentTaskStatusSchema,
+  origin: AgentTaskOriginSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
 });

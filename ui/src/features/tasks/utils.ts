@@ -43,9 +43,18 @@ export function taskListParams(page: number, filter: { agentId?: string | null; 
 /** The open Task, kept in the URL as `<agentId>.<taskId>` so it can be linked to and Back closes it. */
 export type OpenTask = { agentId: string; taskId: string };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Ids from the URL, which anyone can edit: anything that isn't one is ignored rather than sent. */
+export function isUuid(value: string | null): value is string {
+  return value !== null && UUID.test(value);
+}
+
 export function parseOpenTask(value: string | null): OpenTask | null {
   const [agentId, taskId, ...rest] = value?.split(".") ?? [];
-  return agentId && taskId && rest.length === 0 ? { agentId, taskId } : null;
+  return isUuid(agentId ?? null) && isUuid(taskId ?? null) && rest.length === 0
+    ? { agentId: agentId!, taskId: taskId! }
+    : null;
 }
 
 export function serializeOpenTask(task: OpenTask | null): string | null {
