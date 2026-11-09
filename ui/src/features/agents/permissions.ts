@@ -11,6 +11,7 @@ const PERMISSION_PHRASE: [AgentPermissionKey, string][] = [
   ["agent.access.manage", "Manage access"],
   ["activity.read", "See activity"],
   ["cost.read", "See costs"],
+  ["task.read", "See tasks"],
 ];
 
 // Not exposed by the backend catalogue (AgentAccessRoleRead has no "sensitive" flag),

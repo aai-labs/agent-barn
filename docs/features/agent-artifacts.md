@@ -237,7 +237,9 @@ Publication pins an exact artifact ID/checksum to its active run. Completion
 records published files in the step checkpoint, so later sessions receive immutable
 references alongside earlier text summaries. Workspace paths and signed URLs are
 never reference identities. Trusted services can acquire checksum-validated pins
-through `artifacts.references.pin` and release them transactionally; this is the
+through `artifacts.references.pin` and release them transactionally. Agent Tasks pin by
+id alone through `pin_published`, which reads the checksum from the locked row, so
+those pins hold a `READY` Artifact rather than validate a checksum the caller recorded; this is the
 integration seam for future reviews, not an approval implementation. Current workflow
 checkpoints are protected by their active run pin. Separate checkpoint/review owners
 will release their own pins; the run-repair scan never interprets their owner UUIDs
@@ -303,8 +305,8 @@ result views display their checkpoint files once. Each click requests a fresh li
 access errors conceal protected responses and display a retryable failure.
 People with current `agent.update` access can delete from Agent Artifacts using the
 trash action and the shared destructive confirmation dialog. The dialog identifies
-the file, keeps failures visible for retry, and explains active-run/review pin
-conflicts. Successful deletion refreshes Agent and run/step file lists; read-only
+the file, keeps failures visible for retry, and explains that files used by an
+active run, a review or a task cannot be deleted. Successful deletion refreshes Agent and run/step file lists; read-only
 users see no delete control. Storage cleanup follows the existing
 [deletion lifecycle](#retention-deletion-and-recovery).
 
@@ -339,6 +341,11 @@ in the same transaction and starts 30 days from final active reference release.
 Paused/blocked runs remain pinned. Cancellation retains published outputs and
 releases pins on settlement. This is independent of the workflow's 90-day
 content-bearing text/history retention and future approval lifetimes.
+
+A Task File pins its artifact with kind `task`, owned by the Task File's id, for as
+long as the Task has it ([`agent-tasks.md`](agent-tasks.md#task-files)). Deleting
+the Agent removes its Tasks without releasing those pins; the purge removes a
+deleted Agent's files regardless.
 
 Deletion refuses an actively pinned artifact. Authorized deletion conceals it by
 marking DELETING; actual S3 deletion is asynchronous. Agent soft deletion
