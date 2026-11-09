@@ -4,12 +4,13 @@ Proves the property the whole epic exists for: the agent reaches GitHub with the
 credential applied, and that credential is never in the agent's possession.
 """
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import status
-from hamcrest import assert_that, equal_to, is_, is_not
+from hamcrest import assert_that, contains_string, equal_to, is_, is_not
 from injector import Module, provider, singleton
 from starlette.testclient import TestClient
 
@@ -365,7 +366,7 @@ def test_gitlab_keeps_encoded_paths_and_stays_on_public_addresses():
         "%2e/user",
     ],
 )
-def test_gitlab_refuses_paths_that_climb_out_of_the_api(path):
+def test_gitlab_refuses_paths_that_climb_out_of_the_api(path, caplog: pytest.LogCaptureFixture):
     with given(_ALL_AAI_GIVEN) as context:
         _provider_secret(
             context,
@@ -375,11 +376,15 @@ def test_gitlab_refuses_paths_that_climb_out_of_the_api(path):
         token = _token_for(context, SecretProvider.GITLAB)
 
         with when("the agent sends a path with encoded dot segments"):
-            response = context.gateway_client.get(f"/gateway/v1/p/gitlab/{path}", headers=_auth(token))
+            with caplog.at_level(logging.WARNING, logger="api.domains.credential_gateway.service"):
+                response = context.gateway_client.get(f"/gateway/v1/p/gitlab/{path}", headers=_auth(token))
 
-        with then("the gateway refuses and the token never leaves"):
+        with then("the gateway refuses, the token never leaves, and the attempt is logged against the agent"):
             assert_that(response.status_code, is_not(equal_to(status.HTTP_200_OK)))
             assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
+            assert_that(caplog.text, contains_string("dot segment"))
+            assert_that(caplog.text, contains_string(str(context.agent.id)))
+            assert_that(caplog.text, is_not(contains_string("glpat-real")))
 
 
 def test_existing_providers_keep_their_decoded_paths_and_open_egress():

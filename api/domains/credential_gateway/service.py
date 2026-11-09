@@ -3,6 +3,7 @@
 import base64
 import binascii
 import datetime
+import logging
 import threading
 from dataclasses import dataclass, field
 from urllib.parse import unquote, urlsplit
@@ -48,6 +49,8 @@ from api.domains.integrations.plugins.base import (
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.shared_credentials.repository import SharedCredentialRepository
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayTokenRejected(Exception):
@@ -242,6 +245,13 @@ class CredentialGatewayService:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
         if plugin.preserve_encoded_path and _has_dot_segment(request.path):
+            # The route answers with the same opaque refusal as a bad token, so this is the only record.
+            logger.warning(
+                "Gateway refused a %s path with a dot segment from agent %s in organization %s",
+                plugin.key,
+                resolution.agent_id,
+                resolution.organization_id,
+            )
             raise GatewayForwardRefused(f"{plugin.key} path has a dot segment")
         path = (plugin.preserve_encoded_path and request.encoded_path) or request.path
         try:

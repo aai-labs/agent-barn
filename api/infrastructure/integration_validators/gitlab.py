@@ -9,6 +9,7 @@ from api.infrastructure.public_http import NonPublicDestination, pin_to_public_a
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 10
+_NOT_GITLAB = "The URL did not respond like a GitLab API"
 
 
 def _get(content: GitlabContent, path: str) -> httpx.Response:
@@ -40,6 +41,9 @@ def validate_gitlab(content: GitlabContent) -> IntegrationValidationResult:
         return IntegrationValidationResult(valid=False, error="Invalid token")
     if resp.status_code == 403:
         return IntegrationValidationResult(valid=False, error="The token needs the read_api or api scope")
+    # A host that isn't GitLab, or a URL pointing at the wrong path, usually has no /api/v4/user.
+    if resp.status_code == 404:
+        return IntegrationValidationResult(valid=False, error=_NOT_GITLAB)
     if resp.status_code != 200:
         return IntegrationValidationResult(valid=False, error=f"GitLab returned unexpected status {resp.status_code}")
     try:
@@ -48,7 +52,7 @@ def validate_gitlab(content: GitlabContent) -> IntegrationValidationResult:
         body = None
     # A reverse proxy or the wrong host can answer 200 with HTML.
     if not isinstance(body, dict) or "username" not in body:
-        return IntegrationValidationResult(valid=False, error="The URL did not respond like a GitLab API")
+        return IntegrationValidationResult(valid=False, error=_NOT_GITLAB)
     if scope_check is not None and scope_check.status_code == 403:
         return IntegrationValidationResult(valid=False, error="The token needs the read_api or api scope")
     if scope_check is not None and scope_check.status_code != 200:

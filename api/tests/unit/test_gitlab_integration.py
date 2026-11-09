@@ -179,6 +179,14 @@ def test_a_site_that_is_not_gitlab_fails_rather_than_passing():
     assert_that(result.valid, is_(False))
 
 
+def test_a_site_without_the_gitlab_api_is_called_out_as_not_gitlab():
+    _, http = _gitlab_answers(httpx.Response(404, text="Not Found"))
+    with _resolves_to("8.8.8.8"), http:
+        result = validate_gitlab(_SELF_HOSTED)
+    assert_that(result.valid, is_(False))
+    assert_that(result.error or "", contains_string("did not respond like a GitLab API"))
+
+
 def test_network_failures_do_not_reveal_the_cause():
     # The URL is user-supplied, so the error must not become a port-scanning oracle.
     client, http = _gitlab_answers(httpx.Response(200))
