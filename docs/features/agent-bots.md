@@ -47,6 +47,7 @@ Each Bot keeps its own SOUL and instructions, sessions, built-in memory, model a
 ## Operations
 
 - Logs, diagnostics, resource usage, Restore Points and File Sync belong to the Parent Agent and cover every Bot. Logs cannot be split per Bot.
+- A Parent Agent's Restore Point captures every Bot's sessions, memory and scheduled jobs, but not its secrets or generated files. A Bot's database row isn't rolled back: a Bot deleted after the capture stays deleted and its restored files are removed at the next start, and a Bot created after the capture starts with no history.
 - A Bot's tool calls, activity, costs, conversations and memory are its own.
 - Health shows the Parent Agent's pod, and for each Bot whether the pod is serving it.
 

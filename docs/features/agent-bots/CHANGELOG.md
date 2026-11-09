@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: Restore Point exclusions with globs.
+- Next: Bot health from the list of Bots the pod is serving.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Restore Point exclusions for Bots
+
+- Delivered: a Parent Agent's capture leaves out each Bot's `.env`, aai-cli store, generated instructions, config, plugins and skills, and keeps its sessions, memory and scheduled jobs. Leftover `.env_*` temp files are left out too.
+- Changed: the runtime digest moves.
+- Follow-up: Bot health.
 
 ### 2026-11-09 — AF-425 — Connection and settings rules
 
