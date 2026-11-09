@@ -135,7 +135,15 @@ class AgentTaskService:
         stored = self.repository.get_file(agent_id, task_id, file_id, scope)
         if stored is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File {file_id} not found")
-        return self.artifacts.link(stored.artifact_id, agent_id, scope)
+        try:
+            return self.artifacts.link(stored.artifact_id, agent_id, scope)
+        except HTTPException as error:
+            # The File and its Agent were found above, so a missing Artifact is one that expired.
+            if error.status_code == status.HTTP_404_NOT_FOUND:
+                raise HTTPException(
+                    status_code=status.HTTP_410_GONE, detail="This file has expired and can no longer be downloaded."
+                ) from None
+            raise
 
     def list_agent_tasks(
         self,

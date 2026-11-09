@@ -46,6 +46,9 @@ class AgentTask(BaseModel, table=True):
         sa.UniqueConstraint("id", "organization_id", name="uq_agent_task_id_organization"),
         sa.Index("ix_agent_task_organization_agent_created", "organization_id", "agent_id", "created_at"),
         sa.Index("ix_agent_task_organization_status", "organization_id", "status"),
+        # Lists put the most recently changed Task first, for one Agent or the Organization.
+        sa.Index("ix_agent_task_organization_agent_updated", "organization_id", "agent_id", "updated_at"),
+        sa.Index("ix_agent_task_organization_updated", "organization_id", "updated_at"),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
