@@ -52,7 +52,7 @@ The store and its service live in `../../api/domains/agent_tasks/`. Agents write
 - Files are kept while their Task is `open` or `in_progress`. When the Task moves to `done` or `failed`, the same transaction releases its Files' pins, and each Artifact expires a full Artifact retention later (`ARTIFACT_RETENTION_DAYS`, 30 days by default). A File attached to a Task that is already finished is released at once, so it gets the same retention.
 - Reopening a Task does not pin its Files again; they keep the expiry they were given. Files attached after reopening are pinned as usual.
 - An Agent keeps at most `MAX_PINNED_FILES_PER_AGENT` (500, in `service.py`) pinned Task Files. Each attach past that releases the Agent's oldest pins, which then expire like any released File. Attaching never fails because of this limit. Concurrent attaches do not serialise on the count, so it can be passed briefly by as many attaches as run at once.
-- A File whose Artifact has expired stays on its Task; its download link is refused like any expired Artifact's.
+- A File whose Artifact has expired stays on its Task; `file_link` answers 410 ("This file has expired and can no longer be downloaded.") rather than the Artifact's 404, since the File and its Agent were found.
 
 ## Deletion
 
