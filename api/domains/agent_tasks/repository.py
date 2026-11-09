@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from injector import inject, singleton
@@ -29,14 +30,23 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 # Lists show a failed Task's latest Note in two lines; the Task's own page has all of it.
 LATEST_NOTE_PREVIEW_CHARS = 300
 
+# A finished Task's Files are released: they expire a full Artifact retention later.
+_FINISHED = frozenset({AgentTaskStatus.DONE, AgentTaskStatus.FAILED})
+
+
+def _touch(session: Session, task: AgentTask) -> None:
+    """A Note or File is a change to its Task, so the Task's lists order it by it."""
+    task.updated_at = datetime.now(UTC)
+    session.add(task)
+
 
 def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) -> bool:
     """Hold the Agent row against a concurrent soft delete for the rest of the transaction.
 
     Agent deletion takes the row FOR UPDATE, so a write waiting here sees the deletion
     and stops, rather than adding a Task after the deletion removed the Agent's Tasks.
-    FOR KEY SHARE is the weakest lock that conflicts with FOR UPDATE, so a long upload
-    does not hold up ordinary updates to the Agent.
+    FOR KEY SHARE is the weakest lock that conflicts with FOR UPDATE, so Task writes
+    do not hold up ordinary updates to the Agent, nor each other.
     """
     query = (
         select(Agent.id)
@@ -75,8 +85,14 @@ class AgentTaskRepository:
             return task
 
     def update_status(
-        self, organization_id: UUID, agent_id: UUID, task_id: UUID, status: AgentTaskStatus
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        task_id: UUID,
+        status: AgentTaskStatus,
+        release: Callable[[Session, UUID], None],
     ) -> AgentTask | None:
+        """Change a Task's status; finishing it releases its Files' pins in the same transaction."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
@@ -85,6 +101,9 @@ class AgentTaskRepository:
                 return None
             task.status = status
             session.add(task)
+            if status in _FINISHED:
+                for file_id in session.exec(select(AgentTaskFile.id).where(col(AgentTaskFile.task_id) == task_id)):
+                    release(session, file_id)
             session.commit()
             return task
 
@@ -92,10 +111,12 @@ class AgentTaskRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
                 return None
             note = AgentTaskNote(task_id=task_id, body=body)
             session.add(note)
+            _touch(session, task)
             session.commit()
             return note
 
@@ -106,16 +127,21 @@ class AgentTaskRepository:
         task_id: UUID,
         artifact_id: UUID,
         pin: Callable[[Session, UUID], ArtifactRead],
+        release: Callable[[Session, UUID], None],
+        keep_newest: Callable[[Session], None],
     ) -> AgentTaskFile | None:
         """Attach an Artifact to a Task, pinning it in the same transaction.
 
         `pin` takes the Artifact's row lock, so a second attach of the same Artifact
         waits here and then finds the first one's File instead of adding another.
+        A finished Task's new File is released at once, so it gets the usual retention;
+        otherwise `keep_newest` releases the Agent's oldest pins past its limit.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
                 return None
             file_id = uuid7()
             artifact = pin(session, file_id)
@@ -136,6 +162,11 @@ class AgentTaskRepository:
                 size_bytes=artifact.size,
             )
             session.add(stored)
+            _touch(session, task)
+            if task.status in _FINISHED:
+                release(session, file_id)
+            else:
+                keep_newest(session)
             session.commit()
             return stored
 
@@ -151,7 +182,8 @@ class AgentTaskRepository:
         with Session(self.delegate.engine) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return False
-            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
                 return False
             stored = session.exec(
                 select(AgentTaskFile).where(
@@ -164,6 +196,7 @@ class AgentTaskRepository:
                 return False
             release(session, stored.id)
             session.delete(stored)
+            _touch(session, task)
             session.commit()
             return True
 
@@ -228,13 +261,15 @@ class AgentTaskRepository:
         task_filter: AgentTaskFilter,
         pagination: Pagination,
         authorization_scope: AuthorizationScope,
+        visible_scope: AuthorizationScope | None = None,
         recently_changed_first: bool = False,
     ) -> PaginatedItems[AgentTaskRead]:
-        """Tasks newest first, or most recently changed first."""
+        """Tasks newest or most recently changed first; with `visible_scope`, only on Agents it also sees."""
         order = col(AgentTask.updated_at) if recently_changed_first else col(AgentTask.created_at)
         where = [
             col(AgentTask.organization_id) == authorization_scope.organization_id,
             *agent_scope_predicates(authorization_scope),
+            *(agent_scope_predicates(visible_scope) if visible_scope is not None else ()),
         ]
         if task_filter.agent_id is not None:
             where.append(col(AgentTask.agent_id) == task_filter.agent_id)

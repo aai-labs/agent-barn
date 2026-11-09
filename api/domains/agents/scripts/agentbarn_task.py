@@ -7,6 +7,7 @@ import mimetypes
 import os
 import stat
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -264,41 +265,60 @@ def main() -> int:
         ]
     # The bytes go to Artifact storage first; the Task then records the Artifact by id.
     artifact_headers = {"Authorization": "Bearer " + artifact_key}
-    try:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-        metadata = {
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+    def artifact_call(path: str, method: str, data: bytes, content_type_header: str) -> dict:
+        request = urllib.request.Request(
+            f"{artifact_url}{path}",
+            data=data,
+            headers={**artifact_headers, "Content-Type": content_type_header},
+            method=method,
+        )
+        with opener.open(request, timeout=120) as response:
+            return json.loads(response.read(1_000_000))
+
+    metadata = json.dumps(
+        {
             "filename": name,
             "content_type": content_type,
             "size": len(content),
             "checksum": hashlib.sha256(content).hexdigest(),
         }
-        create_request = urllib.request.Request(
-            f"{artifact_url}/artifacts",
-            data=json.dumps(metadata).encode(),
-            headers={**artifact_headers, "Content-Type": "application/json"},
-            method="POST",
-        )
-        with opener.open(create_request, timeout=120) as response:
-            artifact_id = json.loads(response.read(1_000_000))["id"]
-        content_request = urllib.request.Request(
-            f"{artifact_url}/artifacts/{quote(str(artifact_id), safe='')}/content",
-            data=content,
-            headers={**artifact_headers, "Content-Type": "application/octet-stream"},
-            method="PUT",
-        )
-        with opener.open(content_request, timeout=120) as response:
-            published = json.loads(response.read(1_000_000))
+    ).encode()
+    # As the Artifact command does: storage that already holds these bytes answers READY, so
+    # nothing is re-sent, and a create or upload another publisher holds is retried for a while.
+    deadline = time.monotonic() + 30
+    try:
+        while True:
+            artifact = None
+            try:
+                artifact = artifact_call("/artifacts", "POST", metadata, "application/json")
+                if artifact.get("state") != "READY":
+                    artifact = artifact_call(
+                        f"/artifacts/{quote(str(artifact['id']), safe='')}/content",
+                        "PUT",
+                        content,
+                        "application/octet-stream",
+                    )
+                break
+            except urllib.error.HTTPError as error:
+                retryable = error.code == 409 or (artifact is not None and error.code in {404, 503})
+                if not retryable or time.monotonic() >= deadline:
+                    raise
+                time.sleep(min(1, max(0, deadline - time.monotonic())))
     except urllib.error.HTTPError as error:
         return fail(publish_refusal(error))
     except (OSError, ValueError, KeyError, TypeError):
         return fail("The file was not stored, so it was not attached. Try again shortly.")
-    if not isinstance(published, dict) or published.get("state") != "READY":
+    if not isinstance(artifact, dict) or artifact.get("state") != "READY":
         return fail("The file was not stored, so it was not attached. Try again shortly.")
-    ok, attached = fetch(json_request(f"{task_url}/files", "POST", {"artifact_id": str(artifact_id)}))
+    ok, attached = fetch(json_request(f"{task_url}/files", "POST", {"artifact_id": str(artifact["id"])}))
     if not ok:
         return fail(attached)
     # Removed only once the new file is in, so a refused upload leaves the earlier one in place.
-    for file_id in earlier:
+    # Attaching unchanged bytes returns the File already there, which must not be removed.
+    attached_id = attached.get("id") if isinstance(attached, dict) else None
+    for file_id in (file_id for file_id in earlier if file_id != attached_id):
         ok, refused = fetch(json_request(f"{task_url}/files/{quote(file_id, safe='')}", "DELETE"))
         if not ok:
             return fail(f"The file was attached but its earlier copy was not removed: {refused}")

@@ -46,7 +46,8 @@ _COMMAND_TIMEOUT_SECONDS = 150
 _SESSIONS_KEPT = 500
 # Task tool actions and command subcommands that change a Task; reading one is not recording work.
 _WRITE_ACTIONS = {"create", "status", "note", "attach", "remove_file"}
-_COMMAND_WRITE = re.compile(r"agentbarn-task\s+(?:create|status|note|attach|remove-file)\b")
+# The command run as a command (at the start, or after ; & | ( or a newline), not merely mentioned.
+_COMMAND_WRITE = re.compile(r"(?:^|[;&|(\n])\s*agentbarn-task\s+(?:create|status|note|attach|remove-file)\b")
 _REDACTED = "[redacted]"
 # Credentials a user may paste into a request. The automatic Task's title and description
 # come from the request, and people across the Organization can read them.
@@ -54,10 +55,11 @@ _SECRET_PATTERNS = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.DOTALL), _REDACTED),
     (re.compile(r"(://[^/\s:@]+:)[^/\s@]+@"), rf"\1{_REDACTED}@"),
     (re.compile(r"(?i)(\bbearer\s+)\S+"), rf"\1{_REDACTED}"),
+    # The keyword may sit inside a longer name (DB_PASSWORD=, GITHUB_TOKEN=) or a quoted JSON key.
     (
         re.compile(
-            r"(?i)(\b(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)"
-            r"\b\s*(?:[:=]|\bis\b)\s*)\S+"
+            r"(?i)(\w*(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)"
+            r"\w*[\"']?\s*(?:[:=]|\bis\b)\s*[\"']?)[^\s\"',}]+"
         ),
         rf"\1{_REDACTED}",
     ),
@@ -67,6 +69,12 @@ _SECRET_PATTERNS = [
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), _REDACTED),
     (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), _REDACTED),
 ]
+# Files that hold credentials are never attached automatically: anyone who may read the Agent's
+# Tasks could download them. The Agent can still attach one on purpose.
+_CREDENTIAL_FILE = re.compile(
+    r"(?i)^(?:\.env(?:\..*)?|\.netrc|\.npmrc|\.pgpass|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?"
+    r"|.*\.(?:pem|key|p12|pfx)|.*credentials.*\.json|service[-_]account.*\.json)$"
+)
 _OPAQUE_WORD = re.compile(r"\b[A-Za-z0-9_-]{32,}\b")
 # A short message made only of these words is small talk ("Thanks!", "That's all for now"): it gets
 # no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
@@ -306,6 +314,39 @@ def _handle_tool(args: dict, **_) -> str:
         return json.dumps({"result": output})
 
 
+def _result(result) -> dict:
+    """A tool's result as a dict; Hermes passes a JSON string."""
+    try:
+        answer = json.loads(result) if isinstance(result, str) else result
+    except ValueError:
+        return {}
+    return answer if isinstance(answer, dict) else {}
+
+
+def _failed(result) -> bool:
+    """Whether a tool call failed: an error, a patch that did not apply, or a command that exited non-zero."""
+    answer = _result(result)
+    exit_code = answer.get("exit_code")
+    return (
+        bool(answer.get("error")) or answer.get("success") is False or (isinstance(exit_code, int) and exit_code != 0)
+    )
+
+
+def _written_paths(args, result) -> list[str]:
+    """The files a successful write or patch produced. A patch made from a patch body names its
+    files only in the body, so the paths Hermes reports back are used when it gives them."""
+    answer = _result(result)
+    reported: list[str] = []
+    for key in ("files_created", "files_modified"):
+        value = answer.get(key)
+        if isinstance(value, list):
+            reported += [path for path in value if isinstance(path, str) and path]
+    if reported:
+        return reported
+    path = args.get("path") if isinstance(args, dict) else None
+    return [path] if isinstance(path, str) and path else []
+
+
 def _touches_tasks(tool_name: str, args) -> bool:
     if tool_name == _TOOL:
         return True
@@ -318,7 +359,8 @@ def _records_task(tool_name: str, args, result) -> bool:
     if not isinstance(args, dict):
         return False
     if tool_name != _TOOL:
-        return isinstance(args.get("command"), str) and bool(_COMMAND_WRITE.search(args["command"]))
+        command = args.get("command")
+        return isinstance(command, str) and bool(_COMMAND_WRITE.search(command)) and not _failed(result)
     if args.get("action") not in _WRITE_ACTIONS:
         return False
     try:
@@ -389,12 +431,10 @@ def _track(
     else:
         if tool_call_id:
             turn["work"].add(tool_call_id)
-        if tool_name in _FILE_TOOLS:
+        if tool_name in _FILE_TOOLS and not _failed(result):
             turn["wrote_files"] = True
-            path = args.get("path") if isinstance(args, dict) else None
-            if isinstance(path, str) and path:
-                full = os.path.normpath(os.path.join(_workspace(), path))
-                turn["written"][os.path.basename(full)] = full
+            for path in _written_paths(args, result):
+                turn["written"].add(os.path.normpath(os.path.join(_workspace(), path)))
     return turn
 
 
@@ -402,7 +442,7 @@ def _new_turn() -> dict:
     return {
         "work": set(),
         "wrote_files": False,
-        "written": {},
+        "written": set(),
         "recorded": False,
         "task_ids": set(),
         # task_id -> the last status the Agent set this turn
@@ -417,8 +457,10 @@ def _unrecorded_work(turn: dict | None) -> bool:
     return bool(turn) and not turn["recorded"] and (turn["wrote_files"] or len(turn["work"]) >= _WORK_THRESHOLD)
 
 
-def _unattached(turn: dict) -> dict[str, str]:
-    return {name: path for name, path in turn["written"].items() if name not in turn["attached"]}
+def _unattached(turn: dict) -> list[tuple[str, str]]:
+    """The turn's written files, by name and path, that it has not attached and may attach."""
+    written = sorted((os.path.basename(path), path) for path in turn["written"])
+    return [(name, path) for name, path in written if name not in turn["attached"] and not _CREDENTIAL_FILE.match(name)]
 
 
 def _attach_reminder(names: list[str]) -> str:
@@ -432,16 +474,21 @@ def _attach_automatically(turn: dict) -> list[str]:
     """Attach the turn's files to the one Task it touched. Returns the names it could not attach."""
     unattached = _unattached(turn)
     if len(turn["task_ids"]) != 1:
-        return sorted(unattached)
+        return [name for name, _ in unattached]
     (task_id,) = turn["task_ids"]
     limit = os.environ.get("ARTIFACT_MAX_BYTES", "")
+    names = [name for name, _ in unattached]
     failed = []
-    for name, path in sorted(unattached.items()):
+    for name, path in unattached:
         if not os.path.isfile(path):
             continue
         if limit.isdigit() and os.path.getsize(path) > int(limit):
+            failed.append(name)
             continue
-        ok, _ = _run(["attach", task_id, path, "--replace"])
+        # A newer copy replaces the Task's file of the same name, unless this turn wrote two
+        # files of that name in different folders: then both are kept.
+        replace = ["--replace"] if names.count(name) == 1 else []
+        ok, _ = _run(["attach", task_id, path, *replace])
         if not ok:
             failed.append(name)
     return failed
@@ -475,7 +522,7 @@ def _record_automatically(session_id: str, turn: dict) -> list[str]:
     except (ValueError, AttributeError):
         task_id = None
     if not isinstance(task_id, str):
-        return sorted(_unattached(turn))
+        return [name for name, _ in _unattached(turn)]
     turn["task_ids"] = {task_id}
     return _attach_automatically(turn)
 

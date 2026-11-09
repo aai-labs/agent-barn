@@ -132,6 +132,10 @@ Choose commands for the touched area. Full Kubernetes or browser suites are requ
 
 ### When CI runs
 
+The Hermes path filter explicitly includes `hermes_slack_access_driver.py`.
+Changes to that fixture alone select the Hermes image workflow and run the
+real-adapter admission, thread-context, and group-DM button contracts.
+
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
 doing so ran every commit on a PR branch twice. A branch without a pull request
@@ -327,6 +331,10 @@ hooks directly. Shared setup lives in
   `../../helm/monitoring/tests/run.sh`) scrapes the real script with basic auth on, and
   the queries are read back through the API's own client. It needs Docker to reach the
   host through `host.docker.internal`.
+- Temporary fixture directories bind-mounted into non-root runtime containers
+  must grant that user traversal access (for example, mode `0755` for generated
+  test configuration). Linux preserves host permissions; Docker Desktop can
+  mask this failure, so a local Desktop pass alone does not prove readability.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
   on runtime behavior MUST also be checked inside the pinned image. The Hermes
   SessionStore, PVC, native Telegram access, Teams runtime webhook, and image smoke contracts run through
@@ -348,7 +356,9 @@ hooks directly. Shared setup lives in
   and exercises its init container against a fresh root-owned Docker volume,
   verifies non-root writes to startup state and workspace, drives each native
   Telegram access policy through the pinned adapter and gateway authorization
-  chain, pins the Teams runtime listener's environment/port/path contract, and runs
+  chain, drives native Slack messages through the real adapter with independent
+  channel and DM policies (including empty allowlists), pins the Teams runtime
+  listener's environment/port/path contract, and runs
   the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
 - `../../api/tests/fixtures/test-messaging-retirement.sh` exercises fresh, upgraded,
@@ -442,12 +452,17 @@ migrated PostgreSQL test database. It exercises actual bytes, signed-link downlo
 and expiry, publication/checksum fences, current access, pinned retention and
 retryable purge; injected failures isolate recovery while keeping real storage.
 The migration contract verifies upgrade and refusal to drop cleanup evidence.
-These tests require Docker, never installation storage credentials.
+These tests require Docker, never installation storage credentials. The reuse
+regressions also run simultaneous CLI subprocesses over HTTP against the real API
+and Garage, including recovery from a failed first writer and renewed expiry.
 
 `make test-artifact-runtime` is an explicit additional contract; set both
 `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` to already-built images. It executes
 the generated ConfigMap command as each image's normal user against real API,
-PostgreSQL and Garage, including verified retrieval. It uses Linux Docker host
+PostgreSQL and Garage, including verified retrieval and a two-step file workflow
+that transforms retrieved bytes and checkpoints/publishes each deliverable. The
+steps are deterministic Python inside each image; they do not exercise live model
+selection or native runtime session execution. It uses Linux Docker host
 networking for its disposable HTTP listener. It proves executable/byte behavior,
 not a live model's tool selection, provider messaging or workflow stop semantics.
 The regular `make test-api-runtime RUNTIME=...` pattern remains runtime-specific;

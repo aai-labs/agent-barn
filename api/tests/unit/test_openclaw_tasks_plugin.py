@@ -73,6 +73,7 @@ def _after_tool(
     trigger: str = "user",
     params: dict | None = None,
     result: dict | None = None,
+    error: str | None = None,
 ) -> dict:
     return {
         "hook": "after_tool_call",
@@ -82,6 +83,7 @@ def _after_tool(
             "runId": run_id,
             "toolCallId": call_id,
             **({"result": result} if result is not None else {}),
+            **({"error": error} if error is not None else {}),
         },
         "ctx": {"sessionKey": session, "runId": run_id, "trigger": trigger},
     }
@@ -432,6 +434,79 @@ def test_a_file_that_could_not_be_attached_is_named_on_the_next_turn(tmp_path: P
     )
 
     assert_that(_context(driven["results"][-1]), contains_string("states.csv"))
+
+
+def test_a_file_over_the_limit_is_named_on_the_next_turn(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    driven = _drive(tmp_path, [wrote, _created(), _agent_end(), _prompt()], ARTIFACT_MAX_BYTES="1")
+
+    assert_that((_attaches(tmp_path), "states.csv" in _context(driven["results"][-1])), equal_to(([], True)))
+
+
+@pytest.mark.parametrize("name", [".env", ".env.production", "service-account.json", "id_rsa", "server.pem"])
+def test_a_credential_file_is_not_attached_automatically(tmp_path: Path, name: str):
+    wrote, _ = _wrote(tmp_path, name=name)
+
+    driven = _drive(tmp_path, [wrote, _created(), _agent_end(), _prompt()])
+
+    assert_that((_attaches(tmp_path), name in _context(driven["results"][-1])), equal_to(([], False)))
+
+
+def test_files_with_the_same_name_in_different_folders_are_both_attached(tmp_path: Path):
+    workspace = tmp_path / ".openclaw" / "workspace"
+    (workspace / "a").mkdir(parents=True)
+    (workspace / "b").mkdir()
+    wrote_first, first = _wrote(tmp_path, "c1", "a/report.md")
+    wrote_second, second = _wrote(tmp_path, "c3", "b/report.md")
+
+    _drive(tmp_path, [wrote_first, wrote_second, _created(), _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, first], ["attach", _TASK_ID, second]]))
+
+
+def test_a_failed_file_write_is_not_a_produced_file(tmp_path: Path):
+    _drive(
+        tmp_path,
+        [
+            _after_tool("c1", tool="write", params={"path": "states.csv"}, error="EACCES: permission denied"),
+            _agent_end(),
+        ],
+    )
+
+    assert_that(_creates(tmp_path), equal_to([]))
+
+
+@pytest.mark.parametrize(
+    ("command", "exit_code"),
+    [("agentbarn-task create --title=States", 1), ("grep 'agentbarn-task create' notes.md", 0)],
+)
+def test_a_task_command_that_failed_or_was_only_mentioned_does_not_count(tmp_path: Path, command: str, exit_code: int):
+    wrote, _ = _wrote(tmp_path)
+    result = {"content": [{"type": "text", "text": "out"}], "details": {"status": "completed", "exitCode": exit_code}}
+
+    _drive(tmp_path, [wrote, _after_tool("c2", command=command, result=result), _agent_end()])
+
+    assert_that(len(_creates(tmp_path)), equal_to(1))
+
+
+def test_files_a_patch_added_are_attached(tmp_path: Path):
+    workspace = tmp_path / ".openclaw" / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    notes = workspace / "notes.md"
+    notes.write_text("hi\n")
+    patch = "*** Begin Patch\n*** Add File: notes.md\n+hi\n*** End Patch"
+    result = {
+        "content": [{"type": "text", "text": "Applied"}],
+        "details": {"summary": {"added": ["notes.md"], "modified": [], "deleted": []}},
+    }
+
+    _drive(
+        tmp_path,
+        [_after_tool("c1", tool="apply_patch", params={"input": patch}, result=result), _created(), _agent_end()],
+    )
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, str(notes), "--replace"]]))
 
 
 def test_nothing_about_attaching_is_said_within_the_run_or_after_an_automatic_attach(tmp_path: Path):
@@ -809,6 +884,10 @@ _SECRET_REQUESTS = [
         "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     ),
     ("Use token=Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA to fetch", "Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA"),
+    ("Set DB_PASSWORD=hunter2 in production", "hunter2"),
+    ("Export GITHUB_TOKEN=abc123 before the run", "abc123"),
+    ("Add aws_secret_access_key=wJalrXUtnFEMI to the profile", "wJalrXUtnFEMI"),
+    ('Write {"password": "hunter2"} into the config', "hunter2"),
 ]
 
 

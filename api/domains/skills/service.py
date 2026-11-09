@@ -821,20 +821,27 @@ class SkillService:
                 except IntegrityError:
                     raise PlaybookDraftConflict() from None
                 return skill.id
+        slug = self._allocate_slug(name, org_id)
+        # Rendered and validated before anything is saved: a failure must not leave an
+        # empty lineage holding the name.
+        files = self._playbook_files(render(slug))
         skill = Skill(
             organization_id=org_id,
             name=self._allocate_playbook_name(name, org_id),
-            slug=(slug := self._allocate_slug(name, org_id)),
+            slug=slug,
             description=description,
             root_dir=slug,
             entry_path=DEFAULT_ENTRY_PATH,
             source=SkillSource.CUSTOM,
             required_providers=[],
         )
-        self._save_new_skill(skill)
-        self.repository.save_new_draft(
-            skill.id, self._playbook_files(render(slug)), description=description, required_providers=[]
-        )
+        try:
+            self.repository.save_new_skill_with_draft(skill, files, description=description, required_providers=[])
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A skill with this name or mount slug already exists in this organization",
+            ) from None
         return skill.id
 
     def _playbook_files(self, content: str) -> list[tuple[str, str]]:

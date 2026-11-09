@@ -11,19 +11,25 @@ to the attempt's callback URL with the attempt's capability token.
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
+
+_LOGGER = logging.getLogger(__name__)
 
 PORT = int(os.environ.get("AGENT_TRIGGER_PORT", "8082"))
 TRIGGER_KEY = os.environ.get("AGENT_TRIGGER_KEY", "")
@@ -63,6 +69,7 @@ def _database() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS trigger_receipts ("
         "idempotency_key TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, native_job_id TEXT)"
     )
+    db.execute("CREATE TABLE IF NOT EXISTS workflow_step_receipts (attempt_id TEXT PRIMARY KEY)")
     db.commit()
     return db
 
@@ -247,10 +254,15 @@ WORKFLOW_STEPS_PATH = "/agent-triggers/v1/workflow-steps"
 _STEP_PATH = re.compile(r"^/agent-triggers/v1/workflow-steps/([0-9a-f-]{36})/stop$")
 _STEP_TIMEOUT_SECONDS = 900
 _SUMMARY_LIMIT = 4000
+_FILE_HANDOFF_TIMEOUT_SECONDS = 120
 # In-flight steps by attempt id. Process-local: a pod restart ends the session, and the
-# platform retries the step once the attempt expires.
+# platform blocks the run when the attempt expires.
 _STEPS_LOCK = threading.Lock()
 _STEPS: dict[str, dict] = {}
+
+
+class InvalidWorkflowResult(RuntimeError):
+    """The model response cannot be safely admitted as a result."""
 
 
 class NeedsAttention(RuntimeError):
@@ -363,41 +375,126 @@ def _openclaw_step(session_id: str, prompt: str) -> str:
         return str(json.loads(response.read())["choices"][0]["message"]["content"] or "")
 
 
-def _parse_step_reply(text: str) -> tuple[bool, str]:
+def _parse_step_reply(text: str, *, require_envelope: bool = False) -> tuple[bool, str]:
     """The Agent is asked for {"summary", "criteria_met"}; plain prose still counts as the summary."""
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\{", text):
-        try:
-            reply, _ = decoder.raw_decode(text, match.start())
-        except ValueError:
-            continue
-        if isinstance(reply, dict) and isinstance(reply.get("summary"), str) and reply["summary"].strip():
-            return reply.get("criteria_met") is not False, reply["summary"].strip()[:_SUMMARY_LIMIT]
     if not text.strip():
         raise RuntimeError("The Agent returned an empty reply")
+    decoder = json.JSONDecoder()
+    # Repair the specific extra quote observed in a model response.
+    candidate = re.sub(r',\s*"\s*"criteria_met"\s*:', ', "criteria_met":', text)
+    looks_like_envelope = bool(re.search(r'"(?:summary|criteria_met)"\s*:', candidate))
+    for match in re.finditer(r"\{", candidate):
+        try:
+            reply, _ = decoder.raw_decode(candidate, match.start())
+        except ValueError:
+            continue
+        if isinstance(reply, dict) and ("summary" in reply or "criteria_met" in reply):
+            if (
+                isinstance(reply.get("summary"), str)
+                and reply["summary"].strip()
+                and isinstance(reply.get("criteria_met"), bool)
+            ):
+                return reply["criteria_met"], reply["summary"].strip()[:_SUMMARY_LIMIT]
+            raise InvalidWorkflowResult("The Agent returned an invalid workflow result")
+    if looks_like_envelope or require_envelope:
+        raise InvalidWorkflowResult("The Agent returned a malformed workflow result")
     return True, text.strip()[:_SUMMARY_LIMIT]
 
 
+def _retrieve_workflow_files(files: list[dict], directory: str, attempt_id: str) -> list[dict]:
+    deadline = time.monotonic() + _FILE_HANDOFF_TIMEOUT_SECONDS
+
+    def retrieve(item: dict) -> dict:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Workflow file retrieval timed out")
+        artifact_id = str(UUID(item["artifact_id"]))
+        destination = str(Path(directory) / artifact_id)
+        result = subprocess.run(
+            [
+                "/usr/local/bin/agentbarn-artifacts",
+                "retrieve",
+                artifact_id,
+                destination,
+                "--checksum",
+                item["checksum"],
+                "--attempt-id",
+                attempt_id,
+            ],
+            capture_output=True,
+            timeout=remaining,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError("Workflow input file retrieval failed; check access and storage availability")
+        return {**item, "path": destination}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return list(pool.map(retrieve, files))
+
+
 def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
+    directory = None
     try:
         handoff = _post_json(f"{callback_url}/handoff", token, None, method="GET") or {}
         session_id, prompt = str(handoff["session_id"]), str(handoff["prompt"])
+        if handoff.get("files"):
+            workspace = os.environ.get("ARTIFACT_UPLOAD_ROOTS", "").split(":")[0]
+            if not workspace:
+                raise RuntimeError("Workflow file workspace is unavailable")
+            directory = tempfile.mkdtemp(prefix=".workflow-files-", dir=workspace)
+            files = [
+                {**item, "path": str(Path(directory) / str(UUID(item["artifact_id"])))} for item in handoff["files"]
+            ]
+            manifest = "\nVerified input files (read these actual bytes): " + json.dumps(files)
+            if len((prompt + manifest).encode()) > 64000:
+                raise RuntimeError("Workflow context exceeds the context limit")
+            _retrieve_workflow_files(handoff["files"], directory, attempt_id)
+            _post_json(f"{callback_url}/handoff", token, None, method="GET")
+            prompt += manifest
+        with _STEPS_LOCK:
+            if _STEPS.get(attempt_id, {}).get("stopped"):
+                return
+        if len(prompt.encode()) > 64000:
+            raise RuntimeError("Workflow context exceeds the context limit")
         if RUNTIME_KIND == "hermes":
             text = _hermes_step(attempt_id, session_id, prompt)
         elif RUNTIME_KIND == "openclaw":
             text = _openclaw_step(session_id, prompt)
         else:
             raise RuntimeError("Unsupported Agent runtime")
-        met, summary = _parse_step_reply(text)
+        try:
+            met, summary = _parse_step_reply(text)
+        except InvalidWorkflowResult:
+            # Revalidate admission before another model turn; never repeat the step's work.
+            _post_json(f"{callback_url}/handoff", token, None, method="GET")
+            with _STEPS_LOCK:
+                if _STEPS.get(attempt_id, {}).get("stopped"):
+                    return
+            correction = (
+                "Your previous workflow result was malformed. Do not use tools or repeat any work. "
+                "Correct only the response format, preserving the actual result and whether the criteria were met. "
+                'Reply with ONLY valid JSON: {"summary": string, "criteria_met": boolean}. '
+                "Previous response:\n" + text[:8000]
+            )
+            if RUNTIME_KIND == "hermes":
+                corrected = _hermes_step(attempt_id, session_id, correction)
+            else:
+                corrected = _openclaw_step(session_id, correction)
+            met, summary = _parse_step_reply(corrected, require_envelope=True)
         if met:
             _post_json(f"{callback_url}/result", token, {"summary": summary, "criteria_met": True})
         else:
-            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000]})
+            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000], "retryable": False})
+    except InvalidWorkflowResult as exc:
+        _post_json(f"{callback_url}/failure", token, {"reason": str(exc), "retryable": False})
     except NeedsAttention as exc:
         _report_failure(attempt_id, token, callback_url, str(exc), needs_attention=True)
     except Exception as exc:  # every failure is reported, never swallowed silently
         _report_failure(attempt_id, token, callback_url, str(exc) or exc.__class__.__name__)
     finally:
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
         with _STEPS_LOCK:
             _STEPS.pop(attempt_id, None)
 
@@ -415,7 +512,7 @@ def _report_failure(
             token,
             {"reason": reason[:2000].replace(token, "[redacted]"), "needs_attention": needs_attention},
         )
-    except Exception:  # the platform expires the attempt and retries
+    except Exception:  # the platform expires and blocks the uncertain attempt
         pass
 
 
@@ -429,6 +526,12 @@ def start_workflow_step(payload: dict) -> bool:
     with _STEPS_LOCK:
         if attempt_id in _STEPS:
             return False
+        # Persist admission before starting any I/O. An uncertain/crashed dispatch never replays tools.
+        with closing(_database()) as db:
+            cursor = db.execute("INSERT OR IGNORE INTO workflow_step_receipts(attempt_id) VALUES (?)", (attempt_id,))
+            db.commit()
+            if cursor.rowcount == 0:
+                return False
         _STEPS[attempt_id] = {"run_id": None, "stopped": False}
     threading.Thread(target=_run_workflow_step, args=(attempt_id, token, callback_url), daemon=True).start()
     return True
@@ -531,5 +634,21 @@ class TriggerHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
 
+def _clean_workflow_directories() -> None:
+    root = os.environ.get("ARTIFACT_UPLOAD_ROOTS", "").split(":")[0]
+    if not root:
+        return
+    workspace = Path(root)
+    if not workspace.is_dir():
+        return
+    for item in workspace.glob(".workflow-files-*"):
+        if item.is_dir() and not item.is_symlink():
+            try:
+                shutil.rmtree(item)
+            except OSError as error:
+                _LOGGER.warning("Could not clean abandoned workflow directory %s: %s", item, error)
+
+
 if __name__ == "__main__":
+    _clean_workflow_directories()
     ThreadingHTTPServer(("0.0.0.0", PORT), TriggerHandler).serve_forever()

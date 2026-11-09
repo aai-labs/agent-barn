@@ -457,6 +457,89 @@ def test_a_file_that_could_not_be_attached_is_named_on_the_next_turn(tmp_path: P
     assert_that(_context(plugin.start_turn()), contains_string("states.csv"))
 
 
+def test_a_file_over_the_limit_is_named_on_the_next_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.env["ARTIFACT_MAX_BYTES"] = "1"
+    _wrote(plugin)
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that((_attaches(plugin), "states.csv" in _context(plugin.start_turn())), equal_to(([], True)))
+
+
+@pytest.mark.parametrize("name", [".env", ".env.production", "service-account.json", "id_rsa", "server.pem"])
+def test_a_credential_file_is_not_attached_automatically(tmp_path: Path, name: str):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin, name=name)
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that((_attaches(plugin), name in _context(plugin.start_turn())), equal_to(([], False)))
+
+
+def test_files_with_the_same_name_in_different_folders_are_both_attached(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    (plugin.workspace / "a").mkdir()
+    (plugin.workspace / "b").mkdir()
+    first = _wrote(plugin, "call-1", "a/report.md")
+    second = _wrote(plugin, "call-3", "b/report.md")
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, first], ["attach", _TASK_ID, second]]))
+
+
+def test_a_failed_file_write_is_not_a_produced_file(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call(
+        "call-1",
+        tool_name="write_file",
+        args={"path": "states.csv", "content": "a,b"},
+        result=json.dumps({"error": "Permission denied"}),
+    )
+
+    plugin.end_turn()
+
+    assert_that(_creates(plugin), equal_to([]))
+
+
+@pytest.mark.parametrize(
+    ("command", "result"),
+    [
+        ("agentbarn-task create --title=States", {"output": "refused", "exit_code": 1, "error": None}),
+        ("grep 'agentbarn-task create' notes.md", {"output": "agentbarn-task create", "exit_code": 0, "error": None}),
+    ],
+)
+def test_a_task_command_that_failed_or_was_only_mentioned_does_not_count(tmp_path: Path, command: str, result: dict):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    plugin.tool_call("call-2", command=command, result=json.dumps(result))
+
+    plugin.end_turn()
+
+    assert_that(len(_creates(plugin)), equal_to(1))
+
+
+def test_files_a_patch_created_are_attached(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    notes = plugin.workspace / "notes.md"
+    notes.write_text("hi\n")
+    plugin.tool_call(
+        "call-1",
+        tool_name="patch",
+        args={"mode": "patch", "patch": "*** Begin Patch\n*** Add File: notes.md\n+hi\n*** End Patch"},
+        result=json.dumps({"success": True, "files_created": [str(notes)], "files_modified": []}),
+    )
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, str(notes), "--replace"]]))
+
+
 def test_nothing_about_attaching_is_said_within_the_turn_or_after_an_automatic_attach(tmp_path: Path):
     plugin = _Plugin(tmp_path)
     _wrote(plugin)
@@ -852,6 +935,10 @@ _SECRET_REQUESTS = [
         "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     ),
     ("Use token=Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA to fetch", "Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA"),
+    ("Set DB_PASSWORD=hunter2 in production", "hunter2"),
+    ("Export GITHUB_TOKEN=abc123 before the run", "abc123"),
+    ("Add aws_secret_access_key=wJalrXUtnFEMI to the profile", "wJalrXUtnFEMI"),
+    ('Write {"password": "hunter2"} into the config', "hunter2"),
 ]
 
 

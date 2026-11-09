@@ -144,7 +144,7 @@ the cluster is up.
 This validates `.env`, bootstraps persistent private Garage storage, brings up
 the k3d cluster and LiteLLM, builds and loads the agent base images, starts `db`
 and `redis`, runs database migrations, then starts `api`, `worker`, `sync-engine`,
-`communications`, `memory`, `artifact-purge`, and `ui` with hot reload and follows
+`communications`, `memory`, `artifact-purge`, `workflow-maintenance`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
 

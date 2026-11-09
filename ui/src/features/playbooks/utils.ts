@@ -52,6 +52,8 @@ const ERROR_MESSAGE: Record<PlaybookExtractionError, string> = {
   draft_conflict:
     "The playbook already had an unpublished draft, which was left untouched. The generated playbook is kept on this run.",
   skill_unavailable: "The target Skill can no longer receive playbooks.",
+  interrupted:
+    "The run was stopped before it finished: it ran past its time limit or its worker restarted. Model calls already made are still billed. Try again.",
   internal_error: "Something went wrong. Try again.",
 };
 

@@ -37,7 +37,8 @@ const COMMAND_TIMEOUT_MS = 150_000;
 const SESSIONS_KEPT = 500;
 // Task tool actions and command subcommands that change a Task; reading one is not recording work.
 const WRITE_ACTIONS = new Set(["create", "status", "note", "attach", "remove_file"]);
-const COMMAND_WRITE = /agentbarn-task\s+(?:create|status|note|attach|remove-file)\b/;
+// The command run as a command (at the start, or after ; & | ( or a newline), not merely mentioned.
+const COMMAND_WRITE = /(?:^|[;&|(\n])\s*agentbarn-task\s+(?:create|status|note|attach|remove-file)\b/;
 const REDACTED = "[redacted]";
 // Credentials a user may paste into a request. The automatic Task's title and description
 // come from the request, and people across the Organization can read them.
@@ -45,8 +46,9 @@ const SECRET_PATTERNS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED],
   [/(:\/\/[^/\s:@]+:)[^/\s@]+@/g, `$1${REDACTED}@`],
   [/(\bbearer\s+)\S+/gi, `$1${REDACTED}`],
+  // The keyword may sit inside a longer name (DB_PASSWORD=, GITHUB_TOKEN=) or a quoted JSON key.
   [
-    /(\b(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\b\s*(?:[:=]|\bis\b)\s*)\S+/gi,
+    /(\w*(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\w*["']?\s*(?:[:=]|\bis\b)\s*["']?)[^\s"',}]+/gi,
     `$1${REDACTED}`,
   ],
   [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, REDACTED],
@@ -55,6 +57,10 @@ const SECRET_PATTERNS = [
   [/\bAIza[0-9A-Za-z_-]{35}\b/g, REDACTED],
   [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, REDACTED],
 ];
+// Files that hold credentials are never attached automatically: anyone who may read the Agent's
+// Tasks could download them. The Agent can still attach one on purpose.
+const CREDENTIAL_FILE =
+  /^(?:\.env(?:\..*)?|\.netrc|\.npmrc|\.pgpass|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|.*\.(?:pem|key|p12|pfx)|.*credentials.*\.json|service[-_]account.*\.json)$/i;
 const OPAQUE_WORD = /\b[A-Za-z0-9_-]{32,}\b/g;
 // A short message made only of these words is small talk ("Thanks!", "That's all for now"): it
 // gets no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
@@ -236,9 +242,29 @@ async function executeTool(_toolCallId, params) {
 const touchesTasks = (toolName, params) =>
   toolName === TOOL || (typeof params?.command === "string" && params.command.includes("agentbarn-task"));
 
+// Whether a tool call failed. OpenClaw sets `error` for a failed write, edit or patch, but a
+// command that exits non-zero completes normally and only carries its exit code.
+function failed(event) {
+  const exitCode = event.result?.details?.exitCode;
+  return Boolean(event.error) || (typeof exitCode === "number" && exitCode !== 0);
+}
+
+// The files a successful write, edit or patch produced. apply_patch names its files only in the
+// patch text, so the paths it reports back are used.
+function writtenPaths(event) {
+  const summary = event.result?.details?.summary;
+  if (summary && typeof summary === "object") {
+    return [...(summary.added ?? []), ...(summary.modified ?? [])].filter((path) => typeof path === "string" && path);
+  }
+  const path = event.params?.path ?? event.params?.file_path;
+  return typeof path === "string" && path ? [path] : [];
+}
+
 // Whether a Task call changed a Task: a write that did not fail. Reading Tasks is not recording work.
-function recordsTask(toolName, params, result) {
-  if (toolName !== TOOL) return typeof params?.command === "string" && COMMAND_WRITE.test(params.command);
+function recordsTask(toolName, params, result, event = {}) {
+  if (toolName !== TOOL) {
+    return typeof params?.command === "string" && COMMAND_WRITE.test(params.command) && !failed(event);
+  }
   if (!WRITE_ACTIONS.has(params?.action)) return false;
   return !(result?.details && typeof result.details === "object" && "error" in result.details);
 }
@@ -278,7 +304,7 @@ function track(event, ctx) {
   let state = runs.get(runId);
   if (!state) {
     state = {
-      work: new Set(), wroteFiles: false, written: new Map(), recorded: false, taskIds: new Set(),
+      work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
       // taskId -> the last status the Agent set this run
       statuses: new Map(),
       attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
@@ -295,13 +321,21 @@ const attachReminder = (names) =>
   `These files you produced are not on a Task yet: ${names.join(", ")}. Attach the ones that are part of ` +
   "the result with the agentbarn_task tool (action attach).";
 
+// The run's written files, as [name, path], that it has not attached and may attach.
+const unattachedFiles = (state) =>
+  [...state.written]
+    .sort()
+    .map((path) => [basename(path), path])
+    .filter(([name]) => !state.attached.has(name) && !CREDENTIAL_FILE.test(name));
+
 // Attach the run's files to the one Task it touched. Returns the names it could not attach.
 async function attachAutomatically(state) {
-  const unattached = [...state.written].filter(([name]) => !state.attached.has(name)).sort();
+  const unattached = unattachedFiles(state);
   if (state.taskIds.size !== 1) return unattached.map(([name]) => name);
   const [taskId] = state.taskIds;
   const limit = Number(process.env.ARTIFACT_MAX_BYTES) || Infinity;
-  const failed = [];
+  const names = unattached.map(([name]) => name);
+  const notAttached = [];
   for (const [name, path] of unattached) {
     let size;
     try {
@@ -309,11 +343,17 @@ async function attachAutomatically(state) {
     } catch {
       continue;
     }
-    if (size > limit) continue;
-    const { ok } = await run(["attach", taskId, path, "--replace"]);
-    if (!ok) failed.push(name);
+    if (size > limit) {
+      notAttached.push(name);
+      continue;
+    }
+    // A newer copy replaces the Task's file of the same name, unless this run wrote two files of
+    // that name in different folders: then both are kept.
+    const replace = names.filter((other) => other === name).length === 1 ? ["--replace"] : [];
+    const { ok } = await run(["attach", taskId, path, ...replace]);
+    if (!ok) notAttached.push(name);
   }
-  return failed;
+  return notAttached;
 }
 
 // Move each Task the Agent left in_progress this run to `status`; a status it chose itself stays.
@@ -339,7 +379,7 @@ async function recordAutomatically(sessionKey, state) {
     taskId = undefined;
   }
   if (typeof taskId !== "string") {
-    return [...state.written.keys()].filter((name) => !state.attached.has(name)).sort();
+    return unattachedFiles(state).map(([name]) => name);
   }
   state.taskIds = new Set([taskId]);
   return attachAutomatically(state);
@@ -400,7 +440,7 @@ export default {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
       const state = track(event, ctx);
       if (touchesTasks(event.toolName, event.params)) {
-        if (!recordsTask(event.toolName, event.params, event.result)) return;
+        if (!recordsTask(event.toolName, event.params, event.result, event)) return;
         state.recorded = true;
         for (const name of attachedNames(event.toolName, event.params)) state.attached.add(name);
         const taskId = taskIdOf(event.toolName, event.params, event.result);
@@ -411,13 +451,9 @@ export default {
         }
       } else {
         if (event.toolCallId) state.work.add(event.toolCallId);
-        if (FILE_TOOLS.has(event.toolName)) {
+        if (FILE_TOOLS.has(event.toolName) && !failed(event)) {
           state.wroteFiles = true;
-          const path = event.params?.path ?? event.params?.file_path;
-          if (typeof path === "string" && path) {
-            const full = resolvePath(workspace(), path);
-            state.written.set(basename(full), full);
-          }
+          for (const path of writtenPaths(event)) state.written.add(resolvePath(workspace(), path));
         }
       }
     });

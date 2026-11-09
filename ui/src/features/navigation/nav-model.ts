@@ -7,6 +7,7 @@ import {
   CreditCard,
   Cpu,
   FileText,
+  FolderSync,
   LayoutDashboard,
   Layers,
   LayoutGrid,
@@ -203,6 +204,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   files: PackageOpen,
   playbooks: BookOpen,
   tasks: ListChecks,
+  "file-sync": FolderSync,
   activity: Activity,
   costs: Wallet,
   "resource-usage": Cpu,
@@ -212,7 +214,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "tasks"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "tasks", "file-sync"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 

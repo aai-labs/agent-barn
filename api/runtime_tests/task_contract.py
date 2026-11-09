@@ -64,7 +64,7 @@ def _ingest_stub_is_ready():
                         return 413, {"detail": "Artifact exceeds the configured file limit"}
                     if self.command == "PUT":
                         return 200, {"id": ARTIFACT_ID, "state": "READY"}
-                    return 201, {"id": ARTIFACT_ID}
+                    return 201, {"id": ARTIFACT_ID, "state": "UPLOADING"}
                 if self.command == "GET" and self.path.split("?")[0].endswith("/tasks"):
                     return 200, {"items": [{"id": TASK_ID, "title": "Reconcile invoices"}], "total": 1}
                 if self.command == "GET":

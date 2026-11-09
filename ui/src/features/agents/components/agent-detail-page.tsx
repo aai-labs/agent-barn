@@ -28,6 +28,7 @@ import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflow
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
 import { AgentTasksTab } from "@/features/tasks/components/agent-tasks-tab";
+import { FileSyncTab } from "@/features/file-sync/components/file-sync-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -219,6 +220,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
             {resolvedTab === "tasks" && <AgentTasksTab agent={agent} />}
+            {resolvedTab === "file-sync" && canReadActivity && <FileSyncTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "resource-usage" && (

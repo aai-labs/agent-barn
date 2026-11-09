@@ -36,8 +36,8 @@ class EventDeliveryMonitorService:
 
     def list_supported_event_types(self) -> list[SupportedEventTypeRead]:
         # Only event definitions with at least one intended Event Handler ever produce
-        # an Event Delivery; a handler-less event (e.g. agent.created) can't appear in
-        # this monitor and would be a dead filter option.
+        # an Event Delivery; a handler-less event can't appear in this monitor and
+        # would be a dead filter option.
         grouped: dict[str, list[int]] = {}
         for definition in EVENT_REGISTRY.list_definitions():
             if not definition.handler_names:

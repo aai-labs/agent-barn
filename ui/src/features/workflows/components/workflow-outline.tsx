@@ -97,7 +97,7 @@ export function WorkflowOutline({
       )}
       <div className="mt-5 flex flex-wrap gap-1 border-t border-[var(--line)] pt-3 lg:flex-col">
         {sectionButton("inputs", "Required inputs", <ListFilter size={15} />)}
-        {sectionButton("outputs", "Outputs & review", <FileOutput size={15} />)}
+        {sectionButton("outputs", "Review destination", <FileOutput size={15} />)}
       </div>
     </nav>
   );
