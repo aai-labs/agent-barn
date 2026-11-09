@@ -15,9 +15,11 @@ import {
 } from "../integrations";
 import { formatAgentName } from "../naming";
 import { provisioningFailureOf } from "../provisioning-failure";
-import type { AgentProvisioningError, AgentTemplateRead } from "../schemas";
+import type { Agent, AgentProvisioningError, AgentTemplateRead } from "../schemas";
 import { splitRequiredSkills } from "../utils";
+import { useAgentApplyAndRestart } from "./use-agent-apply-and-restart";
 import { useAgentNameSuggestion } from "./use-agent-name-suggestion";
+import { useCreateBot } from "./use-create-bot";
 import { useCreateAgent } from "./use-create-agent";
 import { useModels } from "./use-models";
 import { useStartAgent } from "./use-start-agent";
@@ -44,12 +46,17 @@ function credentialsForProviders(
  * Shared by the hire dialog and onboarding's "Set up your agent" step, which lay the
  * same fields out differently.
  */
-export function useHireAgentForm({ onHired, templatePagination }: {
+export function useHireAgentForm({ onHired, templatePagination, parent }: {
   onHired: (agent: HiredAgent) => void;
   templatePagination?: { page: number; pageSize: number };
+  parent?: Agent;
 }) {
   const { templates, total: totalTemplates, isLoading: isLoadingTemplates, error: templatesError, refetch: reloadTemplates } = useTemplates(templatePagination);
   const createAgent = useCreateAgent();
+  const createBot = useCreateBot(parent?.id);
+  const { applyAndRestart, isPending: isRestarting } = useAgentApplyAndRestart(
+    parent ?? { id: "", status: "STOPPED", updatedAt: "" },
+  );
   const startAgent = useStartAgent();
   const suggestion = useAgentNameSuggestion();
   const [manualName, setManualName] = useState<string | null>(null);
@@ -60,7 +67,9 @@ export function useHireAgentForm({ onHired, templatePagination }: {
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
   const [model, setModel] = useState<string | null>(null);
   const { defaultModel } = useModels();
-  const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
+  const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">(
+    parent?.approvalMode === "manual" ? "manual" : "auto",
+  );
   const [fileSyncEnabled, setFileSyncEnabled] = useState(true);
   // Offered only to Owners and Admins of an Organization the platform lets choose; anyone
   // else hires on the default without being asked.
@@ -84,7 +93,7 @@ export function useHireAgentForm({ onHired, templatePagination }: {
     : "");
   const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
   const missingGroupChoice = groups.some((group) => !(groupChoices[group.key]?.length));
-  const pending = createAgent.isPending || startAgent.isPending;
+  const pending = createAgent.isPending || startAgent.isPending || createBot.isPending || isRestarting;
   const canHire =
     Boolean(template) &&
     Boolean(name.trim()) &&
@@ -165,18 +174,35 @@ export function useHireAgentForm({ onHired, templatePagination }: {
       .filter((draft) => draft.sharedCredentialId)
       .map((draft) => ({ sharedCredentialId: draft.sharedCredentialId! }));
 
+    const definition = {
+      name: name.trim(),
+      templateKey: template.templateKey,
+      templateVersion: template.version,
+      ...(model ? { model } : {}),
+      ...(skillIds.length > 0 ? { skillIds } : {}),
+      ...(requiredSkillVersions.length > 0 ? { skillVersions: requiredSkillVersions } : {}),
+      ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
+      ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
+    };
+
+    if (parent) {
+      const added: Agent[] = [];
+      try {
+        await applyAndRestart(async () => {
+          added.push(await createBot.mutateAsync({ ...definition, approvalMode }));
+        });
+        onHired({ id: added[0].id, name: added[0].name, role: template.templateName });
+      } catch (cause) {
+        reportHireFailure(cause);
+      }
+      return;
+    }
+
     try {
       const approval = agentType === "hermes" ? { approvalMode } : {};
       const agent = await createAgent.mutateAsync({
-        name: name.trim(),
+        ...definition,
         agentType,
-        templateKey: template.templateKey,
-        templateVersion: template.version,
-        ...(model ? { model } : {}),
-        ...(skillIds.length > 0 ? { skillIds } : {}),
-        ...(requiredSkillVersions.length > 0 ? { skillVersions: requiredSkillVersions } : {}),
-        ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
-        ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
         ...approval,
         ...(fileSyncEnabled ? {} : { fileSyncEnabled: false }),
         ...(sizeChoices && agentSizeId ? { agentSizeId } : {}),

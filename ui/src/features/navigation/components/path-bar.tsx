@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Fragment, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Check, ChevronRight, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronRight, ChevronsUpDown, Plus } from "lucide-react";
 
 import { ShareIcon } from "@/components/icons";
 import {
@@ -18,7 +18,10 @@ import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 import { AgentLifecycleMenu } from "@/features/agents/components/agent-lifecycle-menu";
 import { AgentUpdateNotice } from "@/features/agents/components/agent-update-banner";
 import { ShareDialog } from "@/features/agents/components/share-dialog";
+import { NewBotDialog } from "@/features/agents/components/new-bot-dialog";
+import { useAgent } from "@/features/agents/hooks/use-agent";
 import { useAgents } from "@/features/agents/hooks/use-agents";
+import { useBots } from "@/features/agents/hooks/use-bots";
 import { useModels } from "@/features/agents/hooks/use-models";
 import { agentStatus } from "@/features/agents/components/status-line";
 import type { Agent } from "@/features/agents/schemas";
@@ -35,6 +38,7 @@ import { UserMenu } from "./user-menu";
 // Query parameters that name a place inside the page rather than one Agent's thing, so
 // they carry over to another Agent. A thread or channel id is one Agent's and does not.
 const PORTABLE_PARAMS = ["tab", "section", "range"];
+const MAX_BOTS_PER_PARENT = 5;
 
 /**
  * The desktop path bar: where you are, as a path you can switch at each step. The
@@ -83,6 +87,7 @@ export function PathBar() {
           <>
             <Separator />
             <AgentSwitcher orgId={agentRoute.orgId} agentId={agentRoute.agentId} rest={agentRoute.rest} />
+            <BotSwitcher orgId={agentRoute.orgId} agentId={agentRoute.agentId} rest={agentRoute.rest} />
           </>
         )}
         {trail.map((step, index) => (
@@ -127,27 +132,15 @@ function Separator() {
  */
 function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string; rest?: string }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const agent = useCachedAgent(agentId);
+  const current = useCachedAgent(agentId);
+  const parentId = current?.parentAgentId ?? agentId;
+  const agent = useCachedAgent(parentId);
+  const targetFor = useAgentTarget(orgId, rest);
   // Asked for when the menu first opens, not on every Agent page; the team page's list
   // shares the cache, so coming from it there is nothing to wait for.
   const [opened, setOpened] = useState(false);
   const { agents, isLoading } = useAgents({ enabled: opened });
   const orgBase = `/dashboard/${orgId}`;
-
-  // A connection or skill page belongs to the Agent it was opened from, so moving from
-  // one lands on the other Agent's own page instead.
-  const keepsPlace = !rest || rest === "configuration";
-  const targetFor = (nextId: string) => {
-    if (!keepsPlace) return `${orgBase}/agents/${nextId}`;
-    const query = new URLSearchParams();
-    for (const key of PORTABLE_PARAMS) {
-      const value = searchParams.get(key);
-      if (value !== null) query.set(key, value);
-    }
-    const search = query.toString();
-    return `${orgBase}/agents/${nextId}${rest ? `/${rest}` : ""}${search ? `?${search}` : ""}`;
-  };
 
   return (
     <DropdownMenu modal={false} onOpenChange={(open) => open && setOpened(true)}>
@@ -176,12 +169,12 @@ function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: strin
           <DropdownMenuItem
             key={candidate.id}
             onSelect={() => {
-              if (candidate.id !== agentId) router.push(targetFor(candidate.id));
+              if (candidate.id !== parentId) router.push(targetFor(candidate.id));
             }}
           >
             <AgentAvatar agent={candidate} size="xs" />
             <span className="flex-1 truncate">{candidate.name}</span>
-            {candidate.id === agentId && <Check aria-label="Current" />}
+            {candidate.id === parentId && <Check aria-label="Current" />}
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
@@ -193,6 +186,96 @@ function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: strin
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function useAgentTarget(orgId: string, rest?: string) {
+  const searchParams = useSearchParams();
+  const orgBase = `/dashboard/${orgId}`;
+  // A connection or skill page belongs to the Agent it was opened from, so moving from
+  // one lands on the other Agent's own page instead.
+  const keepsPlace = !rest || rest === "configuration";
+  return (nextId: string) => {
+    if (!keepsPlace) return `${orgBase}/agents/${nextId}`;
+    const query = new URLSearchParams();
+    for (const key of PORTABLE_PARAMS) {
+      const value = searchParams.get(key);
+      if (value !== null) query.set(key, value);
+    }
+    const search = query.toString();
+    return `${orgBase}/agents/${nextId}${rest ? `/${rest}` : ""}${search ? `?${search}` : ""}`;
+  };
+}
+
+function BotSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string; rest?: string }) {
+  const router = useRouter();
+  const targetFor = useAgentTarget(orgId, rest);
+  const current = useCachedAgent(agentId);
+  const parentId = current?.parentAgentId ?? agentId;
+  const { agent: parent } = useAgent(parentId);
+  const { bots } = useBots(parentId, { enabled: current?.agentType === "hermes" });
+  const [adding, setAdding] = useState(false);
+  if (!current || !parent || current.agentType !== "hermes") return null;
+  const atLimit = bots.length >= MAX_BOTS_PER_PARENT;
+  const label = current.parentAgentId ? current.name : "Main";
+
+  return (
+    <>
+      <Separator />
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Switch bot. Current: ${label}`}
+            className="af-hover-bg flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-[14px] font-semibold"
+            style={{ color: "var(--ink)" }}
+          >
+            {current.parentAgentId && <AvatarWithStatus agent={current} />}
+            <span className="max-w-[180px] truncate">{label}</span>
+            <ChevronsUpDown size={14} aria-hidden style={{ color: "var(--ink-4)" }} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="bottom" align="start" sideOffset={6} className="w-64">
+          <DropdownMenuLabel>Bots</DropdownMenuLabel>
+          {[parent, ...bots].map((candidate) => (
+            <DropdownMenuItem
+              key={candidate.id}
+              onSelect={() => {
+                if (candidate.id !== agentId) router.push(targetFor(candidate.id));
+              }}
+            >
+              <AvatarWithStatus agent={candidate} />
+              <span className="flex-1 truncate">{candidate.name}</span>
+              {candidate.id === parent.id && (
+                <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  main
+                </span>
+              )}
+              {candidate.id === agentId && <Check aria-label="Current" />}
+            </DropdownMenuItem>
+          ))}
+          {canAgent(parent, "agent.update") && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={atLimit} onSelect={() => setAdding(true)}>
+                <Plus aria-hidden />
+                <span className="flex-1">{atLimit ? `New bot (${MAX_BOTS_PER_PARENT} max)` : "New bot"}</span>
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {adding && (
+        <NewBotDialog
+          parent={parent}
+          onClose={() => setAdding(false)}
+          onAdded={(bot) => {
+            setAdding(false);
+            router.push(`/dashboard/${orgId}/agents/${bot.id}`);
+          }}
+        />
+      )}
+    </>
   );
 }
 

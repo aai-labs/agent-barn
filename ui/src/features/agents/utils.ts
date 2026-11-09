@@ -26,6 +26,7 @@ export const agentsKey = {
     [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
   diagnostics: (org: string, id: string) => [..._agentsKeyBase.detail(id), "diagnostics", org] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
+  bots: (id: string) => [..._agentsKeyBase.detail(id), "bots"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
   llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
