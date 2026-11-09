@@ -33,6 +33,8 @@ from api.domains.agents.builders import (
     agentbarn_telegram_channel,
     agentbarn_telegram_channel_env,
     agentbarn_telegram_env,
+    bot_gateway_config,
+    bot_passthrough_names,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -53,6 +55,7 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_channel,
     runtime_teams_env,
+    with_passthrough_placeholders,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition, refuse_on_bot
@@ -315,6 +318,8 @@ class _AssembledAgent:
     ingest_key: str
     communication_key: str
     memory_key: str | None
+    env_names: frozenset[str]
+    tool_env_names: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -694,12 +699,13 @@ class AgentService:
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
             agent_size_id=agent.agent_size_id,
             agent_size=to_option(size),
-            pending_size=size_is_pending(agent.running_resources, size),
+            pending_size=agent.parent_agent_id is None and size_is_pending(agent.running_resources, size),
             agent_size_set_by_platform=agent.agent_size_set_by_platform,
             # The recorded digest names the image the pod actually started on, so an
             # Agent pinned behind the platform pin (rolled back) reports an update too.
             update_available=(
-                agent.status == AgentStatus.RUNNING
+                agent.parent_agent_id is None
+                and agent.status == AgentStatus.RUNNING
                 and agent.running_config_digest
                 != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
             ),
@@ -2374,11 +2380,23 @@ class AgentService:
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
+        assembled_bots: list[tuple[Agent, _AssembledAgent]] = []
+        deleted_bots: list[Agent] = []
+        if not preflight and agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
+            deleted_bots = self.repository.find_deleted_bots(agent.id)
+            for bot in self.repository.find_live_bots(agent.id):
+                try:
+                    assembled_bots.append((bot, self._assemble_agent(bot)))
+                except Exception as exc:
+                    logger.exception("Failed to assemble bot %s", bot.id)
+                    self._record_provisioning_failure(bot, exc)
         assembled = self._assemble_agent(
             agent,
             preflight=preflight,
             isolation_overrides=isolation_overrides,
             custom_api_overrides=custom_api_overrides,
+            bots=assembled_bots,
+            deleted_bot_ids=[bot.id for bot in deleted_bots],
         )
         if preflight:
             return assembled.previous_status
@@ -2392,12 +2410,25 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.create_config_map(ns, assembled.config_map)
         self.k8s.create_secret(ns, assembled.secret)
+        for bot, bot_assembled in assembled_bots:
+            self.k8s.delete_config_map(f"agent-{bot.id}", ns)
+            self.k8s.delete_secret(f"agent-{bot.id}", ns)
+            self.k8s.create_config_map(ns, bot_assembled.config_map)
+            self.k8s.create_secret(ns, bot_assembled.secret)
         self.k8s.create_pvc(
             ns,
             build_pvc(agent.id, agent.organization_id, ns, self.config.storage_class or None),
         )
         self.k8s.create_service(ns, assembled.service)
         self.k8s.create_deployment(ns, assembled.deployment)
+        self._record_started(agent, assembled)
+        for bot, bot_assembled in assembled_bots:
+            self._record_started(bot, bot_assembled)
+            self.repository.save(bot)
+        return assembled.previous_status
+
+    def _record_started(self, agent: Agent, assembled: _AssembledAgent) -> None:
+        assert assembled.runtime is not None
         self.integrations.set_state(agent.id, "provisioned", assembled.runtime.generation)
 
         agent.status = AgentStatus.RUNNING
@@ -2428,7 +2459,6 @@ class AgentService:
             assembled.communication_key,
             self.config.agent_token_encryption_key,
         )
-        return assembled.previous_status
 
     def _assemble_agent(
         self,
@@ -2437,13 +2467,15 @@ class AgentService:
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+        bots: Sequence[tuple[Agent, _AssembledAgent]] = (),
+        deleted_bot_ids: Sequence[UUID] = (),
     ) -> _AssembledAgent:
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
-        if agent.status == AgentStatus.RUNNING and not preflight:
+        if agent.status == AgentStatus.RUNNING and not preflight and agent.parent_agent_id is None:
             raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is already running",
@@ -2501,6 +2533,7 @@ class AgentService:
             include_telegram_webhook_port=agentbarn_telegram is not None,
             org_name=org_name,
             agent_name=agent.name,
+            bot_slots=[bot.bot_slot for bot, _ in bots if bot.bot_slot is not None],
         )
         # The agent container's CPU and memory: the Agent's Agent Size, or the default when
         # it has none, read at every start so a changed size reaches the Agent the next time
@@ -2533,6 +2566,12 @@ class AgentService:
                 memory_enabled=agent.memory_enabled,
                 max_turns=agent.max_turns,
             )
+            if agent.parent_agent_id is not None:
+                hermes_cfg = bot_gateway_config(
+                    hermes_cfg,
+                    slack_settings=native_slack[0] if native_slack is not None else None,
+                    telegram_settings=native_telegram.settings if native_telegram is not None else None,
+                )
             secret = build_secret_hermes_runtime(
                 agent.id,
                 org_id,
@@ -2561,6 +2600,7 @@ class AgentService:
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
                 resources=resources,
+                bot_ids=[bot.id for bot, _ in bots],
             )
         else:
             native_channels: dict[str, dict] = {}
@@ -2609,8 +2649,9 @@ class AgentService:
         # aai-cli integration secrets — all agent types.
         if not preflight:
             # Reconcile stale workloads before rotating any machine authorization.
-            self.k8s.delete_deployment(name, ns)
-            self.k8s.wait_for_termination(name, ns)
+            if agent.parent_agent_id is None:
+                self.k8s.delete_deployment(name, ns)
+                self.k8s.wait_for_termination(name, ns)
             previous_runtime = self.integrations.runtime(agent.id)
             previous_sharepoint = previous_runtime.bindings.get("sharepoint", {}) if previous_runtime else {}
             desired_sharepoint = self.integrations.policies(agent.id).get(SecretProvider.SHAREPOINT, False)
@@ -2687,6 +2728,8 @@ class AgentService:
             for provider, content in decrypted.items()
         ]
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        if agent.parent_agent_id is not None:
+            aai_home = f"/opt/data/profiles/{agent.id}"
         aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
         gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
         runtime_context = RuntimeContext(
@@ -2885,6 +2928,30 @@ class AgentService:
             + build_scheduled_runs_policy_md()
         )
 
+        tool_env_names = frozenset(artifacts.env) | frozenset(custom_artifacts.env)
+        if agent.parent_agent_id is not None or self.repository.find_live_bots(agent.id):
+            for env_name, value in secret.string_data.items():
+                if "\n" in value or "\r" in value:
+                    raise AgentProvisioningPrecondition(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"{env_name} has a line break, which a Bot's environment file cannot hold",
+                    )
+        bots_manifest = None
+        if bots or deleted_bot_ids:
+            passthrough = bot_passthrough_names(
+                [*secret.string_data, *[name for _, assembled in bots for name in assembled.env_names]],
+                [*tool_env_names, *[name for _, assembled in bots for name in assembled.tool_env_names]],
+            )
+            if bots:
+                with_passthrough_placeholders(secret.string_data, passthrough)
+            bots_manifest = json.dumps(
+                {
+                    "bots": [{"id": str(bot.id), "slot": bot.bot_slot} for bot, _ in bots],
+                    "deleted_ids": [str(bot_id) for bot_id in deleted_bot_ids],
+                    "passthrough": passthrough,
+                }
+            )
+
         if agent.agent_type == AgentType.HERMES:
             assert hermes_cfg is not None
             config_map = build_hermes_config_map(
@@ -2906,6 +2973,7 @@ class AgentService:
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
+                bots_manifest=bots_manifest,
             )
         else:
             config_map = build_config_map(
@@ -2944,6 +3012,8 @@ class AgentService:
             ingest_key=ingest_key,
             communication_key=communication_key,
             memory_key=memory_key,
+            env_names=frozenset(secret.string_data),
+            tool_env_names=tool_env_names,
         )
 
     def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
@@ -3141,6 +3211,8 @@ class AgentService:
         # The pod is gone, so its gateway tokens must stop resolving even if a copy of
         # the Secret was taken while it ran.
         self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
+        if agent.parent_agent_id is None:
+            self._stop_bots(agent)
 
         self.integrations.set_state(agent.id, "stopped")
         agent.status = AgentStatus.STOPPED
@@ -3156,6 +3228,24 @@ class AgentService:
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return result.agent
+
+    def _stop_bots(self, parent: Agent) -> None:
+        ns = self.config.k8s_namespace
+        for bot in self.repository.find_deleted_bots(parent.id):
+            self.k8s.delete_config_map(f"agent-{bot.id}", ns)
+            self.k8s.delete_secret(f"agent-{bot.id}", ns)
+            self.credential_gateway.revoke_for_agent(bot.id, bot.organization_id)
+        for bot in self.repository.find_live_bots(parent.id):
+            self.integrations.set_state(bot.id, "stopping")
+            self.k8s.delete_config_map(f"agent-{bot.id}", ns)
+            self.k8s.delete_secret(f"agent-{bot.id}", ns)
+            self.credential_gateway.revoke_for_agent(bot.id, bot.organization_id)
+            self.integrations.set_state(bot.id, "stopped")
+            bot.status = AgentStatus.STOPPED
+            bot.running_model = ""
+            bot.running_resources = None
+            bot.running_config_digest = ""
+            self.repository.save(bot)
 
     # --- Managed updates (MDP-47 / AF-201) ----------------------------------
 

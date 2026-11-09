@@ -14,9 +14,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - the sharing floor;
   - `GET /agents/{id}/bots`;
   - `POST /agents/{id}/bots`.
-  Bots can be created, and pod operations act on the Parent Agent, but nothing runs Bots yet.
+  Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: Start and stop: per-Bot keys, Secrets and ConfigMaps, status mirrored from the Parent Agent, failure handling.
+- Next: each Bot's plugins using its own identity, the Slack access gate per Bot, a per-Bot LLM error marker, and scheduled-job history kept in the Bot.
 - Blockers: none.
 
 ## Runtime evidence
@@ -50,6 +50,16 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Start and stop with Bots
+
+- Delivered:
+  - Starting a Parent Agent assembles each live Bot's own Secret and ConfigMap with fresh runtime keys, mounts them, and ships `bots.json` with the terminal passthrough names; the LiteLLM key is kept.
+  - A Bot that fails to assemble goes to ERROR alone and is not served. A line break in any value refuses the start, naming only the key.
+  - Bots mirror RUNNING and STOPPED. Stopping removes their Secrets and ConfigMaps, including deleted Bots', and revokes their gateway tokens.
+  - Bots report no update and no pending size.
+- Changed: `bot-setup.py` writes the passthrough names into every profile and points the aai-cli setup at the Bot's own files. The runtime digest moves.
+- Follow-up: per-Bot plugin identity.
 
 ### 2026-11-09 — AF-425 — Bot boot step
 

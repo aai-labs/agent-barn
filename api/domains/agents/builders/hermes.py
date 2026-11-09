@@ -198,7 +198,6 @@ def build_hermes_gateway_config(
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
     max_turns: int | None = None,
-    env_passthrough: Sequence[str] = (),
 ) -> dict:
     plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
@@ -208,8 +207,6 @@ def build_hermes_gateway_config(
     config = _hermes_config_core(
         model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
     )
-    if env_passthrough:
-        config["terminal"]["env_passthrough"] = list(env_passthrough)
     config["memory"]["provider"] = "hindsight" if memory_enabled else ""
     if memory_enabled:
         config["memory"]["hindsight"] = hermes_memory_settings()

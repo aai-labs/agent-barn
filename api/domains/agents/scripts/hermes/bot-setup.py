@@ -118,9 +118,10 @@ def localized(text, bot_id, home):
     return text
 
 
-def write_config(files, home):
+def write_config(files, home, passthrough):
     config = yaml.safe_load((files / "hermes-config.yaml").read_text(encoding="utf-8"))
     config.setdefault("skills", {})["external_dirs"] = [str(home / "skills")]
+    config.setdefault("terminal", {})["env_passthrough"] = passthrough
     target = home / "config.yaml"
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as staged:
         yaml.safe_dump(config, staged, default_flow_style=False, sort_keys=False)
@@ -156,7 +157,7 @@ def setup_bot(bot_id, passthrough):
     for directory in (home / "memories", home / ".config/aai-cli", WORKSPACE / "bots" / bot_id / "memory"):
         directory.mkdir(parents=True, exist_ok=True)
 
-    write_config(files, home)
+    write_config(files, home, passthrough)
     agents = localized((files / "AGENTS.md").read_text(encoding="utf-8"), bot_id, home)
     soul = localized((files / "SOUL.md").read_text(encoding="utf-8"), bot_id, home)
     (home / "SOUL.md").write_text(f"{soul}\n\n{agents}", encoding="utf-8")
@@ -187,7 +188,8 @@ def setup_bot(bot_id, passthrough):
     )
     aai_setup = files / "aai-cli-setup.sh"
     if aai_setup.exists():
-        subprocess.run(["sh", str(aai_setup)], check=True, env={**environment, **values})
+        script = aai_setup.read_text(encoding="utf-8").replace("/app/config/", f"{files}/")
+        subprocess.run(["sh", "-c", script], check=True, env={**environment, **values})
     target = ENV_DIR / f"{bot_id}.env"
     write_env(target, values)
     link(target, home / ".env")
@@ -200,6 +202,11 @@ def setup_parent(passthrough):
         values["API_SERVER_MODEL_NAME"] = os.environ["API_SERVER_MODEL_NAME"]
     write_env(target, values)
     link(target, ROOT / ".env")
+    config_path = ROOT / "config.yaml"
+    if config_path.exists():
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        config.setdefault("terminal", {})["env_passthrough"] = passthrough
+        config_path.write_text(yaml.safe_dump(config, default_flow_style=False, sort_keys=False), encoding="utf-8")
     soul = ROOT / "SOUL.md"
     instructions = (CONFIG / "AGENTS.md").read_text(encoding="utf-8")
     soul.write_text(f"{soul.read_text(encoding='utf-8')}\n\n{instructions}", encoding="utf-8")

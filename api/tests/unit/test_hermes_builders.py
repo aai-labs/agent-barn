@@ -680,12 +680,6 @@ def test_placeholders_fill_only_missing_names():
     assert env == {"AAI_CONFIG": "", "MEMORY_API_KEY": "parent-value"}
 
 
-def test_passthrough_names_reach_the_terminal_config():
-    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", env_passthrough=["AAI_CONFIG"])
-
-    assert config["terminal"]["env_passthrough"] == ["AAI_CONFIG"]
-
-
 def test_a_bot_profile_turns_off_its_api_server_and_keeps_the_parents_config():
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 

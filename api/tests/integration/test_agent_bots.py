@@ -1,13 +1,17 @@
+import json
 from datetime import UTC, datetime
+from unittest.mock import patch
 from uuid import UUID, uuid7
 
 import pytest
+import yaml
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
 
 from api.core.config import Config as AppConfig
 from api.domains.agents.models import AgentStatus, AgentType, pod_agent_id
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.service import AgentService
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
@@ -640,3 +644,179 @@ def test_deleting_a_parent_deletes_its_bots():
         assert_that(_deleted_names(_k8s(context).delete_secret), contains_inanyorder(*names))
         assert_that(_deleted_names(_k8s(context).delete_config_map), contains_inanyorder(*names))
         assert_that(context.injector.get(LiteLLMClient).block_key.call_count, equal_to(3))
+
+
+def _start(context, agent=None):
+    return _call(context, "post", f"{BASE}/{(agent or context.parent).id}/start")
+
+
+def _created(mock_method):
+    return {call.args[1].metadata.name: call.args[1] for call in mock_method.call_args_list}
+
+
+def test_starting_a_parent_serves_its_bots_from_one_pod():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        k8s = _k8s(context)
+        names = [f"agent-{context.parent.id}", *[f"agent-{bot.id}" for bot in context.bots]]
+        assert_that(list(_created(k8s.create_deployment)), equal_to(names[:1]))
+        assert_that(list(_created(k8s.create_pvc)), equal_to(names[:1]))
+        assert_that(list(_created(k8s.create_service)), equal_to(names[:1]))
+        assert_that(list(_created(k8s.create_secret)), contains_inanyorder(*names))
+        assert_that(list(_created(k8s.create_config_map)), contains_inanyorder(*names))
+        pod = _created(k8s.create_deployment)[names[0]].spec.template.spec
+        assert_that({v.name for v in pod.volumes} >= {f"bot-{bot.id}-secret" for bot in context.bots}, equal_to(True))
+        env = {item.name: item.value for item in pod.containers[0].env}
+        assert_that(env["GATEWAY_MULTIPLEX_PROFILES"], equal_to("1"))
+        ports = [port.name for port in _created(k8s.create_service)[names[0]].spec.ports]
+        assert_that("trg-1" in ports and "trg-2" in ports, equal_to(True))
+
+
+def test_the_parent_ships_the_bot_manifest():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        _start(context)
+
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+        manifest = json.loads(data["bots.json"])
+        assert_that(
+            manifest["bots"],
+            equal_to([{"id": str(bot.id), "slot": bot.bot_slot} for bot in context.bots]),
+        )
+        assert_that("AAI_CONFIG" in manifest["passthrough"], equal_to(True))
+        assert_that("bot-setup.py" in data, equal_to(True))
+
+
+def test_the_parents_secret_has_placeholders_for_passthrough_names():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _start(context)
+
+        secret = _created(_k8s(context).create_secret)[f"agent-{context.parent.id}"].string_data
+        assert_that(secret["AAI_CONFIG"], equal_to(""))
+
+
+def test_a_bots_config_turns_off_its_api_server():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _start(context)
+
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.bot.id}"].data
+        config = yaml.safe_load(data["hermes-config.yaml"])
+        assert_that(config["platforms"]["api_server"], equal_to({"enabled": False}))
+
+
+def test_each_bot_gets_its_own_keys_and_keeps_its_litellm_key():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        _start(context)
+
+        secrets = _created(_k8s(context).create_secret)
+        keys = {name: secret.string_data["API_SERVER_KEY"] for name, secret in secrets.items()}
+        ingest = {name: secret.string_data["INGEST_API_KEY"] for name, secret in secrets.items()}
+        assert_that(len(set(keys.values())), equal_to(3))
+        assert_that(len(set(ingest.values())), equal_to(3))
+        for bot in context.bots:
+            assert_that(secrets[f"agent-{bot.id}"].string_data["AGENT_ID"], equal_to(str(bot.id)))
+            assert_that(_stored(context, bot.id).ingest_key_encrypted != "", equal_to(True))
+        context.injector.get(LiteLLMClient).generate_key.assert_not_called()
+
+
+def test_starting_mirrors_running_onto_the_bots():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        _start(context)
+
+        for bot in context.bots:
+            assert_that(_stored(context, bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_one_bad_bot_fails_alone_and_is_not_served():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        original = AgentService._assemble_agent
+        bad = context.bots[0]
+
+        def failing(self, agent, **fields):
+            if agent.id == bad.id:
+                raise RuntimeError("broken bot")
+            return original(self, agent, **fields)
+
+        with patch.object(AgentService, "_assemble_agent", failing):
+            response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        k8s = _k8s(context)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        data = _created(k8s.create_config_map)[f"agent-{context.parent.id}"].data
+        assert_that(
+            [entry["id"] for entry in json.loads(data["bots.json"])["bots"]],
+            equal_to([str(context.bots[1].id)]),
+        )
+        assert_that(f"agent-{bad.id}" in _created(k8s.create_secret), equal_to(False))
+        pod = _created(k8s.create_deployment)[f"agent-{context.parent.id}"].spec.template.spec
+        assert_that(f"bot-{bad.id}-secret" in {v.name for v in pod.volumes}, equal_to(False))
+
+
+def test_a_multi_line_value_refuses_a_parent_with_bots_naming_only_the_key():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        config = context.injector.get(AppConfig)
+        config.agent_firecrawl_api_key = "line1\nline2"
+        config.agent_firecrawl_base_url = "https://configured.firecrawl.example/v1"
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(response.text, contains_string("FIRECRAWL_API_KEY"))
+        assert_that("line1" in response.text, equal_to(False))
+        assert_that(_k8s(context).create_deployment.called, equal_to(False))
+
+
+def test_a_parent_without_bots_ships_no_manifest():
+    with given([*_GIVEN, _parent_with_bots()]) as context:
+        _start(context)
+
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+        assert_that("bots.json" in data, equal_to(False))
+
+
+def test_a_deleted_bot_is_cleaned_up_and_not_served():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _call(context, "delete", f"{BASE}/{context.bot.id}")
+
+        _start(context)
+
+        k8s = _k8s(context)
+        data = _created(k8s.create_config_map)[f"agent-{context.parent.id}"].data
+        manifest = json.loads(data["bots.json"])
+        assert_that(manifest["bots"], equal_to([]))
+        assert_that(manifest["deleted_ids"], equal_to([str(context.bot.id)]))
+        pod = _created(k8s.create_deployment)[f"agent-{context.parent.id}"].spec.template.spec
+        assert_that("GATEWAY_MULTIPLEX_PROFILES" in {e.name for e in pod.containers[0].env}, equal_to(False))
+
+
+def test_stopping_a_parent_stops_its_bots_and_removes_their_runtime_material():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        _start(context)
+        _call(context, "delete", f"{BASE}/{context.bots[1].id}")
+        k8s = _k8s(context)
+        k8s.delete_secret.reset_mock()
+        k8s.delete_config_map.reset_mock()
+
+        response = _call(context, "post", f"{BASE}/{context.parent.id}/stop")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        stopped = _stored(context, context.bots[0].id)
+        assert_that((stopped.status, stopped.running_model), equal_to((AgentStatus.STOPPED, "")))
+        names = [f"agent-{context.parent.id}", *[f"agent-{bot.id}" for bot in context.bots]]
+        assert_that(_deleted_names(k8s.delete_secret), contains_inanyorder(*names))
+        assert_that(_deleted_names(k8s.delete_config_map), contains_inanyorder(*names))
+
+
+def test_a_running_bot_reports_no_update_or_pending_size():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _start(context)
+        stored = _stored(context, context.bot.id)
+        stored.running_config_digest = "stale"
+        context.injector.get(AgentRepository).save(stored)
+
+        body = _call(context, "get", f"{BASE}/{context.bot.id}").json()
+
+        assert_that((body["update_available"], body["pending_size"]), equal_to((False, False)))

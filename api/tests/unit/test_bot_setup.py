@@ -431,3 +431,27 @@ def test_launch_starts_the_helpers_for_served_bots_only(pod):
     while time.time() < deadline and {path.name for path in pod.out.iterdir()} != expected:
         time.sleep(0.1)
     assert {path.name for path in pod.out.iterdir()} == expected
+
+
+def test_every_profile_lists_the_same_passthrough_names(pod):
+    pod.manifest()
+    pod.bot()
+    (pod.root / "config.yaml").write_text(yaml.safe_dump({"model": {"default": "parent"}}))
+
+    _ok(pod.setup())
+
+    names = ["AAI_CONFIG", "ARTIFACT_API_KEY", "MEMORY_API_KEY"]
+    assert yaml.safe_load((pod.home() / "config.yaml").read_text())["terminal"]["env_passthrough"] == names
+    assert yaml.safe_load((pod.root / "config.yaml").read_text())["terminal"]["env_passthrough"] == names
+
+
+def test_the_aai_cli_setup_reads_the_bots_own_config(pod):
+    pod.manifest()
+    pod.bot()
+    script = f"cp /app/config/aai-cli-config.toml {pod.out}/seen.toml || echo $0 > {pod.out}/missing\n"
+    (pod.files / BOT_A / "aai-cli-setup.sh").write_text(f"grep -q . /app/config/aai-cli-config.toml; {script}")
+    (pod.files / BOT_A / "aai-cli-config.toml").write_text("bot config")
+
+    _ok(pod.setup())
+
+    assert (pod.out / "seen.toml").read_text() == "bot config"

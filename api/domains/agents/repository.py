@@ -1782,6 +1782,14 @@ class AgentRepository:
                 ).all()
             )
 
+    def find_deleted_bots(self, parent_id: UUID) -> list[Agent]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(Agent).where(col(Agent.parent_agent_id) == parent_id, col(Agent.deleted_at).is_not(None))
+                ).all()
+            )
+
     def find_all_running(self) -> list[Agent]:
         """Live Agents currently eligible for an operator lifecycle cutover."""
         with Session(self.delegate.engine) as session:
