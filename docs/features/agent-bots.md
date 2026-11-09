@@ -41,7 +41,7 @@ Each Bot keeps its own SOUL and instructions, sessions, built-in memory, model a
 
 - Each Bot has its own bot installs: its own Slack app and its own Telegram bot.
 - A Parent Agent and its Bots can connect the same platform, each with its own app or bot. The one refused pair is Agent Barn Telegram on the Parent Agent with a Bot's own Telegram, because Agent Barn Telegram sets `TELEGRAM_WEBHOOK_URL` for the whole process.
-- Bots support Slack, Telegram and Web Chat. Discord, Microsoft Teams and Agent Barn Telegram are refused on Bots.
+- Bots support Slack, Telegram, Discord and Web Chat. Microsoft Teams and Agent Barn Telegram are refused on Bots.
 - A Bot's scheduled jobs and webhook results are delivered from the Bot's own account on its own platform.
 
 ## Operations

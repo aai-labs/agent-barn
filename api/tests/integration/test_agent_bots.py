@@ -17,11 +17,12 @@ from api.domains.integrations.runtime import RuntimeContext
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
-from api.tests.integration.test_communication_connections import _slack_payload
+from api.tests.integration.test_communication_connections import _discord_payload, _slack_payload
 from api.tests.integration.test_organization_agent_limits import a_platform_administrator_is_signed_in
 from api.tests.steps.agent import (
     FAKE_LITELLM_KEY,
@@ -65,6 +66,7 @@ _GIVEN = [
             "LITELLM_SECRET_NAME": "litellm",
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "SKIP_DISCORD_TOKEN_VALIDATION": "true",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), MockPrometheusModule()]),
@@ -863,13 +865,57 @@ def _new_connection(context, agent, platform="slack"):
     return _call(context, "post", f"{BASE}/{agent.id}/connections", {**_slack_payload(), "platform_key": platform})
 
 
-@pytest.mark.parametrize("platform", ["discord", "teams", "agentbarn_telegram"])
+@pytest.mark.parametrize("platform", ["teams", "agentbarn_telegram"])
 def test_a_bot_cannot_use_a_platform_bots_do_not_support(platform):
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
         response = _new_connection(context, context.bot, platform)
 
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
         assert_that(response.json()["detail"], contains_string("Bot"))
+
+
+def test_a_bot_can_connect_discord():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        response = _call(context, "post", f"{BASE}/{context.bot.id}/connections", _discord_payload())
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+
+
+def test_a_bot_and_its_parent_can_share_discord():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _connect(context, context.parent, "discord")
+
+        response = _call(context, "post", f"{BASE}/{context.bot.id}/connections", _discord_payload())
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+
+
+def test_a_bots_discord_connection_reaches_its_secret_and_config():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        context.postgres_delegate.save(
+            CommunicationConnection(
+                organization_id=context.bot.organization_id,
+                agent_id=context.bot.id,
+                platform_key="discord",
+                display_name="Bot Discord",
+                enabled=True,
+                schema_version=1,
+                settings={"allowed_user_ids": ["user-1"], "require_mention": False},
+                credentials_encrypted=encrypt_token(json.dumps({"bot_token": "bot-discord"}), TEST_ENCRYPTION_KEY),
+            )
+        )
+
+        _start(context)
+
+        secret = _created(_k8s(context).create_secret)[f"agent-{context.bot.id}"].string_data
+        assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("bot-discord"))
+        assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.bot.id}"].data
+        config = yaml.safe_load(data["hermes-config.yaml"])
+        assert_that(
+            config["platforms"]["discord"]["extra"],
+            equal_to({"require_mention": False, "thread_require_mention": False}),
+        )
 
 
 def test_a_bot_can_connect_a_platform_its_parent_is_not_on():

@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-09 — AF-425 — Discord on Bots
+
+- Delivered: a Bot can connect its own Discord bot. Its token and access lists reach its `.env`, and its mention setting is written to `platforms.discord.extra`, which Hermes reads before the process environment.
+- Accepted: Discord settings Agent Barn doesn't set, such as auto-threading and reactions, are process-wide in Hermes `v2026.8.19`, so every Bot uses the same defaults.
+- Not yet verified: a real Discord connection on a Bot.
+
 ### 2026-11-09 — AF-425 — Parent Agents and Bots on the same platform
 
 - Delivered: `hermes-base/patch-bot-cron-delivery.py`, so a Bot's scheduled jobs use the Bot's own connections and a Bot never falls back to its Parent Agent's. A Parent Agent and its Bots can now connect the same platform, with their own apps.

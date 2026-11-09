@@ -27,6 +27,7 @@ from hermes_constants import (  # ty: ignore[unresolved-import]
     reset_hermes_home_override,
     set_hermes_home_override,
 )
+from plugins.platforms.discord.adapter import DiscordAdapter  # ty: ignore[unresolved-import]
 from tools.env_passthrough import resolve_passthrough_value  # ty: ignore[unresolved-import]
 from tools.send_message_tool import _send_via_adapter  # ty: ignore[unresolved-import]
 
@@ -61,9 +62,24 @@ def main() -> None:
     first = home(
         root,
         BOT_A,
-        {"ARTIFACT_API_KEY": "key-a", "ONLY_A": "a", "SLACK_BOT_TOKEN": "xoxb-a", "SLACK_APP_TOKEN": "xapp-a"},
+        {
+            "ARTIFACT_API_KEY": "key-a",
+            "ONLY_A": "a",
+            "SLACK_BOT_TOKEN": "xoxb-a",
+            "SLACK_APP_TOKEN": "xapp-a",
+            "DISCORD_ALLOWED_USERS": "111",
+        },
     )
-    second = home(root, BOT_B, {"ARTIFACT_API_KEY": "key-b", "SLACK_BOT_TOKEN": "xoxb-b", "SLACK_APP_TOKEN": "xapp-b"})
+    second = home(
+        root,
+        BOT_B,
+        {
+            "ARTIFACT_API_KEY": "key-b",
+            "SLACK_BOT_TOKEN": "xoxb-b",
+            "SLACK_APP_TOKEN": "xapp-b",
+            "DISCORD_ALLOWED_USERS": "222",
+        },
+    )
     os.environ.update({"ARTIFACT_API_KEY": "", "ONLY_A": "", "AGENTBARN_SLACK_DM_POLICY": "open"})
     set_multiplex_active(True)
 
@@ -166,6 +182,21 @@ def main() -> None:
         in_scope(first, lambda: bot_slack_token(first)) == "xoxb-a",
     )
     check("another Bot's delivery uses its own", in_scope(second, lambda: bot_slack_token(second)) == "xoxb-b")
+
+    os.environ.update({"DISCORD_REQUIRE_MENTION": "true", "DISCORD_THREAD_REQUIRE_MENTION": "true"})
+    open_bot = DiscordAdapter(
+        PlatformConfig(enabled=True, token="a", extra={"require_mention": False, "thread_require_mention": False})
+    )
+    strict_bot = DiscordAdapter(
+        PlatformConfig(enabled=True, token="b", extra={"require_mention": True, "thread_require_mention": True})
+    )
+    check("a Bot's Discord mention setting beats the process env", not open_bot._discord_require_mention())
+    check("a Bot's Discord thread setting beats the process env", not open_bot._discord_thread_require_mention())
+    check("another Bot keeps its own Discord mention setting", strict_bot._discord_require_mention())
+    in_scope(first, open_bot._snapshot_gate_env)
+    in_scope(second, strict_bot._snapshot_gate_env)
+    check("a Bot's Discord allow list is its own", open_bot._gate_env("DISCORD_ALLOWED_USERS") == "111")
+    check("another Bot's Discord allow list is its own", strict_bot._gate_env("DISCORD_ALLOWED_USERS") == "222")
     print("All Bot checks passed")
 
 

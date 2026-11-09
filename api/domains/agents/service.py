@@ -2611,6 +2611,7 @@ class AgentService:
                     hermes_cfg,
                     slack_settings=native_slack[0] if native_slack is not None else None,
                     telegram_settings=native_telegram.settings if native_telegram is not None else None,
+                    discord_settings=native_discord.settings if native_discord is not None else None,
                 )
             secret = build_secret_hermes_runtime(
                 agent.id,

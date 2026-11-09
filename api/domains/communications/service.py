@@ -52,7 +52,7 @@ from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-BOT_UNSUPPORTED_PLATFORMS = frozenset({"discord", "teams", "agentbarn_telegram"})
+BOT_UNSUPPORTED_PLATFORMS = frozenset({"teams", "agentbarn_telegram"})
 BOT_PLATFORM_CONFLICTS = {"telegram": "agentbarn_telegram", "agentbarn_telegram": "telegram"}
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 

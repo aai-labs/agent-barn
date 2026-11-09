@@ -295,6 +295,7 @@ def bot_gateway_config(
     *,
     slack_settings: dict | None = None,
     telegram_settings: dict | None = None,
+    discord_settings: dict | None = None,
 ) -> dict:
     profile = copy.deepcopy(config)
     platforms = profile.setdefault("platforms", {})
@@ -313,6 +314,9 @@ def bot_gateway_config(
             extra["group_allowed_chats"] = "*"
         elif chat_ids := _setting_ids(telegram_settings, "allowed_chat_ids"):
             extra["allowed_chats"] = extra["group_allowed_chats"] = chat_ids
+    if discord_settings is not None:
+        extra = platforms.setdefault("discord", {}).setdefault("extra", {})
+        extra["require_mention"] = extra["thread_require_mention"] = discord_settings.get("require_mention", True)
     return profile
 
 

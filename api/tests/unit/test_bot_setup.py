@@ -246,6 +246,26 @@ def test_a_bots_env_holds_its_own_values_only(pod):
     assert "COMMUNICATIONS_API_KEY" not in env
 
 
+def test_a_bots_discord_values_reach_its_env(pod):
+    pod.manifest()
+    pod.bot(
+        secret={
+            "DISCORD_BOT_TOKEN": "bot-discord",
+            "DISCORD_ALLOWED_USERS": "123",
+            "DISCORD_ALLOW_ALL_USERS": "false",
+            "DISCORD_HOME_CHANNEL": "456",
+        }
+    )
+
+    _ok(pod.setup())
+
+    env = pod.dotenv(pod.home() / ".env")
+    assert env["DISCORD_BOT_TOKEN"] == "bot-discord"
+    assert env["DISCORD_ALLOWED_USERS"] == "123"
+    assert env["DISCORD_ALLOW_ALL_USERS"] == "false"
+    assert env["DISCORD_HOME_CHANNEL"] == "456"
+
+
 def test_the_parents_env_holds_its_values_and_no_empty_placeholders(pod):
     pod.manifest()
     pod.bot()

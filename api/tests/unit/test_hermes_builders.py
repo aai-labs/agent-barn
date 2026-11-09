@@ -706,6 +706,18 @@ def test_a_bot_profile_carries_slack_settings_in_extra():
     }
 
 
+def test_a_bot_profile_carries_discord_mention_settings_in_extra():
+    extra = bot_gateway_config({}, discord_settings={"require_mention": False})["platforms"]["discord"]["extra"]
+
+    assert extra == {"require_mention": False, "thread_require_mention": False}
+
+
+def test_a_bot_profile_requires_a_discord_mention_by_default():
+    extra = bot_gateway_config({}, discord_settings={})["platforms"]["discord"]["extra"]
+
+    assert extra == {"require_mention": True, "thread_require_mention": True}
+
+
 def test_an_open_slack_group_policy_sets_no_channel_allowlist():
     extra = bot_gateway_config({}, slack_settings={"dm_policy": "allowlist", "group_policy": "open"})["platforms"][
         "slack"
