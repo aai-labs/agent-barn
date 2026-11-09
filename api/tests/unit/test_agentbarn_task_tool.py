@@ -19,8 +19,9 @@ ARTIFACT_ID = "0199f1d2-0000-7000-8000-0000000000bb"
 class _IngestStub:
     """Records each request and answers with a fixed status and JSON body, or one per method.
 
-    It also serves the Artifact runtime routes under `/artifacts-runtime`, answering a
-    publish as a ready Artifact unless `artifacts` says otherwise.
+    It also serves the Artifact runtime routes under `/artifacts-runtime`: a create answers
+    with an uploading Artifact and an upload with a ready one, unless `artifacts` gives one
+    answer for every route or `artifact_answers` one per request, in order.
     """
 
     def __init__(
@@ -29,7 +30,9 @@ class _IngestStub:
         body: object = None,
         by_method: dict[str, tuple[int, object]] | None = None,
         artifacts: tuple[int, object] | None = None,
+        artifact_answers: list[tuple[int, object]] | None = None,
     ):
+        queued = list(artifact_answers or [])
         self.requests: list[dict] = []
         stub = self
 
@@ -46,7 +49,9 @@ class _IngestStub:
                     }
                 )
                 if self.path.startswith("/artifacts-runtime/"):
-                    answer_status, answer = artifacts or (200, {"id": ARTIFACT_ID, "state": "READY"})
+                    state = "READY" if self.path.endswith("/content") else "UPLOADING"
+                    default = (200, {"id": ARTIFACT_ID, "state": state})
+                    answer_status, answer = queued.pop(0) if queued else artifacts or default
                 else:
                     answer_status, answer = (by_method or {}).get(self.command, (status, body))
                 payload = json.dumps(answer if answer is not None else {"id": TASK_ID}).encode()
@@ -448,6 +453,50 @@ def test_attach_replace_removes_earlier_files_of_the_same_name(tmp_path: Path):
         ),
     )
     assert_that(json.loads(result.stdout), has_entries(id="file-new"))
+
+
+def test_attaching_a_file_storage_already_holds_sends_no_bytes(tmp_path: Path):
+    (tmp_path / "offsite.md").write_text("# Offsite")
+    with _IngestStub(status=201, artifact_answers=[(200, {"id": ARTIFACT_ID, "state": "READY"})]) as stub:
+        result = _run(stub, "attach", TASK_ID, str(tmp_path / "offsite.md"), cwd=tmp_path)
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        _attach_requests(stub),
+        equal_to([("POST", "/artifacts-runtime/artifacts"), ("POST", _tasks_path(f"/{TASK_ID}/files"))]),
+    )
+
+
+def test_attach_replace_keeps_the_file_it_just_attached(tmp_path: Path):
+    (tmp_path / "offsite.md").write_text("# Offsite")
+    same = {"id": "file-same", "filename": "offsite.md"}
+    with _IngestStub(
+        by_method={"GET": (200, {"id": TASK_ID, "files": [same]}), "POST": (201, same)},
+        artifact_answers=[(200, {"id": ARTIFACT_ID, "state": "READY"})],
+    ) as stub:
+        result = _run(stub, "attach", TASK_ID, str(tmp_path / "offsite.md"), "--replace", cwd=tmp_path)
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that([method for method, _ in _attach_requests(stub)], equal_to(["GET", "POST", "POST"]))
+
+
+def test_attach_retries_while_another_upload_of_the_file_is_busy(tmp_path: Path):
+    (tmp_path / "offsite.md").write_text("# Offsite")
+    with _IngestStub(status=201, artifact_answers=[(409, {"detail": "Artifact upload is busy"})]) as stub:
+        result = _run(stub, "attach", TASK_ID, str(tmp_path / "offsite.md"), cwd=tmp_path)
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        [path for _, path in _attach_requests(stub)],
+        equal_to(
+            [
+                "/artifacts-runtime/artifacts",
+                "/artifacts-runtime/artifacts",
+                f"/artifacts-runtime/artifacts/{ARTIFACT_ID}/content",
+                _tasks_path(f"/{TASK_ID}/files"),
+            ]
+        ),
+    )
 
 
 def test_attach_replace_keeps_the_earlier_file_when_the_attach_is_refused(tmp_path: Path):

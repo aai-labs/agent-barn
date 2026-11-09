@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid7
 
+import pytest
 import uvicorn
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_entries
@@ -774,3 +775,32 @@ def test_the_command_says_files_are_unavailable_without_file_storage(tmp_path: P
             assert_that(result.stderr, contains_string("Files cannot be attached"))
         finally:
             context.stop_servers()
+
+
+def _titles_most_recently_changed_first(context) -> list[str]:
+    response = context.ingest_client.get(_tasks_url(context.agent), headers=_headers(context.ingest_key))
+    return [task["title"] for task in response.json()["items"]]
+
+
+@pytest.mark.parametrize("change", ["note", "attach", "remove"])
+def test_a_note_or_file_counts_as_a_change_to_its_task(change: str):
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        earlier_id = _create(context, title="Earlier").json()["id"]
+        file_id = _attach(context, earlier_id, _published(context).id).json()["id"] if change == "remove" else None
+        _create(context, title="Later")
+
+        with when(f"the Agent's change to the earlier Task is a {change}"):
+            if change == "note":
+                context.ingest_client.post(
+                    f"{_tasks_url(context.agent)}/{earlier_id}/notes",
+                    json={"body": "Found the cause"},
+                    headers=_headers(context.ingest_key),
+                )
+            elif change == "attach":
+                _attach(context, earlier_id, _published(context).id)
+            else:
+                assert file_id is not None
+                _remove(context, earlier_id, file_id)
+
+            with then("that Task moves to the top of the most recently changed"):
+                assert_that(_titles_most_recently_changed_first(context), contains_exactly("Earlier", "Later"))

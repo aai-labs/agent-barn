@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from injector import inject, singleton
@@ -27,6 +28,12 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 # A finished Task's Files are released: they expire a full Artifact retention later.
 _FINISHED = frozenset({AgentTaskStatus.DONE, AgentTaskStatus.FAILED})
+
+
+def _touch(session: Session, task: AgentTask) -> None:
+    """A Note or File is a change to its Task, so the Task's lists order it by it."""
+    task.updated_at = datetime.now(UTC)
+    session.add(task)
 
 
 def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) -> bool:
@@ -100,10 +107,12 @@ class AgentTaskRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
                 return None
             note = AgentTaskNote(task_id=task_id, body=body)
             session.add(note)
+            _touch(session, task)
             session.commit()
             return note
 
@@ -149,6 +158,7 @@ class AgentTaskRepository:
                 size_bytes=artifact.size,
             )
             session.add(stored)
+            _touch(session, task)
             if task.status in _FINISHED:
                 release(session, file_id)
             else:
@@ -168,7 +178,8 @@ class AgentTaskRepository:
         with Session(self.delegate.engine) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return False
-            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
                 return False
             stored = session.exec(
                 select(AgentTaskFile).where(
@@ -181,6 +192,7 @@ class AgentTaskRepository:
                 return False
             release(session, stored.id)
             session.delete(stored)
+            _touch(session, task)
             session.commit()
             return True
 
