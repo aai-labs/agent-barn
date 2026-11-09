@@ -8,19 +8,119 @@ An Agent listens in chosen shared channels without being mentioned, keeps the co
 
 ## Current state
 
-- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. Discord keeps its "Require @mention" setting; PR 1's removal was undone before it shipped, and migration `16ac819db080` is a no-op. PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names.
+- Delivered: the PR 0 spike on OpenClaw 2026.8.2, recorded below. Discord keeps its "Require @mention" setting; PR 1's removal was undone before it shipped, and migration `16ac819db080` is a no-op. PR 3: OpenClaw turns unmentioned chatter into room events, and Slack Connections have Listen-in channels. PR 4: Discord Connections have Listen-in channels. PR 5: Telegram Connections have Listen-in groups. PR 5b: OpenClaw transcripts record replies in their inbound channel and thread, with sender and channel names. O1: unmentioned OpenClaw turns are limited to posting and web lookups. H1: the Hermes guard plugin core ships in the ConfigMap, not enabled. H2: it adds `post_to_room` and the per-turn rules, still not enabled. H3: it limits tools on listening turns and keeps them out of memory, still not enabled. H3b: Conversations records busy Hermes turns on every Hermes Agent. H4: listen-in rooms are live on Hermes. H5: Hermes reads recent messages in Slack listen-in channels. H6: image tests pin the private Hermes code the guard and observer rely on.
 - In transition: nothing.
 - Next: PR 6, the end-to-end check with Agents built by the real builder, then close ticket 1. PR 2 (a telemetry fix) was dropped after the spike.
 - Blockers: none. Not verified: Hindsight memory on listen-in turns (the spike Agent had Memory off).
 
 ## Changes
 
+### 2026-11-07 — MDP-118 — Require @mention with Hermes listen-in
+
+- Verified: on Hermes, Require @mention off and listen-in rooms work together. Hermes checks the mention per channel and free-response rooms bypass it, so other Discord channels answer every message while listen-in rooms stay guarded. No code change was needed; OpenClaw still refuses the combination, because its rule for unmentioned messages covers the whole Agent.
+- Evidence: a builder test and an Agent start test through the service, both with the switch off and a listen-in channel. Breaking the builder's switch made both builder tests fail.
+
+### 2026-11-07 — MDP-118 — Review fixes for the OpenClaw guard
+
+- Fixed: the guard queued one classification per dispatched message and took one per turn, but a mention steered into a running turn and a command never start a turn, so a leftover entry shifted every later turn in the session (found in review). It now decides per run in `before_agent_run`, from the `[OpenClaw room event]` marker that OpenClaw puts in the run's last message (its runtime context), and blocks by `runId`. Nothing is queued, so nothing can drift.
+- Evidence (OpenClaw 2026.8.2 source, embedded runtime): `before_prompt_build` runs before the room-event context is attached, so it can't see the marker; `before_agent_run` receives `hookMessagesForCurrentPrompt`, which ends with that context; older runtime contexts are stripped from history; tool calls carry the run's `runId`.
+- Changed: an Agent with listen-in rooms no longer auto-threads its other Discord channels (decided with the reviewer's second point). OpenClaw drops `requireMention` in threads it auto-created, so untagged follow-ups there were room events outside any listen-in room. Listen-in rooms keep their threads; Agents without listen-in rooms are unchanged.
+- Not verified live: one room-event message and one mention on a real Agent confirm the per-run marker.
+
 ### 2026-11-06 — MDP-118 — Keep Discord's Require @mention
 
 - Changed: PR 1's removal is undone. Require @mention and listen-in are separate: the setting decides whether users must mention the Agent in every channel, and listen-in channels ignore it. The setting returns with its old default, on; the schema stays at version 2, and migration `16ac819db080` is now a no-op, so saved values on shared environments are kept.
 - Changed: OpenClaw turns unmentioned messages into room events only when the Agent has a listen-in room. Without one, Require @mention off answers every message, as before PR 1.
 - Added: OpenClaw applies one rule for unmentioned messages to the whole Agent, so saving a Connection is refused while Discord's Require @mention is off and any enabled listen-in room exists. Hermes enforces mentions per channel, so it allows both.
-- Follow-up: when AF-428 merges, keep its `_listen_in_rooms` block (a superset), and give its listen-in guard builder test a listen-in room, since room events now need one.
+- Merged into AF-428: its `_listen_in_rooms` block is kept, and its listen-in guard builder test now passes a listen-in room, since room events need one.
+
+### 2026-11-03 — MDP-118 O2 — OpenClaw memory and Slack context
+
+- Fixed: with Memory on, Hindsight saved unmentioned room messages and recalled them on later turns. Live, Odin posted the Canberra correction a second time on an unrelated message, and "teal" reached memory. Memory-enabled Agents now list listen-in rooms in Hindsight's `statelessSessionPatterns`, with recall still on.
+- Added: the first turn of a Slack room session reads up to 15 recent channel messages, as Hermes does since H5, because each top-level Slack message is its own session.
+- Decided: Hindsight's own per-room setting rather than a per-turn block, which would mean altering the shared `agent_end` event. Setting `success` there would mark every listening turn as failed in the Connection Journal.
+- Differs from Hermes: on OpenClaw, mentions in a listen-in room aren't auto-saved. Unmentioned messages in a Discord thread under a listen-in channel are still saved, because a thread has its own session key.
+- Follow-up: the live OpenClaw round must be rerun on all three platforms, including whether `@bot remember X` still saves. The `4` reply to "remember Falcon" stays unexplained until then.
+
+### 2026-11-03 — MDP-118 H7 — Hermes live round
+
+- Result: passed on Slack, Discord and Telegram, on Hermes v2026.8.19 with Memory on and a Connection for each platform. Eric ran the builder's config with the load fix patched into its ConfigMap, ahead of the API redeploy.
+- Observed: greetings, `ls /tmp` requests, "teal", "thanks" sent during a running turn, and unmentioned `/reset` all posted nothing. Each room got one Canberra correction, with no repeat. Mentions were answered. The Discord thread posted no listing. A blocked `terminal` call was recorded. Slack mention turns saw earlier channel messages.
+- Memory: Hindsight holds Falcon and mentioned turns, but not "teal" or the Sydney message.
+- Failed, not the guard: one Telegram reply was lost when Telegram's connection dropped (`send_path_degraded` after 2 retries). Conversations still shows it as OUTBOUND, because the observer mirrors the row on every ledger state. This is existing behaviour and needs its own ticket.
+- Noted: the model twice called `post_to_room` on a mention, was refused, and then answered normally. "Write a story" was declined on all platforms as outside the Agent's role, which comes from its instructions, not listen-in.
+- Not checked: `/background` in a listen-in room, the duplicate failure notice, and typing indicators.
+- Next: redeploy with the load fix, then O2 for OpenClaw, where Hindsight saves unmentioned messages. Ticket 1 stays open until then.
+
+### 2026-11-03 — MDP-118 H4 fix — The guard failed to load on a real Hermes Agent
+
+- Fixed: Hermes discovers plugins while `run_agent` is still importing, so the plugin's import of `AIAgent` at registration failed and the gateway started without the guard, with free-response rooms answering every message. No message was sent to the room before this was caught. The memory guard now installs when the first turn starts.
+- Fixed: `listen-in-check.py` loaded the plugin in a clean process, where that import works, so it passed a guard Hermes itself could not load. It now imports `run_agent` and asks Hermes' plugin manager whether the guard loaded.
+- Evidence: found on a live Agent through the real builder, in the pod's log. `hermes_listen_in_driver.py` now runs the check through Hermes' real loader, with a working guard and with one that fails the same way.
+
+### 2026-11-03 — MDP-118 H6 — Hermes contract driver
+
+- Delivered: `hermes-base/test-image.sh` runs `hermes_listen_in_driver.py` in the image, against Hermes' real adapters, ledger, silence filter, tool hook dispatch, sanitiser and memory sync. `hermes_observer_driver.py` now also covers recording at the adapter and the reply before a queued message. An upgrade that changes any of these fails the image test.
+- Evidence: both drivers passed on the local base image. Ten deliberately broken copies of the listen-in plugin and two of the observer each made their driver fail.
+- Not covered: the drivers don't connect to Slack, Discord or Telegram, or run a model. H7 checks those live.
+
+### 2026-11-03 — MDP-118 H5 — Slack channel context on Hermes
+
+- Delivered: the first turn of a Slack room session, listening or addressed, reads up to 15 recent channel messages with `conversations.history`. Nothing is kept in memory, so this works after a restart. Names and text are flattened to one line with Hermes' own helper, and the block is labelled as background, not instructions.
+- Decided: one Slack call per new session rather than a rolling buffer, which is lost on restart and needs a seed call anyway. Internal customer-built apps, which is how our Slack manifest is used, stay at about 50 calls a minute. A failed or slow call (5-second limit) only leaves the turn without history.
+- Evidence: Slack's rate limit documentation (2025-05-29 and 2025-06-03 changelog entries). The manifest already grants `channels:history` and `groups:history`. The adapter helpers were checked against Hermes v2026.8.19. H7 confirms the call live.
+- Known limits: `conversations.history` returns top-level messages, so thread replies aren't included, and neither are the Agent's answers inside threads. Each message's text is cut at 450 characters. A queued message may use the message ID of the turn that held it, which only makes its history slightly older.
+
+### 2026-11-03 — MDP-118 H4 — Hermes listen-in is live
+
+- Delivered: a Hermes Connection's listen-in rooms become `free_response_*` entries, and the builder enables the guard plugin, turns tool search off and queues busy messages. An Agent with no listen-in rooms gets the same config as before.
+- Decided: Verbose mode is forced off on a platform with listen-in rooms rather than rejected, because it would post a listening turn's progress into the room. It stays on for that Agent's other platforms.
+- Added: `listen-in-check.py` runs before the gateway. If the guard can't load, free-response rooms would answer every message, so it removes them and the Agent answers only mentions.
+- Changed: Queueing applies to the whole Agent: a new message no longer interrupts a running turn in any chat, and `/stop` still works. The runtime digest changes.
+- Evidence: the config matches the H0b spike, which passed live. The check was run against Hermes v2026.8.19. H7 confirms the real builder's output live.
+- Known limits: until H5, a Hermes Agent in a Slack listen-in channel sees only the current message, because each top-level message is its own session. Slack thread replies in a listen-in channel aren't read under the every-message policy.
+
+### 2026-11-03 — MDP-118 H3b — Conversations rows for busy Hermes turns
+
+- Delivered: the Hermes observer records each message at the adapter, before the busy queue, and records the reply sent just before a queued message runs, which skips the delivery ledger. A message seen at both the adapter and the dispatch hook is recorded once.
+- Decided: this lives in the observer and applies to every Hermes Agent, because the gap isn't specific to listen-in.
+- Changed: Requests rises on busy Hermes Agents and Cost per Request falls, because the old count was too low. Past data isn't corrected. Queued messages from senders the Agent won't answer now get a row and count as Requests, as idle ones already did. The runtime digest changes, so running Hermes Agents report an update.
+- Evidence: H0b found the gaps live (database rows against logs). The new patches were applied against Hermes v2026.8.19, where the method signature and attachment stripping matched.
+- Known limits: queued messages have no Connection Journal timeline of their own. Hermes doesn't report the result of that reply's send, so a send that fails without raising still has an OUTBOUND row. H7 confirms the rows live.
+- Follow-up: H6 pins the two new private Hermes points.
+
+### 2026-11-03 — MDP-118 H3 — Hermes tool and memory rules
+
+- Delivered: listening turns can use only `post_to_room`, `web_search` and `web_extract`, and a post right after a blocked tool is refused once, so a half-written message can't reach the room. Listening turns aren't sent to the external memory provider. Background review of a room's session can't write memory or skills. Addressed turns keep every tool, so `@Agent remember X` still saves. No behaviour changes yet: nothing enables the plugin until H4.
+- Fixed: delegated subagents also fire `pre_llm_call`. They now keep their parent's turn instead of taking a queued classification, which would have silenced a subagent's answer and misclassified the next message.
+- Evidence: spike H0b (review block and memory guard, live). Hermes v2026.8.19 code: the subagent platform value and hook arguments; Hindsight has no `on_session_end`, so the turn sync is its only automatic retain path. The plugin registered against the pinned image and patched the real `AIAgent`.
+- Not verified: stored Hindsight rows, because local Hindsight was down during H0b; H7 re-checks them. Also `/background` in a listen-in room, which starts a turn without a classification and may come back silent; H7 checks it.
+- Known limit: memory saved elsewhere, such as in DMs, is still loaded on listening turns, so the Agent can use it when it speaks in a room.
+
+### 2026-11-03 — MDP-118 H2 — Hermes `post_to_room` and per-turn rules
+
+- Delivered: a listening turn receives the rules for when to speak through `pre_llm_call`, and speaks only through the `post_to_room` tool, into its current room and thread. The tool refuses every other kind of turn. Posts pass through Hermes' final-response sanitiser and appear in Conversations through the delivery ledger. No behaviour changes yet: nothing enables the plugin until H4.
+- Decided: one send attempt per turn, whatever the outcome. A rejected or timed-out send may have reached the room in part, because adapters split long messages, so a retry could double post. A failed post means silence, and is logged but not shown in the Connection Journal.
+- Evidence: spike H0 and H0b live posts on Slack, Discord and Telegram. The sanitiser, ledger, `register_tool` and adapter `send` signatures were checked against the pinned image.
+- Known limits: a crash between the send and the ledger write can lose the Conversations row, and a crash between the ledger's two writes can redeliver the post once. If a model ends a turn with a truly empty answer, Hermes skips the transform and posts its own "no response" notice; this did not occur in the spike, and H7 checks for it.
+- Follow-up: H3 adds the tool allowlist that the rules describe, including refusing a post after a blocked tool.
+
+### 2026-11-03 — MDP-118 H1 — Hermes guard plugin core
+
+- Delivered: the `agentbarn-listen-in` Hermes plugin classifies each inbound message at ingress, before Hermes' busy queue, and each turn takes its classification when it starts. Unaddressed turns have their final answer replaced with `NO_REPLY`; a room turn never classified counts as listening. Unaddressed messages lose `allow_gateway_control`, so they can't run slash commands or answer approvals. No behaviour changes yet: nothing enables the plugin until H4.
+- Evidence: spike H0b on Hermes v2026.8.19 (queue races on Discord and Telegram, approvals, slash commands). The plugin was also loaded against the pinned image: all private adapter helpers exist and no adapter overrides `handle_message`.
+- Changed: Runtime: the plugin ships in the ConfigMap and `start.sh` installs it. The runtime configuration digest changes, so running Hermes Agents report an update.
+- Follow-up: H2 adds `post_to_room` and the per-turn rules; until then a listening turn has no way to speak.
+
+### 2026-11-03 — MDP-118 O1 — limit tools on unmentioned OpenClaw turns
+
+- Delivered: an unmentioned message in a listen-in room could lead the Agent to run any tool. The new `agentbarn-listen-in` plugin blocks everything except `message`, `web_search`, `web_fetch` and `x_search` on those turns. Mentions keep every tool.
+- Evidence: on OpenClaw 2026.8.2, Discord, a per-room `tools.deny` blocked `exec` in the channel but not in threads under it (`exec` succeeded twice). A spike of the plugin blocked `exec` on an unmentioned message in a thread, allowed it on mentions, and classified a mention and an unmentioned message sent seconds apart separately. Slack and Telegram are not yet tested live with the plugin; PR 6 covers them.
+- Changed:
+  - Runtime: the plugin ships in the ConfigMap and is enabled with room events. The listen-in rules add "Never answer an @mention with silence". The runtime configuration digest changes, so running OpenClaw Agents report an update.
+  - Docs: [Mention gating](../../architecture/runtime-and-deployment.md#mention-gating), [communications](../communications/CHANGELOG.md).
+- Known limit: a turn with no classification, such as one resumed after a restart, is not limited.
+- Follow-up: PR 6. Whether Hindsight `autoRetain` stores room events on OpenClaw is still unverified.
 
 ### 2026-10-29 — MDP-118 PR 5b — OpenClaw observer transcripts
 

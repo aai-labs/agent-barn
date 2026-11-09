@@ -1,0 +1,11 @@
+{
+  "id": "agentbarn-listen-in",
+  "name": "Agent Barn listen-in guard",
+  "description": "Limit tools on unmentioned turns in listen-in rooms",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": { "slackRooms": { "type": "array", "items": { "type": "string" } } }
+  }
+}
