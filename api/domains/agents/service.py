@@ -2410,11 +2410,17 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.create_config_map(ns, assembled.config_map)
         self.k8s.create_secret(ns, assembled.secret)
+        created_bots: list[tuple[Agent, _AssembledAgent]] = []
         for bot, bot_assembled in assembled_bots:
-            self.k8s.delete_config_map(f"agent-{bot.id}", ns)
-            self.k8s.delete_secret(f"agent-{bot.id}", ns)
-            self.k8s.create_config_map(ns, bot_assembled.config_map)
-            self.k8s.create_secret(ns, bot_assembled.secret)
+            try:
+                self.k8s.delete_config_map(f"agent-{bot.id}", ns)
+                self.k8s.delete_secret(f"agent-{bot.id}", ns)
+                self.k8s.create_config_map(ns, bot_assembled.config_map)
+                self.k8s.create_secret(ns, bot_assembled.secret)
+                created_bots.append((bot, bot_assembled))
+            except Exception as exc:
+                logger.exception("Failed to create runtime resources for bot %s", bot.id)
+                self._record_provisioning_failure(bot, exc)
         self.k8s.create_pvc(
             ns,
             build_pvc(agent.id, agent.organization_id, ns, self.config.storage_class or None),
@@ -2422,7 +2428,7 @@ class AgentService:
         self.k8s.create_service(ns, assembled.service)
         self.k8s.create_deployment(ns, assembled.deployment)
         self._record_started(agent, assembled)
-        for bot, bot_assembled in assembled_bots:
+        for bot, bot_assembled in created_bots:
             self._record_started(bot, bot_assembled)
             self.repository.save(bot)
         return assembled.previous_status

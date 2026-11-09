@@ -820,3 +820,22 @@ def test_a_running_bot_reports_no_update_or_pending_size():
         body = _call(context, "get", f"{BASE}/{context.bot.id}").json()
 
         assert_that((body["update_available"], body["pending_size"]), equal_to((False, False)))
+
+
+def test_a_cluster_failure_on_one_bot_fails_only_that_bot():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        k8s = _k8s(context)
+        bad = context.bots[0]
+
+        def create_secret(namespace, secret):
+            if secret.metadata.name == f"agent-{bad.id}":
+                raise RuntimeError("cluster said no")
+
+        k8s.create_secret.side_effect = create_secret
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))

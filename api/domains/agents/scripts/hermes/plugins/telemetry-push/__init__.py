@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.request
 from datetime import UTC
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -307,12 +308,26 @@ def _on_session_end(**kwargs):
         logger.warning("telemetry-push session_end flush failed: %s", e)
 
 
+def _identity():
+    try:
+        lines = (Path(__file__).resolve().parents[2] / ".env").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return os.environ
+    values = {}
+    for line in lines:
+        name, separator, value = line.partition("=")
+        if separator:
+            values[name] = value[1:-1].replace('\\"', '"').replace("\\\\", "\\") if value.startswith('"') else value
+    return values if values.get("AGENT_ID") else os.environ
+
+
 def register(ctx):
     global _agent_id, _ingest_url, _ingest_api_key, _flush_thread
 
-    _agent_id = os.environ.get("AGENT_ID", "")
-    _ingest_url = os.environ.get("INGEST_URL", "")
-    _ingest_api_key = os.environ.get("INGEST_API_KEY", "")
+    identity = _identity()
+    _agent_id = identity.get("AGENT_ID", "")
+    _ingest_url = identity.get("INGEST_URL", "")
+    _ingest_api_key = identity.get("INGEST_API_KEY", "")
 
     if not _agent_id or not _ingest_url or not _ingest_api_key:
         return

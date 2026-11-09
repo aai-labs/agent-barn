@@ -259,10 +259,24 @@ def _loop(url: str, api_key: str, home: Path) -> None:
             logger.warning("agentbarn-observer poll failed: %s", exc)
 
 
+def _identity():
+    try:
+        lines = (Path(__file__).resolve().parents[2] / ".env").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return os.environ
+    values = {}
+    for line in lines:
+        name, separator, value = line.partition("=")
+        if separator:
+            values[name] = value[1:-1].replace('\\"', '"').replace("\\\\", "\\") if value.startswith('"') else value
+    return values if values.get("AGENT_ID") else os.environ
+
+
 def register(ctx):
-    agent_id = os.environ.get("AGENT_ID", "")
-    ingest_url = os.environ.get("INGEST_URL", "")
-    api_key = os.environ.get("INGEST_API_KEY", "")
+    identity = _identity()
+    agent_id = identity.get("AGENT_ID", "")
+    ingest_url = identity.get("INGEST_URL", "")
+    api_key = identity.get("INGEST_API_KEY", "")
     if not agent_id or not ingest_url or not api_key:
         return
 
@@ -272,6 +286,10 @@ def register(ctx):
     ctx.register_hook("pre_approval_request", _on_approval("approval_requested"))
     ctx.register_hook("post_approval_response", _on_approval("approval_answered"))
 
-    home = Path(os.environ.get("HERMES_HOME", "/opt/data"))
+    home = (
+        Path(os.environ.get("HERMES_HOME", "/opt/data"))
+        if identity is os.environ
+        else Path(__file__).resolve().parents[2]
+    )
     url = f"{ingest_url}/agents/{agent_id}/communication-events"
     threading.Thread(target=_loop, args=(url, api_key, home), daemon=True).start()

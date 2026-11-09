@@ -16,7 +16,8 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: each Bot's plugins using its own identity, the Slack access gate per Bot, a per-Bot LLM error marker, and scheduled-job history kept in the Bot.
+- Next: webhook and workflow URLs that reach the right pod and port.
+- Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
 ## Runtime evidence
@@ -50,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Per-Bot plugin identity
+
+- Delivered: telemetry and the observer report as their own home's Agent, read from that home's `.env`. The Slack access gate no longer falls through to process env. The LLM error marker is keyed per caller under multiplex. A cluster failure creating one Bot's Secret or ConfigMap fails only that Bot.
+- Changed: the runtime digest moves.
+- Follow-up: pod and port URLs.
 
 ### 2026-11-09 — AF-425 — Start and stop with Bots
 

@@ -391,7 +391,8 @@ def test_a_helper_runs_as_its_bot_only(pod):
     assert env["RUNTIME_API_URL"] == f"http://127.0.0.1:8642/p/{BOT_A}"
     assert env["RUNTIME_API_KEY"] == f"key-{BOT_A}"
     assert env["AGENT_TRIGGER_PORT"] == "8101"
-    assert env["AGENTBARN_LLM_ERROR_MARKER"] == f"/tmp/agentbarn-llm-error-{BOT_A}.json"
+    assert env["GATEWAY_MULTIPLEX_PROFILES"] == "1"
+    assert env["OPENAI_API_KEY"] == f"llm-{BOT_A}"
     assert env["BOOT_FILE"] == f"{pod.home()}/BOOT.md"
     assert PARENT_SECRET not in json.dumps(env)
     assert "MEMORY_API_KEY" not in env

@@ -38,7 +38,7 @@ def main():
     env["RUNTIME_API_URL"] = f"http://127.0.0.1:8642/p/{bot_id}"
     env["RUNTIME_API_KEY"] = secret["API_SERVER_KEY"]
     env["AGENT_TRIGGER_PORT"] = str(TRIGGER_BASE_PORT + slot)
-    env["AGENTBARN_LLM_ERROR_MARKER"] = f"/tmp/agentbarn-llm-error-{bot_id}.json"
+    env["GATEWAY_MULTIPLEX_PROFILES"] = "1"
     env["BOOT_FILE"] = str(ROOT / "profiles" / bot_id / "BOOT.md")
     os.execve(sys.executable, [sys.executable, script], env)
 

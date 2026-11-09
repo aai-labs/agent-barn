@@ -1,3 +1,4 @@
+import hashlib
 import http.client
 import json
 import os
@@ -57,14 +58,21 @@ _BUDGET_EXHAUSTED_STATUS = 402
 _LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
 
 
-def _record_terminal_llm_error(code: str) -> None:
+def _llm_error_marker(api_key: str) -> str:
+    if os.environ.get("GATEWAY_MULTIPLEX_PROFILES") != "1":
+        return _LLM_ERROR_MARKER
+    return f"{_LLM_ERROR_MARKER}.{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
+
+
+def _record_terminal_llm_error(code: str, api_key: str) -> None:
     """Best effort: a failed write costs the person chatting a precise reason, never
     the response itself."""
     try:
-        tmp = f"{_LLM_ERROR_MARKER}.tmp"
+        marker = _llm_error_marker(api_key)
+        tmp = f"{marker}.tmp"
         with open(tmp, "w") as handle:
             json.dump({"code": code, "at": time.time()}, handle)
-        os.replace(tmp, _LLM_ERROR_MARKER)
+        os.replace(tmp, marker)
     except OSError:
         pass
 
@@ -385,7 +393,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # usually says 429, which the runtime retries as a rate limit
                     # indefinitely, so the person chatting would never hear back.
                     status = _BUDGET_EXHAUSTED_STATUS
-                    _record_terminal_llm_error(_SPENT_CODE)
+                    _record_terminal_llm_error(
+                        _SPENT_CODE, self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+                    )
                     completion = _spend_limit_completion(self.path, body)
                     if completion is not None:
                         content_type, completion_body = completion
