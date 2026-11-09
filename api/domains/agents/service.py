@@ -12,13 +12,14 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from kubernetes import client
 from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
-from api.domains.agent_sizes.models import size_is_pending, size_resources
+from api.domains.agent_sizes.models import AgentSize, size_is_pending, size_resources
 from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_tool_context_md,
@@ -168,6 +169,7 @@ from api.domains.events.catalog import (
     AGENT_STOPPED,
 )
 from api.domains.integrations.isolation import isolation_read, legacy_isolation
+from api.domains.integrations.models import AgentIntegrationRuntime
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.integrations.runtime import (
     RuntimeBinding,
@@ -298,6 +300,21 @@ def _managed_update_failure_text(exc: Exception) -> str:
     if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
         return exc.detail
     return "The backup step failed unexpectedly. The API logs have the details."
+
+
+@dataclass(frozen=True)
+class _AssembledAgent:
+    previous_status: str
+    service: client.V1Service
+    secret: client.V1Secret
+    config_map: client.V1ConfigMap
+    deployment: client.V1Deployment
+    runtime: AgentIntegrationRuntime | None
+    size: AgentSize
+    effective_model: str
+    ingest_key: str
+    communication_key: str
+    memory_key: str | None
 
 
 @dataclass(frozen=True)
@@ -2357,6 +2374,70 @@ class AgentService:
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
+        assembled = self._assemble_agent(
+            agent,
+            preflight=preflight,
+            isolation_overrides=isolation_overrides,
+            custom_api_overrides=custom_api_overrides,
+        )
+        if preflight:
+            return assembled.previous_status
+        assert assembled.runtime is not None
+        ns = self.config.k8s_namespace
+        name = f"agent-{agent.id}"
+
+        # Failures here are recorded and normalized by _start_agent_unchecked, which
+        # wraps this whole method rather than only the cluster calls.
+        self.k8s.delete_config_map(name, ns)
+        self.k8s.delete_secret(name, ns)
+        self.k8s.create_config_map(ns, assembled.config_map)
+        self.k8s.create_secret(ns, assembled.secret)
+        self.k8s.create_pvc(
+            ns,
+            build_pvc(agent.id, agent.organization_id, ns, self.config.storage_class or None),
+        )
+        self.k8s.create_service(ns, assembled.service)
+        self.k8s.create_deployment(ns, assembled.deployment)
+        self.integrations.set_state(agent.id, "provisioned", assembled.runtime.generation)
+
+        agent.status = AgentStatus.RUNNING
+        agent.last_error = None
+        agent.last_error_code = None
+        agent.last_error_detail = None
+        # Pin what this pod was started on. The runtime reads its config once, so this
+        # is the model it serves until someone restarts it — however the Organization
+        # default moves in the meantime.
+        agent.running_model = assembled.effective_model
+        # Likewise the resources, so a size changed while it runs reads as pending.
+        agent.running_resources = size_resources(assembled.size)
+        if agent.agent_type == AgentType.HERMES:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
+            )
+        else:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self._effective_runtime_image(agent),
+                self.config.hermes_image,
+            )
+        agent.ingest_key_encrypted = encrypt_token(assembled.ingest_key, self.config.agent_token_encryption_key)
+        agent.memory_key_hash = (
+            hashlib.sha256(assembled.memory_key.encode()).hexdigest() if assembled.memory_key else None
+        )
+        agent.communication_key_encrypted = encrypt_token(
+            assembled.communication_key,
+            self.config.agent_token_encryption_key,
+        )
+        return assembled.previous_status
+
+    def _assemble_agent(
+        self,
+        agent: Agent,
+        *,
+        preflight: bool = False,
+        isolation_overrides: Mapping[SecretProvider, bool] | None = None,
+        custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+    ) -> _AssembledAgent:
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
@@ -2646,6 +2727,7 @@ class AgentService:
             store_dir=aai_store_dir,
         )
         gateway_tokens = []
+        runtime = None
         if not preflight:
             runtime = self.integrations.begin(agent.id, snapshot)
             gateway_tokens = self.credential_gateway.issue_for_agent(
@@ -2656,6 +2738,7 @@ class AgentService:
                 replace(runtime_context, gateway_tokens={issued.provider: issued.value for issued in gateway_tokens}),
             )
         if not preflight:
+            assert runtime is not None
             custom_artifacts = materialize_custom_api(
                 custom_connections,
                 self.config.agent_token_encryption_key,
@@ -2849,50 +2932,19 @@ class AgentService:
 
         config_map.data["AGENTS.md"] += custom_artifacts.policy_md
 
-        if preflight:
-            return previous_status
-
-        # Failures here are recorded and normalized by _start_agent_unchecked, which
-        # wraps this whole method rather than only the cluster calls.
-        self.k8s.delete_config_map(name, ns)
-        self.k8s.delete_secret(name, ns)
-        self.k8s.create_config_map(ns, config_map)
-        self.k8s.create_secret(ns, secret)
-        self.k8s.create_pvc(
-            ns,
-            build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+        return _AssembledAgent(
+            previous_status=previous_status,
+            service=service,
+            secret=secret,
+            config_map=config_map,
+            deployment=deployment,
+            runtime=runtime,
+            size=size,
+            effective_model=effective_model,
+            ingest_key=ingest_key,
+            communication_key=communication_key,
+            memory_key=memory_key,
         )
-        self.k8s.create_service(ns, service)
-        self.k8s.create_deployment(ns, deployment)
-        self.integrations.set_state(agent.id, "provisioned", runtime.generation)
-
-        agent.status = AgentStatus.RUNNING
-        agent.last_error = None
-        agent.last_error_code = None
-        agent.last_error_detail = None
-        # Pin what this pod was started on. The runtime reads its config once, so this
-        # is the model it serves until someone restarts it — however the Organization
-        # default moves in the meantime.
-        agent.running_model = effective_model
-        # Likewise the resources, so a size changed while it runs reads as pending.
-        agent.running_resources = size_resources(size)
-        if agent.agent_type == AgentType.HERMES:
-            agent.running_config_digest = agent_runtime_config_digest(
-                self.config.openclaw_image,
-                self._effective_runtime_image(agent),
-            )
-        else:
-            agent.running_config_digest = agent_runtime_config_digest(
-                self._effective_runtime_image(agent),
-                self.config.hermes_image,
-            )
-        agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
-        agent.memory_key_hash = hashlib.sha256(memory_key.encode()).hexdigest() if memory_key else None
-        agent.communication_key_encrypted = encrypt_token(
-            communication_key,
-            self.config.agent_token_encryption_key,
-        )
-        return previous_status
 
     def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
         """Record a start whose Kubernetes resources already exist.

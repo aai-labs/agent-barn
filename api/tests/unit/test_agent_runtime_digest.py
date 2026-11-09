@@ -21,6 +21,7 @@ def build_policy_md() -> str:
 
 _ASSEMBLY_METHODS = {
     "_provision_and_start",
+    "_assemble_agent",
     "_platform_pin_for",
     "_effective_runtime_image",
     "_auto_attached_aai_cli_skills",

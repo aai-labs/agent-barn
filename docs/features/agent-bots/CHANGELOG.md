@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Bots can be created, and pod operations act on the Parent Agent, but nothing runs Bots yet.
 - In transition: nothing.
-- Next: extract `_assemble_agent` with no behaviour change.
+- Next: Bot builders, optional volumes, multiplex, Service ports and passthrough placeholders.
 - Blockers: none.
 
 ## Runtime evidence
@@ -50,6 +50,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Extract Agent assembly
+
+- Delivered: `_assemble_agent` builds an Agent's Secret, ConfigMap, Deployment and Service. No behaviour change: Hermes and OpenClaw start resources compared byte-for-byte equal before and after.
+- Changed: the runtime digest moves, so running Agents report an available update.
+- Follow-up: Bot builders.
 
 ### 2026-11-09 — AF-425 — Pod operations on a Bot
 
