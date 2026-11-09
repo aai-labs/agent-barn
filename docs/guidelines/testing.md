@@ -136,6 +136,10 @@ The Hermes path filter explicitly includes `hermes_slack_access_driver.py`.
 Changes to that fixture alone select the Hermes image workflow and run the
 real-adapter admission, thread-context, and group-DM button contracts.
 
+`hermes_bots_driver.py` is in the same filter. It proves, on the real image, the multiplex
+behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
+scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.
+
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
 doing so ran every commit on a PR branch twice. A branch without a pull request

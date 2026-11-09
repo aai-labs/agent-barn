@@ -47,6 +47,11 @@ docker run --rm --network none \
     -v "$repo_root/api/tests/fixtures/hermes_native_delivery_driver.py:/native-driver.py:ro" \
     --entrypoint python3 "$image" /native-driver.py
 
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-slack-access:/slack-access:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_bots_driver.py:/driver.py:ro" \
+    --entrypoint python3 "$image" /driver.py
+
 sh "$repo_root/api/tests/fixtures/test-messaging-retirement.sh" "$image" hermes
 
 # The healthz server reports the container's own CPU and memory from its cgroup v2

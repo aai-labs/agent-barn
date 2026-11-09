@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the image-level test and CI.
+- Next: the UI: Bot switcher in the path bar and the New bot dialog.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Image-level Bot checks
+
+- Delivered: `hermes_bots_driver.py` runs on the real Hermes image in `test-image.sh`: Bot ids as profile names, per-profile terminal passthrough, the Slack gate and plugin, the shared-platform capture, and a Bot's scheduled delivery using its own credential.
+- Changed: the Hermes CI path filter and `docs/guidelines/testing.md`.
+- Follow-up: UI.
 
 ### 2026-11-09 — AF-425 — Bot health
 
