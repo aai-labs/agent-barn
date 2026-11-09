@@ -1,6 +1,6 @@
 # Bots share their Parent Agent's gateway
 
-Status: Accepted
+Status: Accepted. The messaging platform rule is superseded by [A Parent Agent and its Bots can share a messaging platform](2026-11-09-parent-agents-and-bots-can-share-a-platform.md).
 Date: 2026-11-05
 Origin: AF-425, maintainer decision on 2026-11-05 that bots share only the gateway; runtime spike on 2026-11-06
 

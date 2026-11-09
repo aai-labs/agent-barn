@@ -41,6 +41,8 @@ COPY patch-run-session-history.py /tmp/patch-run-session-history.py
 RUN python3 /tmp/patch-run-session-history.py && rm /tmp/patch-run-session-history.py
 COPY patch-bot-connected-status.py /tmp/patch-bot-connected-status.py
 RUN python3 /tmp/patch-bot-connected-status.py && rm /tmp/patch-bot-connected-status.py
+COPY patch-bot-cron-delivery.py /tmp/patch-bot-cron-delivery.py
+RUN python3 /tmp/patch-bot-cron-delivery.py && rm /tmp/patch-bot-cron-delivery.py
 
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 

@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-09 — AF-425 — Parent Agents and Bots on the same platform
+
+- Delivered: `hermes-base/patch-bot-cron-delivery.py`, so a Bot's scheduled jobs use the Bot's own connections and a Bot never falls back to its Parent Agent's. A Parent Agent and its Bots can now connect the same platform, with their own apps.
+- Changed: only Agent Barn Telegram on a Parent Agent with a Bot's own Telegram is refused. `docs/architecture/runtime-and-deployment.md`, the feature contract, and a new ADR.
+- Observed: in local k3d on Slack, a Parent Agent and a Bot each replied and delivered a scheduled job through their own connection. Telegram, a Bot's job while its connection is down, separate Slack access rules and a restart are still to verify in the end-to-end run.
+
 ### 2026-11-09 — AF-425 — Bot connection status
 
 - Fixed: a Bot's Provider connectivity stayed on Pending. The observer now reads the Bot's own entries in the Parent Agent's `gateway_state.json`.

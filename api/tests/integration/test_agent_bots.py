@@ -879,29 +879,38 @@ def test_a_bot_can_connect_a_platform_its_parent_is_not_on():
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
 
 
-def test_a_bot_cannot_share_a_platform_with_its_parent():
+def test_a_bot_can_share_a_platform_with_its_parent():
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
         _connect(context, context.parent, "slack")
 
         response = _new_connection(context, context.bot)
 
-        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
 
 
-def test_a_parent_cannot_share_a_platform_with_its_bot():
+def test_a_parent_can_share_a_platform_with_its_bot():
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
         _connect(context, context.bot, "slack")
 
         response = _new_connection(context, context.parent)
 
-        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
 
 
-def test_both_telegram_kinds_count_as_one_platform():
+def test_a_parent_cannot_use_agentbarn_telegram_alongside_a_bots_telegram():
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
         _connect(context, context.bot, "telegram")
 
         response = _new_connection(context, context.parent, "agentbarn_telegram")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+
+
+def test_a_bot_cannot_use_telegram_alongside_its_parents_agentbarn_telegram():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _connect(context, context.parent, "agentbarn_telegram")
+
+        response = _new_connection(context, context.bot, "telegram")
 
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
 
@@ -917,16 +926,16 @@ def test_two_bots_can_use_the_same_platform():
 
 def test_a_retired_connection_does_not_count():
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
-        _connect(context, context.parent, "slack")
+        _connect(context, context.parent, "agentbarn_telegram")
         with context.postgres_delegate.engine.begin() as connection:
             connection.exec_driver_sql(
                 "UPDATE communication_connection SET retired_at = now() WHERE agent_id = %s",
                 (str(context.parent.id),),
             )
 
-        response = _new_connection(context, context.bot)
+        response = _new_connection(context, context.bot, "telegram")
 
-        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+        assert_that(response.status_code, is_not(equal_to(status.HTTP_409_CONFLICT)), response.text)
 
 
 def _update(context, agent, **fields):

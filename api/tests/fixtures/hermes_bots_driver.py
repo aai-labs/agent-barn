@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from agent.secret_scope import (  # ty: ignore[unresolved-import]
     build_profile_secret_scope,
@@ -14,12 +16,19 @@ from agent.secret_scope import (  # ty: ignore[unresolved-import]
     set_multiplex_active,
     set_secret_scope,
 )
+from cron.scheduler_provider import InProcessCronScheduler  # ty: ignore[unresolved-import]
 from gateway.authz_mixin import _platform_gate_env  # ty: ignore[unresolved-import]
 from gateway.config import GatewayConfig, Platform, PlatformConfig, load_gateway_config  # ty: ignore[unresolved-import]
 from gateway.delivery import resolve_delivery_transport  # ty: ignore[unresolved-import]
+from gateway.platform_registry import platform_registry  # ty: ignore[unresolved-import]
 from hermes_cli.profiles import validate_profile_name  # ty: ignore[unresolved-import]
-from hermes_constants import reset_hermes_home_override, set_hermes_home_override  # ty: ignore[unresolved-import]
+from hermes_constants import (  # ty: ignore[unresolved-import]
+    get_hermes_home,
+    reset_hermes_home_override,
+    set_hermes_home_override,
+)
 from tools.env_passthrough import resolve_passthrough_value  # ty: ignore[unresolved-import]
+from tools.send_message_tool import _send_via_adapter  # ty: ignore[unresolved-import]
 
 BOT_A = "aaaaaaaa-0000-4000-8000-00000000000a"
 BOT_B = "bbbbbbbb-0000-4000-8000-00000000000b"
@@ -86,11 +95,63 @@ def main() -> None:
     parent = SimpleNamespace(name="parent adapter")
     shared = GatewayConfig(platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="parent")})
     transport = resolve_delivery_transport(Platform.TELEGRAM, shared, {Platform.TELEGRAM: parent})
-    check("a shared platform delivers through the parent's connection", transport.adapter is parent)
+    check("delivery uses the connection it is handed", transport.adapter is parent)
     check(
-        "a platform the parent lacks has no live transport",
+        "a platform with no connection has no live transport",
         resolve_delivery_transport(Platform.SLACK, shared, {Platform.TELEGRAM: parent}) is None,
     )
+
+    bot_connection = SimpleNamespace(name="bot adapter")
+    ticked: dict[str, dict] = {}
+    stop = threading.Event()
+
+    def record_tick(*, adapters, **_) -> None:
+        ticked[get_hermes_home().name] = adapters
+        if len(ticked) == 3:
+            stop.set()
+
+    safety = threading.Timer(30, stop.set)
+    safety.start()
+    with patch("cron.scheduler.tick", record_tick):
+        InProcessCronScheduler()._start_multiplex(
+            stop,
+            profile_homes=[("default", root), (BOT_A, first), (BOT_B, second)],
+            profile_adapters={BOT_A: {Platform.SLACK: bot_connection}},
+            adapters={Platform.SLACK: parent},
+            interval=1,
+        )
+    safety.cancel()
+    check("the parent's jobs use the parent's connections", ticked[root.name] == {Platform.SLACK: parent})
+    check("a Bot's jobs use that Bot's connections", ticked[BOT_A] == {Platform.SLACK: bot_connection})
+    check("a Bot with no connection never gets the parent's", ticked[BOT_B] == {})
+
+    def send_from(path: Path) -> tuple[list[str], list[str]]:
+        live: list[str] = []
+        standalone: list[str] = []
+
+        async def live_send(*, chat_id, content, metadata):
+            live.append(content)
+            return SimpleNamespace(success=True, message_id="1")
+
+        async def standalone_send(_config, _chat_id, content, **_):
+            standalone.append(content)
+            return {"success": True}
+
+        runner = SimpleNamespace(adapters={Platform.SLACK: SimpleNamespace(send=live_send)})
+        entry = SimpleNamespace(standalone_sender_fn=standalone_send)
+        token = set_hermes_home_override(path)
+        try:
+            with (
+                patch("gateway.run._gateway_runner_ref", lambda: runner),
+                patch.object(platform_registry, "get", lambda _name: entry),
+            ):
+                asyncio.run(_send_via_adapter(Platform.SLACK, None, "C1", "hello"))
+        finally:
+            reset_hermes_home_override(token)
+        return live, standalone
+
+    check("a Bot's fallback send skips the parent's connection", send_from(first) == ([], ["hello"]))
+    check("the parent still sends through its own connection", send_from(root) == (["hello"], []))
 
     def bot_slack_token(path: Path) -> str | None:
         token = set_hermes_home_override(path)

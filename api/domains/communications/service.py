@@ -53,11 +53,7 @@ from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 BOT_UNSUPPORTED_PLATFORMS = frozenset({"discord", "teams", "agentbarn_telegram"})
-SHARED_GATEWAY_PLATFORMS = frozenset({"slack", "discord", "telegram", "teams", "agentbarn_telegram"})
-PLATFORM_FAMILIES = {
-    "telegram": {"telegram", "agentbarn_telegram"},
-    "agentbarn_telegram": {"telegram", "agentbarn_telegram"},
-}
+BOT_PLATFORM_CONFLICTS = {"telegram": "agentbarn_telegram", "agentbarn_telegram": "telegram"}
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 
 # A directory read talks to the provider, so a failure is usually the operator's
@@ -257,13 +253,11 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{display_name} is not available for a Bot",
             )
-        if platform_key not in SHARED_GATEWAY_PLATFORMS:
-            return
-        family = PLATFORM_FAMILIES.get(platform_key, {platform_key})
-        if family & self.repository.related_bot_platform_keys(agent):
+        conflicting = BOT_PLATFORM_CONFLICTS.get(platform_key)
+        if conflicting and conflicting in self.repository.related_bot_platform_keys(agent):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"A Parent Agent and its Bots cannot share {display_name}",
+                detail="Agent Barn Telegram on a Parent Agent cannot run alongside a Bot's own Telegram",
             )
 
     def _allocates_address(self, plugin) -> bool:
