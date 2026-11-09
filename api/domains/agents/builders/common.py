@@ -4,11 +4,11 @@ from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.agents.models import BOT_TRIGGER_BASE_PORT
 from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOOK_PORT
 
 _NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
 
-BOT_TRIGGER_BASE_PORT = 8100
 _MIB = 1024**2
 _GIB = 1024**3
 

@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: webhook and workflow URLs that reach the right pod and port.
+- Next: Connection rules on Bots.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Bot trigger routing
+
+- Delivered: `trigger_target` gives an Agent its own Service on port 8082, and a Bot its Parent Agent's Service on `8100 + slot`. Webhook dispatch and workflow steps use it.
+- Changed: `agent_trigger_url` takes `{port}`.
+- Follow-up: Connection rules.
 
 ### 2026-11-09 — AF-425 — Per-Bot plugin identity
 

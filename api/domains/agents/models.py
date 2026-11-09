@@ -65,6 +65,8 @@ class ManagedUpdateOutcome(str, enum.Enum):
 MAX_TURNS_MIN = 1
 MAX_TURNS_MAX = 500
 MAX_BOTS_PER_PARENT = 5
+AGENT_TRIGGER_PORT = 8082
+BOT_TRIGGER_BASE_PORT = 8100
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -689,6 +691,12 @@ MANAGED_UPDATE_STALE_SECONDS = 120
 
 def pod_agent_id(agent: Agent) -> UUID:
     return agent.parent_agent_id or agent.id
+
+
+def trigger_target(agent: Agent) -> tuple[UUID, int]:
+    if agent.bot_slot is None:
+        return agent.id, AGENT_TRIGGER_PORT
+    return pod_agent_id(agent), BOT_TRIGGER_BASE_PORT + agent.bot_slot
 
 
 def managed_update_in_flight(agent: Agent) -> bool:
