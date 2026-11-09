@@ -77,6 +77,7 @@ export const AgentPermissionKeySchema = z.enum([
   "cost.read",
   // Held by Organization Owners and Admins through their role; no Agent Access Role grants it.
   "agent.size.manage",
+  "task.read",
 ]);
 
 export const AgentAccessRoleReadSchema = z.object({
@@ -116,7 +117,7 @@ export const AgentProvisioningErrorSchema = z.object({
 });
 
 export const AgentManagedUpdateSchema = z.object({
-  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
+  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "UPDATE_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
   restorePointId: z.string().uuid().nullish(),
   failureReason: z.string().nullish(),
 });
@@ -486,6 +487,7 @@ export const RestorePointOriginSchema = z.enum([
   "PRE_RESTORE",
   "PRE_RESET",
   "PRE_UPGRADE",
+  "SCHEDULED",
 ]);
 
 export const RestorePointSkillSchema = z.object({
@@ -521,6 +523,9 @@ export const RestorePointSchema = z.object({
   agentType: z.string(),
   archiveBytes: z.number().int().nullable(),
   fileCount: z.number().int().nullable(),
+  // Files that shrank or vanished while a snapshot of a running Agent read them.
+  changedFileCount: z.number().int().nullable().default(null),
+  skippedFileCount: z.number().int().nullable().default(null),
   failureReason: z.string().nullable(),
   // True while a confirmed restore still owes the Agent its recorded configuration.
   reapplyConfiguration: z.boolean().default(false),
@@ -536,9 +541,13 @@ export const PaginatedRestorePointsSchema = z.object({
   pageSize: z.number().int().min(1),
   total: z.number().int().min(0),
   items: z.array(RestorePointSchema),
-  // The cap counts neither system-created backups nor failed captures; total counts both.
+  // manualCount is the restore points users took, which is what the cap refuses a capture on.
+  // total counts every row, scheduled snapshots and failed captures included.
   cap: z.number().int().min(1),
   manualCount: z.number().int().min(0),
+  scheduledCap: z.number().int().min(1),
+  // 0 when scheduled snapshots are off.
+  scheduleIntervalMinutes: z.number().int().min(0),
 });
 
 export type RestorePointStatus = z.infer<typeof RestorePointStatusSchema>;

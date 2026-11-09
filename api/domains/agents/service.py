@@ -7,13 +7,14 @@ import secrets
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from kubernetes import client
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
@@ -171,7 +172,7 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
-from api.domains.integrations.isolation import isolation_read, legacy_isolation
+from api.domains.integrations.isolation import default_isolation, isolation_read, legacy_isolation
 from api.domains.integrations.models import AgentIntegrationRuntime
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.integrations.runtime import (
@@ -214,6 +215,10 @@ from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+if TYPE_CHECKING:
+    from api.domains.custom_api.service import CustomApiService
+
+
 logger = logging.getLogger(__name__)
 
 # Port of the in-pod LLM proxy. Shared by the URL the runtime dials and the
@@ -240,6 +245,7 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
 )
 
 MANAGED_UPDATE_BACKUP_LABEL = "Automatic backup before managed update"
+SKIP_BACKUP_NOT_OFFERED_DETAIL = "Updating without a backup is only possible right after an update's backup failed."
 # How long a managed update waits for the stopped pod to let go of the volume.
 # Capture and restore wait only the pod's default 30s grace period themselves.
 MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS = 120
@@ -327,6 +333,17 @@ class _AssembledAgent:
     memory_key: str | None
     env_names: frozenset[str]
     tool_env_names: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _PreviousRuntime:
+    """The image an Agent's pod ran before a managed update stopped it."""
+
+    # What a rollback starts: the pod's image, else the Agent's pin, else the platform pin.
+    image: str
+    # The same without the platform pin, which may already name the new version. Empty
+    # when neither the pod nor the pin said which image the Agent ran.
+    known_image: str
 
 
 @dataclass(frozen=True)
@@ -1984,12 +2001,22 @@ class AgentService:
             credentials.append(credential)
         return credentials
 
-    def update_agent(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+    def update_agent(
+        self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext, *, custom_api: CustomApiService
+    ) -> AgentRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        if data.restart:
+            refuse_on_bot(agent)
+        if data.restart or data.policies or data.custom_api is not None:
+            if _CREDENTIAL_FIELDS & data.model_fields_set or data.policies or data.custom_api is not None:
+                self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+            if data.restart:
+                self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+            self.restore_points.reconcile_agent(agent_id)
         with self.repository.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
-            read = self._update_agent_locked(agent_id, data, context)
+            read = self._update_agent_locked(agent_id, data, context, custom_api=custom_api)
             self.selection.apply_parent_settings_to_bots(agent_id, data.model_dump(exclude_unset=True))
             return read
 
@@ -2004,20 +2031,34 @@ class AgentService:
         ):
             raise _manual_mixing_refused()
 
-    def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
+    def _update_agent_locked(
+        self,
+        agent_id: UUID,
+        data: AgentUpdate,
+        context: CurrentUserContext,
+        *,
+        custom_api: CustomApiService,
+    ) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         updated = data.model_dump(exclude_unset=True)
-        if _CREDENTIAL_FIELDS & updated.keys():
+        if _CREDENTIAL_FIELDS & updated.keys() or data.policies or data.custom_api is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
 
-        if agent.status == AgentStatus.RUNNING:
+        if agent.status == AgentStatus.RUNNING and not data.restart:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
         self._refuse_bot_setting_changes(agent, updated)
+
+        if data.restart or data.policies or data.custom_api is not None:
+            _refuse_during_managed_update(agent)
+            if self.restore_points.has_blocking_operation(agent_id):
+                raise HTTPException(409, "An Agent restore operation is in progress")
+        if data.restart:
+            self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
             self._refuse_forgetting_granted_sites(agent.id)
@@ -2141,6 +2182,14 @@ class AgentService:
         if data.skill_ids or data.removed_secret_providers:
             self._validate_skill_update(agent, data, org_id)
 
+        changes = custom_api._prepare_changes(agent_id, data.custom_api, context) if data.custom_api is not None else []
+        policies = {policy.provider: policy.isolated for policy in data.policies}
+        try:
+            for provider, isolated in policies.items():
+                select_egress_mode(provider, isolated=isolated)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
         secret_actor = resolve_actor_identity(context, org_id)
         secret_actor_display = context.user.full_name or context.user.email
         secret_delivery_ids: list[UUID] = []
@@ -2156,10 +2205,61 @@ class AgentService:
             (item, _enrich_atlassian_content(validate_content(item.provider, item.content)))
             for item in data.secrets or []
         ]
-        for item, content in manual_upserts:
-            self._validate_live_integration(item.provider, content)
+        credential_overrides = {item.provider: content for item, content in manual_upserts}
         for credential in shared_upserts:
-            self._validate_live_integration(credential.provider, self._decrypt_shared_credential(credential))
+            credential_overrides[SecretProvider(credential.provider)] = self._decrypt_shared_credential(credential)
+        for provider, content in credential_overrides.items():
+            try:
+                self._validate_live_integration(provider, content)
+            except HTTPException as exc:
+                if not (data.restart or data.policies or data.custom_api is not None):
+                    raise
+                # This error can only occur before any writes or runtime teardown.
+                raise HTTPException(
+                    exc.status_code,
+                    detail={
+                        "code": "INTEGRATION_VALIDATION_FAILED",
+                        "provider": provider.value,
+                        "message": f"{PROVIDER_DISPLAY_NAMES[provider]}: {exc.detail}"
+                        if exc.status_code == 400
+                        else exc.detail,
+                    },
+                ) from exc
+        if data.restart or data.policies or changes:
+            stored_providers = {
+                SecretProvider(secret.provider) for secret in self.repository.get_secrets_for_agent(agent_id)
+            }
+            providers = (stored_providers - set(data.removed_secret_providers or [])) | credential_overrides.keys()
+            effective_policies = {
+                provider: default_isolation(provider) for provider in credential_overrides.keys() - stored_providers
+            }
+            effective_policies.update(policies)
+            if self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url:
+                providers.add(SecretProvider.FIRECRAWL)
+            if policies.keys() - providers:
+                raise HTTPException(404, "Integration not configured")
+            try:
+                self._provision_and_start(
+                    agent,
+                    preflight=True,
+                    credential_overrides=credential_overrides,
+                    removed_providers=data.removed_secret_providers or (),
+                    isolation_overrides=effective_policies,
+                    custom_api_overrides={
+                        row.id: None if operation == "deleted" else row for row, operation in changes
+                    },
+                )
+            except ValueError, TypeError:
+                raise HTTPException(400, "Invalid integration runtime configuration") from None
+
+            if agent.status == AgentStatus.RUNNING:
+                self._observe_integration_readiness(agent)
+                agent = self._stop_agent_unchecked(agent, secret_actor)
+            elif agent.status == AgentStatus.ERROR and data.restart:
+                name = f"agent-{agent_id}"
+                self.k8s.delete_deployment(name, self.config.k8s_namespace)
+                self.k8s.wait_for_termination(name, self.config.k8s_namespace)
+                self.credential_gateway.revoke_for_agent(agent_id, agent.organization_id)
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
@@ -2256,8 +2356,23 @@ class AgentService:
         update_result = self.repository.update_scalar_fields_with_event(
             agent, actor=secret_actor, actor_display=secret_actor_display
         )
+        try:
+            if changes:
+                secret_delivery_ids += custom_api.repository.mutate_many_with_events(
+                    changes, secret_actor, secret_actor_display
+                )
+        except IntegrityError:
+            raise HTTPException(409, "A connection identifier is already in use") from None
+        for provider, isolated in policies.items():
+            source = "agent_secret" if self.repository.get_secret(agent_id, provider) else "platform_default"
+            secret_delivery_ids += self.integrations.set_policy(
+                agent_id, provider, isolated, source, actor=secret_actor, actor_display=secret_actor_display
+            )
         self.event_delivery_dispatcher.enqueue_immediate(update_result.delivery_ids + secret_delivery_ids)
-        return self._get_agent_read(update_result.agent, context)
+        agent = update_result.agent
+        if data.restart:
+            agent = self._start_agent_unchecked(agent, secret_actor)
+        return self._get_agent_read(agent, context)
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
@@ -2284,6 +2399,12 @@ class AgentService:
                     detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
                 )
             started = self._start_agent_unchecked(current, actor)
+            if started.managed_update_outcome == ManagedUpdateOutcome.BACKUP_FAILED:
+                # Updating without a backup is offered only while the Agent is still as the
+                # failed backup left it. Once the user runs it, the volume holds newer data
+                # with no backup, so a later stop must not bring the offer back.
+                self.repository.clear_backup_failed_outcome(started.id)
+                started = self.repository.get_by_id(started.id) or started
         return self._get_agent_read(started, context)
 
     def _native_connection_configuration(
@@ -2407,6 +2528,8 @@ class AgentService:
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+        credential_overrides: Mapping[SecretProvider, Any] | None = None,
+        removed_providers: Collection[SecretProvider] = (),
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         assembled_bots: list[tuple[Agent, _AssembledAgent]] = []
@@ -2424,6 +2547,8 @@ class AgentService:
             preflight=preflight,
             isolation_overrides=isolation_overrides,
             custom_api_overrides=custom_api_overrides,
+            credential_overrides=credential_overrides,
+            removed_providers=removed_providers,
             bots=assembled_bots,
             deleted_bot_ids=[bot.id for bot in deleted_bots],
         )
@@ -2502,6 +2627,8 @@ class AgentService:
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
+        credential_overrides: Mapping[SecretProvider, Any] | None = None,
+        removed_providers: Collection[SecretProvider] = (),
         bots: Sequence[tuple[Agent, _AssembledAgent]] = (),
         deleted_bot_ids: Sequence[UUID] = (),
     ) -> _AssembledAgent:
@@ -2708,6 +2835,8 @@ class AgentService:
         decrypted = {}
         for s in agent_secrets:
             provider = SecretProvider(s.provider)
+            if preflight and (provider in (credential_overrides or {}) or provider in removed_providers):
+                continue
             if s.shared_credential_id and s.shared_credential_id in shared_by_id:
                 ciphertext = shared_by_id[s.shared_credential_id].content
             else:
@@ -2727,6 +2856,10 @@ class AgentService:
                         f"({_validation_problems(exc)}). Edit the integration and save it again."
                     ),
                 ) from exc
+        if preflight:
+            decrypted.update(
+                {provider: content.model_copy(deep=True) for provider, content in (credential_overrides or {}).items()}
+            )
         self._backfill_google_client_credentials(decrypted)
         # A Google refresh token is useless without the client it was issued under: either
         # the credential's own, or the server-owned one backfilled just above.
@@ -3289,8 +3422,19 @@ class AgentService:
 
     # --- Managed updates (MDP-47 / AF-201) ----------------------------------
 
-    def managed_update(self, agent_id: UUID, context: CurrentUserContext, schedule: Callable[..., None]) -> AgentRead:
+    def managed_update(
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        schedule: Callable[..., None],
+        *,
+        skip_backup: bool = False,
+    ) -> AgentRead:
         """One-click runtime update: capture, start on the new image, roll back on failure.
+
+        `skip_backup` is the user's answer to a failed backup. The update then runs
+        without one, on the stopped Agent that failure left behind, and a failed start
+        is not rolled back: with no archive there is nothing to roll back to.
 
         The orchestration runs as a scheduled background task; this call only
         checks authority and preconditions, and marks the update as running so
@@ -3304,7 +3448,13 @@ class AgentService:
         # as an Agent update. Settle that here: refused in the background task, it
         # would only show up as an Agent left in ERROR.
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_UPDATE)
-        if agent.status != AgentStatus.RUNNING:
+        if skip_backup:
+            if (
+                agent.status != AgentStatus.STOPPED
+                or agent.managed_update_outcome != ManagedUpdateOutcome.BACKUP_FAILED
+            ):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SKIP_BACKUP_NOT_OFFERED_DETAIL)
+        elif agent.status != AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A managed update applies to a running Agent.",
@@ -3313,13 +3463,27 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
         if not self.repository.claim_managed_update(agent.id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
-        schedule(self._run_managed_update, agent.id, context)
+        try:
+            if skip_backup:
+                self._record_backup_skipped(agent, context)
+            schedule(self._run_managed_update, agent.id, context, skip_backup)
+        except Exception:
+            self.repository.release_managed_update(agent.id)
+            raise
         # Re-read so the response already says the update is in progress.
         return self._get_agent_read(self.repository.get_by_id(agent.id) or agent, context)
 
-    def _run_managed_update(self, agent_id: UUID, context: CurrentUserContext) -> None:
+    def _record_backup_skipped(self, agent: Agent, context: CurrentUserContext) -> None:
+        delivery_ids = self.repository.record_managed_update_backup_skipped(
+            agent,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+
+    def _run_managed_update(self, agent_id: UUID, context: CurrentUserContext, skip_backup: bool = False) -> None:
         try:
-            self._update_or_roll_back(agent_id, context)
+            self._update_or_roll_back(agent_id, context, skip_backup)
         except Exception:
             # Every step handles its own failures. This only catches a fault
             # between them, so the task never dies without a trace.
@@ -3327,51 +3491,37 @@ class AgentService:
         finally:
             self.repository.release_managed_update(agent_id)
 
-    def _update_or_roll_back(self, agent_id: UUID, context: CurrentUserContext) -> None:
+    def _update_or_roll_back(self, agent_id: UUID, context: CurrentUserContext, skip_backup: bool = False) -> None:
         agent = self.repository.get_by_id(agent_id)
-        if agent is None or agent.status != AgentStatus.RUNNING:
+        expected_status = AgentStatus.STOPPED if skip_backup else AgentStatus.RUNNING
+        if agent is None or agent.status != expected_status:
             return
         actor = resolve_actor_identity(context, agent.organization_id)
         logger.info("Managed update started for agent %s", agent_id)
 
+        if skip_backup:
+            self._update_without_backup(agent_id, actor, agent.pinned_runtime_image)
+            return
+
         # 1-2. Stop, then capture the pre-update state. Nothing about the Agent
         #      has changed yet, so a failure here only ends the update, saying why.
+        previous: _PreviousRuntime | None = None
         try:
-            previous_image = self._stop_for_update(agent_id, actor)
-            if previous_image is None:
+            previous = self._stop_for_update(agent_id, actor)
+            if previous is None:
                 return
             backup = self._capture_for_update(agent_id, context)
         except Exception as exc:
             logger.exception("Managed update for agent %s could not take its backup", agent_id)
-            self.repository.record_managed_update_outcome(
-                agent_id,
-                ManagedUpdateOutcome.BACKUP_FAILED,
-                restore_point_id=None,
-                failure_reason=_managed_update_failure_text(exc),
-            )
+            self._record_backup_failed(agent_id, previous, None, _managed_update_failure_text(exc))
             return
         if backup.status != RestorePointStatus.READY:
-            self.repository.record_managed_update_outcome(
-                agent_id,
-                ManagedUpdateOutcome.BACKUP_FAILED,
-                restore_point_id=backup.id,
-                failure_reason=backup.failure_reason,
-            )
+            self._record_backup_failed(agent_id, previous, backup.id, backup.failure_reason)
             return
 
         # 3. Start on the platform image and watch it come up. A start that fails
         #    to provision rolls back exactly like one that never becomes ready.
-        try:
-            self._start_for_update(agent_id, actor, pinned_image="")
-            healthy = self._wait_for_ready(
-                agent_id,
-                self.config.agent_update_ready_timeout_seconds,
-                poll_seconds=self.config.agent_update_ready_poll_seconds,
-            )
-        except Exception:
-            logger.exception("Managed update start failed for agent %s", agent_id)
-            healthy = False
-        if healthy:
+        if self._start_and_wait(agent_id, actor, pinned_image=""):
             logger.info("Managed update succeeded for agent %s", agent_id)
             self.repository.record_managed_update_outcome(
                 agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=backup.id
@@ -3380,9 +3530,99 @@ class AgentService:
 
         # 4. Roll back: free the volume, restore the archive and the recorded
         #    configuration, then start the image the pod ran before.
-        self._rollback_managed_update(agent_id, backup.id, context, actor, previous_image)
+        self._rollback_managed_update(agent_id, backup.id, context, actor, previous.image)
 
-    def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> str | None:
+    def _record_backup_failed(
+        self,
+        agent_id: UUID,
+        previous: _PreviousRuntime | None,
+        restore_point_id: UUID | None,
+        failure_reason: str | None,
+    ) -> None:
+        """End the update as BACKUP_FAILED, pinned to the image the Agent ran.
+
+        The platform pin already names the new version, so without this a plain start
+        would run it with no backup, and an update without one that fails would put back
+        an empty pin and start the new version again.
+        """
+        self.repository.record_managed_update_outcome(
+            agent_id,
+            ManagedUpdateOutcome.BACKUP_FAILED,
+            restore_point_id=restore_point_id,
+            failure_reason=failure_reason,
+            pinned_runtime_image=previous.known_image if previous and previous.known_image else None,
+        )
+
+    def _update_without_backup(self, agent_id: UUID, actor: ActorIdentity, pinned_image: str) -> None:
+        try:
+            self._wait_for_volume_release(agent_id)
+        except Exception as exc:
+            logger.exception("Managed update without a backup could not start agent %s", agent_id)
+            # Nothing changed, so the Agent is exactly as the failed backup left it and
+            # the offer to update without one still stands.
+            self.repository.record_managed_update_outcome(
+                agent_id,
+                ManagedUpdateOutcome.BACKUP_FAILED,
+                restore_point_id=None,
+                failure_reason=_managed_update_failure_text(exc),
+            )
+            return
+        if self._start_and_wait(agent_id, actor, pinned_image=""):
+            logger.info("Managed update without a backup succeeded for agent %s", agent_id)
+            self.repository.record_managed_update_outcome(
+                agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=None
+            )
+            return
+        self._stop_after_failed_update(agent_id, actor, pinned_image)
+
+    def _stop_after_failed_update(self, agent_id: UUID, actor: ActorIdentity, pinned_image: str) -> None:
+        """Stop the Agent on the pin it had before the update, so a start goes back to that image.
+
+        A full stop, like the user's own: the pod's gateway tokens are revoked and the stop is
+        recorded. Only if that cannot run is the workload removed directly.
+        """
+        try:
+            with self.repository.lifecycle_lock(agent_id) as acquired:
+                if not acquired:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                    )
+                current = self.repository.get_by_id(agent_id)
+                if current is not None:
+                    current.pinned_runtime_image = pinned_image
+                    self._stop_agent_unchecked(self.repository.save(current), actor)
+        except Exception:
+            logger.exception("Could not stop agent %s after a failed update", agent_id)
+            self._remove_workload_after_failed_update(agent_id, pinned_image)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.UPDATE_FAILED, restore_point_id=None
+        )
+
+    def _remove_workload_after_failed_update(self, agent_id: UUID, pinned_image: str) -> None:
+        try:
+            self._teardown_workload(agent_id)
+        except Exception:
+            logger.exception("Could not remove the workload of agent %s after a failed update", agent_id)
+        agent = self.repository.get_by_id(agent_id)
+        if agent is not None:
+            agent.status = AgentStatus.STOPPED
+            agent.pinned_runtime_image = pinned_image
+            self.repository.save(agent)
+
+    def _start_and_wait(self, agent_id: UUID, actor: ActorIdentity, *, pinned_image: str) -> bool:
+        try:
+            self._start_for_update(agent_id, actor, pinned_image=pinned_image)
+            return self._wait_for_ready(
+                agent_id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except Exception:
+            logger.exception("Managed update could not start agent %s", agent_id)
+            return False
+
+    def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> _PreviousRuntime | None:
         """Stop the Agent and return the image its pod was running.
 
         None means the Agent was not running after all, so there is nothing to do.
@@ -3398,11 +3638,15 @@ class AgentService:
                 return None
             # What the pod proves it ran, not what the pin or the platform says:
             # both can move underneath a long-running pod.
-            previous_image = self.k8s.get_pod_image(
-                f"agent-{agent_id}", self.config.k8s_namespace
-            ) or self._effective_runtime_image(current)
+            known_image = (
+                self.k8s.get_pod_image(f"agent-{agent_id}", self.config.k8s_namespace) or current.pinned_runtime_image
+            )
+            previous = _PreviousRuntime(
+                image=known_image or self._effective_runtime_image(current),
+                known_image=known_image,
+            )
             self._stop_agent_unchecked(current, actor)
-        return previous_image
+        return previous
 
     def _capture_for_update(self, agent_id: UUID, context: CurrentUserContext) -> AgentRestorePoint:
         self._wait_for_volume_release(agent_id)
@@ -3477,17 +3721,7 @@ class AgentService:
             self._mark_update_failed(agent_id, backup_id, previous_image)
             return
 
-        try:
-            self._start_for_update(agent_id, actor, pinned_image=previous_image)
-            healthy = self._wait_for_ready(
-                agent_id,
-                self.config.agent_update_ready_timeout_seconds,
-                poll_seconds=self.config.agent_update_ready_poll_seconds,
-            )
-        except Exception:
-            logger.exception("Managed update rollback could not restart agent %s", agent_id)
-            healthy = False
-        if not healthy:
+        if not self._start_and_wait(agent_id, actor, pinned_image=previous_image):
             self._mark_update_failed(agent_id, backup_id, previous_image)
             return
         logger.info("Managed update rolled back for agent %s", agent_id)
@@ -3770,6 +4004,7 @@ class AgentService:
         a live validator still receive schema validation;
         their credentials remain eligible for the existing on-demand validation endpoint.
         """
+        provider = SecretProvider(provider)
         validator = PROVIDER_VALIDATORS.get(provider)
         if validator is None:
             return

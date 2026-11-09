@@ -310,6 +310,40 @@ test.describe("Bot pages", () => {
     expect(onBot).toEqual([]);
   });
 
+  test("saving credentials on a running bot restarts its parent", async ({ page }) => {
+    const { data } = await setUp(page, running);
+    await data.agents.interceptGetAgentRequest({
+      agentId: SALES_ID,
+      body: {
+        ...runningSales,
+        secrets: [{ provider: "github", secret_name: "GitHub credential", source: "agent_secret" }],
+      },
+    });
+    await data.agents.interceptGetAgentConfigurationRequest({ agentId: SALES_ID });
+    await data.agents.interceptGetCustomApiConnectionsRequest(SALES_ID);
+    await data.agents.interceptStopAgentRequest({ body: { ...running, status: "STOPPED" } });
+    await data.agents.interceptStartAgentRequest({ body: running });
+    await data.agents.interceptUpdateAgentRequest({ agentId: SALES_ID, body: runningSales });
+    await goto(page, SALES_ID, "/configuration?section=keys");
+    const stop = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/stop`);
+    const save = page.waitForRequest(
+      (request) => request.method() === "PATCH" && request.url().endsWith(`/agents/${SALES_ID}`),
+    );
+    const start = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/start`);
+
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await page.getByRole("button", { name: "Replace credential" }).click();
+    await page.getByPlaceholder("github_pat_… or ghp_…").fill("fixture-token");
+    await page.getByPlaceholder("owner-or-org").fill("fixture-org");
+    await page.getByRole("button", { name: "Apply & Restart", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
+
+    await stop;
+    expect((await save).postDataJSON()).toMatchObject({ restart: false });
+    await start;
+  });
+
   test("restarting for a pending model on a bot restarts its parent", async ({ page }) => {
     const { data } = await setUp(page, running);
     await data.agents.interceptGetAgentRequest({

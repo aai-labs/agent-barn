@@ -5,6 +5,7 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import sys
 import tarfile
 from pathlib import Path
@@ -115,22 +116,78 @@ def _walk_included_files(root: Path, runtime: str):
                 yield current / file_name, rel_path
 
 
+class _ExactSizeReader:
+    """Reads exactly `size` bytes from a file the running Agent may still be writing.
+
+    The tar header has already promised `size` bytes by the time the data is read, so a
+    file that shrank is padded with zeros instead of leaving a short member that breaks
+    the whole archive. A file that grew is cut at `size`.
+    """
+
+    def __init__(self, stream, size: int) -> None:
+        self.stream = stream
+        self.remaining = size
+        self.shrank = False
+
+    def read(self, size: int = -1) -> bytes:
+        wanted = self.remaining if size < 0 else min(size, self.remaining)
+        data = self.stream.read(wanted)
+        if len(data) < wanted:
+            self.shrank = True
+            data += b"\0" * (wanted - len(data))
+        self.remaining -= wanted
+        return data
+
+
+def _open_regular_file(path: Path):
+    """Open a file found by the walk, or None if it is gone or no longer a regular file."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None
+        raise
+    stream = os.fdopen(fd, "rb")
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        stream.close()
+        return None
+    return stream
+
+
 def capture(source: Path, dest: Path, runtime: str) -> dict:
     archive_path = dest / ARCHIVE_NAME
     file_count = 0
+    # Files that vanished (skipped) or shrank (changed) while a live capture read them.
     skipped = 0
+    changed = 0
+    # Entries no extraction could ever accept, such as a link pointing outside the volume.
+    # They are left out of every capture, so they say nothing about the Agent writing.
+    left_out = 0
     try:
         with tarfile.open(archive_path, "w:gz") as tar:
             for path, rel_path in _walk_included_files(source, runtime):
-                info = tar.gettarinfo(path, arcname=rel_path)
+                try:
+                    info = tar.gettarinfo(path, arcname=rel_path)
+                except FileNotFoundError:
+                    skipped += 1
+                    continue
                 try:
                     tarfile.data_filter(info, "")
                 except tarfile.FilterError:
-                    skipped += 1
+                    left_out += 1
                     continue
                 if info.isreg():
-                    with path.open("rb") as stream:
-                        tar.addfile(info, stream)
+                    stream = _open_regular_file(path)
+                    if stream is None:
+                        skipped += 1
+                        continue
+                    with stream:
+                        info.size = os.fstat(stream.fileno()).st_size
+                        reader = _ExactSizeReader(stream, info.size)
+                        tar.addfile(info, reader)
+                    changed += reader.shrank
                 else:
                     tar.addfile(info)
                 file_count += 1
@@ -142,7 +199,13 @@ def capture(source: Path, dest: Path, runtime: str) -> dict:
             ) from exc
         raise
 
-    manifest = {"bytes": archive_path.stat().st_size, "file_count": file_count, "skipped": skipped}
+    manifest = {
+        "bytes": archive_path.stat().st_size,
+        "file_count": file_count,
+        "skipped": skipped,
+        "changed": changed,
+        "left_out": left_out,
+    }
     (dest / MANIFEST_NAME).write_text(json.dumps(manifest))
     return manifest
 

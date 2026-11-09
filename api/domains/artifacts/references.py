@@ -1,5 +1,6 @@
 """Transaction-local immutable handoff and pin operations for trusted workflow/review services."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -35,6 +36,20 @@ def pin(
         raise HTTPException(409, "Released artifact references cannot be reactivated")
 
 
+def pin_published(
+    session: Session, artifact_id: UUID, agent_id: UUID, organization_id: UUID, kind: str, owner_id: UUID
+) -> Artifact:
+    """Pin a READY Artifact by id alone, for owners that never recorded its checksum.
+
+    The row is locked on this first read: `pin` locks it again, but the session hands back
+    this same object without refreshing it, so an unlocked read here would check stale state."""
+    artifact = session.exec(select(Artifact).where(col(Artifact.id) == artifact_id).with_for_update()).one_or_none()
+    if artifact is None:
+        raise HTTPException(404, "Artifact not found")
+    pin(session, artifact_id, artifact.checksum, agent_id, organization_id, kind, owner_id)
+    return artifact
+
+
 def attempt_files(session: Session, attempt_id: UUID) -> list[dict]:
     rows = session.exec(
         select(Artifact)
@@ -48,7 +63,6 @@ def attempt_files(session: Session, attempt_id: UUID) -> list[dict]:
 
 
 def release(session: Session, kind: str, owner_id: UUID, retention_days: int) -> None:
-    now = datetime.now(UTC)
     refs = session.exec(
         select(ArtifactReference)
         .where(
@@ -58,6 +72,27 @@ def release(session: Session, kind: str, owner_id: UUID, retention_days: int) ->
         )
         .order_by(col(ArtifactReference.artifact_id))
     ).all()
+    _release_references(session, refs, retention_days)
+
+
+def release_beyond_newest(session: Session, kind: str, agent_id: UUID, keep: int, retention_days: int) -> None:
+    """Release the Agent's `kind` pins past its newest `keep`, oldest first to go."""
+    refs = session.exec(
+        select(ArtifactReference)
+        .join(Artifact, col(Artifact.id) == col(ArtifactReference.artifact_id))
+        .where(
+            col(ArtifactReference.kind) == kind,
+            col(ArtifactReference.released_at).is_(None),
+            col(Artifact.agent_id) == agent_id,
+        )
+        .order_by(col(ArtifactReference.id).desc())
+        .offset(keep)
+    ).all()
+    _release_references(session, refs, retention_days)
+
+
+def _release_references(session: Session, refs: Sequence[ArtifactReference], retention_days: int) -> None:
+    now = datetime.now(UTC)
     for ref in refs:
         artifact = session.exec(select(Artifact).where(col(Artifact.id) == ref.artifact_id).with_for_update()).one()
         ref.released_at = now

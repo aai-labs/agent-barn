@@ -270,6 +270,8 @@ export const mockRestorePoint = {
   agent_type: "openclaw",
   archive_bytes: 2_097_152,
   file_count: 42,
+  changed_file_count: 0,
+  skipped_file_count: 0,
   failure_reason: null,
   reapply_configuration: false,
   configuration_error: null,
@@ -293,14 +295,29 @@ export const mockPreRestorePoint = {
   origin: "PRE_RESTORE",
 };
 
+export const MOCK_SCHEDULED_SNAPSHOT_ID = "77777777-7777-4777-8777-777777777777";
+
+export const mockScheduledSnapshot = {
+  ...mockRestorePoint,
+  id: MOCK_SCHEDULED_SNAPSHOT_ID,
+  label: "Scheduled snapshot",
+  origin: "SCHEDULED",
+  created_at: "2026-05-14T06:00:00Z",
+  captured_at: "2026-05-14T06:01:00Z",
+};
+
 export function mockRestorePointsPage({
   items = [mockRestorePoint],
   cap = 5,
   manualCount,
+  scheduledCap = 4,
+  scheduleIntervalMinutes = 360,
 }: {
   items?: unknown[];
   cap?: number;
   manualCount?: number;
+  scheduledCap?: number;
+  scheduleIntervalMinutes?: number;
 } = {}) {
   return {
     page: 1,
@@ -309,6 +326,8 @@ export function mockRestorePointsPage({
     items,
     cap,
     manual_count: manualCount ?? items.length,
+    scheduled_cap: scheduledCap,
+    schedule_interval_minutes: scheduleIntervalMinutes,
   };
 }
 
@@ -1173,6 +1192,18 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  async interceptApplyIntegrationsRequest({ status = 200, detail = "Could not apply integrations", body = mockAgent }: {
+    status?: number; detail?: string; body?: unknown;
+  } = {}) {
+    const requests: Record<string, unknown>[] = [];
+    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ status, json: status >= 400 ? { detail } : body });
+    });
+    return requests;
   }
 
   async interceptUpdateAgentRequest({

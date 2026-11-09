@@ -1061,6 +1061,15 @@ def test_a_parents_turn_limit_reaches_its_bots():
         assert_that(_stored(context, context.bot.id).max_turns, equal_to(33))
 
 
+def test_a_save_and_restart_is_refused_on_a_bot():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        response = _update(context, context.bot, restart=True)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        _k8s(context).create_deployment.assert_not_called()
+        _k8s(context).delete_secret.assert_not_called()
+
+
 def _select_template(context, agent, **fields):
     stored = _stored(context, agent.id)
     pinned = context.injector.get(TemplateRepository).get_pinned_template(stored)

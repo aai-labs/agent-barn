@@ -12,10 +12,17 @@ export class CustomApiPage {
   get dialog() { return this.page.getByRole("dialog"); }
   field(name: string) { return this.form.getByLabel(name, { exact: true }); }
   async beginEditing() { await this.edit.click(); }
+  async removeConnection(name: string) {
+    await this.section.getByRole("button", { name: `Remove Custom API ${name}`, exact: true }).click();
+  }
   async addGithubCredential() {
     await this.section.getByRole("button", { name: /GitHub/ }).click();
     await this.section.getByPlaceholder("github_pat_… or ghp_…").fill("fixture-token");
     await this.section.getByPlaceholder("owner-or-org").fill("fixture-org");
+  }
+  async changeGithubIsolation() {
+    await this.section.locator("summary").filter({ hasText: "GitHub" }).click();
+    await this.section.getByRole("switch", { name: "GitHub credential isolation" }).click();
   }
   async expandConnection() { await this.section.locator("summary").filter({ hasText: "Custom API · Inventory API" }).click(); }
   async selectAuth(name: string) {

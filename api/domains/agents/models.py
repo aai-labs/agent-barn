@@ -18,6 +18,7 @@ from sqlmodel import Field as SqlField
 from api.domains.agent_sizes.models import AgentSizeOption
 from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
+from api.domains.custom_api.models import CustomApiConnectionsApply
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -46,6 +47,7 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+    SCHEDULED = "SCHEDULED"
 
 
 class ManagedUpdateOutcome(str, enum.Enum):
@@ -54,6 +56,9 @@ class ManagedUpdateOutcome(str, enum.Enum):
     SUCCEEDED = "SUCCEEDED"
     # The automatic backup could not be taken. The Agent was stopped but not changed.
     BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy and, with no backup, nothing was rolled back.
+    # The Agent was stopped.
+    UPDATE_FAILED = "UPDATE_FAILED"
     # The new version never became healthy; the backup and the old image are back.
     ROLLED_BACK = "ROLLED_BACK"
     # The rollback did not finish. The backup holds the pre-update state.
@@ -855,6 +860,9 @@ class AgentRestorePoint(BaseModel, table=True):
     job_name: str | None = SqlField(default=None, nullable=True, max_length=253)
     archive_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     file_count: int | None = SqlField(default=None, nullable=True)
+    # Files that shrank (zero-padded) or vanished while a live capture read them.
+    changed_file_count: int | None = SqlField(default=None, nullable=True)
+    skipped_file_count: int | None = SqlField(default=None, nullable=True)
     config_manifest: dict[str, Any] = SqlField(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
@@ -864,6 +872,9 @@ class AgentRestorePoint(BaseModel, table=True):
     # The configuration is written only after the Job confirms the volume is back,
     # so the intent has to outlive the request that made it.
     reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Set when the user chose to restore without a safety copy. A failed or lost restore
+    # then leaves this archive restorable, since nothing else holds the Agent's old files.
+    backup_skipped_by_user: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
     # Why the recorded configuration did not land, once the volume already has.
     configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
     # Who asked for the restore, which is who authorized the configuration write that
@@ -1221,6 +1232,12 @@ class BotCreate(AgentDefinition):
     pass
 
 
+class IntegrationPolicyUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: SecretProvider
+    isolated: bool
+
+
 class AgentUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1242,6 +1259,10 @@ class AgentUpdate(PydanticBaseModel):
     secrets: list[AgentSecretCreate] | None = None
     shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+    # Opt in to a server-owned validate/stop/save/start operation.
+    restart: bool = False
+    policies: list[IntegrationPolicyUpdate] = Field(default_factory=list)
+    custom_api: CustomApiConnectionsApply | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
     # Unset leaves the limit alone; an explicit null returns the Agent to the
@@ -1285,6 +1306,20 @@ class AgentUpdate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_secret_operations(self) -> AgentUpdate:
+        if self.restart and self.model_fields_set - {
+            "restart",
+            "secrets",
+            "shared_credentials",
+            "removed_secret_providers",
+            "policies",
+            "custom_api",
+        }:
+            raise ValueError("Restart on PATCH is supported for integration changes only")
+        policies = [policy.provider for policy in self.policies]
+        if len(policies) != len(set(policies)):
+            raise ValueError("Duplicate isolation policy providers are not allowed")
+        if self.custom_api and (self.custom_api.restart or any(create.restart for create in self.custom_api.creates)):
+            raise ValueError("Use the top-level restart choice")
         upserts = [s.provider for s in self.secrets or []]
         if len(upserts) != len(set(upserts)):
             raise ValueError("Duplicate secret providers are not allowed")
@@ -1588,6 +1623,12 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 
 
 AgentModelSource = Literal["default", "override"]
+
+
+class AgentManagedUpdateRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skip_backup: bool = False
 
 
 class AgentManagedUpdateRead(PydanticBaseModel):

@@ -14,6 +14,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agent_sizes.models import AgentSize, OrganizationAgentSize
+from api.domains.agent_tasks.cleanup import stage_agent_task_cleanup
 from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import (
     MANAGED_UPDATE_STALE_SECONDS,
@@ -51,6 +52,7 @@ from api.domains.events.catalog import (
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
     AGENT_LLM_BUDGET_CHANGED,
+    AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,
     AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_UPDATED,
@@ -1118,6 +1120,35 @@ class AgentRepository:
     # The writes below are targeted UPDATEs, not save(): the orchestrator holds no
     # fresh copy of the row and must not write back columns other requests changed.
 
+    def record_managed_update_backup_skipped(
+        self, agent: Agent, *, actor: ActorIdentity, actor_display: str
+    ) -> list[UUID]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=agent.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=agent.id,
+                    organization_id=agent.organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": agent.organization_id,
+                    "agent_id": agent.id,
+                    "agent_name": agent.name,
+                    "actor_display": actor_display,
+                    "subject_display": agent.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
+
     def beat_managed_update(self, agent_id: UUID) -> None:
         """Refresh a running update's heartbeat. Never starts one: that is a claim."""
         self._update_agent(
@@ -1136,14 +1167,27 @@ class AgentRepository:
         *,
         restore_point_id: UUID | None,
         failure_reason: str | None = None,
+        pinned_runtime_image: str | None = None,
     ) -> None:
+        values: dict[str, Any] = {
+            "managed_update_outcome": outcome,
+            "managed_update_restore_point_id": restore_point_id,
+            "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
+        }
+        if pinned_runtime_image is not None:
+            values["pinned_runtime_image"] = pinned_runtime_image
+        self._update_agent(agent_id, values)
+
+    def clear_backup_failed_outcome(self, agent_id: UUID) -> None:
+        """Withdraw a failed backup's outcome, and with it the offer to update without one."""
         self._update_agent(
             agent_id,
             {
-                "managed_update_outcome": outcome,
-                "managed_update_restore_point_id": restore_point_id,
-                "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
+                "managed_update_outcome": None,
+                "managed_update_restore_point_id": None,
+                "managed_update_failure_reason": None,
             },
+            col(Agent.managed_update_outcome) == ManagedUpdateOutcome.BACKUP_FAILED,
         )
 
     def _update_agent(self, agent_id: UUID, values: dict[str, Any], *conditions: Any) -> None:
@@ -1465,6 +1509,7 @@ class AgentRepository:
             session.add(persisted)
             session.flush()
             stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
+            stage_agent_task_cleanup(session, persisted.id, persisted.organization_id)
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired

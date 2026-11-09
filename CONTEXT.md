@@ -180,6 +180,18 @@ _Avoid_: memory sharing, Agent Access
 An Agent Restore Point the system captures automatically at the start of a restore, before the target volume is modified. It is the rollback path when a restore is unwanted or fails partway, and it does not count against the per-Agent retention cap.
 _Avoid_: automatic backup, undo point
 
+**Task**:
+A piece of work an Agent records for itself, with a title, an optional description, a status of open, in progress, done or failed, and a timeline of Task Notes. A Task belongs to one Agent in one Organization, is visible to whoever may read that Agent's Tasks, and is deleted with the Agent. It is the Agent's own record, not what someone asked of it: that is a Request.
+_Avoid_: job, ticket, issue, Request
+
+**Task Note**:
+An append-only entry on a Task's timeline. Notes are never edited or removed on their own; they go with their Task.
+_Avoid_: comment, log line
+
+**Task File**:
+An Agent Artifact the Agent attaches to a Task. The Task keeps the Artifact for as long as the Task exists.
+_Avoid_: attachment, upload
+
 **Platform**:
 The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
 _Avoid_: runtime
@@ -211,6 +223,10 @@ _Avoid_: Communication Delivery, webhook reply
 **Runtime-owned Connection**:
 A Communication Connection whose provider transport, session, and delivery behavior run inside the Agent Runtime rather than the Communications Gateway. Agent Barn still owns the Connection record, credentials, policy, and operational visibility.
 _Avoid_: native Connection
+
+**Listen-in channel**:
+A shared room, listed on a Communication Connection, where the Agent reads every message without being mentioned and posts only when it has something useful to add. Mentions are still required in every other room.
+_Avoid_: ambient room, free-response channel, lurking
 
 **Runtime Webhook Relay**:
 The product API boundary that authenticates and policy-checks a provider webhook, then forwards the accepted request to a private Agent Runtime listener and returns that listener's HTTP response to the provider.
@@ -397,7 +413,7 @@ _Avoid_: action type, category
 
 **Request**:
 One piece of work asked of an Agent: an inbound Conversation Message, from a person on any Platform or through Web Chat, or a Webhook Invocation. Scheduled runs are not Requests, though their Tool Calls and spend still count toward an Agent's per-Request figures. See [`business-value.md`](docs/features/business-value.md#organization-activity).
-_Avoid_: task, job, conversation
+_Avoid_: Task, job, conversation
 
 **Domain Event**:
 An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.

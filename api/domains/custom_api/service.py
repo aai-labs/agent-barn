@@ -111,29 +111,34 @@ class CustomApiService:
         with self.agents.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
-            scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
-            rows = {row.id: row for row in self.repository.list_in_scope(agent_id, scope)}
-            targets = [update.id for update in data.updates] + data.deletes
-            if len(targets) != len(set(targets)):
-                raise HTTPException(422, "Each connection may only be changed once")
-            if any(target not in rows for target in targets):
-                raise HTTPException(404, "Custom API connection not found")
-            changes: list[tuple[CustomApiConnection, str]] = [(rows.pop(key), "deleted") for key in data.deletes]
-            for update in data.updates:
-                row = rows[update.id]
-                self._prepare_update(row, update.data, verify=not preflight)
-                changes.append((row, "updated"))
-            for create in data.creates:
-                row = self._new_connection(agent_id, create, verify=not preflight)
-                rows[row.id] = row
-                changes.append((row, "created"))
-            slugs = [row.slug for row in rows.values()]
-            if len(slugs) != len(set(slugs)):
-                raise HTTPException(
-                    409, "This connection name produces an identifier already in use. Choose another name."
-                )
+            changes = self._prepare_changes(agent_id, data, context, verify=not preflight)
             self._apply_changes_locked(agent_id, changes, context, data.restart, preflight=preflight)
             return [] if preflight else self.list_connections(agent_id, context)
+
+    def _prepare_changes(
+        self, agent_id: UUID, data: CustomApiConnectionsApply, context: CurrentUserContext, *, verify: bool = True
+    ) -> list[tuple[CustomApiConnection, str]]:
+        """Prepare without writes; callers authorize and hold the Agent lifecycle lock."""
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        rows = {row.id: row for row in self.repository.list_in_scope(agent_id, scope)}
+        targets = [update.id for update in data.updates] + data.deletes
+        if len(targets) != len(set(targets)):
+            raise HTTPException(422, "Each connection may only be changed once")
+        if any(target not in rows for target in targets):
+            raise HTTPException(404, "Custom API connection not found")
+        changes: list[tuple[CustomApiConnection, str]] = [(rows.pop(key), "deleted") for key in data.deletes]
+        for update in data.updates:
+            row = rows[update.id]
+            self._prepare_update(row, update.data, verify=verify)
+            changes.append((row, "updated"))
+        for create in data.creates:
+            row = self._new_connection(agent_id, create, verify=verify)
+            rows[row.id] = row
+            changes.append((row, "created"))
+        slugs = [row.slug for row in rows.values()]
+        if len(slugs) != len(set(slugs)):
+            raise HTTPException(409, "This connection name produces an identifier already in use. Choose another name.")
+        return changes
 
     def _new_connection(
         self, agent_id: UUID, data: CustomApiConnectionCreate, *, verify: bool = True
