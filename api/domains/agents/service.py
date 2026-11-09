@@ -3891,9 +3891,17 @@ class AgentService:
 
         try:
             data = self.k8s.fetch_agent_healthz(name, ns)
-            return AgentHealthRead.model_validate(data)
         except RuntimeError:
             return None
+        if agent.parent_agent_id is not None:
+            if "served_bots" not in data:
+                return AgentHealthRead(status="initializing")
+            if str(agent.id) not in data["served_bots"]:
+                return AgentHealthRead(
+                    status="error",
+                    reason="This Bot could not start. Fix its settings, then restart its Parent Agent.",
+                )
+        return AgentHealthRead.model_validate(data)
 
     def runtime_restarts(self, agent: Agent) -> AgentRuntimeDiagnosticsRead | None:
         """Restarts and why the last one ended, without any log text.

@@ -56,6 +56,7 @@ _BUDGET_EXHAUSTED_STATUS = 402
 # runtime does not carry the reason out reliably (it can replace this proxy's
 # message with its own), so the refusal is recorded here and read there.
 _LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
+_ACTIVE_BOTS = os.path.join(os.environ.get("BOT_ENV_DIR", "/run/agentbarn/env"), "active-bots.json")
 
 
 def _llm_error_marker(api_key: str) -> str:
@@ -275,6 +276,14 @@ def _resource_metrics_text() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _with_served_bots(body: dict) -> dict:
+    try:
+        with open(_ACTIVE_BOTS) as handle:
+            return {**body, "served_bots": [entry["id"] for entry in json.load(handle)]}
+    except (OSError, ValueError, TypeError, KeyError):
+        return body
+
+
 def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
     if ok is None:
         return 503, {"status": "starting"}
@@ -305,7 +314,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_text(200, _metrics_text(ok, ever) + _resource_metrics_text())
         elif self.path == "/healthz":
             code, body = _healthz_result(*_snapshot())
-            self._send(code, body)
+            self._send(code, _with_served_bots(body))
         else:
             self.send_response(404)
             self.end_headers()

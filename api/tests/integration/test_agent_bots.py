@@ -1014,3 +1014,48 @@ def test_a_bots_google_state_is_its_own_and_its_shim_is_shared():
         args = runtime_context.call_args
         assert_that(args.args[1], equal_to(f"/opt/data/profiles/{context.bot.id}"))
         assert_that(args.kwargs["gog_shim_home_dir"], equal_to("/home/hermes"))
+
+
+def _bot_health(context, healthz):
+    _k8s(context).fetch_agent_healthz.return_value = healthz
+    return _call(context, "get", f"{BASE}/{context.bot.id}/healthz").json()
+
+
+def test_a_bot_the_pod_is_serving_reports_the_pods_health():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        body = _bot_health(context, {"status": "ok", "served_bots": [str(context.bot.id)]})
+
+        assert_that(body["status"], equal_to("ok"))
+
+
+def test_a_bot_the_pod_is_not_serving_reports_an_error():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        body = _bot_health(context, {"status": "ok", "served_bots": []})
+
+        assert_that(body["status"], equal_to("error"))
+        assert_that(body["reason"], contains_string("Parent Agent"))
+
+
+def test_a_bot_is_initializing_until_the_pod_has_a_served_list():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        body = _bot_health(context, {"status": "starting"})
+
+        assert_that(body["status"], equal_to("initializing"))
+
+
+def test_a_bot_reports_its_parents_pod_going_down():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        _k8s(context).get_pod_readiness.return_value = ("crashed", "OOMKilled")
+
+        body = _call(context, "get", f"{BASE}/{context.bot.id}/healthz").json()
+
+        assert_that(body["status"], equal_to("crashed"))
+
+
+def test_a_parents_health_ignores_the_served_list():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        _k8s(context).fetch_agent_healthz.return_value = {"status": "ok", "served_bots": []}
+
+        body = _call(context, "get", f"{BASE}/{context.parent.id}/healthz").json()
+
+        assert_that(body["status"], equal_to("ok"))

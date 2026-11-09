@@ -152,3 +152,26 @@ def test_recording_an_error_writes_only_that_keys_marker(monkeypatch, tmp_path):
 
     assert Path(healthz._llm_error_marker("key-a")).exists()
     assert not Path(healthz._llm_error_marker("key-b")).exists()
+
+
+def test_healthz_reports_the_bots_the_pod_is_serving(monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_ENV_DIR", str(tmp_path))
+    healthz = _load_healthz()
+    (tmp_path / "active-bots.json").write_text('[{"id": "a", "slot": 1}, {"id": "b", "slot": 2}]')
+
+    assert healthz._with_served_bots({"status": "ok"}) == {"status": "ok", "served_bots": ["a", "b"]}
+
+
+def test_healthz_is_unchanged_without_a_served_list(monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_ENV_DIR", str(tmp_path))
+    healthz = _load_healthz()
+
+    assert healthz._with_served_bots({"status": "ok"}) == {"status": "ok"}
+
+
+def test_healthz_ignores_an_unreadable_served_list(monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_ENV_DIR", str(tmp_path))
+    healthz = _load_healthz()
+    (tmp_path / "active-bots.json").write_text("{not json")
+
+    assert healthz._with_served_bots({"status": "ok"}) == {"status": "ok"}
