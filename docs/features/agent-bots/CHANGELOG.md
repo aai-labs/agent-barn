@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the UI: Bot-scoped tabs, the "Agent" menu group for pod-wide pages, and the Bot count on Home.
+- Next: the UI: the access floor and the shared-trust warning.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Bot pages and pod-wide controls
+
+- Delivered: a Bot's page shows its own sections. An "Agent" group on Hermes Agents holds Logs, File sync, Resource usage, Restore points and Size, and links to the Parent Agent. Lifecycle actions and Apply & Restart on a Bot act on the Parent Agent and need `agent.lifecycle.manage` there. Bot settings leave out Restore points, Size and the turn limit editor. The switcher shows whether the pod is serving each Bot, and Home shows each Parent Agent's Bot count and how many Bots are in error.
+- Changed: `docs/architecture/ui.md`.
+- Follow-up: the access floor and the shared-trust warning.
 
 ### 2026-11-09 — AF-425 — Bot switcher and New bot dialog
 

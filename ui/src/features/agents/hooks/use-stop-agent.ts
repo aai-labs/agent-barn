@@ -7,6 +7,7 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
+import { refreshBotsOf } from "./use-bots";
 
 export function useStopAgent() {
   const queryClient = useQueryClient();
@@ -24,6 +25,7 @@ export function useStopAgent() {
     onSuccess: (data) => {
       queryClient.setQueryData(agentsKey.detail(data.id), data);
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
+      refreshBotsOf(queryClient, data.id);
     },
   });
 }

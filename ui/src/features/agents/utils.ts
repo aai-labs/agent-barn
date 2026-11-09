@@ -73,6 +73,8 @@ const AGENT_COLORS = [
   ["#0f766e", "#0e7490"],
 ];
 
+export const podIdOf = (agent: Pick<Agent, "id" | "parentAgentId">) => agent.parentAgentId ?? agent.id;
+
 export function canAgent(
   agent: Pick<Agent, "allowedActions"> | null | undefined,
   permission: AgentPermissionKey,

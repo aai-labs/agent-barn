@@ -16,6 +16,7 @@ import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentSecretRead } from "../schemas";
 import { coerceBooleanFields, expandGithubContent, getIntegrationProvider, hasIncompleteIntegration, isSignInOnlyProvider, type IntegrationDraft } from "../integrations";
+import { podIdOf } from "../utils";
 
 function setupDrafts(agent: Agent): IntegrationDraft[] {
   return (agent.secrets ?? []).map((secret) => ({ provider: secret.provider, content: {}, existing: true,
@@ -98,7 +99,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
       } else if (!hasCustomChanges && !hasCredentialChanges && changedPolicies.length <= 1) {
         const draft = changedPolicies[0] ?? drafts[0];
         if (draft) await isolation.mutateAsync({ provider: draft.provider, isolated: draft.isolated ?? false, restart });
-        else if (restart) await startAgent.mutateAsync(agent.id);
+        else if (restart) await startAgent.mutateAsync(podIdOf(agent));
       } else {
         const batch = {
           creates: customChanges.filter((draft) => !draft.connection).map((draft) => connectionPayload(draft.value)),
@@ -112,7 +113,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
           // Reject invalid Custom API drafts before the shared provider workflow stops the Agent.
           if (hasCustomChanges) await customApi.preflight(batch);
           if (restart) setRestartRequired(true);
-          if (agent.status === "RUNNING") await stopAgent.mutateAsync(agent.id);
+          if (agent.status === "RUNNING") await stopAgent.mutateAsync(podIdOf(agent));
           if (hasCustomChanges) {
             const saved = await customApi.batchMutation.mutateAsync({ ...batch, restart: false });
             setCustomDrafts(saved.data.map(connectionDraft));
@@ -128,7 +129,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
             await isolation.mutateAsync({ provider: draft.provider, isolated: draft.isolated ?? false, restart: false });
           }
           // A failed save leaves the Agent stopped; never boot with a partly saved choice.
-          if (restart) await startAgent.mutateAsync(agent.id);
+          if (restart) await startAgent.mutateAsync(podIdOf(agent));
         }
       }
       setRestartRequired(false);

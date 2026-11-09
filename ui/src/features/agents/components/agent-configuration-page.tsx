@@ -13,7 +13,8 @@ import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent
 import { useAgent } from "../hooks/use-agent";
 import { useAgentConfiguration } from "../hooks/use-agent-configuration";
 import { useAgentHealth } from "../hooks/use-agent-health";
-import { canAgent } from "../utils";
+import { usePodAgent } from "../hooks/use-pod-agent";
+import { canAgent, podIdOf } from "../utils";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChannelSettings } from "./agent-channel-settings";
 import {
@@ -35,11 +36,12 @@ import { AgentTemplateSelectionSettings } from "./agent-template-selection-setti
 
 export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const {
-    agent,
+    agent: loadedAgent,
     isLoading: agentLoading,
     error: agentError,
     refetch: refetchAgent,
   } = useAgent(agentId);
+  const { agent } = usePodAgent(loadedAgent);
   const {
     configuration,
     isLoading: configurationLoading,
@@ -144,7 +146,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             <AgentErrorBanner failure={agent.lastError} className="mb-8">
               {canReadActivity && (
                 <Link
-                  href={`${homeHref}/agents/${agent.id}?tab=logs`}
+                  href={`${homeHref}/agents/${podIdOf(agent)}?tab=logs`}
                   className="mt-2 inline-block font-medium underline underline-offset-3"
                 >
                   View Agent logs
@@ -168,7 +170,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 </span>
                 {canReadActivity && (
                   <Link
-                    href={`${homeHref}/agents/${agent.id}?tab=logs`}
+                    href={`${homeHref}/agents/${podIdOf(agent)}?tab=logs`}
                     className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
                   >
                     View Agent logs

@@ -44,7 +44,7 @@ export type NavItem = {
   onIntent?: () => void;
 };
 
-export type NavGroup = { key: string; label?: string; items: NavItem[] };
+export type NavGroup = { key: string; label?: string; hint?: string; items: NavItem[] };
 
 /** The Platform's tint, for its rail. */
 export const PLATFORM_RAIL_BACKGROUND = "#1e1a4d";

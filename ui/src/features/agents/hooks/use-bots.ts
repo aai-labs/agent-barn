@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { type QueryClient, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { api } from "@/shared/api";
@@ -8,6 +8,13 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
+
+export function refreshBotsOf(queryClient: QueryClient, parentAgentId: string) {
+  for (const bot of queryClient.getQueryData<Agent[]>(agentsKey.bots(parentAgentId)) ?? []) {
+    void queryClient.invalidateQueries({ queryKey: agentsKey.detail(bot.id) });
+  }
+  void queryClient.invalidateQueries({ queryKey: agentsKey.bots(parentAgentId) });
+}
 
 export function useBots(parentAgentId: string, { enabled = true }: { enabled?: boolean } = {}) {
   const orgApiBase = useOrganizationApiBase();

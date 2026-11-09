@@ -175,3 +175,209 @@ test.describe("New bot dialog", () => {
     expect(created[0]).toMatchObject({ approval_mode: "manual" });
   });
 });
+
+test.describe("Bot pages", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const running = { ...parent, status: "RUNNING" };
+  const runningSales = { ...sales, status: "RUNNING" };
+  const agentHref = (id: string, suffix = "") => `/dashboard/${TEST_ORG_ID}/agents/${id}${suffix}`;
+  const panel = (page: Page, name: string) => page.getByRole("navigation", { name, exact: true });
+  const lifecycle = (page: Page) => page.getByTestId("agent-lifecycle-menu");
+  const POD_LINKS = [
+    ["Logs", "?tab=logs"],
+    ["File sync", "?tab=file-sync"],
+    ["Resource usage", "?tab=resource-usage"],
+    ["Restore points", "/configuration?section=restore"],
+    ["Size", "/configuration?section=profile"],
+  ];
+
+  test("a bot's sections are its own and pod-wide pages link to the parent", async ({ page }) => {
+    await setUp(page);
+    await goto(page, SALES_ID);
+
+    const nav = panel(page, "Sales");
+    await expect(nav.getByRole("link", { name: "Tool calls" })).toHaveAttribute(
+      "href",
+      agentHref(SALES_ID, "?tab=tool-calls"),
+    );
+    await expect(nav.getByText("Shared by every bot")).toBeVisible();
+    for (const [name, suffix] of POD_LINKS) {
+      await expect(nav.getByRole("link", { name, exact: true })).toHaveAttribute(
+        "href",
+        agentHref(MOCK_AGENT_ID, suffix),
+      );
+    }
+  });
+
+  test("a Hermes parent keeps the same pod-wide group, on itself", async ({ page }) => {
+    await setUp(page);
+    await goto(page);
+
+    const nav = panel(page, "Front Desk");
+    await expect(nav.getByText("Shared by every bot")).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Logs", exact: true })).toHaveAttribute(
+      "href",
+      agentHref(MOCK_AGENT_ID, "?tab=logs"),
+    );
+  });
+
+  test("an OpenClaw agent has no pod-wide group", async ({ page }) => {
+    await setUp(page, { ...parent, agent_type: "openclaw" }, []);
+    await goto(page);
+
+    const nav = panel(page, "Front Desk");
+    await expect(nav.getByRole("link", { name: "Logs", exact: true })).toBeVisible();
+    await expect(nav.getByText("Shared by every bot")).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Restore points" })).toHaveCount(0);
+  });
+
+  test("a pod-wide tab opened on a bot falls back to its Overview", async ({ page }) => {
+    await setUp(page);
+    await goto(page, SALES_ID, "?tab=logs");
+
+    await expect(panel(page, "Sales").getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+  });
+
+  test("a bot's Activity does not ask for the pod's diagnostics", async ({ page }) => {
+    await setUp(page);
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes(`/agents/${SALES_ID}/diagnostics`)) asked.push(request.url());
+    });
+    await goto(page, SALES_ID, "?tab=activity");
+
+    await expect(panel(page, "Sales").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
+    await page.waitForTimeout(1_000);
+    expect(asked).toEqual([]);
+  });
+
+  test("Pause on a bot stops its parent", async ({ page }) => {
+    const { data } = await setUp(page, running);
+    await data.agents.interceptGetAgentRequest({ agentId: SALES_ID, body: runningSales });
+    await data.agents.interceptStopAgentRequest({ body: { ...running, status: "STOPPED" } });
+    await goto(page, SALES_ID);
+    const stop = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/stop`);
+
+    await lifecycle(page).getByRole("button", { name: "Pause" }).click();
+
+    await stop;
+  });
+
+  test("a bot offers no lifecycle actions without restart rights on its parent", async ({ page }) => {
+    await setUp(page, { ...parent, allowed_actions: ["agent.read", "activity.read"] });
+    await goto(page, SALES_ID);
+
+    await expect(page.getByTestId("agent-runtime-chip")).toBeVisible();
+    await expect(lifecycle(page)).toHaveCount(0);
+  });
+
+  test("Apply & Restart on a bot restarts its parent", async ({ page }) => {
+    const { data } = await setUp(page, running);
+    await data.agents.interceptGetAgentRequest({ agentId: SALES_ID, body: runningSales });
+    await data.agents.interceptGetAgentConfigurationRequest({ agentId: SALES_ID });
+    await data.agents.interceptStopAgentRequest({ body: { ...running, status: "STOPPED" } });
+    await data.agents.interceptStartAgentRequest({ body: running });
+    await data.agents.interceptUpdateAgentRequest({ agentId: SALES_ID, body: runningSales });
+    const onBot: string[] = [];
+    page.on("request", (request) => {
+      if (/\/agents\/[^/]+\/(stop|start)$/.test(request.url()) && request.url().includes(SALES_ID)) {
+        onBot.push(request.url());
+      }
+    });
+    await goto(page, SALES_ID, "/configuration?section=profile");
+    const stop = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/stop`);
+    const save = page.waitForRequest(
+      (request) => request.method() === "PATCH" && request.url().endsWith(`/agents/${SALES_ID}`),
+    );
+    const start = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/start`);
+
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Agent name").fill("Sales desk");
+    const footer = page.locator('section[aria-label="Profile"] footer');
+    await footer.getByRole("button", { name: "Apply & Restart", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
+
+    await stop;
+    expect((await save).postDataJSON()).not.toHaveProperty("max_turns");
+    await start;
+    expect(onBot).toEqual([]);
+  });
+
+  test("restarting for a pending model on a bot restarts its parent", async ({ page }) => {
+    const { data } = await setUp(page, running);
+    await data.agents.interceptGetAgentRequest({
+      agentId: SALES_ID,
+      body: { ...runningSales, pending_model: "openai/gpt-next" },
+    });
+    await data.agents.interceptStopAgentRequest({ body: { ...running, status: "STOPPED" } });
+    await data.agents.interceptStartAgentRequest({ body: running });
+    await goto(page, SALES_ID);
+    const stop = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/stop`);
+
+    await page.getByTestId("agent-pending-model-restart").click();
+
+    await stop;
+  });
+
+  test("a bot's settings leave out pod-wide controls and the turn limit", async ({ page }) => {
+    const { data } = await setUp(page);
+    await data.agents.interceptGetAgentConfigurationRequest({ agentId: SALES_ID });
+    await goto(page, SALES_ID, "/configuration?section=profile");
+
+    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    await expect(panel(page, "Sales").getByRole("link", { name: "Restore points" })).toHaveCount(0);
+    await expect(page.getByTestId("agent-size-tile")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(page.getByLabel("Agent name")).toBeVisible();
+    await expect(page.getByLabel("Turn limit")).toHaveCount(0);
+  });
+
+  test("the switcher shows a bot the pod is not serving", async ({ page }) => {
+    const { data } = await setUp(page, running, [runningSales, lawyer]);
+    await data.agents.interceptGetAgentHealthRequest({
+      agentId: SALES_ID,
+      body: { status: "error", reason: "This Bot could not start." },
+    });
+    await goto(page);
+
+    await switcher(page).click();
+
+    await expect(
+      page.getByRole("menuitem").filter({ hasText: "Sales" }).getByRole("img", { name: "Disconnected" }),
+    ).toBeVisible();
+  });
+});
+
+test.describe("Home with bots", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const openHome = async (page: Page, bots: unknown[]) => {
+    const { data } = await setUp(page, parent, bots);
+    await data.organizations.interceptGetOrganizationLlmBudget();
+    await page.goto(`/dashboard/${TEST_ORG_ID}`);
+    return page.getByRole("link", { name: "View Front Desk" });
+  };
+
+  test("a parent's card counts its bots and flags one needing attention", async ({ page }) => {
+    const card = await openHome(page, [sales, { ...lawyer, status: "ERROR" }]);
+
+    await expect(card).toContainText("2 bots");
+    await expect(card).toContainText("1 needs attention");
+  });
+
+  test("one healthy bot reads in the singular with no flag", async ({ page }) => {
+    const card = await openHome(page, [sales]);
+
+    await expect(card).toContainText("1 bot");
+    await expect(card).not.toContainText("needs attention");
+  });
+
+  test("a parent with no bots shows no count", async ({ page }) => {
+    const card = await openHome(page, []);
+
+    await expect(card).toBeVisible();
+    await expect(card).not.toContainText(/\d bots?/);
+  });
+});

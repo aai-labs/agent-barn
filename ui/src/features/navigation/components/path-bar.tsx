@@ -20,6 +20,7 @@ import { AgentUpdateNotice } from "@/features/agents/components/agent-update-ban
 import { ShareDialog } from "@/features/agents/components/share-dialog";
 import { NewBotDialog } from "@/features/agents/components/new-bot-dialog";
 import { useAgent } from "@/features/agents/hooks/use-agent";
+import { useAgentHealth } from "@/features/agents/hooks/use-agent-health";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { useBots } from "@/features/agents/hooks/use-bots";
 import { useModels } from "@/features/agents/hooks/use-models";
@@ -244,7 +245,7 @@ function BotSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string;
                 if (candidate.id !== agentId) router.push(targetFor(candidate.id));
               }}
             >
-              <AvatarWithStatus agent={candidate} />
+              <ServedAvatar agent={candidate} />
               <span className="flex-1 truncate">{candidate.name}</span>
               {candidate.id === parent.id && (
                 <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
@@ -281,20 +282,28 @@ function BotSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string;
 
 function AgentActions({ agentId }: { agentId: string }) {
   const agent = useCachedAgent(agentId);
+  const pod = useCachedAgent(agent?.parentAgentId ?? agentId);
   if (!agent) return null;
-  return <AgentActionButtons agent={agent} />;
+  return <AgentActionButtons agent={agent} pod={pod} />;
 }
 
-function AgentActionButtons({ agent }: { agent: Agent }) {
+function AgentActionButtons({ agent, pod }: { agent: Agent; pod: Agent | undefined }) {
   const [shareOpen, setShareOpen] = useState(false);
-  const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const managedPod = canAgent(pod, "agent.lifecycle.manage") ? pod : undefined;
   const canManageAccess = canAgent(agent, "agent.access.manage");
 
   return (
     <div className="flex flex-shrink-0 items-center gap-2">
       <AgentRuntimeChip agent={agent} />
-      {canManageLifecycle && <AgentUpdateNotice agent={agent} />}
-      {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
+      {managedPod && (
+        <div
+          className="flex items-center gap-2"
+          title={agent.parentAgentId ? `Acts on ${managedPod.name} and every bot in it` : undefined}
+        >
+          <AgentUpdateNotice agent={managedPod} />
+          <AgentLifecycleMenu agent={managedPod} />
+        </div>
+      )}
       {canManageAccess && (
         <>
           <button type="button" className="af-btn" onClick={() => setShareOpen(true)}>
@@ -351,6 +360,11 @@ function AgentRuntimeChip({ agent }: { agent: Agent }) {
       </span>
     </span>
   );
+}
+
+function ServedAvatar({ agent }: { agent: Agent }) {
+  useAgentHealth(agent.id, agent.status === "RUNNING" && canAgent(agent, "activity.read"));
+  return <AvatarWithStatus agent={agent} />;
 }
 
 /** The Agent's avatar with its status as a dot. */
