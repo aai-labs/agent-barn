@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Bots can be created, and pod operations act on the Parent Agent, but nothing runs Bots yet.
 - In transition: nothing.
-- Next: Bot builders, optional volumes, multiplex, Service ports and passthrough placeholders.
+- Next: the boot step that lays out each Bot as a Hermes profile (`bot-setup.py`, `bot-run.py`, `start.sh`).
 - Blockers: none.
 
 ## Runtime evidence
@@ -50,6 +50,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-09 — AF-425 — Bot builders
+
+- Delivered: builders can mount Bots into a Parent Agent's pod: multiplex, an in-memory `.env` volume, each Bot's optional Secret and ConfigMap, a trigger port per slot, terminal passthrough names with placeholders, and a Bot profile config carrying Slack and Telegram settings in `extra`. Nothing calls them with Bots yet.
+- Changed: the runtime digest moves.
+- Follow-up: boot step.
 
 ### 2026-11-09 — AF-425 — Extract Agent assembly
 

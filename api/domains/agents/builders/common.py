@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from uuid import UUID
 
 from kubernetes import client
@@ -7,6 +8,7 @@ from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOO
 
 _NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
 
+BOT_TRIGGER_BASE_PORT = 8100
 _MIB = 1024**2
 _GIB = 1024**3
 
@@ -120,6 +122,7 @@ def build_service(
     org_name: str = "",
     agent_name: str = "",
     runtime: str = "",
+    bot_slots: Sequence[int] = (),
 ) -> client.V1Service:
     ports = [
         client.V1ServicePort(port=80, target_port=8080, name="gateway"),
@@ -133,6 +136,9 @@ def build_service(
         ports.append(
             client.V1ServicePort(port=RUNTIME_WEBHOOK_PORT, target_port=RUNTIME_WEBHOOK_PORT, name="tg-webhook")
         )
+    for slot in bot_slots:
+        port = BOT_TRIGGER_BASE_PORT + slot
+        ports.append(client.V1ServicePort(port=port, target_port=port, name=f"trg-{slot}"))
     return client.V1Service(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

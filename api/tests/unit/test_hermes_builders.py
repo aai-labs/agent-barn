@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+from kubernetes import client
+
 from api.domains.agent_sizes.models import (
     STANDARD_CPU_LIMIT_MILLICORES,
     STANDARD_CPU_REQUEST_MILLICORES,
@@ -14,13 +16,24 @@ from api.domains.agents.builders import (
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_secret_hermes_runtime,
+    build_service,
     container_resources,
     native_discord_env,
     native_slack_env,
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
+from api.domains.agents.builders.hermes import (
+    BOT_CONFIG_ROOT,
+    BOT_ENV_DIR,
+    BOT_SECRET_ROOT,
+    HERMES_BOOTLOADER_FOOTER,
+    HERMES_DEFAULT_MAX_TURNS,
+    HERMES_START_SH,
+    bot_gateway_config,
+    bot_passthrough_names,
+    with_passthrough_placeholders,
+)
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
 from api.domains.file_sync.rules import rules_manifest
@@ -576,3 +589,144 @@ def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
         _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", {}
     )
     assert "Files and download links" not in config_map.data["AGENTS.md"]
+
+
+_BOT_A = UUID("aaaaaaaa-0000-4000-8000-00000000000a")
+_BOT_B = UUID("bbbbbbbb-0000-4000-8000-00000000000b")
+
+
+def _deployment(**fields):
+    return build_hermes_deployment(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "hermes:test",
+        resources=client.V1ResourceRequirements(requests={"memory": "1Mi"}, limits={"memory": "1Mi"}),
+        **fields,
+    )
+
+
+def _env(pod):
+    return {env.name: env.value for env in pod.containers[0].env}
+
+
+def test_a_parent_without_bots_gets_no_bot_wiring():
+    pod = _deployment().spec.template.spec
+    service = build_service(_AGENT_ID, _ORG_ID, _NS)
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "GATEWAY_MULTIPLEX_PROFILES" not in _env(pod)
+    assert not [volume for volume in pod.volumes if volume.name.startswith("bot")]
+    assert [port.name for port in service.spec.ports] == ["gateway", "healthz", "triggers"]
+    assert "env_passthrough" not in config["terminal"]
+
+
+def test_bots_turn_on_multiplex_and_an_in_memory_env_volume():
+    pod = _deployment(bot_ids=[_BOT_A]).spec.template.spec
+
+    assert _env(pod)["GATEWAY_MULTIPLEX_PROFILES"] == "1"
+    volume = next(item for item in pod.volumes if item.name == "bot-env")
+    assert volume.empty_dir.medium == "Memory"
+    mount = next(item for item in pod.containers[0].volume_mounts if item.name == "bot-env")
+    assert mount.mount_path == BOT_ENV_DIR
+
+
+def test_each_bots_secret_and_config_map_are_mounted_and_optional():
+    pod = _deployment(bot_ids=[_BOT_A, _BOT_B]).spec.template.spec
+    volumes = {volume.name: volume for volume in pod.volumes}
+    mounts = {mount.name: mount for mount in pod.containers[0].volume_mounts}
+
+    for bot in (_BOT_A, _BOT_B):
+        secret = volumes[f"bot-{bot}-secret"].secret
+        config = volumes[f"bot-{bot}-config"].config_map
+        assert (secret.secret_name, secret.optional) == (f"agent-{bot}", True)
+        assert (config.name, config.optional) == (f"agent-{bot}", True)
+        assert mounts[f"bot-{bot}-secret"].mount_path == f"{BOT_SECRET_ROOT}/{bot}"
+        assert mounts[f"bot-{bot}-config"].mount_path == f"{BOT_CONFIG_ROOT}/{bot}"
+
+
+def test_each_bot_slot_gets_a_trigger_port():
+    ports = {port.name: port for port in build_service(_AGENT_ID, _ORG_ID, _NS, bot_slots=[1, 3]).spec.ports}
+
+    assert (ports["trg-1"].port, ports["trg-1"].target_port) == (8101, 8101)
+    assert (ports["trg-3"].port, ports["trg-3"].target_port) == (8103, 8103)
+
+
+def test_passthrough_covers_every_tool_name_and_never_a_runtime_key():
+    names = bot_passthrough_names(
+        ["AF_GATEWAY_TOKEN_JIRA", "MEMORY_API_KEY", "ARTIFACT_URL", "GOG_HOME", "OPENAI_API_KEY", "SLACK_BOT_TOKEN"],
+        ["AAI_CUSTOM_API_ABC_TOKEN", "FIRECRAWL_API_KEY", "JIRA_EMAIL"],
+    )
+
+    assert names == sorted(
+        [
+            "AAI_CONFIG",
+            "AAI_CUSTOM_API_ABC_TOKEN",
+            "AF_GATEWAY_TOKEN_JIRA",
+            "ARTIFACT_URL",
+            "GOG_HOME",
+            "JIRA_EMAIL",
+            "MEMORY_API_KEY",
+        ]
+    )
+
+
+def test_placeholders_fill_only_missing_names():
+    env = {"MEMORY_API_KEY": "parent-value"}
+
+    with_passthrough_placeholders(env, ["AAI_CONFIG", "MEMORY_API_KEY"])
+
+    assert env == {"AAI_CONFIG": "", "MEMORY_API_KEY": "parent-value"}
+
+
+def test_passthrough_names_reach_the_terminal_config():
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", env_passthrough=["AAI_CONFIG"])
+
+    assert config["terminal"]["env_passthrough"] == ["AAI_CONFIG"]
+
+
+def test_a_bot_profile_turns_off_its_api_server_and_keeps_the_parents_config():
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    profile = bot_gateway_config(config)
+
+    assert profile["platforms"]["api_server"] == {"enabled": False}
+    assert "platforms" not in config or "api_server" not in config["platforms"]
+
+
+def test_a_bot_profile_carries_slack_settings_in_extra():
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
+
+    extra = bot_gateway_config(
+        config,
+        slack_settings={"dm_policy": "off", "thread_mention_policy": "start_only", "channel_ids": ["C1", "C2"]},
+    )["platforms"]["slack"]["extra"]
+
+    assert extra == {
+        "markdown_blocks": True,
+        "require_mention": True,
+        "thread_require_mention": False,
+        "disable_dms": True,
+        "allowed_channels": ["C1", "C2"],
+    }
+
+
+def test_an_open_slack_group_policy_sets_no_channel_allowlist():
+    extra = bot_gateway_config({}, slack_settings={"dm_policy": "allowlist", "group_policy": "open"})["platforms"][
+        "slack"
+    ]["extra"]
+
+    assert extra["disable_dms"] is False
+    assert "allowed_channels" not in extra
+
+
+def test_a_bot_profile_carries_telegram_settings_in_extra():
+    allowlisted = bot_gateway_config({}, telegram_settings={"allowed_chat_ids": ["-100", "-200"]})
+    open_groups = bot_gateway_config({}, telegram_settings={"group_policy": "open"})
+
+    assert allowlisted["platforms"]["telegram"]["extra"] == {
+        "require_mention": True,
+        "allowed_chats": ["-100", "-200"],
+        "group_allowed_chats": ["-100", "-200"],
+    }
+    assert open_groups["platforms"]["telegram"]["extra"] == {"require_mention": True, "group_allowed_chats": "*"}
