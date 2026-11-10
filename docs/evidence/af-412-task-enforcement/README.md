@@ -124,3 +124,18 @@ Two Agents per cell, one model, one scripted conversation, and no prompt caching
 the Agent's base context is relative to the Task overhead, and on how much work the model chooses to do; a model with
 prompt caching would pay much less for the repeated context. One Hermes research turn in round 4 timed out (over seven
 minutes of web calls, no Task calls); its work was still recorded automatically.
+
+## Live re-run with Task Files as Artifacts (2026-11-10)
+
+The runs above predate publishing Task Files as Artifacts. This re-run covers the code as shipped: AF-412 at `033895a2`, served from AF-413 at `17dc14d4` (which contains it), on local k3d with real Garage storage and a real model through LiteLLM. Both Agents used the `general-purpose` template, with the base images `hermes-base:af433` and `openclaw-base:af433` (base image sources identical to this branch; the Task plugin and command reach the pod through the ConfigMap).
+
+| Scenario | Hermes | OpenClaw |
+|---|---|---|
+| Request that produces `states.csv` | Task recorded and marked `done`; file **not** attached (see below) | Task recorded and marked `done`; `states.csv` attached |
+| Attach the same file twice | Both attaches return the same File; it stays on the Task | Same |
+| Attach a 30 MB file | "The file is larger than the 26214400-byte limit."; Task kept without it | Same |
+| Work the Agent was told not to record | `automatic` Task with `notes.md` attached; `DB_PASSWORD=[redacted]` in the description | Same |
+| Writes `.env` and `summary.md` | `summary.md` attached, `.env` not | Same |
+| Download a Task File | Link returns the file's bytes | Same |
+
+Hermes wrote `states.csv` with `execute_code` (its Python sandbox) rather than `write_file`, then published it with `agentbarn-artifacts`. The plugin attaches only files written with `write_file`/`patch` (Hermes) or `write`/`edit`/`apply_patch` (OpenClaw), so files a turn writes by running code or a shell command are not attached automatically on either runtime.
