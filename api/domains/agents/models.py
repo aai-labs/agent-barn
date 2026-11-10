@@ -18,6 +18,7 @@ from sqlmodel import Field as SqlField
 from api.domains.agent_sizes.models import AgentSizeOption
 from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
+from api.domains.custom_api.models import CustomApiConnectionsApply
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -99,6 +100,7 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
+    GITLAB = "gitlab"
     FIRECRAWL = "firecrawl"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
@@ -120,6 +122,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
+    SecretProvider.GITLAB: "GitLab credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
@@ -183,6 +186,50 @@ class BitbucketContent(_RepoListCompat):
     repos: list[str] = Field(default_factory=list)
     email: str
     api_token: str
+
+
+class GitlabContent(_RepoListCompat):
+    # Unlike GitHub and Bitbucket, GitLab is self-hosted as often as not, so the origin is
+    # part of the credential. It is reduced to a bare https origin because the API server,
+    # the agent's aai-cli and the credential gateway all send the token there. Whether the
+    # host is public is decided when it resolves, not here: see `public_http`.
+    base_url: str = "https://gitlab.com"
+    token: str = Field(min_length=1)
+    repos: list[str] = Field(default_factory=list)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return "https://gitlab.com"
+        parsed = urlsplit(value)
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("base_url has an invalid port") from exc
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme != "https"
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("base_url must be an https origin such as https://gitlab.example.com")
+        if host == "localhost" or host.endswith(".localhost"):
+            raise ValueError("base_url must not point at localhost")
+        return f"https://{parsed.netloc.lower()}"
+
+    @field_validator("token")
+    @classmethod
+    def _validate_token(cls, value: str) -> str:
+        token = value.strip()
+        if not token or any(ch.isspace() for ch in token):
+            raise ValueError("token must not be empty or contain whitespace")
+        return token
 
 
 class GoogleWorkspaceContent(SecretContent):
@@ -443,6 +490,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
+    SecretProvider.GITLAB: GitlabContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
@@ -1193,6 +1241,12 @@ class AgentCreate(PydanticBaseModel):
         return self
 
 
+class IntegrationPolicyUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: SecretProvider
+    isolated: bool
+
+
 class AgentUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1214,6 +1268,10 @@ class AgentUpdate(PydanticBaseModel):
     secrets: list[AgentSecretCreate] | None = None
     shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+    # Opt in to a server-owned validate/stop/save/start operation.
+    restart: bool = False
+    policies: list[IntegrationPolicyUpdate] = Field(default_factory=list)
+    custom_api: CustomApiConnectionsApply | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
     # Unset leaves the limit alone; an explicit null returns the Agent to the
@@ -1257,6 +1315,20 @@ class AgentUpdate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_secret_operations(self) -> AgentUpdate:
+        if self.restart and self.model_fields_set - {
+            "restart",
+            "secrets",
+            "shared_credentials",
+            "removed_secret_providers",
+            "policies",
+            "custom_api",
+        }:
+            raise ValueError("Restart on PATCH is supported for integration changes only")
+        policies = [policy.provider for policy in self.policies]
+        if len(policies) != len(set(policies)):
+            raise ValueError("Duplicate isolation policy providers are not allowed")
+        if self.custom_api and (self.custom_api.restart or any(create.restart for create in self.custom_api.creates)):
+            raise ValueError("Use the top-level restart choice")
         upserts = [s.provider for s in self.secrets or []]
         if len(upserts) != len(set(upserts)):
             raise ValueError("Duplicate secret providers are not allowed")

@@ -5,6 +5,7 @@ from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
+from api.infrastructure.integration_validators.gitlab import validate_gitlab
 from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
@@ -18,6 +19,7 @@ PROVIDER_VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.JIRA: validate_jira,
     SecretProvider.CONFLUENCE: validate_confluence,
     SecretProvider.BITBUCKET: validate_bitbucket,
+    SecretProvider.GITLAB: validate_gitlab,
     SecretProvider.GOOGLE_WORKSPACE: validate_google_workspace,
     SecretProvider.GMAIL: validate_gmail,
     SecretProvider.GMAIL_APP_PASSWORD: validate_gmail_app_password,
@@ -50,6 +52,7 @@ __all__ = [
     "validate_bitbucket",
     "validate_confluence",
     "validate_github",
+    "validate_gitlab",
     "validate_gmail",
     "validate_google_workspace",
     "validate_jira",

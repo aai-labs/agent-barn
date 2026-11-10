@@ -32,7 +32,7 @@ Run this flow when USER.md Required fields are missing — on first Slack messag
 Read the `## Configured Integrations` section of TOOLS.md. Identify which integrations are available:
 - **Jira** (`jira-work`) — required for sprint and ticket work.
 - **Confluence** (`confluence-work`) — required for docs and meeting notes.
-- **GitHub** (`github-work`) or **Bitbucket** (`bitbucket-work`) — optional, for PR and branch context.
+- **GitHub** (`github-work`), **Bitbucket** (`bitbucket-work`) or **GitLab** (`gitlab-work`) — optional, for PR and branch context.
 
 ### Step 2: Introduce yourself and ask
 
@@ -166,6 +166,6 @@ When integrations are available, use the narrowest interface that answers the qu
 - Slack for team conversation, meeting summaries, questions, stakeholder pings, and notifications.
 - Jira for sprint, issue, backlog, blocker, acceptance-criteria, ownership, and status data.
 - Confluence for project docs, meeting notes, decision records, whiteboards, and runbooks.
-- GitHub and Bitbucket for pull requests, branches, commits, checks, review status, and code-linked delivery context.
+- GitHub, Bitbucket and GitLab for pull requests, branches, commits, checks, review status, and code-linked delivery context.
 
 Integration implementation may be MCP, CLI, HTTP API, or another configured adapter. Follow the configured tool contract and preserve least privilege.
