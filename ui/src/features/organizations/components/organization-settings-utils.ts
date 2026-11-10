@@ -1,4 +1,4 @@
-import { Brain, FileCode2, FolderSync, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
+import { Brain, FileCode2, FolderSync, KeyRound, Layers, Sparkles, UserRound, Wallet } from "lucide-react";
 
 export type OrganizationSettingsSectionKey =
   | "agents"
@@ -8,7 +8,8 @@ export type OrganizationSettingsSectionKey =
   | "organization-memory"
   | "memory-access"
   | "shared-credentials"
-  | "sync";
+  | "sync"
+  | "tier";
 
 export type OrganizationSettingsSection = {
   key: OrganizationSettingsSectionKey;
@@ -77,6 +78,13 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     description: "Connect storage providers to keep your organization's files in sync.",
     adminOnly: false,
   },
+  {
+    key: "tier",
+    label: "Tier",
+    description: "What your organization's tier covers, and which agents and features are on hold.",
+    adminOnly: true,
+    membershipAdminOnly: true,
+  },
 ];
 
 export const ORGANIZATION_SETTINGS_SECTION_KEYS = ORGANIZATION_SETTINGS_SECTIONS.map(
@@ -92,6 +100,7 @@ export const ORGANIZATION_SETTINGS_ICONS = {
   "organization-memory": Brain,
   "shared-credentials": KeyRound,
   sync: FolderSync,
+  tier: Layers,
 } as const;
 
 export function visibleOrganizationSettingsSections(canManage: boolean, isMembershipAdmin = canManage) {

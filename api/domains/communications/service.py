@@ -49,6 +49,7 @@ from api.domains.communications.repository import (
 from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, platform_transport
 from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.guard import UsageAction, UsageGuard, UsageSubject
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -105,12 +106,19 @@ class CommunicationsService:
     repository: CommunicationConnectionRepository
     addresses: AgentEmailAddressRepository
     plugins: PlatformPluginRegistry
+    usage: UsageGuard
     delivery_repository: CommunicationDeliveryRepository | None = None
     operations: CommunicationOperationalRepository | None = None
 
     def list_platforms(self, context: CurrentUserContext) -> list[PlatformDescriptorRead]:
-        context.require_current_user_organization()
-        return self.plugins.descriptors()
+        membership = context.require_current_user_organization()
+        return [
+            descriptor
+            for descriptor in self.plugins.descriptors()
+            if self.usage.allows(
+                membership.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=descriptor.key)
+            )
+        ]
 
     def list_connections(
         self,
@@ -221,6 +229,7 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} is not available",
             )
+        self.usage.check(agent.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=plugin.key))
         validated = self._validate(
             plugin,
             data.settings,
@@ -285,6 +294,10 @@ class CommunicationsService:
         if connection is None:
             self._raise_not_found(connection_id)
         self._reject_web_chat_mutation(connection.platform_key)
+        if data.enabled and not connection.enabled:
+            self.usage.check(
+                agent.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=connection.platform_key)
+            )
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -306,6 +319,8 @@ class CommunicationsService:
             connection.display_name = data.display_name.strip()
         if data.enabled is not None:
             connection.enabled = data.enabled
+        if data.enabled:
+            connection.resume()
         connection.schema_version = plugin.schema_version
         connection.settings = validated.settings
         connection.credentials_encrypted = self._encrypt_credentials(validated.credentials)

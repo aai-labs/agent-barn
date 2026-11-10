@@ -1,3 +1,7 @@
+# The platform Template of the premade Agent, on Hermes: the Agent onboarding hires, and the
+# one an Organization whose plan leaves out custom agents may hire.
+PREMADE_TEMPLATE_KEY = "general-purpose"
+
 DEFAULT_SOUL_MD = """\
 # SOUL.md - Who Am I?
 

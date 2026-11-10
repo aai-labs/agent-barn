@@ -19,6 +19,8 @@ export const TrialSettingsSchema = z.object({
   // Null: no cap on how many trials may be active at once.
   maxActiveTrials: z.number().int().nullable().optional(),
   activeTrials: z.number().int().optional(),
+  // Sign-up grants the Free tier, so it stays closed while Free isn't offered.
+  freeTierOffered: z.boolean().optional(),
   updatedAt: z.string().nullable().optional(),
 });
 

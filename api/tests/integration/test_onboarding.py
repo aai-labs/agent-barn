@@ -14,13 +14,16 @@ from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.agents.repository import AgentRepository
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.service import OnboardingService
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.service import TemplateService
+from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.domains.users.repository import UserRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.google_sign_in import WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
+from api.tests.steps.google_sign_in import GOOGLE_EMAIL, WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
 from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user
@@ -133,6 +136,27 @@ def test_setting_up_gives_the_agent_an_agent_barn_telegram_connection():
         assert_that(connections, has_length(1))
         assert_that(connections[0], has_entries(platform_key="agentbarn_telegram", enabled=True))
         assert_that(body["connection_id"], equal_to(connections[0]["id"]))
+
+
+def test_an_organization_past_its_trial_gets_its_agent_without_the_shared_bot():
+    def the_trial_was_converted(context):
+        # As subscribing to a paid Tier leaves it.
+        organizations = context.injector.get(OrganizationRepository)
+        (organization_id,) = [
+            membership.organization_id
+            for membership in context.injector.get(OrganizationUserRepository).get_by_user_id(
+                context.injector.get(UserRepository).get_by_email(GOOGLE_EMAIL).id
+            )
+        ]
+        organization = organizations.get(organization_id)
+        organization.is_trial = False
+        organizations.save(organization)
+
+    with given(_setup(someone_signed_up_with_google(), the_trial_was_converted)) as context:
+        body = _set_up_agent(context).json()
+
+        assert_that(body, has_entries(agent_status=AgentStatus.RUNNING.value, connection_id=None))
+        assert_that(_connections(context, body), has_length(0))
 
 
 def test_setting_up_twice_keeps_the_one_agent_and_connection():
@@ -287,7 +311,7 @@ def test_onboarding_follows_the_trials_first_agent():
         )
         hired = context.client.post(
             f"/api/v1/organizations/{first['organization_id']}/agents",
-            json={"name": "Aardvark", "template_key": "general-purpose"},
+            json={"name": "Aardvark", "template_key": "general-purpose", "agent_type": "hermes"},
             headers=auth(context),
         )
         assert_that(hired.status_code, equal_to(status.HTTP_201_CREATED), hired.text)

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import type { Agent } from "@/features/agents/schemas";
 import { formatDate } from "@/shared/date";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { useAgentWebhookActions } from "../hooks/use-agent-webhooks";
 import type {
@@ -56,6 +57,8 @@ export function WebhookDetail({
   onRetire: () => void;
 }) {
   const { updateWebhook, rotateSecret } = useAgentWebhookActions();
+  // Without webhooks in the tier, an existing one can be disabled but not enabled again.
+  const tierAllowsWebhooks = useTierEntitlements().hasFeature("agent_webhooks");
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState(webhook.displayName);
   const [deliveryPlatform, setDeliveryPlatform] = useState(
@@ -147,7 +150,8 @@ export function WebhookDetail({
                 <button
                   type="button"
                   className="af-btn af-btn-sm"
-                  disabled={updateWebhook.isPending}
+                  disabled={updateWebhook.isPending || (!webhook.enabled && !tierAllowsWebhooks)}
+                  title={!webhook.enabled && !tierAllowsWebhooks ? "Your organization's tier doesn't include agent webhooks." : undefined}
                   onClick={() => void toggleEnabled()}
                 >
                   {webhook.enabled ? "Disable" : "Enable"}

@@ -55,7 +55,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
+from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition, AgentSuspended
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -192,6 +192,7 @@ from api.domains.templates.models import AgentTemplate, PlatformTemplate, Templa
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import effective_required_ids, split_requirements
+from api.domains.usage.guard import TemplateChoice, UsageAction, UsageGuard, UsageSubject
 from api.domains.users.models import User
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators import (
@@ -390,6 +391,7 @@ class AgentService:
     agentbarn_telegram_secrets: AgentBarnTelegramService
     agent_sizes: AgentSizeLookupService
     artifact_buckets: ArtifactBucketRepository
+    usage: UsageGuard
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -404,6 +406,20 @@ class AgentService:
         else:
             agent.agent_template_id = template.id
             agent.platform_template_id = None
+
+    def _check_template_usage(
+        self,
+        org_id: UUID,
+        action: UsageAction,
+        template: AgentTemplate | PlatformTemplate,
+        agent_type: AgentType,
+    ) -> None:
+        choice = TemplateChoice(
+            key=template.template_key,
+            from_platform=isinstance(template, PlatformTemplate),
+            agent_type=AgentType(agent_type).value,
+        )
+        self.usage.check(org_id, action, UsageSubject(template=choice))
 
     def count_agents_in_error(self) -> int:
         return self.repository.count_agents_in_error()
@@ -723,6 +739,10 @@ class AgentService:
                 else HERMES_DEFAULT_MAX_TURNS
             ),
             memory_enabled=agent.memory_enabled,
+            suspended_at=agent.suspended_at,
+            suspension_reason=agent.suspension_reason,
+            memory_suspended_at=agent.memory_suspended_at,
+            memory_suspension_reason=agent.memory_suspension_reason,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
@@ -953,6 +973,11 @@ class AgentService:
             missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
+        self._check_template_usage(org_id, UsageAction.HIRE_AGENT, template, data.agent_type)
+        if data.skill_ids:
+            self.usage.check(org_id, UsageAction.CUSTOMIZE_AGENT)
+        if data.secrets or data.shared_credentials:
+            self.usage.check(org_id, UsageAction.ADD_INTEGRATION)
         # Checked again under a lock when the Agent is stored; checked here too so a
         # refused create never allocates a LiteLLM key.
         limits = self.organization_lookup.get_agent_limit(org_id)
@@ -963,7 +988,7 @@ class AgentService:
             if limits is not None
             else None
         )
-        if agent_limit is not None and self.repository.count_active_by_org(org_id) >= agent_limit:
+        if agent_limit is not None and self.repository.count_toward_agent_limit(org_id) >= agent_limit:
             raise AgentLimitReached(agent_limit)
 
         agent = Agent(
@@ -1366,6 +1391,8 @@ class AgentService:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         existing = self.override_repository.get_draft(agent.id, org_id)
+        if existing is None:
+            self.usage.check(org_id, UsageAction.CUSTOMIZE_AGENT)
         if existing is not None:
             return self._override_draft_read(
                 existing,
@@ -1497,6 +1524,7 @@ class AgentService:
     ) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.usage.check(org_id, UsageAction.CUSTOMIZE_AGENT)
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1927,6 +1955,8 @@ class AgentService:
         updated = data.model_dump(exclude_unset=True)
         if _CREDENTIAL_FIELDS & updated.keys() or data.policies or data.custom_api is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+        if data.custom_api is not None and data.custom_api.creates:
+            self.usage.check(org_id, UsageAction.ADD_INTEGRATION)
 
         if agent.status == AgentStatus.RUNNING and not data.restart:
             raise HTTPException(
@@ -1957,6 +1987,8 @@ class AgentService:
         # template pin, or any attached credential.
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
         current_skill_ids = {row.skill_id for row in current_skill_rows}
+        if set(data.skill_ids) - current_skill_ids:
+            self.usage.check(org_id, UsageAction.CUSTOMIZE_AGENT)
         resolved_skill_pins = self._resolve_skill_pins(
             data.skill_ids,
             data.skill_versions,
@@ -1978,6 +2010,7 @@ class AgentService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=(f"Template {updated['template_key']} v{updated['template_version']} not found"),
                 )
+            self._check_template_usage(org_id, UsageAction.REPIN_AGENT, effective_template, agent.agent_type)
             self._set_pin(agent, effective_template)
 
         if "name" in updated:
@@ -2089,6 +2122,10 @@ class AgentService:
         credential_overrides = {item.provider: content for item, content in manual_upserts}
         for credential in shared_upserts:
             credential_overrides[SecretProvider(credential.provider)] = self._decrypt_shared_credential(credential)
+        if credential_overrides.keys() - {
+            SecretProvider(secret.provider) for secret in self.repository.get_secrets_for_agent(agent_id)
+        }:
+            self.usage.check(org_id, UsageAction.ADD_INTEGRATION)
         for provider, content in credential_overrides.items():
             try:
                 self._validate_live_integration(provider, content)
@@ -2351,6 +2388,9 @@ class AgentService:
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
+        if agent.suspended_at is not None:
+            raise AgentSuspended(agent.suspension_reason)
+        begun = dt.datetime.now(dt.UTC)
         try:
             self._provision_and_start(agent, preflight=True)
             previous_status = self._provision_and_start(agent)
@@ -2359,7 +2399,18 @@ class AgentService:
         except Exception as exc:
             logger.exception("Failed to start agent %s", agent.id)
             raise self._record_provisioning_failure(agent, exc) from exc
-        return self._persist_started(agent, actor, previous_status)
+        started = self._persist_started(agent, actor, previous_status)
+        # A suspension recorded while it started couldn't stop it, since this start held the
+        # lifecycle lock; the row read under the start's write has it, so stop it now.
+        if started.suspended_at is not None and started.status == AgentStatus.RUNNING:
+            return self._stop_agent_unchecked(started, actor)
+        # Likewise a native Connection suspended while it started may be in its runtime's
+        # configuration, so it starts again without it.
+        if started.status == AgentStatus.RUNNING and self.repository.native_connection_suspended_since(
+            started.id, begun
+        ):
+            return self._start_agent_unchecked(self._stop_agent_unchecked(started, actor), actor)
+        return started
 
     def _record_provisioning_failure(self, agent: Agent, exc: Exception) -> HTTPException:
         """Persist a sanitized failure on the Agent and build the error to raise.
@@ -3096,6 +3147,42 @@ class AgentService:
             _refuse_during_managed_update(current)
             stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
+
+    def restart_to_apply(self, agent_id: UUID, actor: ActorIdentity) -> None:
+        """Restart a running Agent so its runtime takes changed native Connections, as the
+        apply-and-restart flow does. A lifecycle operation holding the lock is left to it: a
+        start under way checks for Connections suspended while it ran."""
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                logger.info("Agent %s has a lifecycle operation in progress; it applies the change", agent_id)
+                return
+            current = self.repository.get_by_id(agent_id)
+            if current is None or current.deleted_at is not None or current.status != AgentStatus.RUNNING:
+                return
+            self._start_agent_unchecked(self._stop_agent_unchecked(current, actor), actor)
+
+    def stop_running_suspended(self, actor: ActorIdentity) -> None:
+        """Stop every Agent still running though it is suspended: one whose stop was skipped
+        because another lifecycle operation held its lock at the time."""
+        for agent_id, _organization_id in self.repository.list_running_suspended():
+            try:
+                self.stop_suspended(agent_id, actor)
+            except Exception:
+                logger.exception("Could not stop suspended agent %s", agent_id)
+
+    def stop_suspended(self, agent_id: UUID, actor: ActorIdentity) -> None:
+        """Stop an Agent its suspension has just been recorded on, if it runs. The suspension
+        already refuses any later start, and a start already under way stops it once it
+        finishes; anything else holding the lock is caught by `running_suspended`."""
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                # The operation holding the lock stops it when it finishes starting.
+                logger.info("Agent %s is suspended; it is stopped once its lifecycle operation ends", agent_id)
+                return
+            current = self.repository.get_by_id(agent_id)
+            if current is None or current.deleted_at is not None or current.status != AgentStatus.RUNNING:
+                return
+            self._stop_agent_unchecked(current, actor)
 
     def restart_agent_for_platform(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
         """Restart any Agent for a Platform Administrator: stop it if it runs, then start it.

@@ -114,6 +114,10 @@ agentModelAllowlist: ""
 # Administrator sets its own. Empty means the default of 10.
 organizationDefaultAgentLimit: ""
 
+# Lets an Owner subscribe to a paid Tier with a pretend payment, for demonstrations.
+# Never turn it on where customers pay.
+tiersMockPayments: false
+
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without
 # the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per
 # environment: Telegram lets only one deployment poll a bot.
@@ -226,6 +230,12 @@ costs:
     # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "*/15 * * * *"
+
+tierSweep:
+  enabled: true
+  # Every five minutes: ends subscription periods that have run out and applies Tier Holds
+  # whose choosing time is up. A run that finds nothing due does nothing.
+  schedule: "*/5 * * * *"
 
 businessValue:
   backfill:

@@ -15,6 +15,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Pagination } from "@/features/agents/components/pagination";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { type SkillSource } from "../schemas";
 import { useSkills } from "../hooks/use-skills";
@@ -46,6 +48,9 @@ const HINTS: Record<SkillScopeRef["kind"], string> = {
 };
 
 export function SkillsPanel({ scope, canManage }: { scope: SkillScopeRef; canManage: boolean }) {
+  const { tier, hasFeature } = useTierEntitlements();
+  // The platform's own skills are never gated by an organization's tier.
+  const canAdd = scope.kind === "platform" || hasFeature("templates_and_skills");
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const [search, setSearch] = useState("");
@@ -115,11 +120,12 @@ export function SkillsPanel({ scope, canManage }: { scope: SkillScopeRef; canMan
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        {canManage && (
+        {canManage && canAdd && (
           <Link href={newSkillHref} className="af-btn af-btn-primary ml-auto">
             <PlusIcon /> New skill
           </Link>
         )}
+        {canManage && !canAdd && <div className="ml-auto"><TierLockedNote tierName={tier?.name} what="new skills" /></div>}
       </div>
 
       {isLoading && (

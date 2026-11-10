@@ -22,12 +22,13 @@ from api.domains.communications.models import CommunicationConnectionCreate, Com
 from api.domains.communications.service import CommunicationsService
 from api.domains.onboarding.models import OnboardingRead
 from api.domains.organizations.lookup import OrganizationLookupService
+from api.domains.templates.defaults import PREMADE_TEMPLATE_KEY
 from api.domains.users.service import UserService
 from api.infrastructure.shared.models import Pagination
 
 logger = logging.getLogger(__name__)
 
-TRIAL_TEMPLATE_KEY = "general-purpose"
+TRIAL_TEMPLATE_KEY = PREMADE_TEMPLATE_KEY
 TELEGRAM_PLATFORM_KEY = "agentbarn_telegram"
 # What the hire dialog calls a General Purpose Agent.
 _AGENT_ROLE = "the Assistant"
@@ -70,6 +71,13 @@ class OnboardingService:
         if trial is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There is nothing left to set up.")
         agent = self._agent(trial) or self._create_agent(trial)
+        organization_id = trial.require_current_user_organization().organization_id
+        if not self.organizations.is_trial(organization_id):
+            # The shared bot is the trial's way to try the Agent; a paid Organization chats
+            # on the web and connects its own channels.
+            if agent.status in _STARTABLE:
+                agent = self._start(agent, trial)
+            return self._read(trial, agent, None)
         # Before starting: the Agent picks up its Connection when it starts.
         try:
             connection, created = self._ensure_telegram_connection(agent.id, trial)

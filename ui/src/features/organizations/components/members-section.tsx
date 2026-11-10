@@ -16,6 +16,8 @@ import { toast } from "sonner";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
 import { SearchInput } from "@/components/search-input";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import {
   Dialog,
   DialogContent,
@@ -175,6 +177,8 @@ export function MembersSection({
     useMemberActions(organizationId);
 
   const [addOpen, setAddOpen] = useState(false);
+  const { tier, hasFeature } = useTierEntitlements();
+  const canInvite = hasFeature("team");
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [search, setSearch] = useState("");
 
@@ -275,12 +279,16 @@ export function MembersSection({
             ariaLabel="Search members"
             className="flex-1 md:w-64 md:flex-none"
           />
-          <button
-            className="af-btn af-btn-primary flex-shrink-0"
-            onClick={() => setAddOpen(true)}
-          >
-            <PlusIcon width={15} height={15} /> Add member
-          </button>
+          {canInvite ? (
+            <button
+              className="af-btn af-btn-primary flex-shrink-0"
+              onClick={() => setAddOpen(true)}
+            >
+              <PlusIcon width={15} height={15} /> Add member
+            </button>
+          ) : (
+            <TierLockedNote tierName={tier?.name} what="inviting teammates" />
+          )}
         </div>
       </div>
 

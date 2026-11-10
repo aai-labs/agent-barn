@@ -1,20 +1,29 @@
 """Persisted platform signup policy for onboarding scenarios."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from api.domains.onboarding.models import PlatformTrialSettings
+from api.domains.tiers.models import FREE_TIER_KEY, Tier
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
-def trial_settings_are_configured(*, enabled: bool = True, credit: float = 10):
+def trial_settings_are_configured(
+    *, enabled: bool = True, credit: float = 10, agent_limit: int = 1, free_offered: bool = True
+):
+    """Signup as the platform settings and the Free Tier, where its credit and limit live."""
+
     def step(context):
         delegate = context.injector.get(PostgresRepositoryDelegate)
         with Session(delegate.engine) as session:
-            session.add(
-                PlatformTrialSettings(self_signup_enabled=enabled, credit_usd=credit, updated_at=datetime.now(UTC))
-            )
+            session.add(PlatformTrialSettings(self_signup_enabled=enabled, updated_at=datetime.now(UTC)))
+            free = session.exec(select(Tier).where(Tier.key == FREE_TIER_KEY)).one()
+            free.one_time_credit_usd = Decimal(str(credit))
+            free.agent_limit = agent_limit
+            free.enabled = free_offered
+            session.add(free)
             session.commit()
 
     return step

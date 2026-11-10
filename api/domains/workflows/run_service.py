@@ -11,6 +11,7 @@ from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.workflows.models import WorkflowDraft, WorkflowVersion
 from api.domains.workflows.repository import WorkflowConflict, WorkflowRepository
 from api.domains.workflows.run_models import (
@@ -58,6 +59,7 @@ class WorkflowRunService:
     definitions: WorkflowRepository
     authorization: AgentAuthorization
     dispatcher: EventDeliveryDispatcher
+    usage: UsageGuard
 
     def _scope(self, agent_id: UUID, context: CurrentUserContext, *, write: bool = False):
         self.authorization.require_action(
@@ -202,6 +204,7 @@ class WorkflowRunService:
         rerun_of: WorkflowRun | None = None,
     ) -> WorkflowRunRead:
         scope = self._scope(agent_id, context, write=True)
+        self.usage.check(context.require_current_user_organization().organization_id, UsageAction.RUN_WORKFLOW)
         workflow = self.definitions.get_in_scope(workflow_id, agent_id, scope)
         if workflow is None:
             raise HTTPException(404, "Workflow not found")

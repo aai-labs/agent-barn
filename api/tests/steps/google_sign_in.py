@@ -58,8 +58,9 @@ def google_returns(result: GoogleIdentity | Exception):
     return step
 
 
-def start_google_sign_in(context, origin: str = "signup"):
-    return context.client.get("/api/v1/auth/google/start", params={"origin": origin}, follow_redirects=False)
+def start_google_sign_in(context, origin: str = "signup", tier: str | None = None):
+    params = {"origin": origin, **({"tier": tier} if tier else {})}
+    return context.client.get("/api/v1/auth/google/start", params=params, follow_redirects=False)
 
 
 def state_from(start_response) -> str:
@@ -67,9 +68,9 @@ def state_from(start_response) -> str:
     return dict(urllib.parse.parse_qsl(urllib.parse.urlparse(location).query))["state"]
 
 
-def finish_google_sign_in(context, origin: str = "signup", **params):
+def finish_google_sign_in(context, origin: str = "signup", tier: str | None = None, **params):
     """Start sign-in, then come back from Google with a code for its state."""
-    state = state_from(start_google_sign_in(context, origin))
+    state = state_from(start_google_sign_in(context, origin, tier))
     return context.client.get(
         "/api/v1/auth/google/callback",
         params={"code": "the-code", "state": state, **params},

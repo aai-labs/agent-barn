@@ -138,8 +138,9 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Agent Memory")).toHaveAttribute("aria-current", "page");
       await expect(navigation.panelLink("Agent sizes")).toBeVisible();
       await expect(navigation.panelLink("Signup & trials")).toBeVisible();
+      await expect(navigation.panelLink("Tiers")).toBeVisible();
       await expect(navigation.breadcrumb()).toContainText("Settings/Agent Memory");
-      await expect(navigation.panelSections()).toHaveCount(7);
+      await expect(navigation.panelSections()).toHaveCount(8);
       await expect(navigation.panelSections().nth(0)).toHaveText("Agent Memory");
 
       await navigation.gotoPlatform("/agents");

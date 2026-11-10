@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -54,6 +55,9 @@ PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
 PLATFORM_AGENT_SIZE_CREATED = "platform.agent_size.created"
 PLATFORM_AGENT_SIZE_CHANGED = "platform.agent_size.changed"
 PLATFORM_AGENT_SIZE_DELETED = "platform.agent_size.deleted"
+PLATFORM_TIER_CREATED = "platform.tier.created"
+PLATFORM_TIER_CHANGED = "platform.tier.changed"
+PLATFORM_TIER_DELETED = "platform.tier.deleted"
 PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 PLATFORM_BILLING_SETTINGS_CHANGED = "platform.billing_settings.changed"
 PLATFORM_CREDIT_PURCHASE_UNAPPLIED = "platform.credit_purchase.unapplied"
@@ -79,6 +83,12 @@ ORGANIZATION_AGENT_SIZES_CHANGED = "organization.agent_sizes.changed"
 AGENT_AGENT_SIZE_CHANGED = "agent.agent_size.changed"
 ORGANIZATION_TRIAL_EXPIRED = "organization.trial.expired"
 ORGANIZATION_AGENT_LIMIT_CHANGED = "organization.agent_limit.changed"
+ORGANIZATION_TIER_CHANGED = "organization.tier.changed"
+ORGANIZATION_TIER_HOLDS_CHANGED = "organization.tier_holds.changed"
+ORGANIZATION_SUBSCRIPTION_STARTED = "organization.subscription.started"
+ORGANIZATION_SUBSCRIPTION_CHANGED = "organization.subscription.changed"
+ORGANIZATION_SUBSCRIPTION_RENEWED = "organization.subscription.renewed"
+ORGANIZATION_SUBSCRIPTION_ENDED = "organization.subscription.ended"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
@@ -457,6 +467,54 @@ class OrganizationAgentLimitChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationTierChangedPayload(BaseModel):
+    """The Tier an Organization is on, before and after, by key; None is no Tier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    tier_key: str | None
+    previous_tier_key: str | None
+    assigned_by_platform: bool
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationTierHoldsChangedPayload(BaseModel):
+    """What a Tier change or an Owner's choice put on hold or released, by id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    # "tier" when the Organization's Tier stopped covering it, "choice" when an Owner or Admin chose.
+    reason: str
+    held_agent_ids: list[UUID]
+    released_agent_ids: list[UUID]
+    held_connection_ids: list[UUID]
+    held_webhook_ids: list[UUID]
+    held_memory_agent_ids: list[UUID]
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationSubscriptionPayload(BaseModel):
+    """A subscription as it stands after it started, changed, renewed or ended."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    subscription_id: UUID
+    tier_id: UUID
+    provider: str
+    status: str
+    current_period_end: datetime
+    cancel_at_period_end: bool
+    # What changed: "tier", "cancel_scheduled", "cancel_withdrawn"; None otherwise.
+    change: str | None = None
+    actor_display: str
+    subject_display: str
+
+
 class OrganizationAgentSizesChangedPayload(BaseModel):
     """The Agent Sizes an Organization may choose, before and after, set by the platform.
 
@@ -717,6 +775,47 @@ class PlatformAgentSizePayload(BaseModel):
     is_default: bool
 
 
+class PlatformTierPayload(BaseModel):
+    """A Tier added to or removed from the catalog, with every value it had.
+
+    The subject is the Tier (`SYSTEM`, the Tier's id); `subject_display` is its name.
+    Amounts are US dollars.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    key: str
+    activation: str
+    tagline: str | None
+    enabled: bool
+    sort_order: int
+    price_usd: float
+    price_note: str | None
+    monthly_usage_usd: float
+    one_time_credit_usd: float
+    agent_limit: int
+    allowed_platform_keys: list[str] | None
+    features: list[str]
+    contact_url: str | None
+
+
+class PlatformTierChangedPayload(BaseModel):
+    """One changed setting of one Tier, named by `setting`, before and after. None is a
+    removed value: no tagline, or every Platform allowed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: bool | int | float | str | list[str] | None
+    current: bool | int | float | str | list[str] | None
+
+
 class PlatformAgentSizeChangedPayload(BaseModel):
     """One changed field of one size, named by `setting`, with its before and after values.
 
@@ -884,6 +983,12 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_AGENT_SIZES_CHANGED, OrganizationAgentSizesChangedPayload),
         (AGENT_AGENT_SIZE_CHANGED, AgentAgentSizeChangedPayload),
         (ORGANIZATION_AGENT_LIMIT_CHANGED, OrganizationAgentLimitChangedPayload),
+        (ORGANIZATION_TIER_CHANGED, OrganizationTierChangedPayload),
+        (ORGANIZATION_TIER_HOLDS_CHANGED, OrganizationTierHoldsChangedPayload),
+        (ORGANIZATION_SUBSCRIPTION_STARTED, OrganizationSubscriptionPayload),
+        (ORGANIZATION_SUBSCRIPTION_CHANGED, OrganizationSubscriptionPayload),
+        (ORGANIZATION_SUBSCRIPTION_RENEWED, OrganizationSubscriptionPayload),
+        (ORGANIZATION_SUBSCRIPTION_ENDED, OrganizationSubscriptionPayload),
         (ORGANIZATION_TRIAL_EXPIRED, OrganizationTrialExpiredPayload),
     ):
         registry.register(
@@ -1135,6 +1240,25 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_AGENT_SIZE_CHANGED,
             schema_version=1,
             payload_model=PlatformAgentSizeChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    for event_name in (PLATFORM_TIER_CREATED, PLATFORM_TIER_DELETED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformTierPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_TIER_CHANGED,
+            schema_version=1,
+            payload_model=PlatformTierChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )

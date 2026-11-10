@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { OrganizationTierSchema, TierEntitlementsSchema } from "@/features/tiers/schemas";
+
 export const OrganizationSchema = z.object({
   id: z.string().uuid(),
   createdAt: z.string(),
@@ -19,6 +21,13 @@ export const OrganizationSchema = z.object({
   // How many agents a trial may run; only the organization read carries it.
   trialAgentLimit: z.number().int().nullable().optional(),
   trialAgentLimitReached: z.boolean().optional(),
+  // The tier it is on, null when it has none; only the organization read carries these three.
+  tier: OrganizationTierSchema.nullable().optional(),
+  entitlements: TierEntitlementsSchema.nullable().optional(),
+  // Whether it already runs more than its tier covers.
+  overTier: z.boolean().optional(),
+  // When what it runs beyond its tier is held, unless its owner chooses first.
+  tierHoldsDueAt: z.string().nullable().optional(),
 });
 
 export const OrganizationCreateSchema = z.object({
@@ -88,6 +97,11 @@ export const PlatformOrganizationSchema = z.object({
   // force (null for no limit). Only the single organization read carries the latter.
   agentLimit: z.number().int().nullable().optional(),
   agentLimitInForce: z.number().int().nullable().optional(),
+  tierId: z.string().uuid().nullable().optional(),
+  tierAssignedByPlatform: z.boolean().optional(),
+  // Only the single organization read carries these two.
+  tier: OrganizationTierSchema.nullable().optional(),
+  overTier: z.boolean().optional(),
 });
 
 export const OrganizationLlmBudgetSchema = z.object({

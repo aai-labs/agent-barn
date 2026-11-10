@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
+from api.domains.usage.models import SuspensionReason
 from api.infrastructure.postgres.models import BaseModel
 
 
@@ -73,6 +74,35 @@ class AgentWebhook(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    # Disabled without being deleted; enabling it again resumes it.
+    suspended_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    suspension_reason: SuspensionReason | None = SqlField(
+        default=None,
+        sa_column=Column(
+            sa.Enum(
+                SuspensionReason,
+                native_enum=False,
+                create_constraint=False,
+                length=16,
+                values_callable=lambda members: [member.value for member in members],
+            ),
+            nullable=True,
+        ),
+    )
+
+    def suspend(self, reason: SuspensionReason, now: datetime) -> None:
+        self.enabled = False
+        self.suspended_at = now
+        self.suspension_reason = reason
+
+    def resume(self) -> None:
+        """Enabling it again is the caller's; this only clears the suspension."""
+        self.suspended_at = None
+        self.suspension_reason = None
 
 
 class WebhookInvocation(BaseModel, table=True):
@@ -173,6 +203,8 @@ class AgentWebhookRead(PydanticBaseModel):
     display_name: str
     delivery_platform: WebhookDeliveryPlatform
     enabled: bool
+    suspended_at: datetime | None = None
+    suspension_reason: SuspensionReason | None = None
     revision: int
     webhook_url: str | None
     signing_secret: str | None = None

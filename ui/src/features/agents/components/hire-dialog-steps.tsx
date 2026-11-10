@@ -9,6 +9,8 @@ import { useSkills } from "@/features/skills/hooks/use-skills";
 import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import type { Skill } from "@/features/skills/schemas";
 import { SkillSourceBadge } from "@/features/skills/components/skill-source-badge";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import {
   INTEGRATION_PROVIDERS,
@@ -541,6 +543,9 @@ export function IntegrationsStep({
 }) {
   const { switchToShared, switchToManual, handlePickShared } =
     useSharedManualSwitch(integrations, onChange);
+  // Without integrations in the tier, existing ones stay editable but none can be added.
+  const { tier, hasFeature } = useTierEntitlements();
+  const canAdd = hasFeature("integrations");
 
   const usedProviders = new Set(integrations.filter((i) => !i.platformDefault).map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter(
@@ -725,7 +730,8 @@ export function IntegrationsStep({
         />
       )}
 
-      {(available.length > 0 || onAddCustomApi) && (
+      {!canAdd && <TierLockedNote tierName={tier?.name} what="adding integrations" />}
+      {canAdd && (available.length > 0 || onAddCustomApi) && (
         <div className="flex flex-col gap-2">
           <div
             className="font-medium text-[0.844rem]"

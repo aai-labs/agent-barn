@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
+import { TierHoldsNotice } from "@/features/tiers/components/tier-holds-notice";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { EmptyTeam } from "@/features/agents/components/empty-team";
@@ -46,6 +48,10 @@ export default function DashboardPage() {
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
   const { selectedOrganization } = useOrganizationContext();
+  const { tier, hasFeature } = useTierEntitlements();
+  const premadeOnly = !hasFeature("custom_agents");
+  // The none tier allows no agents: the organization subscribes before it hires.
+  const needsTier = tier?.activation === "none";
   const { agents, total, isLoading, error, refetch } = useAgents();
 
   const hour = new Date().getHours();
@@ -69,6 +75,8 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {!isLoading && !error && <TierHoldsNotice organizationId={orgId} heldAgents={agents.filter((agent) => agent.suspendedAt).length} />}
 
       <div className="mb-12">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 pb-4" style={{ borderBottom: "1px solid var(--line)" }}>
@@ -108,7 +116,8 @@ export default function DashboardPage() {
               : displayedAgents.map((agent) => (
                   <AgentCard key={agent.id} agent={agent} href={`/dashboard/${orgId}/agents/${agent.id}`} />
                 ))}
-            {!isLoading && agents.length === 0 && <EmptyTeam onReady={selectedOrganization?.isTrial ? () => { setHireChoice("ready"); setHireOpen(true); } : undefined} onCustom={() => { setHireChoice("custom"); setHireOpen(true); }} />}
+            {!isLoading && agents.length === 0 && needsTier && <EmptyTeam subscribeHref={`/dashboard/${orgId}/billing`} />}
+            {!isLoading && agents.length === 0 && !needsTier && <EmptyTeam onReady={selectedOrganization?.isTrial || premadeOnly ? () => { setHireChoice("ready"); setHireOpen(true); } : undefined} onCustom={premadeOnly ? undefined : () => { setHireChoice("custom"); setHireOpen(true); }} />}
             {!isLoading && agents.length > 0 && displayedAgents.length === 0 && (
               <div className="col-span-full flex min-h-56 flex-col items-center justify-center gap-1 text-center" style={{ color: "var(--ink-3)" }}>
                 <div className="font-medium text-[0.9375rem]" style={{ color: "var(--ink)" }}>

@@ -44,6 +44,19 @@ export function AgentLifecycleMenu({ agent }: { agent: Agent }) {
   // A stopped Agent can only be started, so it gets a plain button rather than a
   // menu whose other entries would do nothing.
   if (agent.status !== "RUNNING") {
+    if (agent.suspendedAt) {
+      const why =
+        agent.suspensionReason === "tier"
+          ? "Your organization's tier doesn't cover this agent. An owner or admin can release it in Settings, Tier."
+          : "This agent is suspended and can't start.";
+      return (
+        <div data-testid="agent-lifecycle-menu">
+          <button className="af-btn" disabled title={why}>
+            <PlayIcon /> On hold
+          </button>
+        </div>
+      );
+    }
     return (
       <div data-testid="agent-lifecycle-menu">
         <button className="af-btn" disabled={busy} onClick={start}>
