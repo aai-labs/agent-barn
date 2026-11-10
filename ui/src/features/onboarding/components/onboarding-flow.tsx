@@ -68,8 +68,10 @@ export function OnboardingFlow() {
   const paid = organization ? !organization.isTrial : false;
 
   useEffect(() => {
-    if (searchParams?.get("subscription")) router.replace("/onboarding");
-  }, [searchParams, router]);
+    // The browser's own history call: Next's router keeps it in step, and unlike
+    // router.replace it doesn't depend on the router being ready during hydration.
+    if (searchParams?.get("subscription")) window.history.replaceState(null, "", "/onboarding");
+  }, [searchParams]);
 
   useEffect(() => {
     if (subscriptionReturn !== "started") return;
