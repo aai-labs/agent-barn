@@ -26,15 +26,13 @@ export function useCustomApi(agentId: string, running: boolean) {
   const url = `${base}/agents/${agentId}/custom-api-connections`;
   const polling = useRef<{ scope: string; startedAt: number } | null>(null);
   const queryKey = customApiKey.list({ organizationId, agentId, running });
+  const readConnections = async () => (
+    await api.get<CustomApiConnection[]>(url, { schema: z.array(CustomApiConnectionSchema) })
+  ).data;
   const query = useQuery({
     queryKey,
     enabled: Boolean(agentId && organizationId),
-    queryFn: async () =>
-      (
-        await api.get<CustomApiConnection[]>(url, {
-          schema: z.array(CustomApiConnectionSchema),
-        })
-      ).data,
+    queryFn: readConnections,
     refetchInterval: (query) => {
       if (
         !running ||
@@ -108,8 +106,8 @@ export function useCustomApi(agentId: string, running: boolean) {
     isLoadingConnections: query.isLoading,
     connectionsError: query.error,
     refetchConnections: query.refetch,
+    readConnections,
     connectionMutation: mutation,
     batchMutation,
-    preflight: (data: CustomApiBatch) => api.post(`${url}/preflight`, data, { timeout: 120_000 }),
   };
 }

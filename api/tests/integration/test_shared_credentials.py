@@ -1,10 +1,13 @@
+from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_item, not_
 from starlette.testclient import TestClient
 
+from api.domains.agents.models import SecretProvider
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.integration_validators import PROVIDER_VALIDATORS, IntegrationValidationResult
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -59,8 +62,24 @@ _GIVEN = [
 ]
 
 
+_GITLAB_CONTENT = {"base_url": "https://gitlab.example.com", "token": "glpat-shared", "repos": []}
+
+
 def _auth(context) -> dict:
     return {"Authorization": f"Bearer {context.access_token}"}
+
+
+def _validators_answer(provider: SecretProvider, answer):
+    validator = MagicMock(side_effect=answer) if isinstance(answer, Exception) else MagicMock(return_value=answer)
+    return validator, patch.dict(PROVIDER_VALIDATORS, {provider: validator})
+
+
+def _create_gitlab(client, context, name: str = "Shared GitLab"):
+    return client.post(
+        _BASE,
+        json={"provider": "gitlab", "name": name, "content": _GITLAB_CONTENT},
+        headers=_auth(context),
+    )
 
 
 # --- Create ---
@@ -110,6 +129,108 @@ def test_create_shared_credential_accepts_merkys():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(response.json()["provider"], equal_to("merkys"))
             assert "cb_shared-key" not in response.text
+
+
+def test_a_shared_gitlab_credential_is_checked_with_gitlab_before_it_is_saved():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        validator, validators = _validators_answer(
+            SecretProvider.GITLAB, IntegrationValidationResult(valid=True, identity="Bot (@bot)")
+        )
+
+        with when("I create a shared GitLab credential"), validators:
+            response = _create_gitlab(client, context)
+
+        with then("GitLab was asked about the exact token and the credential is saved"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(validator.call_count, equal_to(1))
+            assert_that(validator.call_args.args[0].token, equal_to("glpat-shared"))
+
+
+def test_a_shared_gitlab_credential_gitlab_refuses_is_not_saved():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        _, validators = _validators_answer(
+            SecretProvider.GITLAB,
+            IntegrationValidationResult(valid=False, error="GitLab must be reachable at a public https address."),
+        )
+
+        with when("I create a shared GitLab credential for a private instance"), validators:
+            response = _create_gitlab(client, context)
+            listed = client.get(_BASE, headers=_auth(context))
+
+        with then("it is refused with GitLab's reason and nothing is stored"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("GitLab must be reachable at a public https address."))
+            assert_that(listed.json()["total"], equal_to(0))
+
+
+def test_a_shared_gitlab_credential_is_not_saved_when_gitlab_cannot_be_asked():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        _, validators = _validators_answer(SecretProvider.GITLAB, RuntimeError("boom"))
+
+        with when("the GitLab check raises"), validators:
+            response = _create_gitlab(client, context)
+
+        with then("it is refused as retryable without leaking the cause"):
+            assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+            assert "boom" not in response.text
+
+
+def test_new_shared_gitlab_content_is_checked_with_gitlab_before_it_replaces_the_old():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        _, accept = _validators_answer(SecretProvider.GITLAB, IntegrationValidationResult(valid=True, identity="Bot"))
+        _, refuse = _validators_answer(
+            SecretProvider.GITLAB, IntegrationValidationResult(valid=False, error="Invalid token")
+        )
+        with accept:
+            cred_id = _create_gitlab(client, context).json()["id"]
+
+        with when("I replace the token with one GitLab refuses"), refuse:
+            response = client.patch(
+                f"{_BASE}/{cred_id}",
+                json={"content": {**_GITLAB_CONTENT, "token": "glpat-bad"}},
+                headers=_auth(context),
+            )
+
+        with then("the update is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Invalid token"))
+
+
+def test_renaming_a_shared_gitlab_credential_does_not_call_gitlab():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        _, accept = _validators_answer(SecretProvider.GITLAB, IntegrationValidationResult(valid=True, identity="Bot"))
+        with accept:
+            cred_id = _create_gitlab(client, context).json()["id"]
+        validator, validators = _validators_answer(SecretProvider.GITLAB, RuntimeError("must not be called"))
+
+        with when("I only rename it"), validators:
+            response = client.patch(f"{_BASE}/{cred_id}", json={"name": "Renamed"}, headers=_auth(context))
+
+        with then("GitLab is not asked"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(validator.called, equal_to(False))
+
+
+def test_other_shared_providers_are_saved_without_a_live_check():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        validator, validators = _validators_answer(SecretProvider.JIRA, RuntimeError("must not be called"))
+
+        with when("I create a shared Jira credential"), validators:
+            response = client.post(
+                _BASE,
+                json={"provider": "jira", "name": "Jira", "content": _JIRA_CONTENT},
+                headers=_auth(context),
+            )
+
+        with then("it is saved as before, without asking Jira"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(validator.called, equal_to(False))
 
 
 def test_create_shared_credential_rejects_oauth_provider():

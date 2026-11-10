@@ -27,6 +27,11 @@ def credential_for(provider: SecretProvider) -> SecretContent:
             "email": "fixture@example.com",
             "api_token": "bitbucket-provider-secret",
         },
+        SecretProvider.GITLAB: {
+            "base_url": "https://gitlab.example.com",
+            "token": "gitlab-provider-secret",
+            "repos": ["group/one", "group/two"],
+        },
         SecretProvider.APOLLO: {"api_token": "apollo-provider-secret"},
         SecretProvider.MERKYS: {"base_url": "https://merkys.aai-labs.com", "api_key": "merkys-provider-secret"},
         SecretProvider.PIPEDRIVE: {"domain": "acme", "api_token": "pipedrive-provider-secret"},

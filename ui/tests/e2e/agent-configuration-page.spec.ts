@@ -1221,7 +1221,8 @@ test.describe("Agent configuration page", () => {
       expect(sent.patchBody?.secrets).toEqual([
         { provider: "gmail_app_password", content: { email: "someone@gmail.com", app_password: "abcd efgh ijkl mnop" } },
       ]);
-      await expect.poll(() => sent.isolation).toEqual([{ isolated: true, restart: false }]);
+      expect(sent.patchBody?.policies).toEqual([{ provider: "gmail_app_password", isolated: true }]);
+      expect(sent.isolation).toEqual([]);
     });
 
     test("a saved app password stays isolated with nothing to apply", async ({ page }) => {

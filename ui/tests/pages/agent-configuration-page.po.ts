@@ -7,6 +7,49 @@ export class AgentConfigurationPage {
     await this.page.goto(`/dashboard/${orgId}/agents/${agentId}/configuration`);
   }
 
+  integrationsSection(): Locator {
+    return this.page.getByRole("region", { name: "Integrations", exact: true });
+  }
+
+  async addApolloCredential(key: string) {
+    const section = this.integrationsSection();
+    await section.getByRole("button", { name: "Edit", exact: true }).click();
+    await section.getByRole("button", { name: "Apollo", exact: true }).click();
+    await this.apolloKey().fill(key);
+  }
+
+  integrationCard(name: string): Locator {
+    return this.integrationsSection().locator("details").filter({ has: this.page.locator("summary").getByText(name, { exact: true }) });
+  }
+
+  integrationKey(name: string): Locator {
+    return this.integrationCard(name).locator("label").filter({ hasText: /^API key$/ }).locator("..").locator("input");
+  }
+
+  apolloKey(): Locator {
+    return this.integrationKey("Apollo");
+  }
+
+  async addFirecrawlCredential(key: string) {
+    await this.integrationsSection().getByRole("button", { name: "Edit", exact: true }).click();
+    await this.integrationsSection().getByRole("button", { name: "Firecrawl", exact: true }).click();
+    await this.integrationKey("Firecrawl").fill(key);
+  }
+
+  async appendApolloCredential(key: string) {
+    await this.integrationsSection().getByRole("button", { name: "Apollo", exact: true }).click();
+    await this.apolloKey().fill(key);
+  }
+
+  async applyIntegrations() {
+    await this.integrationsSection().getByRole("button", { name: /^Apply(?: & Restart)?$/ }).click();
+    await this.applyConfirmationButton().click();
+  }
+
+  async removeIntegration(name: string) {
+    await this.integrationCard(name).getByRole("button", { name: `Remove ${name}`, exact: true }).click();
+  }
+
   profileHeading(): Locator {
     return this.page.getByRole("heading", { name: "Profile", exact: true });
   }

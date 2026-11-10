@@ -18,7 +18,7 @@ Plugins are trusted release artifacts, not dynamically installed packages: addin
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Gmail, Gmail with an app password, Firecrawl, Pipedrive, SharePoint, Apollo, and Merkys. Gmail is a read-only integration beside Google Workspace: one sign-in on the shared Google client, Gmail only, reached through aai-cli's `email` commands. Gmail with an app password is a separate read-only provider for accounts that connect with a Google app password instead; see [Gmail app password](#gmail-app-password). The per-service Google Calendar and Google Sheets providers are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, GitLab, Google Workspace, Gmail, Gmail with an app password, Firecrawl, Pipedrive, SharePoint, Apollo, and Merkys. Gmail is a read-only integration beside Google Workspace: one sign-in on the shared Google client, Gmail only, reached through aai-cli's `email` commands. Gmail with an app password is a separate read-only provider for accounts that connect with a Google app password instead; see [Gmail app password](#gmail-app-password). The per-service Google Calendar and Google Sheets providers are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace, including both Gmail providers) or gog (Google Workspace only). For Gmail with an app password, aai-cli only carries the request: the credential gateway reads the inbox itself. The two have separate runtime artifacts, secret stores, and agent policy blocks. Commands run through either CLI are recorded as Business Actions (see [`business-value.md`](business-value.md)).
 
@@ -26,7 +26,7 @@ Providers reach their service through one of two CLIs: aai-cli (all of the above
 
 Shared Credentials are org-scoped, admin-managed credential payloads that any member can attach to an agent. They use the same encryption and provider content models as Agent Secrets.
 
-- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, Merkys. OAuth-based providers (Google Workspace, SharePoint) are excluded.
+- Only manual-entry providers are supported for shared credentials (v1): GitHub, Jira, Confluence, Bitbucket, GitLab, Merkys. OAuth-based providers (Google Workspace, SharePoint) are excluded.
 - An agent gets either a shared credential or a per-agent secret for a given provider, not both.
 - Any org member can list and attach shared credentials; only admins (owner/admin roles) can create, update, or delete them.
 - Multiple shared credentials per provider per org are allowed (e.g. "Production GitHub" and "Staging GitHub").
@@ -40,11 +40,26 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 - An agent has at most one Agent Secret per provider.
 - Duplicate providers in create/update payloads are rejected.
 - Read APIs return provider and display label, not credential contents.
+- The Integrations settings submit credential changes through the existing `PATCH /agents/{agent_id}` with an explicit `restart` choice in the Organization scope. One lifecycle lock covers provider validation, preparation of the proposed credentials/isolation/Custom API configuration, stop, save, and optional start. Validation uses the submitted manual credentials and organization-scoped shared credentials before any writes or runtime teardown; a rejected credential or unavailable validator leaves a running Agent running with its previous configuration. Valid changes to a running Agent require explicit `restart: true` and restart it once; `restart: false` preserves a stopped Agent's state. The operation requires `agent.update` and `agent.secret.manage`, plus `agent.lifecycle.manage` when restarting. Pre-save live-validator failures on this apply path identify the failing `provider` and use error code `INTEGRATION_VALIDATION_FAILED`. The editor opens that integration's panel, shows the provider's reason beside its fields, retains all drafts, and confirms that no changes were saved and, when applicable, the Agent is still running. Validation stops at the first failure; other integrations are not partially saved. Omitting `restart` keeps the existing stopped-only PATCH contract. Persistence/infrastructure failures after validation can leave partial saved changes and a stopped or failed Agent; no automatic restart with a partly saved selection is attempted.
 - Agent updates validate that remaining skill provider requirements are satisfied. Updating a Skill's provider metadata later does not revalidate existing agents.
 - Eligible built-in aai-cli skills are mounted at start when their provider credential is configured.
 - A built-in skill may declare no required providers when it needs no credential (Excel operates on local `.xlsx` files). Such a skill is never auto-mounted — an empty requirement list is trivially satisfied, so it would otherwise attach to every agent — and is mounted only when explicitly assigned.
 - Application deployment secrets, Agent Secrets, Shared Credentials, and Communication Connection credentials are distinct credential classes with different ownership and lifecycles. Connection credentials are owned and validated by shipped Platform Plugins and never become runtime Integration secrets.
 - Firecrawl is an infrastructure capability with an operator-default binding and an optional stored override. Their source ownership, independent isolation choices and endpoint rules are defined under [Platform-default Firecrawl](#platform-default-firecrawl).
+
+## GitLab
+
+GitLab is the one provider whose host the user chooses freely: gitlab.com by default, or any self-hosted instance. The instance is stored on the credential, reduced to a bare https origin, and subpath installs such as `https://example.com/gitlab` are not supported.
+
+The token is a personal access token, either a person's or one issued to a [service account](https://docs.gitlab.com/user/profile/service_accounts/). A service account is the better fit for an agent: its activity shows under its own name, its reach is the projects it is added to, and it does not depend on a person staying at the company. Both are plain bearer tokens, so nothing in agent barn tells them apart.
+
+Because the API server and the gateway would otherwise send requests to a user-chosen host, `GitlabPlugin` sets `upstream_public_only`. The gateway resolves the host on every hop, redirects included, refuses it unless every answer is a public address over https, and pins the connection to the checked address while TLS and `Host` keep the real name. That is what stops a public name from resolving to, or redirecting into, the cluster. The live validator uses the same pin and follows no redirects, and it runs whenever GitLab content is saved, on an agent or as a shared credential, so a private instance is refused at save time in direct and isolated mode alike. Shared credentials get this live check only for providers that set `upstream_public_only`; every other shared provider keeps the format-only check. This is deliberate: a GitLab reachable only over a VPN cannot be connected.
+
+The refusal is a property of the destination, not of the URL's text, and the check in `GitlabContent` for `localhost` is only a typo guard.
+
+`GitlabPlugin` also sets `preserve_encoded_path`, because GitLab addresses projects, files and branches by a single encoded segment (`projects/group%2Fapp`). The router decodes paths, so the gateway recovers the raw path and forwards that. Before it does, it refuses any path with a `.` or `..` segment, however many times it is encoded, so a raw path can't climb out of `/api/v4`. The agent gets the same opaque refusal as a bad token, and the gateway logs a warning naming the agent and organization. Lists page with `page=N` rather than following `Link` headers, whose URLs name the upstream host and would step around the gateway.
+
+aai-cli's profile `base_url` is the API root (`https://<host>/api/v4`), so a gateway profile can replace it whole. GitLab's `--project` flag takes a full path, stored in the profile's `repo` field.
 
 ## Google OAuth
 
@@ -151,7 +166,7 @@ An isolated provider whose Integration Plugin declares `EgressMode.GATEWAY_PROXY
 
 Redirects retain provider credential headers only within the same origin (scheme, host and effective port). Changing the port or downgrading HTTPS to HTTP strips credentials, and a later redirect back does not restore them.
 
-The existing gateway-routed aai-cli providers use this mode: GitHub, Jira, Confluence, Bitbucket, Pipedrive, and Apollo. Credential-owned Jira and Confluence upstream URLs are restricted to their provider hosts before forwarding, because `site_url` is user-supplied and becomes the forward target. Isolated bindings are excluded from the aai-cli secret store, so their real credentials are in neither the pod Secret nor `aai-secrets.enc.json`. The plugin's `egress_mode` declares its isolated route; the binding's policy selects direct or isolated materialization without a deployment allowlist.
+The existing gateway-routed aai-cli providers use this mode: GitHub, Jira, Confluence, Bitbucket, GitLab, Pipedrive, and Apollo. Credential-owned Jira and Confluence upstream URLs are restricted to their provider hosts before forwarding, because `site_url` is user-supplied and becomes the forward target. Isolated bindings are excluded from the aai-cli secret store, so their real credentials are in neither the pod Secret nor `aai-secrets.enc.json`. The plugin's `egress_mode` declares its isolated route; the binding's policy selects direct or isolated materialization without a deployment allowlist.
 
 Credential isolation does not impose an agent egress policy. Hermes and OpenClaw retain unrestricted internet access; the gateway changes where provider credentials live and where authenticated provider requests are executed, not which unrelated destinations an agent may reach.
 
@@ -293,13 +308,18 @@ the Agent, then persists the connection changes and their events in one transact
 Invalid batches leave the running Agent and saved connections unchanged. A running
 Agent requires explicit restart authorization and is restarted once for the batch;
 a stopped Agent stays stopped unless `restart` is requested.
-For edits combining Custom API and built-in provider changes, the editor first
-uses `POST /custom-api-connections/preflight` with the same batch body. This validates
-the resulting Custom API configuration without saving or stopping, before entering
-the shared provider stop/save/start workflow. The batch is revalidated when saved;
-this preflight does not reserve configuration across requests or make built-in
-provider and Custom API writes atomic together. Failed mixed saves retain the
-restart choice for retry within the editor.
+Edits combining Custom API and built-in provider changes use the single integration
+apply operation described in the [invariants](#invariants). The standalone Custom API
+preflight endpoint remains available to API clients. Configuration writes across
+built-in providers and Custom API connections do not share one database transaction;
+validation failures occur before any writes, while persistence failures can leave
+partially saved settings. Failed mixed saves retain the restart choice in the editor
+when the Agent is left stopped or failed. Rejections that leave the Agent running
+do not leave a pending restart after the rejected drafts are discarded. Empty
+Custom API change lists do not trigger runtime start preflight on credential-only
+saves to a stopped Agent; unrelated start blockers do not prevent those saves.
+Retries reuse the IDs of Custom API connections already saved before startup
+failed, including when the other edits change only provider isolation policies.
 
 Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
 use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.

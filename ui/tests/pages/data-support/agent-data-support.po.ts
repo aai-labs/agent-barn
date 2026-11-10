@@ -1194,6 +1194,18 @@ export class AgentDataSupport {
     );
   }
 
+  async interceptApplyIntegrationsRequest({ status = 200, detail = "Could not apply integrations", body = mockAgent }: {
+    status?: number; detail?: string; body?: unknown;
+  } = {}) {
+    const requests: Record<string, unknown>[] = [];
+    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ status, json: status >= 400 ? { detail } : body });
+    });
+    return requests;
+  }
+
   async interceptUpdateAgentRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,

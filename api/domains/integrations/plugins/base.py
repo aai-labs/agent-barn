@@ -170,6 +170,12 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
     #: Most requests the gateway keeps in flight to this provider per process. Each one holds
     #: a thread from a shared pool, so a slow provider is capped to leave room for the rest.
     max_concurrent_upstream: int | None = None
+    #: The upstream host comes from the credential rather than from this plugin, so the
+    #: gateway may only reach it at a public address, checked on every hop.
+    upstream_public_only: bool = False
+    #: The provider's paths hold URL-encoded segments, such as GitLab's ``group%2Fapp``,
+    #: that mean something different once decoded.
+    preserve_encoded_path: bool = False
 
     def validate_external(self, content: ContentT) -> IntegrationValidationResult | None:
         """Check the credential against the live provider.

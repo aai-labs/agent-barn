@@ -123,6 +123,16 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
+  {
+    id: "gitlab",
+    label: "GitLab",
+    scopeNote: "Personal access token, or a service account token so the agent has its own GitLab identity. Use the api scope, or read_api if the agent only reads. A self-hosted GitLab must be reachable at a public address.",
+    fields: [
+      { key: "baseUrl", label: "GitLab URL", type: "text", required: false, placeholder: "https://gitlab.com", hint: "Leave empty for gitlab.com. For a self-hosted GitLab, enter its address." },
+      { key: "repos", label: "Projects", type: "repo-list", required: false, placeholder: "group/project", hint: "Leave empty to allow access to any project the token can reach — the agent will need to name a project explicitly." },
+      { key: "token", label: "Access token", type: "secret", required: true, placeholder: "glpat-…" },
+    ],
+  },
   // google_sheets and google_calendar are retired: one google_workspace credential
   // (below) covers Gmail, Calendar, Drive and Sheets through gog under a single consent.
   // gmail is separate: read-only Gmail alone, connected with one Google sign-in.
