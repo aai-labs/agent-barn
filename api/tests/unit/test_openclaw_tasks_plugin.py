@@ -509,6 +509,41 @@ def test_files_a_patch_added_are_attached(tmp_path: Path):
     assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, str(notes), "--replace"]]))
 
 
+def _exec_result(exit_code: int) -> dict:
+    return {"content": [{"type": "text", "text": "out"}], "details": {"status": "completed", "exitCode": exit_code}}
+
+
+def test_a_file_the_agent_published_is_attached(tmp_path: Path):
+    workspace = tmp_path / ".openclaw" / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "states.csv").write_text("a,b\n")
+    publish = _after_tool("c1", command="/usr/local/bin/agentbarn-artifacts upload states.csv", result=_exec_result(0))
+
+    _drive(tmp_path, [publish, _created(), _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, str(workspace / "states.csv"), "--replace"]]))
+
+
+def test_a_failed_publish_is_not_attached(tmp_path: Path):
+    workspace = tmp_path / ".openclaw" / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "states.csv").write_text("a,b\n")
+    publish = _after_tool("c1", command="agentbarn-artifacts upload states.csv", result=_exec_result(1))
+
+    _drive(tmp_path, [publish, _created(), _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to([]))
+
+
+def test_the_task_command_run_by_its_full_path_counts_as_recording(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+    record = _after_tool("c2", command="/usr/local/bin/agentbarn-task create --title=States", result=_exec_result(0))
+
+    _drive(tmp_path, [wrote, record, _agent_end()])
+
+    assert_that(_creates(tmp_path), equal_to([]))
+
+
 def test_nothing_about_attaching_is_said_within_the_run_or_after_an_automatic_attach(tmp_path: Path):
     wrote, _ = _wrote(tmp_path)
 
