@@ -190,7 +190,7 @@ test("a malformed Agent filter in the link is ignored", async ({ page }) => {
   expect(mock.listRequests.some((url) => url.searchParams.get("agent_id") === "abc")).toBe(false);
 });
 
-test("the Organization board also defaults to the last 30 days of finished work", async ({ page }) => {
+test("the Organization board also shows the last 30 days of finished work, or a picked range", async ({ page }) => {
   const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const { tasksPage } = await open(page, {
     tasks: [
@@ -200,6 +200,8 @@ test("the Organization board also defaults to the last 30 days of finished work"
   });
 
   await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
-  await tasksPage.filterBy("Updated", "All time");
-  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Date range" })).toContainText("Last 30 days");
+  await page.goto(`/dashboard/${TEST_ORG_ID}/tasks?from=${daysAgo(50)}&to=${daysAgo(30)}`);
+  await expect(tasksPage.column("Done")).toContainText("Old report");
+  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
 });

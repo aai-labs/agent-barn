@@ -277,6 +277,8 @@ class AgentTaskRepository:
             where.append(col(AgentTask.status) == task_filter.status)
         if task_filter.updated_since is not None:
             where.append(col(AgentTask.updated_at) >= task_filter.updated_since)
+        if task_filter.updated_before is not None:
+            where.append(col(AgentTask.updated_at) <= task_filter.updated_before)
 
         with Session(self.delegate.engine) as session:
             total = (

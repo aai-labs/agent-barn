@@ -3,6 +3,7 @@
 import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { DateRangePicker } from "@/components/date-range-picker";
 import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
 import { canAgent } from "@/features/agents/utils";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
@@ -11,16 +12,13 @@ import { useTasks } from "../hooks/use-agent-tasks";
 import { useOpenTask } from "../hooks/use-open-task";
 import type { AgentTaskStatus } from "../schemas";
 import {
-  DEFAULT_TASK_PERIOD,
+  DEFAULT_TASK_WINDOW_LABEL,
   isUuid,
-  periodEmptyMessage,
-  periodStart,
-  TASK_PERIOD_OPTIONS,
-  TASK_PERIODS,
+  taskWindow,
   TASK_STATUSES,
   TASK_STATUS_OPTIONS,
   TASK_VIEWS,
-  type TaskPeriod,
+  windowEmptyMessage,
   type TaskView,
 } from "../utils";
 import { TaskBoard } from "./task-board";
@@ -38,7 +36,8 @@ export function OrganizationTasksPage() {
       agent: parseAsString,
       status: parseAsStringEnum<AgentTaskStatus>(TASK_STATUSES),
       view: parseAsStringEnum<TaskView>(TASK_VIEWS).withDefault("board"),
-      period: parseAsStringEnum<TaskPeriod>(TASK_PERIODS).withDefault(DEFAULT_TASK_PERIOD),
+      from: parseAsString,
+      to: parseAsString,
     },
     { history: "replace", scroll: false },
   );
@@ -49,7 +48,7 @@ export function OrganizationTasksPage() {
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
   const agentFilter = isUuid(filters.agent) ? filters.agent : null;
   const scope = { kind: "organization", agentId: agentFilter } as const;
-  const since = periodStart(filters.period);
+  const dates = taskWindow(filters.from, filters.to);
   // Shared with the board's empty check: whether there are any Tasks at all.
   const recordedAny = useTasks(scope, null).total > 0;
   const agentName = (agentId: string) => agentNames.get(agentId);
@@ -74,12 +73,13 @@ export function OrganizationTasksPage() {
             options={taskAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
             onChange={(agent) => void setFilters({ agent })}
           />
-          <TaskFilterSelect
-            label="Updated"
-            allLabel="All time"
-            value={filters.period === "all" ? null : filters.period}
-            options={TASK_PERIOD_OPTIONS}
-            onChange={(period) => void setFilters({ period: (period as TaskPeriod | null) ?? "all" })}
+          <DateRangePicker
+            from={filters.from ?? ""}
+            to={filters.to ?? ""}
+            onChange={(from, to) => void setFilters({ from: from || null, to: to || null })}
+            placeholder={DEFAULT_TASK_WINDOW_LABEL}
+            width="16rem"
+            ariaLabel="Date range"
           />
           {/* The board's columns already split Tasks by status. */}
           {filters.view === "list" && (
@@ -111,7 +111,7 @@ export function OrganizationTasksPage() {
       {filters.view === "board" ? (
         <TaskBoard
           scope={scope}
-          since={since}
+          dates={dates}
           emptyMessage={agentFilter ? "This Agent hasn't recorded any tasks yet." : EMPTY}
           columnHeading="h2"
           agentName={agentName}
@@ -121,13 +121,13 @@ export function OrganizationTasksPage() {
         <TaskList
           scope={scope}
           status={filters.status}
-          since={since}
+          dates={dates}
           agentName={agentName}
           emptyMessage={
             agentFilter || filters.status
               ? "No tasks match these filters."
-              : since && recordedAny
-                ? periodEmptyMessage(filters.period)
+              : recordedAny
+                ? windowEmptyMessage(dates.picked)
                 : EMPTY
           }
           onOpen={open}

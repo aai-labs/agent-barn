@@ -306,28 +306,38 @@ test("the board shows the last 30 days of finished work, and every unfinished Ta
   await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
   await expect(tasksPage.column("Done")).toContainText("This week's report");
   await expect(tasksPage.column("Open")).toContainText("Waiting on the client");
-  await expect(page.getByRole("combobox", { name: "Updated" })).toContainText("Last 30 days");
+  await expect(page.getByRole("button", { name: "Date range" })).toContainText("Last 30 days");
   const since = (status: string) =>
     mock.listRequests.find((url) => url.searchParams.get("status") === status)?.searchParams.get("updated_since");
   expect(since("done")).toBeTruthy();
   expect(since("open")).toBeFalsy();
 });
 
-test("All time brings older finished Tasks back", async ({ page }) => {
+test("a picked date range shows the finished Tasks changed in it", async ({ page }) => {
   const { tasksPage } = await open(page, { tasks: RECENT_AND_OLD });
+
+  await page.goto(`${page.url()}&taskFrom=${daysAgo(50)}&taskTo=${daysAgo(30)}`);
+
   await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
-
-  await tasksPage.filterBy("Updated", "All time");
-
-  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(2);
-  await expect(page).toHaveURL(/taskPeriod=all/);
+  await expect(tasksPage.column("Done")).toContainText("Old report");
+  await expect(page.getByRole("button", { name: "Date range" })).not.toContainText("Last 30 days");
 });
 
-test("the list keeps to the chosen time too, and says when nothing is that recent", async ({ page }) => {
+test("clearing the dates goes back to the last 30 days", async ({ page }) => {
+  const { tasksPage } = await open(page, { tasks: RECENT_AND_OLD });
+  await page.goto(`${page.url()}&taskFrom=${daysAgo(50)}&taskTo=${daysAgo(30)}`);
+  await expect(tasksPage.column("Done")).toContainText("Old report");
+
+  await page.getByRole("button", { name: "Date range" }).click();
+  await page.getByRole("button", { name: "Clear dates" }).click();
+
+  await expect(tasksPage.column("Done")).toContainText("This week's report");
+  await expect(page).not.toHaveURL(/taskFrom=/);
+});
+
+test("the list keeps to the dates too, and says when nothing is that recent", async ({ page }) => {
   const { tasksPage } = await open(page, { tasks: [RECENT_AND_OLD[1]] });
   await tasksPage.showList();
 
   await expect(page.getByText("No tasks in the last 30 days.")).toBeVisible();
-  await tasksPage.filterBy("Updated", "All time");
-  await expect(tasksPage.rows()).toHaveCount(1);
 });

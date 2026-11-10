@@ -6,7 +6,7 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { api } from "@/shared/api";
 
 import { PaginatedAgentTasksSchema, type AgentTaskStatus, type PaginatedAgentTasks } from "../schemas";
-import { taskListParams, tasksKey } from "../utils";
+import { NO_TASK_WINDOW, taskListParams, tasksKey, type TaskWindow } from "../utils";
 
 /** Whose Tasks a list or board shows: one Agent's, or the Organization's, optionally narrowed to one Agent. */
 export type TaskScope = { kind: "agent"; agentId: string } | { kind: "organization"; agentId: string | null };
@@ -25,20 +25,20 @@ function uniqueTasks(pages: PaginatedAgentTasks[]) {
   return pages.flatMap((page) => page.items).filter((task) => !seen.has(task.id) && Boolean(seen.add(task.id)));
 }
 
-/** Tasks in a scope, most recently changed first, optionally of one status and changed since a time. */
-export function useTasks(scope: TaskScope, status: AgentTaskStatus | null, since: string | null = null) {
+/** Tasks in a scope, most recently changed first, optionally of one status and changed within a dates. */
+export function useTasks(scope: TaskScope, status: AgentTaskStatus | null, dates: TaskWindow = NO_TASK_WINDOW) {
   const orgApiBase = useOrganizationApiBase();
   const query = useInfiniteQuery({
     queryKey:
       scope.kind === "agent"
-        ? tasksKey.agentTasks(scope.agentId, orgApiBase, status, since)
-        : tasksKey.organizationTasks(orgApiBase, scope.agentId, status, since),
+        ? tasksKey.agentTasks(scope.agentId, orgApiBase, status, dates)
+        : tasksKey.organizationTasks(orgApiBase, scope.agentId, status, dates),
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const url =
         scope.kind === "agent"
-          ? `${orgApiBase}/agents/${scope.agentId}/tasks?${taskListParams(pageParam, { status, since })}`
-          : `${orgApiBase}/tasks?${taskListParams(pageParam, { agentId: scope.agentId, status, since })}`;
+          ? `${orgApiBase}/agents/${scope.agentId}/tasks?${taskListParams(pageParam, { status, dates })}`
+          : `${orgApiBase}/tasks?${taskListParams(pageParam, { agentId: scope.agentId, status, dates })}`;
       return (await api.get<PaginatedAgentTasks>(url, { schema: PaginatedAgentTasksSchema })).data;
     },
     getNextPageParam: nextPage,

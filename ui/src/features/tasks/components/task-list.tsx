@@ -4,6 +4,7 @@ import { AppErrorState } from "@/components/app-error-state";
 
 import { useTasks, type TaskScope } from "../hooks/use-agent-tasks";
 import type { AgentTaskStatus, AgentTaskSummary } from "../schemas";
+import type { TaskWindow } from "../utils";
 import { TaskStatusBadge } from "./task-status-badge";
 import { TASK_FOCUS_RING, TaskSummaryMeta } from "./task-summary";
 
@@ -11,14 +12,14 @@ import { TASK_FOCUS_RING, TaskSummaryMeta } from "./task-summary";
 export function TaskList({
   scope,
   status,
-  since,
+  dates,
   emptyMessage,
   agentName,
   onOpen,
 }: {
   scope: TaskScope;
   status: AgentTaskStatus | null;
-  since: string | null;
+  dates: TaskWindow;
   emptyMessage: string;
   /** Names each Task's Agent, on lists that span Agents. */
   agentName?: (agentId: string) => string | undefined;
@@ -27,7 +28,7 @@ export function TaskList({
   const { tasks, isLoading, error, refetch, hasMore, loadMore, isLoadingMore, loadMoreError } = useTasks(
     scope,
     status,
-    since,
+    dates,
   );
 
   return (

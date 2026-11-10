@@ -25,13 +25,14 @@ def list_agent_tasks(
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],
     task_status: Annotated[AgentTaskStatus | None, Query(alias="status")] = None,
     updated_since: Annotated[datetime | None, Query()] = None,
+    updated_before: Annotated[datetime | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     return service.list_agent_tasks(
         agent_id,
         context,
-        AgentTaskFilter(status=task_status, updated_since=updated_since),
+        AgentTaskFilter(status=task_status, updated_since=updated_since, updated_before=updated_before),
         Pagination(page=page, size=page_size),
     )
 
@@ -65,11 +66,14 @@ def list_tasks(
     agent_id: Annotated[UUID | None, Query()] = None,
     task_status: Annotated[AgentTaskStatus | None, Query(alias="status")] = None,
     updated_since: Annotated[datetime | None, Query()] = None,
+    updated_before: Annotated[datetime | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     return service.list_organization_tasks(
         context,
-        AgentTaskFilter(agent_id=agent_id, status=task_status, updated_since=updated_since),
+        AgentTaskFilter(
+            agent_id=agent_id, status=task_status, updated_since=updated_since, updated_before=updated_before
+        ),
         Pagination(page=page, size=page_size),
     )

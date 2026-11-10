@@ -460,3 +460,28 @@ def test_lists_keep_only_tasks_changed_since_a_time():
                 [task["title"] for task in organization.json()["items"]], contains_exactly("This week's report")
             )
             assert_that(everything.json()["total"], equal_to(2))
+
+
+def test_lists_keep_only_tasks_changed_within_a_date_range():
+    with given(
+        _api_setup(
+            there_is_an_agent(),
+            _a_task("Older report", AgentTaskStatus.DONE),
+            _last_changed_days_ago(60),
+            _a_task("September report", AgentTaskStatus.DONE),
+            _last_changed_days_ago(40),
+            _a_task("This week's report", AgentTaskStatus.DONE),
+        )
+    ) as context:
+        window = {
+            "updated_since": (datetime.now(UTC) - timedelta(days=50)).isoformat(),
+            "updated_before": (datetime.now(UTC) - timedelta(days=30)).isoformat(),
+        }
+
+        with when("the Owner lists Tasks changed between 50 and 30 days ago"):
+            per_agent = context.client.get(_agent_tasks(context), params=window, headers=_auth(context))
+            organization = context.client.get(_ORG_TASKS, params=window, headers=_auth(context))
+
+        with then("only the Task changed in that window is listed"):
+            assert_that([task["title"] for task in per_agent.json()["items"]], contains_exactly("September report"))
+            assert_that([task["title"] for task in organization.json()["items"]], contains_exactly("September report"))

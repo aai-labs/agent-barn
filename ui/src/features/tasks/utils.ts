@@ -19,28 +19,27 @@ export const TASK_STATUS_LABEL: Record<AgentTaskStatus, string> = {
 
 export const TASK_STATUS_OPTIONS = TASK_STATUSES.map((status) => ({ value: status, label: TASK_STATUS_LABEL[status] }));
 
-/** How far back lists and boards look, by a Task's last change. Boards would otherwise fill up
+/** With no dates picked, lists and boards show the last 30 days. Boards would otherwise fill up
  * with old finished work, whose files have usually expired. */
-export type TaskPeriod = "7d" | "30d" | "all";
-export const TASK_PERIODS: TaskPeriod[] = ["7d", "30d", "all"];
-export const DEFAULT_TASK_PERIOD: TaskPeriod = "30d";
-const PERIOD_DAYS: Record<Exclude<TaskPeriod, "all">, number> = { "7d": 7, "30d": 30 };
-export const TASK_PERIOD_OPTIONS = [
-  { value: "7d", label: "Last 7 days" },
-  { value: "30d", label: "Last 30 days" },
-];
+/** Bounds on a Task's last change, both inclusive; null is open-ended. */
+export type TaskWindow = { since: string | null; before: string | null };
+export const NO_TASK_WINDOW: TaskWindow = { since: null, before: null };
 
-/** When a period starts: from midnight, so the time, and the lists' cache keys, hold for the day. */
-export function periodStart(period: TaskPeriod): string | null {
-  if (period === "all") return null;
+export const DEFAULT_TASK_DAYS = 30;
+export const DEFAULT_TASK_WINDOW_LABEL = `Last ${DEFAULT_TASK_DAYS} days`;
+
+/** The bounds a list asks for. Unset dates count from midnight, so the time, and the lists'
+ * cache keys, hold for the day. */
+export function taskWindow(from: string | null, to: string | null) {
+  if (from || to) return { since: from || null, before: to || null, picked: true };
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - PERIOD_DAYS[period]);
-  return start.toISOString();
+  start.setDate(start.getDate() - DEFAULT_TASK_DAYS);
+  return { since: start.toISOString(), before: null, picked: false };
 }
 
-export function periodEmptyMessage(period: TaskPeriod): string {
-  return `No tasks in the last ${PERIOD_DAYS[period as Exclude<TaskPeriod, "all">]} days.`;
+export function windowEmptyMessage(picked: boolean): string {
+  return picked ? "No tasks in these dates." : `No tasks in the last ${DEFAULT_TASK_DAYS} days.`;
 }
 
 /** Unfinished Tasks stay on the board whatever their age; the period trims finished ones. */
@@ -52,26 +51,27 @@ const _tasksKeyBase = createQueryKeyStructure("agent-tasks");
  * evicted on an Organization switch and keyed by the Organization API base. */
 export const tasksKey = {
   ..._tasksKeyBase,
-  agentTasks: (agentId: string, orgApiBase: string, status: AgentTaskStatus | null, since: string | null) =>
-    [...agentsKey.detail(agentId), "tasks", orgApiBase, status, since] as const,
+  agentTasks: (agentId: string, orgApiBase: string, status: AgentTaskStatus | null, dates: TaskWindow) =>
+    [...agentsKey.detail(agentId), "tasks", orgApiBase, status, dates.since, dates.before] as const,
   task: (agentId: string, orgApiBase: string, taskId: string) =>
     [...agentsKey.detail(agentId), "task", orgApiBase, taskId] as const,
   organizationTasks: (
     orgApiBase: string,
     agentId: string | null,
     status: AgentTaskStatus | null,
-    since: string | null,
-  ) => [..._tasksKeyBase.all, orgApiBase, agentId, status, since] as const,
+    dates: TaskWindow,
+  ) => [..._tasksKeyBase.all, orgApiBase, agentId, status, dates.since, dates.before] as const,
 };
 
 export function taskListParams(
   page: number,
-  filter: { agentId?: string | null; status: AgentTaskStatus | null; since?: string | null },
+  filter: { agentId?: string | null; status: AgentTaskStatus | null; dates?: TaskWindow },
 ) {
   const params = new URLSearchParams({ page: String(page), page_size: String(TASKS_PAGE_SIZE) });
   if (filter.agentId) params.set("agent_id", filter.agentId);
   if (filter.status) params.set("status", filter.status);
-  if (filter.since) params.set("updated_since", filter.since);
+  if (filter.dates?.since) params.set("updated_since", filter.dates.since);
+  if (filter.dates?.before) params.set("updated_before", filter.dates.before);
   return params.toString();
 }
 
