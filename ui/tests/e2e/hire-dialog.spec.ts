@@ -327,6 +327,19 @@ test.describe("Hire Dialog", () => {
     ]);
   });
 
+  test("shows the selected template's description", async ({ page }) => {
+    const description = "Requires Google Workspace with Gmail selected.";
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [{ ...mockTemplates[0], description }] },
+    });
+
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+    await chooseTemplate(page);
+
+    await expect(page.getByText(description, { exact: true })).toBeVisible();
+  });
+
   test("keeps standalone template-required skills in the required section", async ({ page }) => {
     const jiraRequiredSkill = {
       id: mockJiraSkill.id,

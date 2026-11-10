@@ -143,10 +143,9 @@ chmod 755 {bin_dir}/gog
 def build_gog_policy_md(content: GoogleWorkspaceContent | None, *, isolated: bool = False) -> str:
     """Render the agents_md block for a configured Google Workspace credential.
 
-    Both runtimes auto-load AGENTS.md into the startup prompt, and this block is the
-    *only* place the agent learns gog exists (the integration ships no skill file), so it
-    carries the command grammar and one worked example per enabled service rather than
-    pointing at a doc to read.
+    Both runtimes auto-load AGENTS.md into the startup prompt, so this block carries the
+    command grammar and one worked example per enabled service. The integration's bundled
+    skill is only a short pointer, and it does not know which services are enabled.
 
     Kept separate from ``build_integrations_policy_md`` because that block tells the agent
     to always pass ``--profile`` and that aai-cli is the only way to reach its

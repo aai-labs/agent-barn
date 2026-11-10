@@ -30,6 +30,7 @@ _DISPLAY_NAMES = {
     "aai-github": "GitHub",
     "aai-gmail": "Gmail",
     "aai-google-drive": "Google Drive",
+    "aai-google-workspace": "Google Workspace",
     "aai-hubspot": "HubSpot",
     "aai-jira": "Jira",
     "aai-merkys": "Merkys",
@@ -55,6 +56,9 @@ _COMMANDS = {
     "aai-posthog": "posthog",
     "aai-microsoft": "microsoft",
 }
+
+_DEFAULT_RUNTIME_TOOL = "aai-cli"
+_RUNTIME_TOOL_OVERRIDES = {"aai-google-workspace": "gog"}
 
 # Which providers a bundled skill needs before it is auto-attached. Derived from each
 # Integration Plugin's ``bundled_skill_slugs`` so a new provider cannot be modelled
@@ -101,7 +105,9 @@ def _bundled_skill(directory: str) -> dict:
         "files": files,
         "entry_path": "SKILL.md",
         "tools_pointer": (
-            f"\nFor {_DISPLAY_NAMES[directory]}, use the aai-cli tool. See ./skills/{directory}/SKILL.md\n"
+            f"\nFor {_DISPLAY_NAMES[directory]}, use the "
+            f"{_RUNTIME_TOOL_OVERRIDES.get(directory, _DEFAULT_RUNTIME_TOOL)} tool. "
+            f"See ./skills/{directory}/SKILL.md\n"
         ),
     }
 

@@ -4,6 +4,7 @@ from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_item, has_items, not_, starts_with
 from starlette.testclient import TestClient
 
+from api.domains.agents.aai_cli_skills import _COMMANDS
 from api.domains.agents.models import SecretProvider
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.skills.repository import SkillRepository
@@ -517,7 +518,10 @@ def test_aai_cli_seeder_publishes_the_bundled_skill_tree():
             version = repository.get_latest_version(skill.id)
             assert version is not None
             paths = [file.path for file in repository.get_files(version.id)]
-            assert_that(paths, has_items("SKILL.md", "references/command-reference.md"))
+            required_paths = ["SKILL.md"]
+            if skill.slug in _COMMANDS:
+                required_paths.append("references/command-reference.md")
+            assert_that(paths, has_items(*required_paths))
 
 
 def test_platform_admin_can_list_global_skills():

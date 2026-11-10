@@ -120,6 +120,7 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
             <SelectTrigger aria-label="Template" className="w-full"><SelectValue placeholder={isLoading ? "Loading templates…" : "Choose a template"} /></SelectTrigger>
             <SelectContent><SelectGroup>{templates.map((item) => <SelectItem key={`${item.templateKey}:${item.version}`} value={item.templateKey}>{item.templateName} · v{item.version}</SelectItem>)}</SelectGroup></SelectContent>
           </Select>
+          {template?.description && <p className="m-0 text-[0.8125rem] leading-[1.45]" style={{ color: "var(--ink-3)" }}>{template.description}</p>}
         </FormField>
         <FormField label="Model">
           <ModelChoice

@@ -2059,6 +2059,28 @@ def test_seed_predefined_templates_code_reviewer_requires_github_or_bitbucket():
             assert_that(group_keys, equal_to({"github-or-bitbucket"}))
 
 
+def test_seed_predefined_templates_email_reminder_requires_google_workspace():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_skill(name="Google Workspace", global_skill=True),
+        ]
+    ) as context:
+        service: TemplateService = context.injector.get(TemplateService)
+        client: TestClient = context.client
+
+        with when("I seed the global predefined catalogue"):
+            service.seed_predefined_templates()
+
+        with then("email-reminder requires Google Workspace on its own and says Gmail must be selected"):
+            response = client.get(f"{_BASE}/email-reminder", headers=_auth(context))
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            required_skills = response.json()["required_skills"]
+            assert_that([s["name"] for s in required_skills], equal_to(["Google Workspace"]))
+            assert_that(required_skills[0]["group_key"], none())
+            assert_that(response.json()["description"], contains_string("Gmail"))
+
+
 def test_seed_predefined_templates_code_reviewer_seeds_partial_group_when_only_one_host_skill_exists():
     with given(
         [

@@ -68,6 +68,7 @@ from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
+from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -5983,6 +5984,29 @@ def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
         with then("the aai-cli integrations block and profiles are absent"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
+            assert_that(config_map.data["aai-cli-config.toml"], is_not(contains_string("[profiles.")))
+
+
+def test_start_agent_mounts_the_google_workspace_skill_without_the_aai_cli_policy():
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        seed_aai_cli_skills(context.injector.get(SkillRepository))
+
+        with when("Google Workspace is the agent's only integration"):
+            saved = _configure_gws(client, context)
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the bundled skill is mounted and TOOLS.md points at gog"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            paths = [entry["path"] for entry in json.loads(config_map.data["skills.json"])]
+            assert_that(paths, has_item("aai-google-workspace/SKILL.md"))
+            assert_that(config_map.data["TOOLS.md"], contains_string("use the gog tool"))
+
+        with then("the aai-cli integrations block and profiles stay absent"):
             assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
             assert_that(config_map.data["aai-cli-config.toml"], is_not(contains_string("[profiles.")))
 
