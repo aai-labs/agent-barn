@@ -1,7 +1,7 @@
 """Add gitlab to the agent_secret provider constraint.
 
 Revision ID: c8e41f7a2d96
-Revises: 91d534425109
+Revises: c84888d0018a
 
 _OLD is copied verbatim from a4e9c2d7b615 (add_merkys_to_secret_provider), the most recent
 revision to recreate the provider constraint — not reconstructed from an older one.
@@ -10,7 +10,7 @@ revision to recreate the provider constraint — not reconstructed from an older
 from alembic import op
 
 revision: str = "c8e41f7a2d96"
-down_revision: str | None = "91d534425109"
+down_revision: str | None = "c84888d0018a"
 branch_labels: str | None = None
 depends_on: str | None = None
 
