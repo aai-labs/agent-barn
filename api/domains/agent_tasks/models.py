@@ -158,6 +158,8 @@ class AgentTaskFilter(PydanticBaseModel):
 
     agent_id: UUID | None = None
     status: AgentTaskStatus | None = None
+    # Only Tasks last changed at or after this time; boards default to recent work.
+    updated_since: datetime | None = None
 
 
 class AgentTaskRead(PydanticBaseModel):

@@ -61,10 +61,14 @@ function json(route: Route, status: number, body: unknown) {
 function filtered(tasks: Json[], url: URL) {
   const status = url.searchParams.get("status");
   const agentId = url.searchParams.get("agent_id");
+  const updatedSince = url.searchParams.get("updated_since");
   const page = Number(url.searchParams.get("page") ?? 1);
   const pageSize = Number(url.searchParams.get("page_size") ?? 20);
   const matching = tasks.filter(
-    (task) => (!status || task.status === status) && (!agentId || task.agent_id === agentId),
+    (task) =>
+      (!status || task.status === status) &&
+      (!agentId || task.agent_id === agentId) &&
+      (!updatedSince || Date.parse(String(task.updated_at)) >= Date.parse(updatedSince)),
   );
   const items = matching.slice((page - 1) * pageSize, page * pageSize);
   return { page, page_size: pageSize, total: matching.length, items };

@@ -286,3 +286,48 @@ test("a malformed Task link opens nothing", async ({ page }) => {
   await expect(tasksPage.cards()).toHaveCount(1);
   await expect(tasksPage.detail()).toHaveCount(0);
 });
+
+const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+const RECENT_AND_OLD = [
+  mockTask({ title: "This week's report", updated_at: daysAgo(3) }),
+  mockTask({ id: "aaaaaaaa-0000-4000-8000-0000000000a2", title: "Old report", updated_at: daysAgo(40) }),
+  mockTask({
+    id: "aaaaaaaa-0000-4000-8000-0000000000a3",
+    title: "Waiting on the client",
+    status: "open",
+    updated_at: daysAgo(60),
+  }),
+];
+
+test("the board shows the last 30 days of finished work, and every unfinished Task", async ({ page }) => {
+  const { mock, tasksPage } = await open(page, { tasks: RECENT_AND_OLD });
+
+  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
+  await expect(tasksPage.column("Done")).toContainText("This week's report");
+  await expect(tasksPage.column("Open")).toContainText("Waiting on the client");
+  await expect(page.getByRole("combobox", { name: "Updated" })).toContainText("Last 30 days");
+  const since = (status: string) =>
+    mock.listRequests.find((url) => url.searchParams.get("status") === status)?.searchParams.get("updated_since");
+  expect(since("done")).toBeTruthy();
+  expect(since("open")).toBeFalsy();
+});
+
+test("All time brings older finished Tasks back", async ({ page }) => {
+  const { tasksPage } = await open(page, { tasks: RECENT_AND_OLD });
+  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
+
+  await tasksPage.filterBy("Updated", "All time");
+
+  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(2);
+  await expect(page).toHaveURL(/taskPeriod=all/);
+});
+
+test("the list keeps to the chosen time too, and says when nothing is that recent", async ({ page }) => {
+  const { tasksPage } = await open(page, { tasks: [RECENT_AND_OLD[1]] });
+  await tasksPage.showList();
+
+  await expect(page.getByText("No tasks in the last 30 days.")).toBeVisible();
+  await tasksPage.filterBy("Updated", "All time");
+  await expect(tasksPage.rows()).toHaveCount(1);
+});

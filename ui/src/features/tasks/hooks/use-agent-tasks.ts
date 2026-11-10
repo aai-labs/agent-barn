@@ -25,20 +25,20 @@ function uniqueTasks(pages: PaginatedAgentTasks[]) {
   return pages.flatMap((page) => page.items).filter((task) => !seen.has(task.id) && Boolean(seen.add(task.id)));
 }
 
-/** Tasks in a scope, most recently changed first, optionally of one status. */
-export function useTasks(scope: TaskScope, status: AgentTaskStatus | null) {
+/** Tasks in a scope, most recently changed first, optionally of one status and changed since a time. */
+export function useTasks(scope: TaskScope, status: AgentTaskStatus | null, since: string | null = null) {
   const orgApiBase = useOrganizationApiBase();
   const query = useInfiniteQuery({
     queryKey:
       scope.kind === "agent"
-        ? tasksKey.agentTasks(scope.agentId, orgApiBase, status)
-        : tasksKey.organizationTasks(orgApiBase, scope.agentId, status),
+        ? tasksKey.agentTasks(scope.agentId, orgApiBase, status, since)
+        : tasksKey.organizationTasks(orgApiBase, scope.agentId, status, since),
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const url =
         scope.kind === "agent"
-          ? `${orgApiBase}/agents/${scope.agentId}/tasks?${taskListParams(pageParam, { status })}`
-          : `${orgApiBase}/tasks?${taskListParams(pageParam, { agentId: scope.agentId, status })}`;
+          ? `${orgApiBase}/agents/${scope.agentId}/tasks?${taskListParams(pageParam, { status, since })}`
+          : `${orgApiBase}/tasks?${taskListParams(pageParam, { agentId: scope.agentId, status, since })}`;
       return (await api.get<PaginatedAgentTasks>(url, { schema: PaginatedAgentTasksSchema })).data;
     },
     getNextPageParam: nextPage,

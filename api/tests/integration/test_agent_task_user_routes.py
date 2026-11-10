@@ -11,7 +11,13 @@ from hamcrest import assert_that, contains_exactly, contains_string, equal_to, h
 from injector import Module, provider, singleton
 from sqlmodel import Session
 
-from api.domains.agent_tasks.models import AgentTaskCreate, AgentTaskFileCreate, AgentTaskNoteCreate, AgentTaskStatus
+from api.domains.agent_tasks.models import (
+    AgentTask,
+    AgentTaskCreate,
+    AgentTaskFileCreate,
+    AgentTaskNoteCreate,
+    AgentTaskStatus,
+)
 from api.domains.agent_tasks.service import AgentTaskService
 from api.domains.agents.repository import AgentRepository
 from api.domains.artifacts.models import Artifact
@@ -417,3 +423,40 @@ def test_a_long_latest_note_is_listed_as_a_preview():
         with then("the latest Note is cut to a preview; the Task itself still has all of it"):
             [task] = listing.json()["items"]
             assert_that(task["latest_note"], equal_to("x" * 300))
+
+
+def _last_changed_days_ago(days: int):
+    """Backdate the current Task's last change, as if the Agent finished it `days` ago."""
+
+    def step(context):
+        with Session(context.postgres_delegate.engine) as session:
+            task = session.get_one(AgentTask, context.task.id)
+            task.updated_at = datetime.now(UTC) - timedelta(days=days)
+            session.add(task)
+            session.commit()
+
+    return step
+
+
+def test_lists_keep_only_tasks_changed_since_a_time():
+    with given(
+        _api_setup(
+            there_is_an_agent(),
+            _a_task("Old report", AgentTaskStatus.DONE),
+            _last_changed_days_ago(40),
+            _a_task("This week's report", AgentTaskStatus.DONE),
+        )
+    ) as context:
+        since = {"updated_since": (datetime.now(UTC) - timedelta(days=30)).isoformat()}
+
+        with when("the Owner lists Tasks changed in the last 30 days"):
+            per_agent = context.client.get(_agent_tasks(context), params=since, headers=_auth(context))
+            organization = context.client.get(_ORG_TASKS, params=since, headers=_auth(context))
+            everything = context.client.get(_ORG_TASKS, headers=_auth(context))
+
+        with then("the older Task is left out, unless no time is given"):
+            assert_that([task["title"] for task in per_agent.json()["items"]], contains_exactly("This week's report"))
+            assert_that(
+                [task["title"] for task in organization.json()["items"]], contains_exactly("This week's report")
+            )
+            assert_that(everything.json()["total"], equal_to(2))

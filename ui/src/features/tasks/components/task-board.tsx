@@ -4,7 +4,7 @@ import { AppErrorState } from "@/components/app-error-state";
 
 import { useTasks, type TaskScope } from "../hooks/use-agent-tasks";
 import type { AgentTaskStatus, AgentTaskSummary } from "../schemas";
-import { TASK_STATUSES, TASK_STATUS_LABEL } from "../utils";
+import { FINISHED_TASK_STATUSES, TASK_STATUSES, TASK_STATUS_LABEL } from "../utils";
 import { TASK_FOCUS_RING, TaskSummaryMeta } from "./task-summary";
 
 type ColumnHeading = "h2" | "h3";
@@ -12,12 +12,14 @@ type ColumnHeading = "h2" | "h3";
 function TaskBoardColumn({
   scope,
   status,
+  since,
   heading: Heading,
   agentName,
   onOpen,
 }: {
   scope: TaskScope;
   status: AgentTaskStatus;
+  since: string | null;
   heading: ColumnHeading;
   agentName?: (agentId: string) => string | undefined;
   onOpen: (task: AgentTaskSummary) => void;
@@ -25,6 +27,7 @@ function TaskBoardColumn({
   const { tasks, total, isLoading, error, refetch, hasMore, loadMore, isLoadingMore, loadMoreError } = useTasks(
     scope,
     status,
+    since,
   );
   const label = TASK_STATUS_LABEL[status];
 
@@ -96,12 +99,15 @@ function TaskBoardColumn({
  */
 export function TaskBoard({
   scope,
+  since,
   emptyMessage,
   columnHeading,
   agentName,
   onOpen,
 }: {
   scope: TaskScope;
+  /** Finished Tasks changed before this are left off; unfinished ones always show. */
+  since: string | null;
   /** Shown once in place of the columns when there are no Tasks at all. */
   emptyMessage: string;
   /** The level that fits under the page's own heading. */
@@ -127,6 +133,7 @@ export function TaskBoard({
             key={status}
             scope={scope}
             status={status}
+            since={FINISHED_TASK_STATUSES.includes(status) ? since : null}
             heading={columnHeading}
             agentName={agentName}
             onOpen={onOpen}

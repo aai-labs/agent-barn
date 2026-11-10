@@ -1,5 +1,6 @@
 """The Task routes people use to read an Agent's Tasks and download their Files."""
 
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -23,11 +24,15 @@ def list_agent_tasks(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],
     task_status: Annotated[AgentTaskStatus | None, Query(alias="status")] = None,
+    updated_since: Annotated[datetime | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     return service.list_agent_tasks(
-        agent_id, context, AgentTaskFilter(status=task_status), Pagination(page=page, size=page_size)
+        agent_id,
+        context,
+        AgentTaskFilter(status=task_status, updated_since=updated_since),
+        Pagination(page=page, size=page_size),
     )
 
 
@@ -59,9 +64,12 @@ def list_tasks(
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],
     agent_id: Annotated[UUID | None, Query()] = None,
     task_status: Annotated[AgentTaskStatus | None, Query(alias="status")] = None,
+    updated_since: Annotated[datetime | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     return service.list_organization_tasks(
-        context, AgentTaskFilter(agent_id=agent_id, status=task_status), Pagination(page=page, size=page_size)
+        context,
+        AgentTaskFilter(agent_id=agent_id, status=task_status, updated_since=updated_since),
+        Pagination(page=page, size=page_size),
     )

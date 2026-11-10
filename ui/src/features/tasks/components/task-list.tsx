@@ -11,12 +11,14 @@ import { TASK_FOCUS_RING, TaskSummaryMeta } from "./task-summary";
 export function TaskList({
   scope,
   status,
+  since,
   emptyMessage,
   agentName,
   onOpen,
 }: {
   scope: TaskScope;
   status: AgentTaskStatus | null;
+  since: string | null;
   emptyMessage: string;
   /** Names each Task's Agent, on lists that span Agents. */
   agentName?: (agentId: string) => string | undefined;
@@ -25,6 +27,7 @@ export function TaskList({
   const { tasks, isLoading, error, refetch, hasMore, loadMore, isLoadingMore, loadMoreError } = useTasks(
     scope,
     status,
+    since,
   );
 
   return (

@@ -189,3 +189,17 @@ test("a malformed Agent filter in the link is ignored", async ({ page }) => {
   await expect(tasksPage.cards()).toHaveCount(2);
   expect(mock.listRequests.some((url) => url.searchParams.get("agent_id") === "abc")).toBe(false);
 });
+
+test("the Organization board also defaults to the last 30 days of finished work", async ({ page }) => {
+  const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const { tasksPage } = await open(page, {
+    tasks: [
+      mockTask({ title: "This week's report", updated_at: daysAgo(3) }),
+      mockTask({ id: "aaaaaaaa-0000-4000-8000-0000000000a2", title: "Old report", updated_at: daysAgo(40) }),
+    ],
+  });
+
+  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
+  await tasksPage.filterBy("Updated", "All time");
+  await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(2);
+});
