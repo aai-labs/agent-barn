@@ -9,6 +9,7 @@ operator-facing token endpoint later would put it squarely under
 """
 
 from typing import Annotated
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi_injector import Injected
@@ -64,6 +65,19 @@ def _refused(detail_message: str) -> HTTPException:
     )
 
 
+def encoded_upstream_path(request: Request, provider_key: str, upstream_path: str) -> str | None:
+    """Recover ``upstream_path`` as the agent sent it, before URL decoding.
+
+    The router decodes the path, which turns ``%2F`` into a separator. The raw form is only
+    trusted when it decodes back to what the router matched.
+    """
+    raw_path = request.scope.get("raw_path")
+    if not raw_path:
+        return None
+    _, marker, encoded = raw_path.decode("ascii", errors="ignore").partition(f"/p/{provider_key}/")
+    return encoded if marker and unquote(encoded) == upstream_path else None
+
+
 @gateway_router.api_route(
     "/p/{provider_key}/{upstream_path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
@@ -88,6 +102,7 @@ async def forward_to_provider(
             ForwardRequest(
                 provider_key=provider_key,
                 path=upstream_path,
+                encoded_path=encoded_upstream_path(request, provider_key, upstream_path),
                 method=request.method,
                 headers=dict(request.headers),
                 params=dict(request.query_params),

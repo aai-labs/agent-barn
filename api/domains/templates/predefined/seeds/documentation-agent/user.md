@@ -21,8 +21,8 @@ Integration credentials and base URLs are in TOOLS.md — do not duplicate them 
 
 ### Repo Scope
 
-Which repositories to document, from your configured source-control host (GitHub
-or Bitbucket).
+Which repositories to document, from your configured source-control host (GitHub,
+Bitbucket or GitLab).
 
 - **If the integration is already scoped to specific repos** (see the Integrations
   block in AGENTS.md), those are used automatically — leave this blank.

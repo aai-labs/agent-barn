@@ -3,9 +3,10 @@
 import base64
 import binascii
 import datetime
+import logging
 import threading
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 from injector import inject, singleton
@@ -48,6 +49,8 @@ from api.domains.integrations.plugins.base import (
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.shared_credentials.repository import SharedCredentialRepository
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayTokenRejected(Exception):
@@ -241,12 +244,22 @@ class CredentialGatewayService:
         if content is None:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
+        if plugin.preserve_encoded_path and _has_dot_segment(request.path):
+            # The route answers with the same opaque refusal as a bad token, so this is the only record.
+            logger.warning(
+                "Gateway refused a %s path with a dot segment from agent %s in organization %s",
+                plugin.key,
+                resolution.agent_id,
+                resolution.organization_id,
+            )
+            raise GatewayForwardRefused(f"{plugin.key} path has a dot segment")
+        path = (plugin.preserve_encoded_path and request.encoded_path) or request.path
         try:
             outbound = plugin.apply_upstream_auth(
                 content,
                 OutboundRequest(
                     method=request.method,
-                    path=request.path,
+                    path=path,
                     headers=sanitize_request_headers(request.headers),
                     query=dict(request.params),
                 ),
@@ -268,7 +281,7 @@ class CredentialGatewayService:
             raise UpstreamUnreachable("provider authorization could not be established") from exc
         except ValueError as exc:
             raise GatewayForwardRefused(f"invalid upstream configuration for {plugin.key}") from exc
-        url = f"{base}/{request.path.lstrip('/')}"
+        url = f"{base}/{path.lstrip('/')}"
         slot = self._upstream_slot(plugin)
         if slot is not None and not slot.acquire(blocking=False):
             raise UpstreamBusy(plugin.key)
@@ -281,6 +294,7 @@ class CredentialGatewayService:
                 content=request.body,
                 sensitive_headers=outbound.sensitive_headers,
                 timeout=plugin.upstream_timeout_seconds,
+                public_only=plugin.upstream_public_only,
             )
         finally:
             if slot is not None:
@@ -392,6 +406,18 @@ class CredentialGatewayService:
         return decrypt_content(provider, ciphertext, self.config.agent_token_encryption_key)
 
 
+def _has_dot_segment(path: str) -> bool:
+    """Whether ``path`` holds a ``.`` or ``..`` segment at any level of URL encoding.
+
+    A raw path is forwarded as sent, so httpx won't collapse an encoded ``..``, but a proxy
+    in front of the upstream can, which would carry the credential out of the API prefix.
+    """
+    decoded = unquote(path)
+    while decoded != path:
+        path, decoded = decoded, unquote(decoded)
+    return any(segment in {".", ".."} for segment in decoded.replace("\\", "/").split("/"))
+
+
 def _gateway_token_value(authorization: str | None) -> str | None:
     if not authorization:
         return None
@@ -428,3 +454,5 @@ class ForwardRequest:
     headers: dict[str, str]
     params: dict[str, str]
     body: bytes
+    #: ``path`` before URL decoding, when the route could recover it.
+    encoded_path: str | None = None

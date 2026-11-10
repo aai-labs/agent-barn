@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 import httpx
 from injector import singleton
 
+from api.infrastructure.public_http import NonPublicDestination, pin_to_public_address
+
 #: Headers that describe one hop and must not be copied onto the next one.
 HOP_BY_HOP_HEADERS = frozenset(
     {
@@ -79,6 +81,7 @@ class UpstreamForwarder:
         content: bytes,
         sensitive_headers: frozenset[str] = frozenset({"authorization"}),
         timeout: float = DEFAULT_TIMEOUT,
+        public_only: bool = False,
     ) -> UpstreamResponse:
         """Send one upstream request, following redirects with care.
 
@@ -89,6 +92,9 @@ class UpstreamForwarder:
         provider-specific credential headers such as Pipedrive's ``x-api-token``. Agent
         internet access remains unrestricted; redirect handling does not rely on egress
         confinement.
+
+        ``public_only`` is for providers whose host the user chose: each hop, redirects
+        included, is resolved, refused unless public HTTPS, and pinned to what was checked.
         """
         try:
             with httpx.Client(timeout=timeout, follow_redirects=False) as client:
@@ -97,12 +103,14 @@ class UpstreamForwarder:
                 origin = httpx.URL(url)
                 origin_key = (origin.scheme, origin.host, origin.port)
                 for _ in range(_MAX_REDIRECTS + 1):
+                    pinned = pin_to_public_address(current_url) if public_only else None
                     response = client.request(
                         method,
-                        current_url,
-                        headers=current_headers,
+                        pinned.url if pinned else current_url,
+                        headers={**current_headers, **pinned.headers} if pinned else current_headers,
                         params=params or None,
                         content=content or None,
+                        extensions=pinned.extensions if pinned else None,
                     )
                     location = response.headers.get("location")
                     if not (response.is_redirect and location):
@@ -121,5 +129,5 @@ class UpstreamForwarder:
                     # duplicate or contradict it.
                     params = {}
                 raise UpstreamUnreachable(f"Exceeded {_MAX_REDIRECTS} redirects")
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, NonPublicDestination) as exc:
             raise UpstreamUnreachable(str(exc)) from exc
