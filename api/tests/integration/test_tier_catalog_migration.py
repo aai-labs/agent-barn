@@ -20,7 +20,7 @@ from api.domains.agents.models import Agent
 from api.domains.organizations.models import Organization
 from api.domains.tiers.models import SEED_TIERS
 
-PRE_MIGRATION_REVISION = "91d534425109"
+PRE_MIGRATION_REVISION = "c8e41f7a2d96"
 TIER_CATALOG_REVISION = "55e07653f502"
 ORGANIZATION_TIER_REVISION = "9b0aec4da777"
 TIER_HOLDS_REVISION = "53961518cfc3"

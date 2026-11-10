@@ -1,7 +1,7 @@
 """Add the Tier catalog, seeded from the public pricing page, and the payment grace period
 
 Revision ID: 55e07653f502
-Revises: 91d534425109
+Revises: c8e41f7a2d96
 Create Date: 2026-11-08
 
 Tiers, PR 1: a platform-managed catalog of what an Organization may use and what it pays.
@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.
 revision: str = "55e07653f502"
-down_revision: str | Sequence[str] | None = "91d534425109"
+down_revision: str | Sequence[str] | None = "c8e41f7a2d96"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
