@@ -1,6 +1,7 @@
 """Trial settings (AF-368): Platform Administrators set the credit a new trial
 Organization starts with, how many Agents a trial runs and how many trials may be active
-at once, and every change is audited."""
+at once, and every change is audited. A trial is an Organization on the Free Tier, so its
+credit and Agent limit are stored on the Free row (Tiers, PR 4)."""
 
 from uuid import uuid7
 
@@ -65,19 +66,20 @@ def _trial_setting_events(context) -> list[OutboxMessage]:
         )
 
 
-def test_signup_is_closed_with_zero_credit_until_an_administrator_configures_it():
+def test_signup_is_closed_until_an_administrator_configures_it():
     with given(_setup(a_platform_admin())) as context:
         with when("a Platform Administrator reads the trial settings"):
             response = context.client.get(BASE, headers=auth(context))
 
-        with then("safe defaults are shown, never saved"):
+        with then("signup is off, with the Free Tier's seeded credit and limit, never saved"):
             assert_that(response.status_code, equal_to(200))
             assert_that(
                 response.json(),
                 has_entries(
                     self_signup_enabled=False,
-                    credit_usd=0.0,
+                    credit_usd=10.0,
                     agent_limit=1,
+                    free_tier_offered=False,
                     max_active_trials=none(),
                     updated_at=none(),
                 ),
@@ -98,7 +100,21 @@ def test_a_platform_administrator_sets_the_trial_credit():
         with then("the change is audited with its before and after values"):
             events = _trial_setting_events(context)
             assert_that(events, has_length(1))
-            assert_that(events[0].payload, has_entries(previous=0.0, current=25.0))
+            assert_that(events[0].payload, has_entries(previous=10.0, current=25.0))
+
+
+def test_the_trial_credit_and_agent_limit_are_the_free_tiers():
+    with given(_setup(a_platform_admin())) as context:
+        with when("they set the credit and the agent limit"):
+            context.client.put(BASE, headers=auth(context), json={"credit_usd": 25, "agent_limit": 2})
+
+        with then("the Free Tier grants them"):
+            free = next(
+                tier
+                for tier in context.client.get("/api/v1/platform/tiers", headers=auth(context)).json()
+                if tier["key"] == "free"
+            )
+            assert_that(free, has_entries(one_time_credit_usd="25.00", agent_limit=2))
 
 
 def test_saving_the_same_credit_again_records_nothing_new():
@@ -137,7 +153,7 @@ def test_a_platform_administrator_caps_the_active_trials():
 
         with then("it is stored, and the other settings are left as they were"):
             assert_that(saved.status_code, equal_to(200), saved.text)
-            assert_that(saved.json(), has_entries(credit_usd=0.0, agent_limit=1, max_active_trials=20))
+            assert_that(saved.json(), has_entries(credit_usd=10.0, agent_limit=1, max_active_trials=20))
 
         with then("the change is audited, from no cap to the cap"):
             events = _trial_setting_events(context)
@@ -227,17 +243,18 @@ def test_signup_can_be_enabled_together_with_positive_credit_and_is_audited():
         events = {event.payload["setting"]: event.payload for event in _trial_setting_events(context)}
         assert_that(events["self_signup_enabled"], has_entries(previous=False, current=True))
         assert_that(type(events["self_signup_enabled"]["current"]), equal_to(bool))
-        assert_that(events["credit_usd"], has_entries(previous=0, current=20))
+        assert_that(events["credit_usd"], has_entries(previous=10, current=20))
 
 
 def test_signup_cannot_be_enabled_without_positive_credit():
     with given(_setup(a_platform_admin())) as context:
+        context.client.put(BASE, headers=auth(context), json={"credit_usd": 0})
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
         assert_that(response.status_code, equal_to(400))
         assert_that(
             context.client.get(BASE, headers=auth(context)).json(), has_entries(self_signup_enabled=False, credit_usd=0)
         )
-        assert_that(_trial_setting_events(context), has_length(0))
+        assert_that(_trial_setting_events(context), has_length(1))
 
 
 def test_credit_cannot_be_zeroed_while_signup_is_enabled():

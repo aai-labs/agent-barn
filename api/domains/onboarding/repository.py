@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -18,6 +19,7 @@ from api.domains.onboarding.models import (
     TrialGrant,
     TrialSettingsRead,
 )
+from api.domains.usage.plans import OrganizationPlans, TrialTerms
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 # Serializes trial settings changes, including creation of the singleton row.
@@ -32,27 +34,36 @@ _TRIAL_ADMISSION_LOCK = 732914107
 class TrialSettingsRepository:
     delegate: PostgresRepositoryDelegate
     outbox: OutboxMessageRepository
+    plans: OrganizationPlans
 
     def read(self) -> TrialSettingsRead:
         with Session(self.delegate.engine) as session:
-            return self._current(session.get(PlatformTrialSettings, 1))
+            return self._current(session.get(PlatformTrialSettings, 1), self.plans.trial_terms(session))
 
     @staticmethod
-    def _current(row: PlatformTrialSettings | None) -> TrialSettingsRead:
+    def _current(row: PlatformTrialSettings | None, terms: TrialTerms | None) -> TrialSettingsRead:
+        tier_values = (
+            {
+                "credit_usd": float(terms.credit_usd),
+                "agent_limit": terms.agent_limit,
+                "free_tier_offered": terms.offered,
+            }
+            if terms is not None
+            else {}
+        )
         if row is None:
-            return TrialSettingsRead()
+            return TrialSettingsRead(**tier_values)
         return TrialSettingsRead(
             self_signup_enabled=row.self_signup_enabled,
-            credit_usd=row.credit_usd,
-            agent_limit=row.agent_limit,
             max_active_trials=row.max_active_trials,
             updated_at=row.updated_at,
+            **tier_values,
         )
 
     def read_for_signup(self, session: Session) -> TrialSettingsRead:
         """Keep the admitted signup's policy and credit stable until its transaction ends."""
         session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock_shared({_TRIAL_SETTINGS_LOCK})"))
-        return self._current(session.get(PlatformTrialSettings, 1))
+        return self._current(session.get(PlatformTrialSettings, 1), self.plans.trial_terms(session))
 
     def lock_trial_admission(self, session: Session) -> None:
         """Held until the caller's transaction ends, so concurrent sign-ups count active
@@ -70,7 +81,8 @@ class TrialSettingsRepository:
         with Session(self.delegate.engine) as session:
             session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock({_TRIAL_SETTINGS_LOCK})"))
             row = session.get(PlatformTrialSettings, 1)
-            current = self._current(row)
+            terms = self.plans.trial_terms(session, for_update=True)
+            current = self._current(row, terms)
             moved = [
                 (setting, getattr(current, setting), value)
                 for setting, value in changes.items()
@@ -88,13 +100,14 @@ class TrialSettingsRepository:
                 PlatformTrialSettings(
                     id=1,
                     self_signup_enabled=stored.self_signup_enabled,
-                    credit_usd=stored.credit_usd,
-                    agent_limit=stored.agent_limit,
                     max_active_trials=stored.max_active_trials,
                     updated_at=now,
                     updated_by=actor_id,
                 )
             )
+            # The trial's credit and Agent limit are the trial plan's.
+            if terms is not None:
+                self.plans.store_trial_terms(session, Decimal(str(stored.credit_usd)), stored.agent_limit, now)
             correlation_id = uuid4()
             event_ids = []
             for setting, previous, value in moved:

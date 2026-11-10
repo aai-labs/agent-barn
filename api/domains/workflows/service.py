@@ -9,6 +9,7 @@ from injector import inject, singleton
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.workflows.models import (
     Workflow,
     WorkflowCapabilitiesRead,
@@ -32,6 +33,7 @@ class WorkflowService:
     repository: WorkflowRepository
     authorization: AgentAuthorization
     settings: PlatformWorkflowRepository
+    usage: UsageGuard
 
     def _authoring_enabled(self) -> bool:
         return self.settings.read().authoring_enabled
@@ -140,6 +142,7 @@ class WorkflowService:
 
     def create(self, agent_id: UUID, draft: WorkflowDraft, context: CurrentUserContext) -> WorkflowRead:
         self._require_authoring(agent_id, context)
+        self.usage.check(context.require_current_user_organization().organization_id, UsageAction.CREATE_WORKFLOW)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
         try:
             return self._read(self.repository.create(agent_id, draft, context.user.id, scope), context)

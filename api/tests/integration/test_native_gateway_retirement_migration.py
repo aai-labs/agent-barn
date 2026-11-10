@@ -93,7 +93,10 @@ def seed(engine, *, bulk=False):
                     enabled=platform != "telegram",
                 )
                 session.connection().execute(
-                    table.insert().values(**connection.model_dump(), driver_key_encrypted="historical-driver")
+                    table.insert().values(
+                        **{key: value for key, value in connection.model_dump().items() if key in table.c},
+                        driver_key_encrypted="historical-driver",
+                    )
                 )
                 session.flush()
                 for direction in CommunicationDirection:

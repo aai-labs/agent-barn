@@ -12,7 +12,7 @@ const KEY = createQueryKeyStructure("platform-billing-settings").detail("setting
 
 type BillingSettingsChange = Pick<
   BillingSettings,
-  "paymentsEnabled" | "minPurchaseUsd" | "maxPurchaseUsd" | "purchaseFeePercent"
+  "paymentsEnabled" | "minPurchaseUsd" | "maxPurchaseUsd" | "purchaseFeePercent" | "paymentGraceDays"
 >;
 
 export function useBillingSettings() {

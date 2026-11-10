@@ -35,7 +35,11 @@ export function GmailStep({
   agentId,
   onDone,
   onLater,
+  sharedBot = true,
+  planName,
 }: {
+  sharedBot?: boolean;
+  planName?: string;
   email: string;
   creditUsd: number | null;
   path: OnboardingPath;
@@ -119,6 +123,8 @@ export function GmailStep({
     <OnboardingShell
       step={3}
       path={path}
+      sharedBot={sharedBot}
+      planName={planName}
       email={email}
       creditUsd={creditUsd}
       title="Let your agent read your Gmail"

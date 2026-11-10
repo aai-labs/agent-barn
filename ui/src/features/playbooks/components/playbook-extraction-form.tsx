@@ -15,6 +15,7 @@ import type { Agent } from "@/features/agents/schemas";
 import { formatModelLabel, formatTokens } from "@/features/costs/format";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { toastError } from "@/shared/toast";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { usePlaybookPreview } from "../hooks/use-agent-playbook-runs";
 import { useOrganizationPlaybookRuns } from "../hooks/use-organization-playbook-runs";
@@ -55,7 +56,10 @@ export function PlaybookExtractionForm({ agent, hasActiveRun }: { agent: Agent; 
   // A playbook with an unpublished draft cannot take the next one until it is published or discarded.
   const chosenSkillId = skillId ?? targets.find((option) => !option.hasDraft)?.id ?? null;
   const targetReady = target === "new" ? name.trim().length > 0 : chosenSkillId !== null;
-  const blockedReason = hasActiveRun
+  const { tier, hasFeature } = useTierEntitlements();
+  const blockedReason = !hasFeature("templates_and_skills")
+    ? `Your organization's tier${tier?.name ? `, ${tier.name},` : ""} doesn't include playbooks.`
+    : hasActiveRun
     ? "A playbook extraction is already running for this Agent."
     : preview?.sessionCount === 0
       ? "There are no conversations in this period."

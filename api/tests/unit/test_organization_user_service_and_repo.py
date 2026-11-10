@@ -38,6 +38,7 @@ def test_organization_user_service_raises_404_when_membership_missing():
         user_repository=Mock(),
         permission_policy=Mock(),
         event_delivery_dispatcher=Mock(),
+        usage=Mock(),
     )
 
     assert_that(
@@ -58,6 +59,7 @@ def test_organization_user_service_maps_conflict_to_409():
         user_repository=Mock(),
         permission_policy=Mock(),
         event_delivery_dispatcher=Mock(),
+        usage=Mock(),
     )
     org_user = OrganizationUser(
         user_id=uuid7(),

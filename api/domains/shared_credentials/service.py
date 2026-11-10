@@ -28,6 +28,7 @@ from api.domains.shared_credentials.models import (
     SharedCredentialUpdate,
 )
 from api.domains.shared_credentials.repository import SharedCredentialRepository
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.integration_validators import (
     PROVIDER_VALIDATORS,
     format_validation_result,
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 class SharedCredentialService:
     repository: SharedCredentialRepository
     config: Config
+    usage: UsageGuard
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -65,6 +67,7 @@ class SharedCredentialService:
         self, data: SharedCredentialCreate, context: CurrentUserContext
     ) -> SharedCredentialRead:
         org_id = self._require_manager(context)
+        self.usage.check(org_id, UsageAction.ADD_INTEGRATION)
 
         if data.provider not in SHARED_CREDENTIAL_ALLOWED_PROVIDERS:
             raise HTTPException(

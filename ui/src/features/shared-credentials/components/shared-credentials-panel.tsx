@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Pagination } from "@/features/agents/components/pagination";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import type { SharedCredentialRead } from "../schemas";
 import { useSharedCredentials } from "../hooks/use-shared-credentials";
@@ -54,6 +56,8 @@ export function SharedCredentialsPanel() {
   const [page, setPage] = useState(1);
   const [drawer, setDrawer] = useState<DrawerMode | null>(null);
   const { canManage } = useActiveOrgRole();
+  const { tier, hasFeature } = useTierEntitlements();
+  const canAdd = hasFeature("integrations");
 
   const { credentials, total, isLoading, error, refetch } =
     useSharedCredentials({
@@ -127,7 +131,7 @@ export function SharedCredentialsPanel() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        {canManage && (
+        {canManage && canAdd && (
           <button
             className="af-btn af-btn-primary ml-auto"
             onClick={() => setDrawer({ kind: "create" })}
@@ -135,6 +139,7 @@ export function SharedCredentialsPanel() {
             <PlusIcon /> Connect credential
           </button>
         )}
+        {canManage && !canAdd && <div className="ml-auto"><TierLockedNote tierName={tier?.name} what="integrations" /></div>}
       </div>
 
       {isLoading && (
