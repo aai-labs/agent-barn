@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -46,8 +47,11 @@ _COMMAND_TIMEOUT_SECONDS = 150
 _SESSIONS_KEPT = 500
 # Task tool actions and command subcommands that change a Task; reading one is not recording work.
 _WRITE_ACTIONS = {"create", "status", "note", "attach", "remove_file"}
-# The command run as a command (at the start, or after ; & | ( or a newline), not merely mentioned.
-_COMMAND_WRITE = re.compile(r"(?:^|[;&|(\n])\s*agentbarn-task\s+(?:create|status|note|attach|remove-file)\b")
+# A command run as a command (at the start, or after ; & | ( or a newline, by name or full path),
+# not merely mentioned.
+_COMMAND_WRITE = re.compile(r"(?:^|[;&|(\n])\s*(?:\S*/)?agentbarn-task\s+(?:create|status|note|attach|remove-file)\b")
+# A file the Agent published for the user is part of the result, however it was written.
+_ARTIFACT_UPLOAD = re.compile(r"(?:^|[;&|(\n])\s*(?:\S*/)?agentbarn-artifacts\s+upload\s+([^;&|)\n]+)")
 _REDACTED = "[redacted]"
 # Credentials a user may paste into a request. The automatic Task's title and description
 # come from the request, and people across the Organization can read them.
@@ -133,11 +137,13 @@ _SMALL_TALK_WORDS = frozenset(
 
 _IN_TURN_REMINDER = (
     "[Agent Barn] This request has taken several steps and has no Task yet. Create one with the "
-    "agentbarn_task tool. Your files are attached and the Task is marked done when the turn ends."
+    "agentbarn_task tool. Files you write with your file-writing tool are attached and the Task is marked "
+    "done when the turn ends; attach any other file that is part of the result yourself."
 )
 _BEFORE_FINISHING_REMINDER = (
     "Before you finish: this turn produced files but recorded no Task. Create one with the agentbarn_task "
-    "tool (a body says what was done), then give your answer. Your files are attached to it for you."
+    "tool (a body says what was done), then give your answer. Files you wrote with your file-writing tool "
+    "are attached to it for you."
 )
 # Next to every request but small talk, as on OpenClaw: so the Task exists from the start of the
 # work, not the end. About 40 tokens.
@@ -151,8 +157,9 @@ _SCHEMA = {
     "name": _TOOL,
     "description": (
         "Record work that uses tools or produces files as a Task the people you work for can follow. "
-        "`create` one before you start (it starts in_progress); when your turn ends, the files you wrote are "
-        "attached and a Task still in_progress is marked done. Set `failed` (with a body saying why) or "
+        "`create` one before you start (it starts in_progress); when your turn ends, files you wrote with your "
+        "file-writing tool or published are attached and a Task still in_progress is marked done. Attach any "
+        "other file that is part of the result yourself. Set `failed` (with a body saying why) or "
         "`open` (waiting on the user) yourself."
     ),
     "parameters": {
@@ -347,6 +354,23 @@ def _written_paths(args, result) -> list[str]:
     return [path] if isinstance(path, str) and path else []
 
 
+def _published_paths(args) -> list[str]:
+    """Files a shell command published with `agentbarn-artifacts upload`. Workflow uploads (with
+    --attempt-id) belong to their run, not to a Task."""
+    command = args.get("command") if isinstance(args, dict) else None
+    if not isinstance(command, str):
+        return []
+    paths = []
+    for match in _ARTIFACT_UPLOAD.finditer(command):
+        try:
+            words = shlex.split(match.group(1))
+        except ValueError:
+            continue
+        if words and not any(word.startswith("--attempt-id") for word in words):
+            paths.append(words[0])
+    return paths
+
+
 def _touches_tasks(tool_name: str, args) -> bool:
     if tool_name == _TOOL:
         return True
@@ -434,6 +458,11 @@ def _track(
         if tool_name in _FILE_TOOLS and not _failed(result):
             turn["wrote_files"] = True
             for path in _written_paths(args, result):
+                turn["written"].add(os.path.normpath(os.path.join(_workspace(), path)))
+        published = [] if _failed(result) else _published_paths(args)
+        if published:
+            turn["wrote_files"] = True
+            for path in published:
                 turn["written"].add(os.path.normpath(os.path.join(_workspace(), path)))
     return turn
 

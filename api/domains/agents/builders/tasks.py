@@ -37,9 +37,12 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
   ones and the latest finished ones). If the request continues one, keep using
   it (set a finished one back to `in_progress`); otherwise `create` one with a
   short title.
-- The Task you worked on is marked `done` when your turn ends, and the files you
-  wrote are attached to it. `show` lists them; remove any that are not part of
-  the result with `remove_file`.
+- The Task you worked on is marked `done` when your turn ends. Files you write
+  with your file-writing tool, and files you publish with `agentbarn-artifacts`,
+  are attached to it for you. A file you produce another way, such as by running
+  code or a shell command, is not: attach it yourself if it is part of the result.
+  `show` lists a Task's files; remove any that are not part of the result with
+  `remove_file`.
 - If the work failed, set `failed` with a `body` saying why. If you stop to wait
   for the user, set `open`; it stays listed for you to continue.
 - Add a `body` (a note) only for a decision or problem worth knowing later.

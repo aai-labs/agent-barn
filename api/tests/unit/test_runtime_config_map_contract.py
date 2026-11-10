@@ -202,4 +202,5 @@ def test_the_instructions_point_users_to_their_tasks_when_they_ask_where_the_wor
 def test_the_instructions_leave_closing_and_attaching_to_the_plugin():
     instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
     assert "is marked `done` when your turn ends" in instructions
-    assert "the files you wrote are attached to it" in instructions
+    assert "Files you write with your file-writing tool, and files you publish with" in instructions
+    assert "attach it yourself if it is part of the result" in instructions

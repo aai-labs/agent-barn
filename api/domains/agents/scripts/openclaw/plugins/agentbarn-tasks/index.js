@@ -37,8 +37,11 @@ const COMMAND_TIMEOUT_MS = 150_000;
 const SESSIONS_KEPT = 500;
 // Task tool actions and command subcommands that change a Task; reading one is not recording work.
 const WRITE_ACTIONS = new Set(["create", "status", "note", "attach", "remove_file"]);
-// The command run as a command (at the start, or after ; & | ( or a newline), not merely mentioned.
-const COMMAND_WRITE = /(?:^|[;&|(\n])\s*agentbarn-task\s+(?:create|status|note|attach|remove-file)\b/;
+// A command run as a command (at the start, or after ; & | ( or a newline, by name or full path),
+// not merely mentioned.
+const COMMAND_WRITE = /(?:^|[;&|(\n])\s*(?:\S*\/)?agentbarn-task\s+(?:create|status|note|attach|remove-file)\b/;
+// A file the Agent published for the user is part of the result, however it was written.
+const ARTIFACT_UPLOAD = /(?:^|[;&|(\n])\s*(?:\S*\/)?agentbarn-artifacts\s+upload\s+([^;&|)\n]+)/g;
 const REDACTED = "[redacted]";
 // Credentials a user may paste into a request. The automatic Task's title and description
 // come from the request, and people across the Organization can read them.
@@ -73,8 +76,9 @@ const SMALL_TALK_WORDS = new Set(
 
 const IN_TURN_REMINDER =
   "This request has taken several steps and has no Task yet. Before you finish, create one with the " +
-  "agentbarn_task tool (a body says what was done). Your files are attached and the Task is marked done " +
-  "when the run ends.";
+  "agentbarn_task tool (a body says what was done). Files you write with your file-writing tool are " +
+  "attached and the Task is marked done when the run ends; attach any other file that is part of the " +
+  "result yourself.";
 // Next to every request but small talk, as on Hermes: in end-to-end runs OpenClaw's model did not
 // use the tool within the turn from the instructions alone, and it cannot be held back once a run
 // has side effects. About 40 tokens.
@@ -260,6 +264,19 @@ function writtenPaths(event) {
   return typeof path === "string" && path ? [path] : [];
 }
 
+// Files a shell command published with `agentbarn-artifacts upload`. Workflow uploads (with
+// --attempt-id) belong to their run, not to a Task.
+function publishedPaths(params) {
+  const command = params?.command;
+  if (typeof command !== "string") return [];
+  const paths = [];
+  for (const match of command.matchAll(ARTIFACT_UPLOAD)) {
+    const words = [...match[1].matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((word) => word[1] ?? word[2] ?? word[3]);
+    if (words.length && !words.some((word) => word.startsWith("--attempt-id"))) paths.push(words[0]);
+  }
+  return paths;
+}
+
 // Whether a Task call changed a Task: a write that did not fail. Reading Tasks is not recording work.
 function recordsTask(toolName, params, result, event = {}) {
   if (toolName !== TOOL) {
@@ -429,8 +446,9 @@ export default {
       label: "Agent Barn Task",
       description:
         "Record work that uses tools or produces files as a Task the people you work for can follow. `create` " +
-        "one before you start (it starts in_progress); when your run ends, the files you wrote are attached and " +
-        "a Task still in_progress is marked done. Set `failed` (with a body saying why) or `open` (waiting on " +
+        "one before you start (it starts in_progress); when your run ends, files you wrote with your " +
+        "file-writing tool or published are attached and a Task still in_progress is marked done. Attach any " +
+        "other file that is part of the result yourself. Set `failed` (with a body saying why) or `open` (waiting on " +
         "the user) yourself.",
       parameters: PARAMETERS,
       execute: executeTool,
@@ -454,6 +472,11 @@ export default {
         if (FILE_TOOLS.has(event.toolName) && !failed(event)) {
           state.wroteFiles = true;
           for (const path of writtenPaths(event)) state.written.add(resolvePath(workspace(), path));
+        }
+        const published = failed(event) ? [] : publishedPaths(event.params);
+        if (published.length) {
+          state.wroteFiles = true;
+          for (const path of published) state.written.add(resolvePath(workspace(), path));
         }
       }
     });

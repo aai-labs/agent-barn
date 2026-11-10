@@ -540,6 +540,50 @@ def test_files_a_patch_created_are_attached(tmp_path: Path):
     assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, str(notes), "--replace"]]))
 
 
+def test_a_file_the_agent_published_is_attached(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    (plugin.workspace / "states.csv").write_text("a,b\n")
+    plugin.tool_call(
+        "call-1",
+        command="cd /workspace && /usr/local/bin/agentbarn-artifacts upload states.csv",
+        result=json.dumps({"output": "{}", "exit_code": 0, "error": None}),
+    )
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, str(plugin.workspace / "states.csv"), "--replace"]]))
+
+
+def test_a_failed_publish_is_not_attached(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    (plugin.workspace / "states.csv").write_text("a,b\n")
+    plugin.tool_call(
+        "call-1",
+        command="agentbarn-artifacts upload states.csv",
+        result=json.dumps({"output": "refused", "exit_code": 1, "error": None}),
+    )
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_attaches(plugin), equal_to([]))
+
+
+def test_the_task_command_run_by_its_full_path_counts_as_recording(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    plugin.tool_call(
+        "call-2",
+        command="/usr/local/bin/agentbarn-task create --title=States",
+        result=json.dumps({"output": "{}", "exit_code": 0, "error": None}),
+    )
+
+    plugin.end_turn()
+
+    assert_that(_creates(plugin), equal_to([]))
+
+
 def test_nothing_about_attaching_is_said_within_the_turn_or_after_an_automatic_attach(tmp_path: Path):
     plugin = _Plugin(tmp_path)
     _wrote(plugin)
