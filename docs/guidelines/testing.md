@@ -140,6 +140,14 @@ real-adapter admission, thread-context, and group-DM button contracts.
 behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
 scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.
 
+`../../api/runtime_tests/test_openclaw_bots.py` is the OpenClaw equivalent and runs with
+the other OpenClaw runtime contracts (`OPENCLAW_TEST_IMAGE=<image> make test-api-runtime
+RUNTIME=openclaw`), offline. It renders a Parent Agent's gateway config with two Bots
+through the builders and proves the pinned image accepts it: the config validates, each
+Bot is its own agent with its own workspace, model provider and Telegram account, and
+every Bot key reference resolves, with a missing key unresolved for that Bot only. It
+must pass on every OpenClaw upgrade.
+
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
 doing so ran every commit on a PR branch twice. A branch without a pull request

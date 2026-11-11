@@ -8,6 +8,8 @@ from api.domains.agents.models import BOT_TRIGGER_BASE_PORT
 from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOOK_PORT
 
 _NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
+BOT_SECRET_ROOT = "/run/agentbarn/bots"
+BOT_CONFIG_ROOT = "/app/bots"
 
 _MIB = 1024**2
 _GIB = 1024**3
@@ -60,6 +62,37 @@ def _name_slug_label(name: str, fallback_id: UUID) -> str:
     edges); falls back to the given id so the label is never empty."""
     slug = _NON_LABEL_CHARS.sub("-", name.lower()).strip("-")[:63].strip("-")
     return slug or str(fallback_id)
+
+
+def bot_mounts(bot_ids: Sequence[UUID]) -> list[client.V1VolumeMount]:
+    mounts = []
+    for bot_id in bot_ids:
+        mounts.append(
+            client.V1VolumeMount(name=f"bot-{bot_id}-secret", mount_path=f"{BOT_SECRET_ROOT}/{bot_id}", read_only=True)
+        )
+        mounts.append(
+            client.V1VolumeMount(name=f"bot-{bot_id}-config", mount_path=f"{BOT_CONFIG_ROOT}/{bot_id}", read_only=True)
+        )
+    return mounts
+
+
+def bot_volumes(bot_ids: Sequence[UUID]) -> list[client.V1Volume]:
+    volumes = []
+    for bot_id in bot_ids:
+        resource = _resource_name(bot_id)
+        volumes.append(
+            client.V1Volume(
+                name=f"bot-{bot_id}-secret",
+                secret=client.V1SecretVolumeSource(secret_name=resource, optional=True, default_mode=0o444),
+            )
+        )
+        volumes.append(
+            client.V1Volume(
+                name=f"bot-{bot_id}-config",
+                config_map=client.V1ConfigMapVolumeSource(name=resource, optional=True),
+            )
+        )
+    return volumes
 
 
 def _setting_ids(settings: dict, key: str) -> list[str]:

@@ -17,7 +17,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules.
 - In transition: an OpenClaw Parent Agent can hold Bots, but starting it does not serve them yet; its pod runs the Parent Agent alone.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the multi-agent configuration builders.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, in-pod boot: `init-openclaw.js` replacing the multi-agent settings, `bot-setup.py` and `bot-run.py`.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,18 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-11 — AF-445 — OpenClaw multi-agent builders
+
+- Delivered, in `builders/openclaw.py` and not yet called by the service:
+  - `multi_agent_gateway_config` turns a parent's gateway config into a multi-agent one: explicit ownership with `main` as the system agent, one entry per Bot with its own workspace, agent directory and `litellm-bot-<slot>` provider, whose key is a file reference to `/tmp/agentbarn-keys/<bot-id>.json`.
+  - On a platform a Bot uses, the parent moves to account `default` and each Bot gets account `<bot-id>` with its own token references; the channel root keeps no policy. A platform only the parent uses stays as it was. Every account has a binding to its agent.
+  - Channel plugins and the observer cover every Bot's platform. Active memory covers every agent. Hindsight ignores `agent:<bot-id>:**` sessions, and a Bot's own memory setting never turns automatic memory on. `tools.agentToAgent` is off.
+  - `multi_agent_runtime_env` gives a parent with Bots `RUNTIME_MODEL=openclaw/main` and the union of platforms in `AGENTBARN_NATIVE_CHANNELS`.
+  - `build_deployment(bot_ids=...)` mounts each Bot's Secret and ConfigMap, and `build_config_map(bots_manifest=...)` ships `bots.json`.
+  - Without Bots every output is unchanged.
+- Changed: the per-Bot Secret and ConfigMap mounts moved to `builders/common.py`; the Hermes Deployment is unchanged. New image contract `runtime_tests/test_openclaw_bots.py`.
+- Follow-up: in-pod boot.
 
 ### 2026-11-11 — AF-445 — Bots on OpenClaw Parent Agents in the API
 

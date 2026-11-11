@@ -22,7 +22,7 @@ from .artifacts import (
     artifact_command_mount,
     artifact_command_volume,
 )
-from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids, bot_mounts, bot_volumes
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_TOOL_INSTRUCTIONS,
@@ -99,8 +99,6 @@ HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 # Persistent working directory for the agent's terminal and messaging layer.
 HERMES_WORKSPACE_DIR = "/workspace"
 BOT_ENV_DIR = "/run/agentbarn/env"
-BOT_SECRET_ROOT = "/run/agentbarn/bots"
-BOT_CONFIG_ROOT = "/app/bots"
 _BOT_ENV_VOLUME = "bot-env"
 _BOT_ENV_VOLUME_SIZE = "1Mi"
 _BOT_PASSTHROUGH_PREFIXES = ("AF_GATEWAY_", "MEMORY_", "ARTIFACT_", "GOG_")
@@ -583,41 +581,17 @@ def _bot_env(bot_ids: Sequence[UUID]) -> list[client.V1EnvVar]:
 def _bot_mounts(bot_ids: Sequence[UUID]) -> list[client.V1VolumeMount]:
     if not bot_ids:
         return []
-    mounts = [client.V1VolumeMount(name=_BOT_ENV_VOLUME, mount_path=BOT_ENV_DIR)]
-    for bot_id in bot_ids:
-        mounts.append(
-            client.V1VolumeMount(name=f"bot-{bot_id}-secret", mount_path=f"{BOT_SECRET_ROOT}/{bot_id}", read_only=True)
-        )
-        mounts.append(
-            client.V1VolumeMount(name=f"bot-{bot_id}-config", mount_path=f"{BOT_CONFIG_ROOT}/{bot_id}", read_only=True)
-        )
-    return mounts
+    return [client.V1VolumeMount(name=_BOT_ENV_VOLUME, mount_path=BOT_ENV_DIR), *bot_mounts(bot_ids)]
 
 
 def _bot_volumes(bot_ids: Sequence[UUID]) -> list[client.V1Volume]:
     if not bot_ids:
         return []
-    volumes = [
-        client.V1Volume(
-            name=_BOT_ENV_VOLUME,
-            empty_dir=client.V1EmptyDirVolumeSource(medium="Memory", size_limit=_BOT_ENV_VOLUME_SIZE),
-        )
-    ]
-    for bot_id in bot_ids:
-        resource = _resource_name(bot_id)
-        volumes.append(
-            client.V1Volume(
-                name=f"bot-{bot_id}-secret",
-                secret=client.V1SecretVolumeSource(secret_name=resource, optional=True, default_mode=0o444),
-            )
-        )
-        volumes.append(
-            client.V1Volume(
-                name=f"bot-{bot_id}-config",
-                config_map=client.V1ConfigMapVolumeSource(name=resource, optional=True),
-            )
-        )
-    return volumes
+    env_volume = client.V1Volume(
+        name=_BOT_ENV_VOLUME,
+        empty_dir=client.V1EmptyDirVolumeSource(medium="Memory", size_limit=_BOT_ENV_VOLUME_SIZE),
+    )
+    return [env_volume, *bot_volumes(bot_ids)]
 
 
 def build_hermes_deployment(
