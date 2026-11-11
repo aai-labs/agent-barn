@@ -129,7 +129,7 @@ An organization-owned AI worker configured from one active shared Template Versi
 _Avoid_: bot (except a Bot), pod
 
 **Bot**:
-An Agent created inside a Parent Agent. It has its own Template, Skills, Agent Secrets, Communication Connections, Configured Model, Agent Memory and Agent Access, and runs as a Hermes profile in its Parent Agent's pod. Bots share their Parent Agent's trust boundary, so a Bot is not a security boundary. Not yet available; see [Agent Bots](docs/features/agent-bots.md).
+An Agent created inside a Parent Agent. It has its own Template, Skills, Agent Secrets, Communication Connections, Configured Model, Agent Memory and Agent Access, and runs in its Parent Agent's pod as a Hermes profile or an OpenClaw agent. Bots share their Parent Agent's trust boundary, so a Bot is not a security boundary. Not yet available; see [Agent Bots](docs/features/agent-bots.md).
 _Avoid_: persona, profile, sub-agent, child Agent
 
 **Parent Agent**:
@@ -477,7 +477,7 @@ _Avoid_: webhook
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
-- A **Parent Agent** holds up to five **Bots**, all Hermes and in its Organization. A **Bot** never holds Bots, counts toward the Organization's Agent limit, and cannot share a Platform family with its **Parent Agent**.
+- A **Parent Agent** holds up to five **Bots**, all on its Runtime and in its Organization. A **Bot** never holds Bots, counts toward the Organization's Agent limit, and connects Platforms through its own bot installs, including Platforms its **Parent Agent** also uses.
 - An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Playbook Extraction** reads one source **Agent** and writes into one **Organization Skill**'s **Skill Draft**; a **Playbook** may be refreshed by later extractions from the same or other Agents.

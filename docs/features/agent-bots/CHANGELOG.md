@@ -1,8 +1,8 @@
 # Agent Bots — change log
 
 Status: Active
-Epic: AF-425
-Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md`](../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md), [`../rbac/IMPLEMENTATION-BRIEF.md`](../rbac/IMPLEMENTATION-BRIEF.md), [`../../guidelines/epics.md`](../../guidelines/epics.md)
+Epic: AF-425 (Hermes), AF-445 (OpenClaw)
+Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md`](../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md), [`../../adr/2026-11-11-openclaw-bots-are-agents-in-the-parent-gateway.md`](../../adr/2026-11-11-openclaw-bots-are-agents-in-the-parent-gateway.md), [`../rbac/IMPLEMENTATION-BRIEF.md`](../rbac/IMPLEMENTATION-BRIEF.md), [`../../guidelines/epics.md`](../../guidelines/epics.md)
 
 ## Current state
 
@@ -15,8 +15,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `GET /agents/{id}/bots`;
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
-- In transition: nothing.
-- Next: the full end-to-end run in local k3d on a fresh API image.
+- OpenClaw (AF-445): the feature contract, terminology and ADR. Nothing in code yet; OpenClaw Parent Agents are still refused with 400.
+- In transition: the docs describe OpenClaw Bots ahead of the code.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the migration letting a Parent Agent and its Bots share either runtime.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -50,7 +51,39 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
+## OpenClaw runtime evidence
+
+From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real OpenClaw Parent Agent and two Bots, created through the API, served as three agents by one gateway with a hand-built configuration. Later slices may rely on these.
+
+**Observed working:**
+- `openclaw config validate` accepted `agents.ownership: "explicit"`, `main` plus two Bot entries, and per-Bot workspace, agent directory and model. Each agent answered through `openclaw/<id>`, and its commands ran in its own workspace.
+- One model provider per Bot, `litellm-bot-<slot>`, with a file secret reference: a Bot's call was billed to its own LiteLLM key only.
+- A `before_tool_call` plugin on `exec` at priority -1000 gave each agent its own `AGENT_ID` and artifact key, in foreground and background commands. A model-supplied `env` could not override them, and a test value never appeared in sessions, state, logs or the `tool_call` table.
+- Two Slack apps, two Telegram bots and two Discord bots, as `default` and Bot accounts in one gateway, each replied as itself, and each conversation landed in its own agent's sessions.
+- A scheduled job created with `--agent <bot>` ran as that Bot. On Telegram, the Bot's jobs, pinned to its account or not, posted from the Bot's account, and the Parent Agent's from `default`.
+- `openclaw channels status --probe --json` reported each account's connection.
+- With one Bot's Secret missing, that Bot failed closed with no fallback key; the Parent Agent and the other Bot kept working.
+- A Parent Agent's sessions continued as `agent:main:…` after Bots were added, and with its old key after the last Bot was removed.
+
+**Observed behaviour that shapes the design:**
+- `openclaw/default` fails once there are several agents, so a Parent Agent with Bots is reached as `openclaw/main`.
+- Session keys without an agent prefix fail with several agents; they must be `agent:<id>:…`.
+- The file secret provider refuses a symlink, and Secret volume files are symlinks, so Bot keys are copied at boot into private files.
+- `init-openclaw.js` merges into the volume's `openclaw.json`, so removing the last Bot left multi-agent settings that broke `openclaw/default` until they were deleted.
+- Every tool call was filed under the Parent Agent, because `telemetry-push` reads one `AGENT_ID`.
+- Agent Barn's `agentbarn-tasks` plugin, on staging and not on this branch, shows the Parent Agent's Tasks to every agent in the pod. It needs per-Bot identity on both runtimes.
+
+**Measured:** Parent Agent with two Bots, 578 MiB during a scheduled run and 890 MiB idle later, with six platform accounts connected.
+
+**Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
+
 ## Changes
+
+### 2026-11-11 — AF-445 — OpenClaw Bots documentation
+
+- Delivered: the OpenClaw Bots contract in the feature doc, the runtime-neutral Bot terms, the ADR, and the OpenClaw spike evidence.
+- Changed: docs only. `CONTEXT.md` drops the superseded rule that a Bot cannot share a Platform with its Parent Agent.
+- Follow-up: the migration letting a Parent Agent and its Bots share either runtime.
 
 ### 2026-11-09 — AF-425 — Staging merge
 
