@@ -19,6 +19,7 @@ _EXPECTED_PROVIDER_NAMES = {
     "Gmail",
     "Bitbucket",
     "Google Drive",
+    "Google Workspace",
     "Excel",
     "HubSpot",
     "Merkys",
@@ -72,6 +73,18 @@ def test_gmail_skill_requires_the_gmail_credential():
         "aai-gmail/SKILL.md",
         "aai-gmail/references/command-reference.md",
     }
+
+
+def test_google_workspace_skill_requires_the_google_workspace_credential():
+    (skill_def,) = [s for s in AAI_CLI_PROVIDER_SKILLS if s["slug"] == "aai-google-workspace"]
+    assert skill_def["required_providers"] == [SecretProvider.GOOGLE_WORKSPACE]
+    assert {f["skill_file_path"] for f in skill_def["files"]} == {"aai-google-workspace/SKILL.md"}
+
+
+def test_google_workspace_skill_points_at_gog_rather_than_aai_cli():
+    (skill_def,) = [s for s in AAI_CLI_PROVIDER_SKILLS if s["slug"] == "aai-google-workspace"]
+    assert "gog" in skill_def["tools_pointer"]
+    assert "aai-cli" not in skill_def["tools_pointer"]
 
 
 def test_credential_free_skills_declare_no_providers():

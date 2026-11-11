@@ -169,6 +169,48 @@ def test_callback_propagates_google_denial():
     assert "access_denied" in msg["error"]
 
 
+def test_callback_still_posts_to_the_opener():
+    cfg = _config()
+    state = oauth._encode_state(cfg, "google_workspace")
+    html = oauth.google_callback(config=cfg, code="auth-code", state=state, error=None).body.decode()
+    assert 'window.opener.postMessage(msg, "http://localhost:3000")' in html
+
+
+def test_callback_relays_the_result_over_the_broadcast_channel():
+    cfg = _config()
+    state = oauth._encode_state(cfg, "google_workspace")
+    html = oauth.google_callback(config=cfg, code="auth-code", state=state, error=None).body.decode()
+    assert 'new BroadcastChannel("google-oauth")' in html
+    assert "channel.postMessage(msg)" in html
+    assert _extract_message(html)["state"] == state
+
+
+def test_callback_relays_a_google_denial_with_its_state():
+    cfg = _config()
+    state = oauth._encode_state(cfg, "google_workspace")
+    msg = _extract_message(
+        oauth.google_callback(config=cfg, code=None, state=state, error="access_denied").body.decode()
+    )
+    assert "access_denied" in msg["error"]
+    assert msg["state"] == state
+
+
+def test_callback_never_relays_a_code_for_an_invalid_state():
+    msg = _extract_message(oauth.google_callback(config=_config(), code="c", state="bad", error=None).body.decode())
+    assert "code" not in msg
+
+
+def test_callback_escapes_a_hostile_state():
+    hostile = "</script><script>alert(1)</script>"
+    html = oauth.google_callback(config=_config(), code=None, state=hostile, error="denied").body.decode()
+    assert hostile not in html
+
+
+def test_callback_omits_state_when_google_sent_none():
+    msg = _extract_message(oauth.google_callback(config=_config(), code=None, state=None, error="denied").body.decode())
+    assert "state" not in msg
+
+
 # --- token exchange ---
 
 

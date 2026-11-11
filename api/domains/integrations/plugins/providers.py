@@ -682,7 +682,7 @@ class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
     #: OAuth-based, so its consent is per-agent and it cannot be an org-scoped
     #: Shared Credential.
     shared_credential_eligible = False
-    bundled_skill_slugs = ()
+    bundled_skill_slugs = ("aai-google-workspace",)
 
     def validate_external(self, content: GoogleWorkspaceContent) -> IntegrationValidationResult:
         return validate_google_workspace(content)
