@@ -7,9 +7,9 @@ from uuid import uuid7
 
 import pytest
 from hamcrest import assert_that, equal_to, has_entries, has_length, none, not_none
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
-from api.domains.events.catalog import PLATFORM_TRIAL_SETTINGS_CHANGED
+from api.domains.events.catalog import PLATFORM_TIER_CHANGED, PLATFORM_TRIAL_SETTINGS_CHANGED
 from api.domains.events.models import OutboxMessage
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
@@ -58,12 +58,25 @@ def auth(context):
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _trial_setting_events(context) -> list[OutboxMessage]:
+def _events(context, event_name: str) -> list[OutboxMessage]:
     delegate = context.injector.get(PostgresRepositoryDelegate)
     with Session(delegate.engine) as session:
         return list(
-            session.exec(select(OutboxMessage).where(OutboxMessage.event_name == PLATFORM_TRIAL_SETTINGS_CHANGED))
+            session.exec(
+                select(OutboxMessage)
+                .where(OutboxMessage.event_name == event_name)
+                .order_by(col(OutboxMessage.created_at))
+            )
         )
+
+
+def _trial_setting_events(context) -> list[OutboxMessage]:
+    return _events(context, PLATFORM_TRIAL_SETTINGS_CHANGED)
+
+
+def _free_tier_events(context) -> list[OutboxMessage]:
+    """The trial's credit and Agent limit are the Free Tier's, audited as its changes."""
+    return _events(context, PLATFORM_TIER_CHANGED)
 
 
 def test_signup_is_closed_until_an_administrator_configures_it():
@@ -97,10 +110,10 @@ def test_a_platform_administrator_sets_the_trial_credit():
             read = context.client.get(BASE, headers=auth(context))
             assert_that(read.json(), has_entries(credit_usd=25.0))
 
-        with then("the change is audited with its before and after values"):
-            events = _trial_setting_events(context)
+        with then("the change is audited as the Free Tier's, with its before and after values"):
+            events = _free_tier_events(context)
             assert_that(events, has_length(1))
-            assert_that(events[0].payload, has_entries(previous=10.0, current=25.0))
+            assert_that(events[0].payload, has_entries(setting="one_time_credit_usd", previous=10.0, current=25.0))
 
 
 def test_the_trial_credit_and_agent_limit_are_the_free_tiers():
@@ -126,7 +139,7 @@ def test_saving_the_same_credit_again_records_nothing_new():
 
         with then("no second change is audited"):
             assert_that(response.status_code, equal_to(200))
-            assert_that(_trial_setting_events(context), has_length(1))
+            assert_that(_free_tier_events(context), has_length(1))
 
 
 def test_a_platform_administrator_sets_the_trial_agent_limit():
@@ -141,9 +154,9 @@ def test_a_platform_administrator_sets_the_trial_agent_limit():
             assert_that(saved.json(), has_entries(credit_usd=25.0, agent_limit=3))
 
         with then("each change is audited on its own"):
-            events = _trial_setting_events(context)
+            events = _free_tier_events(context)
             assert_that(events, has_length(2))
-            assert_that(events[1].payload, has_entries(setting="agent_limit", previous=1.0, current=3.0))
+            assert_that(events[1].payload, has_entries(setting="agent_limit", previous=1, current=3))
 
 
 def test_a_platform_administrator_caps_the_active_trials():
@@ -243,7 +256,8 @@ def test_signup_can_be_enabled_together_with_positive_credit_and_is_audited():
         events = {event.payload["setting"]: event.payload for event in _trial_setting_events(context)}
         assert_that(events["self_signup_enabled"], has_entries(previous=False, current=True))
         assert_that(type(events["self_signup_enabled"]["current"]), equal_to(bool))
-        assert_that(events["credit_usd"], has_entries(previous=10, current=20))
+        (credit,) = _free_tier_events(context)
+        assert_that(credit.payload, has_entries(setting="one_time_credit_usd", previous=10, current=20))
 
 
 def test_signup_cannot_be_enabled_without_positive_credit():
@@ -254,7 +268,8 @@ def test_signup_cannot_be_enabled_without_positive_credit():
         assert_that(
             context.client.get(BASE, headers=auth(context)).json(), has_entries(self_signup_enabled=False, credit_usd=0)
         )
-        assert_that(_trial_setting_events(context), has_length(1))
+        assert_that(_trial_setting_events(context), has_length(0))
+        assert_that(_free_tier_events(context), has_length(1))
 
 
 def test_credit_cannot_be_zeroed_while_signup_is_enabled():
@@ -265,7 +280,8 @@ def test_credit_cannot_be_zeroed_while_signup_is_enabled():
         assert_that(
             context.client.get(BASE, headers=auth(context)).json(), has_entries(self_signup_enabled=True, credit_usd=20)
         )
-        assert_that(_trial_setting_events(context), has_length(2))
+        assert_that(_trial_setting_events(context), has_length(1))
+        assert_that(_free_tier_events(context), has_length(1))
 
 
 def test_disabling_signup_allows_zero_credit_in_the_same_save():

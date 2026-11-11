@@ -606,8 +606,8 @@ charges nothing; it is a deployment setting (the `tiersMockPayments` API chart v
 default, and must stay off wherever customers pay. Locally, set it in `.env` and restart the
 API. Subscriptions also need a paid Tier offered under **Tiers**.
 
-The `tier-sweep` CronJob (`tierSweep` chart values, every five minutes) ends demo
-subscription periods that have run out (Stripe renews its own), ends subscriptions past due
+The `tier-sweep` CronJob (`tierSweep` chart values, every five minutes) finishes
+subscription activations that stopped partway, ends demo subscription periods that have run out (Stripe renews its own), ends subscriptions past due
 for longer than the payment grace period (cancelling them at Stripe), applies the Tier Holds
 of Organizations whose choosing time is up, and stops any held Agent still running. It needs the API's Secret and, like cost sync, the
 cluster access to stop and restart Agents and

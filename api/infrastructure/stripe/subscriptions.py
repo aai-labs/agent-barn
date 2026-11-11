@@ -258,6 +258,35 @@ class StripeSubscriptions:
         except stripe.StripeError as exc:
             raise PaymentProviderUnavailable(str(exc)) from exc
 
+    def refund_latest_payment(self, subscription_id: str) -> None:
+        """Refund what the subscription's latest invoice took, for a subscription that should
+        never have been bought. One already refunded stays as it is."""
+        try:
+            data = self._stripe().v1.subscriptions.retrieve(subscription_id).to_dict()
+            invoice_id = _id(data.get("latest_invoice"))
+            if not invoice_id:
+                return
+            payments = self._stripe().v1.invoice_payments.list(
+                params={"invoice": invoice_id, "status": "paid", "limit": 10}
+            )
+            for payment in payments.data:
+                paid_with = payment.to_dict().get("payment") or {}
+                if paid_with.get("payment_intent"):
+                    target = {"payment_intent": _id(paid_with["payment_intent"])}
+                elif paid_with.get("charge"):
+                    target = {"charge": _id(paid_with["charge"])}
+                else:
+                    continue
+                try:
+                    self._stripe().v1.refunds.create(
+                        params={**target, "metadata": {"agent_barn_subscription": subscription_id}}
+                    )
+                except stripe.InvalidRequestError as exc:
+                    if exc.code != "charge_already_refunded":
+                        raise PaymentProviderUnavailable(str(exc)) from exc
+        except stripe.StripeError as exc:
+            raise PaymentProviderUnavailable(str(exc)) from exc
+
     def portal_url(self, customer_id: str, return_url: str) -> str:
         """Stripe's page for the card, billing details and invoices."""
         try:

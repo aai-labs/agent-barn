@@ -6,17 +6,8 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
-from api.domains.organizations.models import PlatformOrganizationRead
-from api.domains.tiers.assignment import TierAssignmentService
 from api.domains.tiers.holds import TierHoldService
-from api.domains.tiers.models import (
-    OrganizationTierAssignment,
-    PublicTierRead,
-    TierCreate,
-    TierHoldsRead,
-    TierRead,
-    TierUpdate,
-)
+from api.domains.tiers.models import PublicTierRead, TierCreate, TierHoldsRead, TierRead, TierUpdate
 from api.domains.tiers.repository import TierRepository
 from api.domains.tiers.service import TierService
 
@@ -106,18 +97,3 @@ public_tiers_router = APIRouter(prefix="/tiers", tags=["tiers"])
 def list_offered_tiers(repository: Annotated[TierRepository, Injected(TierRepository)]):
     """The Tiers offered to new Organizations, in catalog order."""
     return [tier for tier in repository.list_offered() if tier.agent_limit > 0]
-
-
-# A Platform Administrator's view of one Organization, beside the Platform Organization routes.
-platform_organization_tier_router = APIRouter(prefix="/platform/organizations", tags=["platform-organizations"])
-
-
-@platform_organization_tier_router.put("/{organization_id}/tier", response_model=PlatformOrganizationRead)
-def set_organization_tier(
-    organization_id: UUID,
-    data: OrganizationTierAssignment,
-    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
-    service: Annotated[TierAssignmentService, Injected(TierAssignmentService)],
-):
-    """Put an Organization on a Tier; null takes it off any Tier."""
-    return service.assign(organization_id, data.tier_id, context)

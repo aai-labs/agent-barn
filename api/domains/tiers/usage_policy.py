@@ -1,11 +1,10 @@
 """The Tier's answer to `UsageGuard`: the one place that decides what an Organization's Tier
 lets it start using.
 
-It also gives other domains' reads their `UsageSummary`. For a check, it loads the
-Organization's Tier and chooses a strategy for it: no Tier is unrestricted, and
-any Tier is checked against its catalog row (the none Tier's row allows nothing). Inside
-a strategy, each action has one rule (a feature, a Platform, the premade Agent, or a paid
-Tier), so a new action is a row in `_RULES` rather than a check in another domain.
+It also gives other domains' reads their `UsageSummary`. No Tier is unrestricted; any Tier
+is checked against its catalog row (the none Tier's row allows nothing). Each action has
+one rule (a feature, a Platform, the premade Agent, or a paid Tier), so a new action is a
+row in `_RULES` rather than a check in another domain.
 """
 
 from abc import ABC, abstractmethod
@@ -20,6 +19,7 @@ from api.domains.tiers.models import (
     Tier,
     TierActivation,
     TierFeature,
+    agent_limit_in_force,
     allows_feature,
     allows_platform,
 )
@@ -140,56 +140,27 @@ _RULES: dict[UsageAction, _Rule] = {
 }
 
 
-# --- strategies: how an Organization's Tier is checked ----------------------------------------
-
-
-class _Strategy(ABC):
-    @abstractmethod
-    def allows(self, rule: _Rule, subject: UsageSubject) -> bool: ...
-
-    @abstractmethod
-    def refusal(self, rule: _Rule, subject: UsageSubject, upgrades: list[Tier]) -> HTTPException: ...
-
-
-class _Unrestricted(_Strategy):
-    """No Tier: the Organization is platform-managed and may use everything."""
-
-    def allows(self, rule: _Rule, subject: UsageSubject) -> bool:
-        return True
-
-    def refusal(self, rule: _Rule, subject: UsageSubject, upgrades: list[Tier]) -> HTTPException:
-        raise AssertionError("an unrestricted Organization is never refused")
-
-
-@dataclass(frozen=True)
-class _CatalogTier(_Strategy):
-    """What the Tier's catalog row allows."""
-
-    tier: Tier
-
-    def allows(self, rule: _Rule, subject: UsageSubject) -> bool:
-        return rule.allowed(self.tier, subject)
-
-    def refusal(self, rule: _Rule, subject: UsageSubject, upgrades: list[Tier]) -> HTTPException:
-        upgrade = next((tier for tier in upgrades if rule.allowed(tier, subject)), None)
-        return rule.refusal(self.tier, subject, upgrade)
-
-
 @inject
 @singleton
 @dataclass
 class TierUsagePolicy(UsageGuard):
     repository: TierRepository
 
+    """No Tier is unrestricted: the Organization is platform-managed. Any Tier, the none Tier
+    included, allows what its catalog row does, by each action's rule in `_RULES`."""
+
     def allows(self, organization_id: UUID, action: UsageAction, subject: UsageSubject | None = None) -> bool:
-        return self._strategy(organization_id).allows(_RULES[action], subject or UsageSubject())
+        tier = self.repository.for_organization(organization_id)
+        return tier is None or _RULES[action].allowed(tier, subject or UsageSubject())
 
     def check(self, organization_id: UUID, action: UsageAction, subject: UsageSubject | None = None) -> None:
         subject = subject or UsageSubject()
-        strategy = self._strategy(organization_id)
+        tier = self.repository.for_organization(organization_id)
         rule = _RULES[action]
-        if not strategy.allows(rule, subject):
-            raise strategy.refusal(rule, subject, self._upgrades())
+        if tier is None or rule.allowed(tier, subject):
+            return
+        upgrade = next((offered for offered in self._upgrades() if rule.allowed(offered, subject)), None)
+        raise rule.refusal(tier, subject, upgrade)
 
     def summary(self, organization_id: UUID, *, coverage: bool = False) -> UsageSummary:
         tier = self.repository.for_organization(organization_id)
@@ -209,19 +180,16 @@ class TierUsagePolicy(UsageGuard):
             over_limit=coverage and is_over_tier(tier, self.repository.coverage(organization_id)),
         )
 
-    def _strategy(self, organization_id: UUID) -> _Strategy:
-        tier = self.repository.for_organization(organization_id)
-        return _Unrestricted() if tier is None else _CatalogTier(tier)
-
     def _upgrades(self) -> list[Tier]:
         """Offered Tiers that run Agents, in catalog order: where a refusal points."""
         return [tier for tier in self.repository.list_offered() if tier.agent_limit > 0]
 
 
 def is_over_tier(tier: Tier, coverage: TierCoverage) -> bool:
-    """Whether the Organization already runs more than its Tier covers."""
+    """Whether the Organization already runs more than its Tier covers. Agents are counted
+    against the limit in force, the Organization's own limit before its Tier's, as holds are."""
     return (
-        coverage.agents > tier.agent_limit
+        coverage.agents > agent_limit_in_force(coverage.own_agent_limit, tier)
         or any(not allows_platform(tier, key) for key in coverage.enabled_platform_keys)
         or (coverage.memory_agents > 0 and not allows_feature(tier, TierFeature.AGENT_MEMORY))
         or (coverage.enabled_webhooks > 0 and not allows_feature(tier, TierFeature.AGENT_WEBHOOKS))

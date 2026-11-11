@@ -19,7 +19,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.lookup import OrganizationLookupService
-from api.domains.organizations.models import CreditGrantCreate, CreditGrantKind
+from api.domains.organizations.models import CreditGrantCreate, CreditGrantKind, Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.organizations.service import OrganizationService
 from api.domains.rbac.catalog import PermissionKey
@@ -70,7 +70,12 @@ class SubscriptionService:
     Activation puts the Organization on the Tier, ends a trial, grants the Tier's one-time
     credit (once per Organization) and the first period's allowance. Each period's end
     expires what is left of its allowance, then renews or ends the subscription; ending
-    drops the Organization to Free and holds what Free doesn't cover.
+    drops the Organization to Free and holds what Free doesn't cover, unless a Platform
+    Administrator chose its Tier.
+
+    Every change to an Organization's subscription is made under its lock
+    (`SubscriptionRepository.organization_lock`), whoever makes it: the Owner, a Platform
+    Administrator, the sweep or the provider's events.
     """
 
     repository: SubscriptionRepository
@@ -157,6 +162,19 @@ class SubscriptionService:
                 detail="A platform administrator chose this organization's tier. Contact them to change it.",
             )
         actor = self._actor(context, organization_id)
+        with self.repository.organization_lock(organization_id):
+            return self._start(organization, tier, provider, actor, context, return_to)
+
+    def _start(
+        self,
+        organization: Organization,
+        tier: Tier,
+        provider: SubscriptionProvider,
+        actor: _Actor,
+        context: CurrentUserContext,
+        return_to: str,
+    ) -> SubscriptionStartRead:
+        organization_id = organization.id
         live = self.repository.live_for(organization_id)
         if live is not None:
             return SubscriptionStartRead(outcome="active", subscription=self._change_tier(live, tier, actor))
@@ -191,26 +209,29 @@ class SubscriptionService:
     ) -> SubscriptionRead:
         """Cancel at the end of the period, or take a scheduled cancellation back."""
         self._require_billing(context, organization_id)
-        live = self.repository.live_for(organization_id)
-        if live is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This organization has no subscription.")
-        if live.cancel_at_period_end == cancel:
-            return self._read(live)
-        with _provider_errors():
-            self._provider_for(live).cancel_at_period_end(live, cancel)
-        live.cancel_at_period_end = cancel
-        if cancel:
-            # A cancellation ends the subscription as it is; a scheduled downgrade goes with it.
-            live.scheduled_tier_id = None
-            live.provider_schedule_id = None
-        actor = self._actor(context, organization_id)
-        saved = self._save(
-            live,
-            ORGANIZATION_SUBSCRIPTION_CHANGED,
-            actor,
-            change="cancel_scheduled" if cancel else "cancel_withdrawn",
-        )
-        return self._read(saved)
+        with self.repository.organization_lock(organization_id):
+            live = self.repository.live_for(organization_id)
+            if live is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="This organization has no subscription."
+                )
+            if live.cancel_at_period_end == cancel:
+                return self._read(live)
+            with _provider_errors():
+                self._provider_for(live).cancel_at_period_end(live, cancel)
+            live.cancel_at_period_end = cancel
+            if cancel:
+                # A cancellation ends the subscription as it is; a scheduled downgrade goes with it.
+                live.scheduled_tier_id = None
+                live.provider_schedule_id = None
+            actor = self._actor(context, organization_id)
+            saved = self._save(
+                live,
+                ORGANIZATION_SUBSCRIPTION_CHANGED,
+                actor,
+                change="cancel_scheduled" if cancel else "cancel_withdrawn",
+            )
+            return self._read(saved)
 
     def portal(self, organization_id: UUID, context: CurrentUserContext) -> SubscriptionPortal:
         """The payment provider's page for the card, billing details and invoices."""
@@ -229,16 +250,33 @@ class SubscriptionService:
     def end_period_now(self, organization_id: UUID, context: CurrentUserContext) -> SubscriptionRead | None:
         """End the current period now, as if it had run out: for demonstrating renewal."""
         context.require_platform_admin()
+        with self.repository.organization_lock(organization_id):
+            live = self.repository.live_for(organization_id)
+            if live is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="This organization has no subscription."
+                )
+            if not self._provider_for(live).renews_itself():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Only demo subscriptions can end their period early; a payment provider renews this one.",
+                )
+            self.end_period(live, self._actor(context, organization_id), now=datetime.now(UTC))
+            return self.read(organization_id)
+
+    def end_for_assignment(self, organization_id: UUID, actor: _Actor) -> None:
+        """A Platform Administrator is choosing the Organization's Tier: stop charging now and
+        end the subscription, leaving the Tier to them. Call under the Organization's lock,
+        before the assignment; nothing changes here when the provider can't be reached."""
         live = self.repository.live_for(organization_id)
         if live is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This organization has no subscription.")
-        if not self._provider_for(live).renews_itself():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Only demo subscriptions can end their period early; a payment provider renews this one.",
-            )
-        self.end_period(live, self._actor(context, organization_id), now=datetime.now(UTC))
-        return self.read(organization_id)
+            return
+        with _provider_errors():
+            self._provider_for(live).end_now(live)
+        self._expire_allowance(live, actor)
+        live.status = SubscriptionStatus.CANCELED.value
+        live.canceled_at = datetime.now(UTC)
+        self._save(live, ORGANIZATION_SUBSCRIPTION_ENDED, actor, change="tier_assigned")
 
     def read_for_platform(self, organization_id: UUID, context: CurrentUserContext) -> SubscriptionRead | None:
         context.require_platform_admin()
@@ -248,20 +286,36 @@ class SubscriptionService:
         """End every period that has run out, apply holds whose choosing time is up, and stop
         any held Agent still running."""
         now = now or datetime.now(UTC)
+        system = _Actor(_SYSTEM, _SYSTEM_DISPLAY)
+        for subscription in self.repository.unactivated():
+            try:
+                with self.repository.organization_lock(subscription.organization_id):
+                    current = self._refreshed(subscription)
+                    if current.status != SubscriptionStatus.CANCELED.value:
+                        self.finish_activation(current, system)
+            except Exception:
+                logger.exception("Could not finish activating subscription %s", subscription.id)
         for subscription in self.repository.due(now):
             if not self._provider_for(subscription).renews_itself():
                 # The provider reports renewals and endings itself.
                 continue
             try:
-                self.end_period(subscription, _Actor(_SYSTEM, _SYSTEM_DISPLAY), now=subscription.current_period_end)
+                with self.repository.organization_lock(subscription.organization_id):
+                    current = self._refreshed(subscription)
+                    if current.status != SubscriptionStatus.CANCELED.value and current.current_period_end <= now:
+                        self.end_period(current, system, now=current.current_period_end)
             except Exception:
                 logger.exception("Could not end the period of subscription %s", subscription.id)
         grace = timedelta(days=self.billing_settings.read().payment_grace_days)
         for subscription in self.repository.past_due_since_before(now - grace):
             try:
-                # Out of grace: stop charging, then end it here without waiting for the provider.
-                self._provider_for(subscription).end_now(subscription)
-                self.finish(subscription, _Actor(_SYSTEM, "Payment grace period"))
+                with self.repository.organization_lock(subscription.organization_id):
+                    current = self._refreshed(subscription)
+                    if current.status != SubscriptionStatus.PAST_DUE.value:
+                        continue
+                    # Out of grace: stop charging, then end it here without waiting for the provider.
+                    self._provider_for(current).end_now(current)
+                    self.finish(current, _Actor(_SYSTEM, "Payment grace period"))
             except Exception:
                 logger.exception("Could not end past-due subscription %s", subscription.id)
         for organization_id in self.repository.holds_due(now):
@@ -285,9 +339,8 @@ class SubscriptionService:
         period_end: datetime,
         actor: _Actor,
     ) -> OrganizationSubscription:
-        """The first payment landed: put the Organization on the Tier and grant its credit."""
-        self.organization_service.convert_trial(organization_id, actor=actor.identity, actor_display=actor.display)
-        self._set_tier(organization_id, tier, actor)
+        """The first payment landed: record the subscription, then put the Organization on the
+        Tier and grant its credit (`finish_activation`). Call under the Organization's lock."""
         subscription, delivery_ids = self.repository.save_with_event(
             OrganizationSubscription(
                 organization_id=organization_id,
@@ -304,10 +357,30 @@ class SubscriptionService:
             subject_display=self._organization_name(organization_id),
         )
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        return self.finish_activation(subscription, actor)
+
+    def finish_activation(self, subscription: OrganizationSubscription, actor: _Actor) -> OrganizationSubscription:
+        """What a paid subscription brings: the trial ends, the Organization moves to the Tier,
+        and the one-time credit, the period's allowance and the holds are settled. Each step
+        is safe to repeat, so an activation that stopped partway carries on from the next
+        provider event or sweep, and the subscription is marked activated only at the end."""
+        if subscription.activated_at is not None:
+            return subscription
+        organization_id = subscription.organization_id
+        tier = self._tier(subscription.tier_id)
+        self.organization_service.convert_trial(organization_id, actor=actor.identity, actor_display=actor.display)
+        self._set_tier(organization_id, tier, actor)
         self._grant_one_time_credit(organization_id, tier, actor)
-        subscription = self._grant_allowance(subscription, tier.monthly_usage_usd, actor)
+        subscription = self.ensure_allowance(subscription, actor)
         self.holds.apply(organization_id, actor=actor.identity, actor_display=actor.display)
-        return subscription
+        subscription.activated_at = datetime.now(UTC)
+        return self.repository.save(subscription)
+
+    def ensure_allowance(self, subscription: OrganizationSubscription, actor: _Actor) -> OrganizationSubscription:
+        """A paid period has its allowance: granted now when it has none yet."""
+        if subscription.period_allowance_usd != 0:
+            return subscription
+        return self._grant_allowance(subscription, self._tier(subscription.tier_id).monthly_usage_usd, actor)
 
     def end_period(self, subscription: OrganizationSubscription, actor: _Actor, *, now: datetime) -> None:
         """A period ran out: expire what's left of its allowance, then renew or end."""
@@ -346,10 +419,13 @@ class SubscriptionService:
 
     def end(self, subscription: OrganizationSubscription, actor: _Actor) -> None:
         """The subscription is over: drop to Free, keeping the credit, and hold what Free
-        doesn't cover."""
+        doesn't cover. A Tier a Platform Administrator chose stays."""
         subscription.status = SubscriptionStatus.CANCELED.value
         subscription.canceled_at = datetime.now(UTC)
         self._save(subscription, ORGANIZATION_SUBSCRIPTION_ENDED, actor)
+        organization = self.organizations.get(subscription.organization_id)
+        if organization is None or organization.tier_assigned_by_platform:
+            return
         free = self._tier(self.tiers.system_tier_id(FREE_TIER_KEY))
         self._set_tier(subscription.organization_id, free, actor)
         self.holds.apply(subscription.organization_id, actor=actor.identity, actor_display=actor.display)
@@ -408,10 +484,9 @@ class SubscriptionService:
             actor,
             change="payment_failed" if failed else "payment_recovered",
         )
-        if not failed and subscription.period_allowance_usd == 0:
+        if not failed:
             # The period it couldn't pay for is paid now: its allowance arrives.
-            tier = self._tier(subscription.tier_id)
-            subscription = self._grant_allowance(subscription, tier.monthly_usage_usd, actor)
+            subscription = self.ensure_allowance(subscription, actor)
         return subscription
 
     def note_cancel_at_period_end(
@@ -457,12 +532,11 @@ class SubscriptionService:
                 detail="Keep your subscription before switching tiers: it's set to end.",
             )
         if tier.price_usd > current.price_usd:
-            with self.repository.provider_lock(live.provider_subscription_id), _provider_errors():
+            with _provider_errors():
                 provider.upgrade_now(live, tier)
-                live = self._refreshed(live)
-                live.scheduled_tier_id = None
-                live.provider_schedule_id = None
-                return self._switch(live, tier, actor)
+            live.scheduled_tier_id = None
+            live.provider_schedule_id = None
+            return self._switch(live, tier, actor)
         with _provider_errors():
             schedule_id = provider.schedule_change(live, tier)
         live.scheduled_tier_id = tier.id
@@ -488,6 +562,11 @@ class SubscriptionService:
         return self._read(subscription)
 
     def _set_tier(self, organization_id: UUID, tier: Tier, actor: _Actor) -> None:
+        """Move the Organization to its subscription's Tier, unless a Platform Administrator
+        chose its Tier."""
+        organization = self.organizations.get(organization_id)
+        if organization is None or organization.tier_assigned_by_platform:
+            return
         result = self.tiers.assign_with_event(
             organization_id, tier, actor=actor.identity, actor_display=actor.display, by_platform=False
         )
@@ -525,7 +604,8 @@ class SubscriptionService:
     ) -> OrganizationSubscription:
         if amount <= 0:
             return subscription
-        granted = self.budgets.grant_credit(
+        # False when an earlier attempt already granted it: what it granted is recorded below.
+        self.budgets.grant_credit(
             subscription.organization_id,
             CreditGrantCreate(
                 kind=CreditGrantKind.ALLOWANCE,
@@ -537,8 +617,6 @@ class SubscriptionService:
             actor=actor.identity,
             actor_display=actor.display,
         )
-        if not granted:
-            return subscription
         subscription.period_allowance_usd += amount
         # The grant itself is the audit record of the allowance.
         return self.repository.save(subscription)

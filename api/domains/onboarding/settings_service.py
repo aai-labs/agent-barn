@@ -12,8 +12,11 @@ from api.domains.onboarding.models import TrialSettingsRead, TrialSettingsUpdate
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.platform_admin.service import PlatformAdminService
+from api.domains.usage.plans import OrganizationPlans
 
 _GMAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
+# The trial settings that are its plan's terms.
+_PLAN_TERMS = ("credit_usd", "agent_limit")
 
 
 @inject
@@ -28,6 +31,7 @@ class TrialSettingsService:
     authority: PlatformAdminService
     dispatcher: EventDeliveryDispatcher
     organizations: OrganizationLookupService
+    plans: OrganizationPlans
 
     def signup_settings(self, session: Session) -> TrialSettingsRead:
         """Read signup policy and credit together, held stable through trial creation."""
@@ -54,17 +58,38 @@ class TrialSettingsService:
         return self._with_active_trials(self.repository.read())
 
     def update(self, data: TrialSettingsUpdate, context: CurrentUserContext) -> TrialSettingsRead:
+        """The trial's credit and Agent limit are its plan's, so they are changed, audited and
+        enforced as a change to that plan; the rest are the trial settings' own. Turning
+        sign-up off is stored before the credit changes, and anything else after, so sign-up
+        is never open on no credit."""
         self.authority.require_platform_admin(context.user)
+        settings = data.changes()
+        # Neither can be cleared (TrialSettingsUpdate), so a term that is sent has a value.
+        terms: dict[str, float | int] = {
+            setting: value for setting in _PLAN_TERMS if (value := settings.pop(setting, None)) is not None
+        }
+        current = self.repository.read()
+        signup = settings.get("self_signup_enabled", current.self_signup_enabled)
+        if signup and terms.get("credit_usd", current.credit_usd) <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Set a trial credit amount greater than $0 before enabling self-signup.",
+            )
+        closing_signup = settings.get("self_signup_enabled") is False
+        if terms and not closing_signup:
+            self.plans.change_trial_terms(terms, context)
         try:
-            result, delivery_ids = self.repository.set_settings(
-                data.changes(),
+            _, delivery_ids = self.repository.set_settings(
+                settings,
                 context.user.id,
                 context.user.full_name or context.user.email,
             )
         except TrialSignupCreditRequired as error:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
         self.dispatcher.enqueue_immediate(delivery_ids)
-        return self._with_active_trials(result)
+        if terms and closing_signup:
+            self.plans.change_trial_terms(terms, context)
+        return self._with_active_trials(self.repository.read())
 
     def _with_active_trials(self, settings: TrialSettingsRead) -> TrialSettingsRead:
         return settings.model_copy(update={"active_trials": self.organizations.count_trials()})

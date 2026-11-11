@@ -15,6 +15,7 @@ from injector import Module, provider, singleton
 from sqlmodel import Session
 
 from api.domains.organizations.models import CreditGrantKind
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.subscriptions.models import OrganizationSubscription
 from api.domains.subscriptions.service import SubscriptionService
@@ -30,6 +31,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.integration.test_billing import WEBHOOK_SECRET, deliver, payments_are_on
 from api.tests.integration.test_subscriptions import (
     TIER_IDS,
+    a_platform_administrator_is_signed_in,
     auth,
     ledger,
     organization,
@@ -70,6 +72,7 @@ class FakeStripe:
         self.released: list[str] = []
         self.cancel_flags: list[bool] = []
         self.cancelled_now: list[str] = []
+        self.refunded: list[str] = []
         self.decline = False
 
     def price_for(self, lookup_key: str) -> StripePrice | None:
@@ -112,6 +115,9 @@ class FakeStripe:
     def cancel_now(self, subscription_id: str) -> None:
         self.cancelled_now.append(subscription_id)
         self.subscriptions[subscription_id] = replace(self.subscriptions[subscription_id], status="canceled")
+
+    def refund_latest_payment(self, subscription_id: str) -> None:
+        self.refunded.append(subscription_id)
 
     def portal_url(self, customer_id: str, return_url: str) -> str:
         return f"https://billing.stripe.test/{customer_id}?return={return_url}"
@@ -293,6 +299,96 @@ def test_the_paid_checkout_starts_the_subscription_once_however_many_events_repo
             )
             read = context.client.get(url(context), headers=auth(context.owner_token)).json()
             assert_that(read, has_entries(provider="stripe", manageable=True))
+
+
+def test_an_activation_that_stopped_partway_is_finished_by_the_next_event():
+    def the_first_allowance_fails(context):
+        budgets = context.injector.get(SubscriptionService).budgets
+        grant = budgets.grant_credit
+        failed = []
+
+        def grant_once_failing(organization_id, data, **kwargs):
+            if data.kind == CreditGrantKind.ALLOWANCE and not failed:
+                failed.append(True)
+                raise RuntimeError("the ledger is unavailable")
+            return grant(organization_id, data, **kwargs)
+
+        budgets.grant_credit = grant_once_failing
+
+    with given(_setup(the_first_allowance_fails)) as context:
+        with when("the paid Checkout is reported while the ledger is down"):
+            subscribe(context, "cloud_1")
+            stripe_has(context)
+            try:
+                checkout_completed(context)
+            except RuntimeError:
+                pass
+            assert_that(stored(context).activated_at, is_(none()))
+
+        with when("Stripe reports the subscription again"):
+            response = invoice_event(context)
+
+        with then("the activation finishes, with the month's usage granted once"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            subscription = stored(context)
+            assert_that(subscription.activated_at, is_(not_none()))
+            assert_that(subscription.period_allowance_usd, equal_to(Decimal(20)))
+            assert_that(organization(context).tier_id, equal_to(TIER_IDS["cloud_1"]))
+            assert_that(allowances(context), equal_to([Decimal(20)]))
+
+
+def test_a_second_paid_subscription_is_refunded_and_cancelled():
+    with given(_setup(subscribed_through_stripe("cloud_1"))) as context:
+        with when("a second Checkout for the same Organization is paid"):
+            stripe(context).subscriptions["sub_2"] = replace(stripe(context).subscriptions["sub_1"], id="sub_2")
+            response = deliver(context, "customer.subscription.created", {"id": "sub_2", "object": "subscription"})
+
+        with then("Stripe refunds and cancels it, and the first subscription carries on alone"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(stripe(context).refunded, equal_to(["sub_2"]))
+            assert_that(stripe(context).cancelled_now, equal_to(["sub_2"]))
+            assert_that(stored(context).provider_subscription_id, equal_to("sub_1"))
+            assert_that(allowances(context), equal_to([Decimal(20)]))
+
+
+def test_a_tier_the_platform_chooses_ends_the_subscription_and_stays():
+    with given(_setup(subscribed_through_stripe("cloud_1"))) as context:
+        with when("a Platform Administrator puts the Organization on Cloud Tier 2"):
+            a_platform_administrator_is_signed_in(context)
+            response = context.client.put(
+                f"/api/v1/platform/organizations/{context.organization.id}/tier",
+                json={"tier_id": str(TIER_IDS["cloud_2"])},
+                headers=auth(context.access_token),
+            )
+
+        with then("the subscription stops charging and ends, leaving their Tier"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(stripe(context).cancelled_now, equal_to(["sub_1"]))
+            assert_that(stored(context).status, equal_to("canceled"))
+            assert_that(organization(context).tier_id, equal_to(TIER_IDS["cloud_2"]))
+            assert_that(organization(context).tier_assigned_by_platform, is_(True))
+
+        with when("Stripe reports the cancellation"):
+            subscription_event(context, "customer.subscription.deleted")
+
+        with then("the Tier the platform chose is kept"):
+            assert_that(organization(context).tier_id, equal_to(TIER_IDS["cloud_2"]))
+
+
+def test_a_checkout_paid_after_the_platform_chose_the_tier_is_refunded():
+    with given(_setup()) as context:
+        subscribe(context, "cloud_1")
+        organizations = context.injector.get(OrganizationRepository)
+        chosen = organizations.get(context.organization.id)
+        chosen.tier_assigned_by_platform = True
+        organizations.save(chosen)
+        stripe_has(context)
+
+        checkout_completed(context)
+
+        assert_that(stripe(context).refunded, equal_to(["sub_1"]))
+        assert_that(stripe(context).cancelled_now, equal_to(["sub_1"]))
+        assert_that(organization(context).tier_id, equal_to(TIER_IDS["free"]))
 
 
 def test_an_unpaid_checkout_starts_nothing():

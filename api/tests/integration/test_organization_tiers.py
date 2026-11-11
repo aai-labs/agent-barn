@@ -170,10 +170,24 @@ def test_taking_an_organization_off_its_tier_leaves_it_unrestricted():
 
 def test_assigning_the_tier_it_is_already_on_records_nothing():
     with given(_setup(on_tier("free"), a_platform_administrator_is_signed_in)) as context:
+        assign(context, "free")
+        before = events_named(context, "organization.tier.changed")
+
         response = assign(context, "free")
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(events_named(context, "organization.tier.changed"), equal_to([]))
+        assert_that(events_named(context, "organization.tier.changed"), equal_to(before))
+
+
+def test_choosing_the_tier_a_subscription_chose_makes_it_the_platforms():
+    with given(_setup(on_tier("cloud_1"), a_platform_administrator_is_signed_in)) as context:
+        response = assign(context, "cloud_1")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        stored = context.injector.get(OrganizationRepository).get(context.organization.id)
+        assert_that(stored.tier_assigned_by_platform, is_(True))
+        (event,) = events_named(context, "organization.tier.changed")
+        assert_that(event.payload, has_entries(tier_key="cloud_1", assigned_by_platform=True))
 
 
 def test_a_tier_that_does_not_exist_is_refused():
@@ -292,6 +306,21 @@ def test_running_more_than_the_tier_covers_is_over_tier():
         with then("both say it runs more than Free covers"):
             assert_that(member_read, has_entries(over_tier=True))
             assert_that(platform_read, has_entries(over_tier=True, agent_limit_in_force=1))
+
+
+def test_an_own_limit_that_covers_the_agents_is_not_over_tier():
+    def own_limit_of_two(context):
+        organizations = context.injector.get(OrganizationRepository)
+        organization = organizations.get(context.organization.id)
+        organization.agent_limit = 2
+        organizations.save(organization)
+
+    with given(_setup(there_is_an_agent(name="One"), there_is_an_agent(name="Two"), own_limit_of_two)) as context:
+        on_tier("free")(context)
+
+        # Free allows one Agent, but the Organization's own limit of two is the one in force,
+        # so nothing is held and nothing is over.
+        assert_that(read_organization(context), has_entries(over_tier=False, agent_limit=2))
 
 
 # --- gated actions ---------------------------------------------------------------------

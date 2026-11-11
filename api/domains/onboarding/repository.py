@@ -1,7 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -77,7 +76,10 @@ class TrialSettingsRepository:
         actor_display: str,
     ) -> tuple[TrialSettingsRead, list[UUID]]:
         """Store the settings and stage one audit Event per setting that moved, in one
-        commit. A setting saved at the value already in force writes nothing."""
+        commit. A setting saved at the value already in force writes nothing. The credit
+        and Agent limit are the trial plan's, changed through `OrganizationPlans`."""
+        if plan_terms := changes.keys() & {"credit_usd", "agent_limit"}:
+            raise ValueError(f"{', '.join(sorted(plan_terms))} belong to the trial's plan")
         with Session(self.delegate.engine) as session:
             session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock({_TRIAL_SETTINGS_LOCK})"))
             row = session.get(PlatformTrialSettings, 1)
@@ -105,9 +107,6 @@ class TrialSettingsRepository:
                     updated_by=actor_id,
                 )
             )
-            # The trial's credit and Agent limit are the trial plan's.
-            if terms is not None:
-                self.plans.store_trial_terms(session, Decimal(str(stored.credit_usd)), stored.agent_limit, now)
             correlation_id = uuid4()
             event_ids = []
             for setting, previous, value in moved:

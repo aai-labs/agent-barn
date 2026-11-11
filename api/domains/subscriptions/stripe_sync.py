@@ -1,9 +1,13 @@
 """Applying Stripe's subscription events.
 
 Stripe sends events out of order and more than once, so an event only names the
-subscription it is about: the subscription is read from Stripe as it is now and Agent
-Barn's copy is brought in line with it, one subscription at a time. Applying the same state
-twice changes nothing.
+subscription it is about: the subscription is read from Stripe as it is now, under the
+Organization's subscription lock, and Agent Barn's copy is brought in line with it.
+Applying the same state twice changes nothing, and a step that failed is taken up again by
+the next event.
+
+A paid subscription the Organization shouldn't have, because it already has one or a
+Platform Administrator chose its Tier, is refunded and cancelled at Stripe.
 """
 
 import logging
@@ -14,6 +18,7 @@ from typing import Any
 from injector import inject, singleton
 
 from api.domains.events import ActorIdentity, ActorIdentityType
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.subscriptions.models import SubscriptionProviderKey, SubscriptionStatus
 from api.domains.subscriptions.repository import SubscriptionRepository
 from api.domains.subscriptions.service import SubscriptionService, _Actor
@@ -54,13 +59,20 @@ class StripeSubscriptionSync:
     service: SubscriptionService
     repository: SubscriptionRepository
     tiers: TierRepository
+    organizations: OrganizationRepository
     stripe: StripeSubscriptions
 
     def handle(self, event_type: str, data: dict[str, Any]) -> None:
         reference = subscription_reference(event_type, data)
         if reference is None:
             return
-        with self.repository.provider_lock(reference):
+        local = self.repository.by_provider_reference(SubscriptionProviderKey.STRIPE.value, reference)
+        organization_id = local.organization_id if local else self.stripe.subscription(reference).organization_id
+        if organization_id is None:
+            logger.info("Ignoring Stripe subscription %s: it isn't for an Agent Barn Organization", reference)
+            return
+        with self.repository.organization_lock(organization_id):
+            # Read again under the lock: what Stripe has now, after any change made meanwhile.
             self.apply(self.stripe.subscription(reference))
 
     def apply(self, state: StripeSubscriptionState) -> None:
@@ -74,6 +86,8 @@ class StripeSubscriptionSync:
         if state.status in _ENDED:
             self.service.finish(local, STRIPE)
             return
+        if state.status in _PAID:
+            local = self.service.finish_activation(local, STRIPE)
         if tier is not None and tier.id != local.tier_id:
             local = self.service.apply_tier(local, tier, STRIPE)
         if state.period_start > local.current_period_start + _SAME_MOMENT:
@@ -85,6 +99,8 @@ class StripeSubscriptionSync:
                 paid=state.status in _PAID,
             )
         local = self.service.set_payment_failed(local, state.status in _FAILING, STRIPE)
+        if state.status in _PAID:
+            local = self.service.ensure_allowance(local, STRIPE)
         local = self.service.note_cancel_at_period_end(local, state.cancel_at_period_end, STRIPE)
         if state.schedule_id is None and local.scheduled_tier_id is not None:
             # The scheduled change was dropped at Stripe.
@@ -99,14 +115,22 @@ class StripeSubscriptionSync:
         if state.organization_id is None or tier is None:
             logger.info("Ignoring Stripe subscription %s: it isn't for an Agent Barn Tier", state.id)
             return
+        organization = self.organizations.get(state.organization_id)
+        if organization is None:
+            logger.info("Ignoring Stripe subscription %s: its Organization no longer exists", state.id)
+            return
         live = self.repository.live_for(state.organization_id)
-        if live is not None:
-            logger.error(
-                "Stripe subscription %s was paid for Organization %s, which already has subscription %s",
+        if live is not None or organization.tier_assigned_by_platform or not organization.runs_on_credit:
+            # Bought twice, from two Checkouts, or after the platform took the Tier over: give
+            # the money back first, so a retry after a failed cancel refunds nothing twice.
+            logger.warning(
+                "Refunding and cancelling Stripe subscription %s: Organization %s %s",
                 state.id,
                 state.organization_id,
-                live.id,
+                f"already has subscription {live.id}" if live is not None else "doesn't subscribe",
             )
+            self.stripe.refund_latest_payment(state.id)
+            self.stripe.cancel_now(state.id)
             return
         subscription = self.service.activate(
             state.organization_id,

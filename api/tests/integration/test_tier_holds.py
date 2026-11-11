@@ -15,6 +15,7 @@ from hamcrest import (
     contains_inanyorder,
     equal_to,
     has_entries,
+    has_item,
     has_length,
     has_properties,
     is_,
@@ -276,6 +277,34 @@ def test_a_native_channel_held_while_its_agent_starts_restarts_it(monkeypatch):
             assert_that(starts, has_length(2))
 
 
+def test_an_agent_already_held_loses_what_a_lower_tier_leaves_out():
+    def newest_has_slack_and_memory(context):
+        context.agent = context.agents["Newest"]
+        _ensure_native_connection(context, "slack")
+        from sqlmodel import Session
+
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            agent = session.get_one(Agent, context.agent.id)
+            agent.memory_enabled = True
+            session.add(agent)
+            session.commit()
+
+    with given(_setup(agents_named("Oldest", "Newest"), newest_has_slack_and_memory)) as context:
+        with when("Cloud Tier 1 holds the newest Agent, then the Organization moves to Free"):
+            put_on(context, "cloud_1")
+            assert_that(stored(context, "Newest").suspended_at, is_(not_none()))
+            assert_that(stored(context, "Newest").memory_enabled, is_(True))
+            put_on(context, "free")
+
+        with then("the held Agent's Slack and memory are held too, so releasing it brings neither back"):
+            (slack,) = connections_of(context)
+            assert_that((slack.enabled, slack.suspension_reason), equal_to((False, SuspensionReason.TIER)))
+            newest = stored(context, "Newest")
+            assert_that(
+                (newest.memory_enabled, newest.memory_suspension_reason), equal_to((False, SuspensionReason.TIER))
+            )
+
+
 def test_taking_an_organization_off_any_tier_holds_nothing():
     with given(_setup(agents_named("Oldest", "Newest"))) as context:
         a_platform_administrator_is_signed_in(context)
@@ -302,6 +331,30 @@ def test_editing_a_tier_down_holds_in_every_organization_on_it():
         with then("the newest Agent is held"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
             assert_that(stored(context, "Newest").suspended_at, is_(not_none()))
+
+
+def test_lowering_the_trial_agent_limit_holds_like_any_free_tier_change():
+    def trial_limit(context, limit: int):
+        return context.client.put(
+            "/api/v1/platform/settings/trial", json={"agent_limit": limit}, headers=auth(context.access_token)
+        )
+
+    with given(_setup(agents_named("Oldest", "Newest"))) as context:
+        a_platform_administrator_is_signed_in(context)
+        trial_limit(context, 2)
+        put_on(context, "free")
+        assert_that(stored(context, "Newest").suspended_at, is_(none()))
+
+        with when("a Platform Administrator lowers the trial's agent limit to one in Signup & trials"):
+            response = trial_limit(context, 1)
+
+        with then("the newest Agent is held, and the change is audited as the Free Tier's"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(stored(context, "Newest").suspended_at, is_(not_none()))
+            assert_that(
+                [event.payload for event in events_named(context, "platform.tier.changed")],
+                has_item(has_entries(setting="agent_limit", previous=2, current=1)),
+            )
 
 
 # --- choosing what to keep ---------------------------------------------------------------

@@ -1,24 +1,35 @@
-"""Add the Tier catalog, seeded from the public pricing page, and the payment grace period
+"""Add the Tier catalog, put Organizations on a Tier, and suspend what a Tier leaves out
 
 Revision ID: 55e07653f502
 Revises: c8e41f7a2d96
 Create Date: 2026-11-08
 
-Tiers, PR 1: a platform-managed catalog of what an Organization may use and what it pays.
-Five rows are seeded, all switched off: Free, Cloud Tier 1, Cloud Tier 2, the contact-only
-Supervised Pilot, and the system's `none` Tier for an Organization with no Tier it may use.
-Nothing reads the catalog yet: no Organization is on a Tier, so behavior is unchanged.
+A platform-managed catalog of what an Organization may use and what it pays. Five rows are
+seeded, all switched off: Free, Cloud Tier 1, Cloud Tier 2, the contact-only Supervised
+Pilot, and the system's `none` Tier for an Organization with no Tier it may use.
 
 The database keeps each Tier coherent on its own: a paid Tier has a price and is the only
 kind granting monthly usage, Free and none cost nothing, a contact-only Tier has a link, none
 grants nothing and is never offered, and there is one Free and one none.
 
+`organization.tier_id` names the Tier an Organization is on. NULL keeps it platform-managed
+and unrestricted, which is where every existing Organization stays. A Tier that
+Organizations are on cannot be deleted (`ON DELETE RESTRICT`). `tier_assigned_by_platform`
+records that a Platform Administrator chose the Tier, so a subscription won't replace it.
+
+An Agent, a Connection and an Agent Webhook can be suspended (`suspended_at`), and an
+Agent's memory on its own (`memory_suspended_at`), with the reason beside it; a Tier that
+stops covering them suspends them with the reason `tier`. Every column starts NULL, so
+nothing is suspended. The Organization Permission `tier_hold.manage` lets Owners and Admins
+choose which Agents stay held.
+
 `platform_billing_settings.payment_grace_days` is how long a past-due subscription keeps its
-Tier; nothing reads it until subscriptions arrive.
+Tier.
 """
 
 import json
 from collections.abc import Sequence
+from uuid import UUID
 
 import sqlalchemy as sa
 from alembic import op
@@ -31,6 +42,17 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _TABLE = "tier"
+# Frozen here rather than imported: a migration must keep meaning what it meant when
+# it shipped, whatever the catalogue in code says later.
+TIER_HOLD_MANAGE_ID = UUID("f236e2c1-a221-559e-946b-9c25232caa30")
+TIER_HOLD_MANAGE_KEY = "tier_hold.manage"
+# (table, suspended column, reason column)
+_SUSPENSION_COLUMNS = (
+    ("agent", "suspended_at", "suspension_reason"),
+    ("agent", "memory_suspended_at", "memory_suspension_reason"),
+    ("communication_connection", "suspended_at", "suspension_reason"),
+    ("agent_webhook", "suspended_at", "suspension_reason"),
+)
 _ALL_FEATURES = [
     "custom_agents",
     "integrations",
@@ -129,6 +151,14 @@ def _money(name: str) -> sa.Column:
     return sa.Column(name, sa.Numeric(10, 2), nullable=False, server_default="0")
 
 
+def _with_catalogue_unlocked(statement: sa.TextClause, **params: object) -> None:
+    """The Permission catalogue is immutable by trigger; a migration is the one place
+    allowed to change it, and it locks it again in the same transaction."""
+    op.execute("ALTER TABLE permissions DISABLE TRIGGER trg_permission_catalogue_immutability")
+    op.get_bind().execute(statement, params)
+    op.execute("ALTER TABLE permissions ENABLE TRIGGER trg_permission_catalogue_immutability")
+
+
 def upgrade() -> None:
     op.create_table(
         _TABLE,
@@ -207,8 +237,38 @@ def upgrade() -> None:
         "payment_grace_days >= 0 AND payment_grace_days <= 60",
     )
 
+    op.add_column("organization", sa.Column("tier_id", sa.Uuid(), nullable=True))
+    op.add_column(
+        "organization",
+        sa.Column("tier_assigned_by_platform", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+    )
+    op.create_foreign_key(
+        "fk_organization_tier_id_tier", "organization", "tier", ["tier_id"], ["id"], ondelete="RESTRICT"
+    )
+    op.create_index("ix_organization_tier_id", "organization", ["tier_id"])
+
+    for table, suspended, reason in _SUSPENSION_COLUMNS:
+        op.add_column(table, sa.Column(suspended, sa.DateTime(timezone=True), nullable=True))
+        op.add_column(table, sa.Column(reason, sa.String(length=16), nullable=True))
+    _with_catalogue_unlocked(
+        sa.text(
+            "INSERT INTO permissions (id, created_at, updated_at, key) "
+            "VALUES (:id, now(), now(), :key) ON CONFLICT DO NOTHING"
+        ),
+        id=TIER_HOLD_MANAGE_ID,
+        key=TIER_HOLD_MANAGE_KEY,
+    )
+
 
 def downgrade() -> None:
+    _with_catalogue_unlocked(sa.text("DELETE FROM permissions WHERE id = :id"), id=TIER_HOLD_MANAGE_ID)
+    for table, suspended, reason in reversed(_SUSPENSION_COLUMNS):
+        op.drop_column(table, reason)
+        op.drop_column(table, suspended)
+    op.drop_index("ix_organization_tier_id", table_name="organization")
+    op.drop_constraint("fk_organization_tier_id_tier", "organization", type_="foreignkey")
+    op.drop_column("organization", "tier_assigned_by_platform")
+    op.drop_column("organization", "tier_id")
     op.drop_constraint("ck_platform_billing_settings_grace_days_range", "platform_billing_settings", type_="check")
     op.drop_column("platform_billing_settings", "payment_grace_days")
     op.drop_index("uq_tier_system_activation", table_name=_TABLE)
