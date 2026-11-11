@@ -130,6 +130,25 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByText("Brandon the Assistant was hired successfully.")).toBeVisible();
   });
 
+  test("hires on a specific model picked from the model menu", async ({ page }) => {
+    await page.getByRole("radio", { name: "Choose a specific model" }).check();
+    await page.getByRole("button", { name: "Model", exact: true }).click();
+    await page.getByPlaceholder("Search models…").fill("mini");
+    await page.getByRole("option", { name: "GPT-5 mini" }).click();
+
+    await expect(page.getByRole("option")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Build your own agent" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveText("GPT-5 mini");
+    expect(await hirePayload(page, dataSupport)).toEqual({
+      name: "Brandon the Assistant",
+      agent_type: "hermes",
+      template_key: "general-purpose",
+      template_version: 1,
+      approval_mode: "auto",
+      model: "litellm/openrouter/openai/gpt-5-mini",
+    });
+  });
+
   test("offers file sync, on by default, when a connected provider syncs files", async ({ page }) => {
     await dataSupport.syncProviders.interceptProviders({
       providers: [oneDriveEntry({ connection: activeOneDriveConnection() })],
