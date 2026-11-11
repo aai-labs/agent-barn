@@ -21,6 +21,7 @@ from api.tests.steps.database import database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization
 
 PREVIOUS_HEAD = "3680352c132d"
+BEFORE_SHARED_RUNTIME = "d79ce00137d2"
 BOT_COLUMNS = {"parent_agent_id", "bot_slot"}
 BOT_CONSTRAINTS = {"fk_agent_parent_agent", "uq_agent_live_bot_slot"}
 
@@ -155,18 +156,47 @@ def test_an_agent_cannot_be_its_own_parent():
             )
 
 
-def test_an_openclaw_agent_cannot_hold_bots():
+def test_an_openclaw_agent_can_hold_an_openclaw_bot():
     with given(_GIVEN) as context:
         there_is_an_agent(name="OpenClaw parent", agent_type=AgentType.OPENCLAW)(context)
 
-        with pytest.raises(IntegrityError, match="Hermes"):
-            _insert_bot(context, context.agent.id, 1)
+        bot_id = _insert_bot(context, context.agent.id, 1, agent_type="openclaw")
+
+        assert_that(_exists(context, bot_id), equal_to(True))
 
 
-def test_a_bot_must_be_hermes():
+@pytest.mark.parametrize(("parent_type", "bot_type"), [(AgentType.HERMES, "openclaw"), (AgentType.OPENCLAW, "hermes")])
+def test_a_bot_must_share_its_parents_runtime(parent_type, bot_type):
     with given(_GIVEN) as context:
-        with pytest.raises(IntegrityError, match="Hermes"):
-            _insert_bot(context, context.agent.id, 1, agent_type="openclaw")
+        there_is_an_agent(name="Parent of another runtime", agent_type=parent_type)(context)
+
+        with pytest.raises(IntegrityError, match="runtime"):
+            _insert_bot(context, context.agent.id, 1, agent_type=bot_type)
+
+
+def test_a_bots_runtime_cannot_change():
+    with given(_GIVEN) as context:
+        bot_id = _insert_bot(context, context.agent.id, 1)
+
+        with pytest.raises(IntegrityError, match="runtime"):
+            _execute(context, "UPDATE agent SET agent_type = 'openclaw' WHERE id = :id", id=bot_id)
+
+
+def test_a_parent_agents_runtime_cannot_change_while_it_has_bots():
+    with given(_GIVEN) as context:
+        _insert_bot(context, context.agent.id, 1)
+
+        with pytest.raises(IntegrityError, match="runtime"):
+            _execute(context, "UPDATE agent SET agent_type = 'openclaw' WHERE id = :id", id=context.agent.id)
+
+
+def test_an_agent_without_bots_can_change_runtime():
+    with given(_GIVEN) as context:
+        _execute(context, "UPDATE agent SET agent_type = 'openclaw' WHERE id = :id", id=context.agent.id)
+
+        agent_type = _execute(context, "SELECT agent_type FROM agent WHERE id = :id", id=context.agent.id).scalar_one()
+
+        assert_that(agent_type, equal_to("openclaw"))
 
 
 def test_a_bot_must_be_in_its_parents_organization():
@@ -256,5 +286,26 @@ def test_the_migration_matches_the_models_and_downgrades_cleanly(isolated_databa
 
         command.upgrade(config, "head")
         assert_that(BOT_COLUMNS <= {c["name"] for c in inspect(engine).get_columns("agent")}, equal_to(True))
+    finally:
+        engine.dispose()
+
+
+def _bot_rule(engine):
+    with engine.connect() as connection:
+        return connection.execute(text("SELECT pg_get_functiondef('validate_agent_bot_parent'::regproc)")).scalar_one()
+
+
+def test_the_shared_runtime_rule_downgrades_to_hermes_only(isolated_database):  # noqa: F811
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    command.upgrade(config, "head")
+    engine = create_engine(isolated_database)
+    try:
+        assert_that("same runtime" in _bot_rule(engine), equal_to(True))
+
+        command.downgrade(config, BEFORE_SHARED_RUNTIME)
+        assert_that("must be Hermes" in _bot_rule(engine), equal_to(True))
+
+        command.upgrade(config, "head")
+        assert_that("same runtime" in _bot_rule(engine), equal_to(True))
     finally:
         engine.dispose()

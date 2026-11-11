@@ -15,9 +15,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `GET /agents/{id}/bots`;
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
-- OpenClaw (AF-445): the feature contract, terminology and ADR. Nothing in code yet; OpenClaw Parent Agents are still refused with 400.
-- In transition: the docs describe OpenClaw Bots ahead of the code.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the migration letting a Parent Agent and its Bots share either runtime.
+- OpenClaw (AF-445): the feature contract, terminology and ADR, and the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`). The API still refuses OpenClaw Parent Agents with 400.
+- In transition: the docs describe OpenClaw Bots ahead of the code, and the database already accepts OpenClaw Bots that the API cannot create.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, Bot creation and Bot rules for OpenClaw Parent Agents in the API.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,12 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-11 — AF-445 — Bots share their parent's runtime
+
+- Delivered: migration `865ce7d7db04`. `trg_agent_bot_parent` now requires a Bot to use its Parent Agent's runtime, Hermes or OpenClaw, and refuses changing a Parent Agent's runtime while it has Bots. Downgrade restores the Hermes-only rule without rechecking existing rows.
+- Changed: schema rule only; no model or API change.
+- Follow-up: Bot creation for OpenClaw Parent Agents.
 
 ### 2026-11-11 — AF-445 — OpenClaw Bots documentation
 
