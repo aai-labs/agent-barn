@@ -88,6 +88,8 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
+BOT_SETUP_PY: str = (_SCRIPTS / "bot-setup.py").read_text()
+BOT_RUN_PY: str = (_SCRIPTS / "bot-run.py").read_text()
 
 
 def _openclaw_config_core(
@@ -342,7 +344,7 @@ def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot]) -> dic
 def multi_agent_runtime_env(parent_env: Mapping[str, str], bots: Sequence[OpenClawBot]) -> dict[str, str]:
     if not bots:
         return {}
-    env = {"RUNTIME_MODEL": MULTI_AGENT_RUNTIME_MODEL}
+    env = {"RUNTIME_MODEL": MULTI_AGENT_RUNTIME_MODEL, "RUNTIME_SESSION_PREFIX": f"agent:{MAIN_AGENT_ID}:"}
     parent_platforms = [name for name in parent_env.get("AGENTBARN_NATIVE_CHANNELS", "").split(",") if name]
     if platforms := _platforms(parent_platforms, bots):
         env["AGENTBARN_NATIVE_CHANNELS"] = ",".join(platforms)
@@ -614,6 +616,8 @@ def build_config_map(
         data["skills.json"] = skills_json
     if bots_manifest is not None:
         data["bots.json"] = bots_manifest
+        data["bot-setup.py"] = BOT_SETUP_PY
+        data["bot-run.py"] = BOT_RUN_PY
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

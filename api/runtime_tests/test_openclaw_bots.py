@@ -12,7 +12,9 @@ from api.runtime_tests.memory_helpers import selected_image
 
 REPO = Path(__file__).resolve().parents[2]
 CHECK_SCRIPT = Path(__file__).parent / "fixtures" / "openclaw_bots_check.sh"
-PLUGINS = REPO / "api" / "domains" / "agents" / "scripts" / "openclaw" / "plugins"
+BOOT_SCRIPT = Path(__file__).parent / "fixtures" / "openclaw_bots_boot_check.sh"
+SCRIPTS = REPO / "api" / "domains" / "agents" / "scripts" / "openclaw"
+PLUGINS = SCRIPTS / "plugins"
 PROXY = "http://localhost:8090"
 BOT_A = UUID("0000000a-0000-4000-8000-00000000000a")
 BOT_B = UUID("0000000b-0000-4000-8000-00000000000b")
@@ -120,3 +122,82 @@ def test_a_bot_whose_key_file_is_missing_is_the_only_one_unresolved(openclaw_ima
     result = _check(openclaw_image, tmp_path, config, _keys(BOT_A))
 
     assert_that(_unresolved(result["audit"]), equal_to(["models.providers.litellm-bot-2.apiKey"]))
+
+
+def _boot(image: str, root: Path) -> dict:
+    inputs, outputs, app_config = root / "in", root / "out", root / "app-config"
+    secret, files_root = root / "secrets" / str(BOT_A), root / "files"
+    for directory in (inputs, outputs, app_config, secret):
+        directory.mkdir(parents=True)
+        directory.chmod(0o777)
+    bots = _bots()
+    (inputs / "single.json").write_text(json.dumps(multi_agent_gateway_config(_parent(), [])))
+    (inputs / "multi.json").write_text(json.dumps(multi_agent_gateway_config(_parent(), bots)))
+    (inputs / "bots.json").write_text(
+        json.dumps({"bots": [{"id": str(bot.id), "slot": bot.slot} for bot in bots], "deleted_ids": []})
+    )
+    for name, value in {"AGENT_ID": str(BOT_A), **_keys(BOT_A)[BOT_A]}.items():
+        (secret / name).write_text(value)
+    for bot in bots:
+        files = files_root / str(bot.id)
+        files.mkdir(parents=True)
+        for name in ("SOUL.md", "AGENTS.md", "USER.md"):
+            (files / name).write_text(f"{bot.id} {name}")
+    completed = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "-v",
+            f"{inputs}:/in:ro",
+            "-v",
+            f"{outputs}:/out",
+            "-v",
+            f"{app_config}:/app/config",
+            "-v",
+            f"{root / 'secrets'}:/run/agentbarn/bots:ro",
+            "-v",
+            f"{files_root}:/app/bots:ro",
+            "-v",
+            f"{SCRIPTS}:/scripts:ro",
+            "-v",
+            f"{PLUGINS}:/plugins:ro",
+            "-v",
+            f"{BOOT_SCRIPT}:/check.sh:ro",
+            "--entrypoint",
+            "sh",
+            image,
+            "/check.sh",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=115,
+    )
+    assert_that(completed.returncode, equal_to(0), completed.stdout + completed.stderr)
+    return {
+        f"{step}-{name}": json.loads((outputs / f"{step}-{name}.json").read_text() or "null")
+        for step in ("alone", "bots", "after")
+        for name in ("validate", "agents", "audit", "config")
+    }
+
+
+def test_bots_come_and_go_through_the_boot_scripts_on_the_saved_config(openclaw_image: str, tmp_path: Path):
+    result = _boot(openclaw_image, tmp_path)
+
+    assert_that(result["alone-validate"], has_entries(valid=True))
+    assert_that([agent["id"] for agent in result["alone-agents"]], equal_to(["main"]))
+
+    assert_that(result["bots-validate"], has_entries(valid=True, warnings=[]))
+    assert_that([agent["id"] for agent in result["bots-agents"]], equal_to(["main", str(BOT_A)]))
+    assert_that(result["bots-audit"]["resolution"]["refsChecked"], equal_to(2))
+    assert_that(_unresolved(result["bots-audit"]), equal_to([]))
+
+    assert_that(result["after-validate"], has_entries(valid=True))
+    assert_that([agent["id"] for agent in result["after-agents"]], equal_to(["main"]))
+    saved = result["after-config"]
+    assert_that("ownership" in saved["agents"] or "entries" in saved["agents"], equal_to(False))
+    assert_that([name for name in saved["models"]["providers"] if name.startswith("litellm-bot-")], equal_to([]))
+    assert_that("secrets" in saved, equal_to(False))

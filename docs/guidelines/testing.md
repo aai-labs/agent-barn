@@ -146,7 +146,10 @@ RUNTIME=openclaw`), offline. It renders a Parent Agent's gateway config with two
 through the builders and proves the pinned image accepts it: the config validates, each
 Bot is its own agent with its own workspace, model provider and Telegram account, and
 every Bot key reference resolves, with a missing key unresolved for that Bot only. It
-must pass on every OpenClaw upgrade.
+also runs the real `init-openclaw.js` and `bot-setup.py` through a first Bot, a Bot whose
+Secret is missing, and the last Bot's removal. It must pass on every OpenClaw upgrade.
+`../../api/tests/unit/test_openclaw_bot_setup.py` covers the same scripts on temp
+directories; its two tests that start Bot helpers skip on Windows.
 
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:

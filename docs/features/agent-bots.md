@@ -65,7 +65,8 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 - Each platform holds one account per agent: the Parent Agent's is `default`, and each Bot's is its Agent id. Every account writes all its own policy keys, and every account has a binding to its agent.
 - Each Bot has its own model provider, `litellm-bot-<slot>`, whose key comes from a private copy of the Bot's Secret made at boot. Bot keys never enter the gateway environment.
 - The `agentbarn-bot-env` plugin gives each agent's commands its own Agent Barn and integration values and blanks every other agent's.
-- Each Bot runs its own communications adapter and trigger server, on port `8100 + slot`.
+- Each Bot runs its own communications adapter and trigger server, on port `8100 + slot`, through the one gateway as `openclaw/<bot-id>` with the gateway's token.
+- At every start, `init-openclaw.js` replaces the agent entries in the saved `openclaw.json` and removes the multi-agent settings, Bot providers and Bot key references the new config no longer names, so removing the last Bot returns the Parent Agent to one agent. `bot-setup.py` then writes each Bot's workspace and private key file, and removes a Bot it cannot set up from `openclaw.json`. A deleted Bot's files are removed at start and its scheduled jobs once the gateway answers. A scheduled job whose agent no longer exists fails rather than running as another agent.
 
 ## Operations
 

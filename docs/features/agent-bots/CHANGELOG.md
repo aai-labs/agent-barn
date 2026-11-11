@@ -17,7 +17,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules.
 - In transition: an OpenClaw Parent Agent can hold Bots, but starting it does not serve them yet; its pod runs the Parent Agent alone.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, in-pod boot: `init-openclaw.js` replacing the multi-agent settings, `bot-setup.py` and `bot-run.py`.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the `agentbarn-bot-env` exec plugin.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,17 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-11 — AF-445 — OpenClaw in-pod boot
+
+- Delivered:
+  - `init-openclaw.js` replaces `agents.entries` and deletes `agents.ownership`, `agents.defaults.systemAgent`, `agents.entries`, `litellm-bot-<n>` providers and `bot<n>` secret providers the overlay leaves out; other secret providers stay.
+  - `scripts/openclaw/bot-setup.py` writes each Bot's workspace (`workspace-<id>`, instructions pointed at it, skills, its own `USER.md` kept), agent and home directories, runs its aai-cli and gog setup from `/app/bots/<id>`, and writes `/tmp/agentbarn-keys/<id>.json` (0600) with only its LiteLLM key and platform tokens. A Bot without a matching Secret, a LiteLLM key or its ConfigMap, or whose setup fails, is removed from `openclaw.json` and left out of `/tmp/agentbarn-active-bots.json`. Deleted Bots' files go at start; `--clean-jobs` removes their scheduled jobs in the background once the gateway lists them.
+  - `scripts/openclaw/bot-run.py` runs a served Bot's adapter and trigger server with its own Secret, the parent's gateway token and URL, `openclaw/<id>`, port `8100 + slot` and its own receipts file.
+  - `start.sh` sets Bots up after the parent's integrations and launches their helpers and the job cleanup just before the gateway.
+  - The adapter and trigger server prefix OpenClaw session keys with `RUNTIME_SESSION_PREFIX`; a parent with Bots gets `agent:main:`, a Bot `agent:<id>:`.
+- Changed: the parent's ConfigMap ships `bot-setup.py` and `bot-run.py` with `bots.json`. Observed in the spike pod: a job whose agent was removed failed with "cron job agent is unavailable" instead of running as the parent.
+- Follow-up: the exec plugin.
 
 ### 2026-11-11 — AF-445 — OpenClaw multi-agent builders
 

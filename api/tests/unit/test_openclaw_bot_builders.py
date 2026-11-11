@@ -1,5 +1,6 @@
 import copy
 import json
+from pathlib import Path
 from uuid import UUID
 
 from api.domains.agent_sizes.models import (
@@ -33,6 +34,7 @@ BOT_B = UUID("0000000b-0000-4000-8000-00000000000b")
 NS = "agent-farm"
 PROXY = "http://localhost:8090"
 STATE = "/home/node/.openclaw"
+SCRIPTS = Path(__file__).resolve().parents[2] / "domains/agents/scripts/openclaw"
 STANDARD = container_resources(
     cpu_request_millicores=STANDARD_CPU_REQUEST_MILLICORES,
     cpu_limit_millicores=STANDARD_CPU_LIMIT_MILLICORES,
@@ -246,7 +248,11 @@ def test_a_parent_with_bots_is_reached_as_main_and_installs_every_platform():
 
     env = multi_agent_runtime_env(parent_env, _bots())
 
-    assert env == {"RUNTIME_MODEL": "openclaw/main", "AGENTBARN_NATIVE_CHANNELS": "slack,telegram,discord"}
+    assert env == {
+        "RUNTIME_MODEL": "openclaw/main",
+        "RUNTIME_SESSION_PREFIX": "agent:main:",
+        "AGENTBARN_NATIVE_CHANNELS": "slack,telegram,discord",
+    }
 
 
 def test_a_parent_without_bots_keeps_its_runtime_env():
@@ -298,6 +304,8 @@ def test_the_parents_config_map_carries_the_bot_manifest():
     )
 
     assert config_map.data["bots.json"] == manifest
+    assert config_map.data["bot-setup.py"] == (SCRIPTS / "bot-setup.py").read_text()
+    assert config_map.data["bot-run.py"] == (SCRIPTS / "bot-run.py").read_text()
 
 
 def test_a_parent_without_bots_ships_no_bot_manifest():
@@ -316,4 +324,4 @@ def test_a_parent_without_bots_ships_no_bot_manifest():
         openclaw_config_overlay=_parent(),
     )
 
-    assert "bots.json" not in config_map.data
+    assert not {"bots.json", "bot-setup.py", "bot-run.py"} & set(config_map.data)

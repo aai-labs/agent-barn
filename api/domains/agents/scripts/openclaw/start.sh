@@ -43,10 +43,17 @@ fi
 if [ -f /app/config/gog-setup.sh ]; then
   sh /app/config/gog-setup.sh || exit $?
 fi
+if [ -f /app/config/bots.json ]; then
+  python3 /app/config/bot-setup.py
+fi
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   python3 /app/config/memory-gateway-ready.py || true
 fi
 python3 /app/config/file-sync.py --once || true
 python3 /app/config/file-sync.py &
 touch "$AGENT_RUNTIME_SETUP_READY_FILE"
+if [ -f /app/config/bots.json ]; then
+  python3 /app/config/bot-setup.py --launch
+  python3 /app/config/bot-setup.py --clean-jobs &
+fi
 exec openclaw gateway --allow-unconfigured

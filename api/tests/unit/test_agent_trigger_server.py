@@ -603,3 +603,15 @@ def test_workflow_file_retrieval_runs_concurrently_and_preserves_manifest_order(
     monkeypatch.setattr(trigger_server.subprocess, "run", retrieve)
     result = trigger_server._retrieve_workflow_files(files, str(tmp_path), "attempt")
     assert [item["artifact_id"] for item in result] == [item["artifact_id"] for item in files]
+
+
+def test_a_pod_with_bots_names_the_agent_in_the_openclaw_session_header(trigger_server) -> None:
+    trigger_server.RUNTIME_SESSION_PREFIX = "agent:bot-1:"
+
+    headers = trigger_server._runtime_headers("workflow-a")
+
+    assert headers["X-OpenClaw-Session-Key"] == "agent:bot-1:workflow-a"
+
+
+def test_a_pod_without_bots_keeps_the_openclaw_session_header(trigger_server) -> None:
+    assert trigger_server._runtime_headers("workflow-a")["X-OpenClaw-Session-Key"] == "workflow-a"

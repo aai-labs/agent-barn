@@ -37,6 +37,7 @@ RUNTIME_KIND = os.environ.get("RUNTIME_KIND", "")
 RUNTIME_API_KEY = os.environ.get("RUNTIME_API_KEY", "")
 RUNTIME_API_URL = os.environ.get("RUNTIME_API_URL", "").rstrip("/")
 RUNTIME_MODEL = os.environ.get("RUNTIME_MODEL", "")
+RUNTIME_SESSION_PREFIX = os.environ.get("RUNTIME_SESSION_PREFIX", "")
 RECEIPT_PATH = Path(os.environ.get("AGENT_TRIGGER_RECEIPT_PATH", "/tmp/agent-trigger-receipts.sqlite3"))
 MAX_BODY_BYTES = 128 * 1024
 PLATFORMS = {"slack", "discord", "telegram", "teams"}
@@ -292,7 +293,7 @@ def _runtime_headers(session_id: str) -> dict[str, str]:
         "Authorization": f"Bearer {RUNTIME_API_KEY}",
         "Content-Type": "application/json",
         "X-Hermes-Session-Key": session_id,
-        "X-OpenClaw-Session-Key": session_id,
+        "X-OpenClaw-Session-Key": f"{RUNTIME_SESSION_PREFIX}{session_id}",
     }
 
 
