@@ -72,9 +72,15 @@ from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
+from api.domains.subscriptions.routes import (
+    organization_subscription_router,
+    platform_organization_tier_router,
+    platform_subscription_router,
+)
 from api.domains.sync_provider.routes import sync_provider_callback_router, sync_provider_router
 from api.domains.templates.routes import platform_templates_router, templates_router
 from api.domains.templates.service import TemplateService
+from api.domains.tiers.routes import organization_tier_holds_router, platform_tiers_router, public_tiers_router
 from api.domains.tool_calls.routes import tool_calls_router
 from api.domains.users.organization_users.routes import member_router, platform_member_router
 from api.domains.users.routes import users_router
@@ -159,6 +165,12 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_agent_sizes_router)
+    subapi.include_router(platform_tiers_router)
+    subapi.include_router(platform_organization_tier_router)
+    subapi.include_router(organization_tier_holds_router)
+    subapi.include_router(public_tiers_router)
+    subapi.include_router(organization_subscription_router)
+    subapi.include_router(platform_subscription_router)
     subapi.include_router(platform_organization_agent_sizes_router)
     subapi.include_router(platform_agents_router)
     subapi.include_router(organization_agent_sizes_router)

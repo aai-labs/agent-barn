@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/select";
 import type { Agent } from "@/features/agents/schemas";
 import { AgentConfigurationSection } from "@/features/agents/components/agent-configuration-section";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import {
   useAgentWebhookActions,
@@ -92,6 +94,8 @@ export function AgentWebhookSettings({
   const webhooks = useAgentWebhooks(agent.id);
   const platforms = useWebhookDeliveryPlatforms(agent.id);
   const { createWebhook, retireWebhook } = useAgentWebhookActions();
+  const { tier, hasFeature } = useTierEntitlements();
+  const tierAllowsWebhooks = hasFeature("agent_webhooks");
   const [selectedId, setSelectedId] = useQueryState(
     "webhook",
     parseAsString.withOptions({ history: "replace", scroll: false }),
@@ -181,13 +185,17 @@ export function AgentWebhookSettings({
           description="Signed URLs that submit one-shot jobs to this Agent. Results go to the selected native channel."
           footer={
             canManageSecrets && !adding ? (
-              <button
-                type="button"
-                className="af-btn af-btn-primary"
-                onClick={() => setAdding(true)}
-              >
-                <Plus size={14} /> Add webhook
-              </button>
+              tierAllowsWebhooks ? (
+                <button
+                  type="button"
+                  className="af-btn af-btn-primary"
+                  onClick={() => setAdding(true)}
+                >
+                  <Plus size={14} /> Add webhook
+                </button>
+              ) : (
+                <TierLockedNote tierName={tier?.name} what="agent webhooks" />
+              )
             ) : undefined
           }
         >

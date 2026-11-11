@@ -119,6 +119,8 @@ class AgentWebhookRepository:
                     webhook.delivery_platform = delivery_platform
                 if enabled is not None:
                     webhook.enabled = enabled
+                if enabled:
+                    webhook.resume()
                 if signing_secret_encrypted is not None:
                     webhook.signing_secret_encrypted = signing_secret_encrypted
                 webhook.revision += 1

@@ -18,9 +18,11 @@ import { GoogleSignInButton, SignInError } from "@/features/onboarding/component
 export function LoginForm({
   signInError,
   origin,
+  tierKey,
 }: {
   signInError?: string | null;
   origin: "login" | "signup";
+  tierKey?: string;
 }) {
   const router = useRouter();
   const { login, isLoggingIn } = useAuthActions();
@@ -51,7 +53,7 @@ export function LoginForm({
     <AuthFrame title="Welcome to Agent Barn" subtitle="Log in, or sign up with Google to start a free trial.">
       <div className="flex flex-col gap-2.5">
         <SignInError code={signInError} />
-        <GoogleSignInButton origin={origin} />
+        <GoogleSignInButton origin={origin} tierKey={tierKey} />
       </div>
 
       <div className="my-5 flex items-center gap-3 text-[12px]" style={{ color: "var(--ink-4)" }}>

@@ -47,6 +47,8 @@ from api.domains.organizations.repository import OrganizationRepository
 from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.domains.usage.guard import UsageGuard
+from api.domains.usage.plans import OrganizationPlans
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -76,6 +78,8 @@ class OrganizationService:
     memory_keys: MemoryKeyRepository
     trial_settings: TrialSettingsService
     organization_settings: OrganizationSettingsService
+    usage: UsageGuard
+    plans: OrganizationPlans
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -88,11 +92,17 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
+        plan = self.usage.summary(organization_id, coverage=True)
+        organization.tier = plan.tier
+        organization.entitlements = plan.entitlements
+        organization.over_tier = plan.over_limit
         # The read carries the Organization's own limit; members see the one in force.
-        organization.agent_limit = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
+        organization.agent_limit = self._agent_limit_in_force(
+            organization.agent_limit, organization.is_trial, plan.agent_limit
+        )
         if organization.agent_limit is not None:
             organization.agent_limit_reached = (
-                self.agent_repository.count_active_by_org(organization_id) >= organization.agent_limit
+                self.agent_repository.count_toward_agent_limit(organization_id) >= organization.agent_limit
             )
             if organization.is_trial:
                 organization.trial_agent_limit = organization.agent_limit
@@ -109,11 +119,16 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
-        organization.agent_limit_in_force = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
+        plan = self.usage.summary(organization_id, coverage=True)
+        organization.tier = plan.tier
+        organization.over_tier = plan.over_limit
+        organization.agent_limit_in_force = self._agent_limit_in_force(
+            organization.agent_limit, organization.is_trial, plan.agent_limit
+        )
         return organization
 
-    def _agent_limit_in_force(self, own: int | None, is_trial: bool) -> int | None:
-        return OrganizationAgentLimit(own=own, is_trial=is_trial).in_force(
+    def _agent_limit_in_force(self, own: int | None, is_trial: bool, tier_limit: int | None) -> int | None:
+        return OrganizationAgentLimit(own=own, is_trial=is_trial, tier=tier_limit).in_force(
             trial_limit=self.trial_settings.agent_limit, default=self.organization_settings.default_agent_limit
         )
 
@@ -249,6 +264,11 @@ class OrganizationService:
             if trial:
                 opening_credit = Decimal(str(policy.credit_usd))
                 organization.is_trial = True
+                organization.tier_id = self.plans.trial_plan_id()
+            else:
+                # Like a returning inbox at sign-up: while a plan can be bought, it runs
+                # nothing until it subscribes.
+                organization.tier_id = self.plans.plan_for_paying_organization()
             organization.llm_budget_usd = float(opening_credit)
             organization.llm_budget_duration = ONE_OFF_BUDGET_WINDOW
 
@@ -365,10 +385,12 @@ class OrganizationService:
             if exc.status_code != status.HTTP_502_BAD_GATEWAY:
                 raise
             not_yet_applied = exc
+        # A Platform Administrator ending a trial makes it platform-managed again.
         result = self.organization_repository.end_trial_with_event(
             organization_id,
             actor=resolve_actor_identity(context, organization_id),
             actor_display=context.user.full_name or context.user.email,
+            leave_tier=True,
         )
         if result is None:
             raise HTTPException(

@@ -4,6 +4,8 @@ import { useState, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import {
   useAbandonSyncProvider,
@@ -24,6 +26,8 @@ function Note({ children }: { children: ReactNode }) {
 
 /** One provider in the Sync list: what it is or where it syncs, and what this person may do with it. */
 export function SyncProviderRow({ provider, canManage }: { provider: SyncProvider; canManage: boolean }) {
+  const { tier, hasFeature } = useTierEntitlements();
+  const canAdd = hasFeature("integrations");
   const { connect, isConnecting } = useConnectSyncProvider(provider);
   const { disconnect, isDisconnecting } = useDisconnectSyncProvider(provider);
   const { abandon, isAbandoning } = useAbandonSyncProvider(provider);
@@ -101,7 +105,8 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
         </div>
 
         <div className="flex items-center gap-2">
-          {status === null && canManage && (
+          {status === null && canManage && !canAdd && <TierLockedNote tierName={tier?.name} what="integrations" />}
+          {status === null && canManage && canAdd && (
             <button
               type="button"
               className="af-btn af-btn-primary af-btn-sm"

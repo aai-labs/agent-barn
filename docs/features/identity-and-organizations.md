@@ -44,14 +44,14 @@ The callback resolves the account by Google account id first, then by email igno
 
 - An unverified Google address neither creates an account nor signs in to one.
 - An existing account is linked to the Google account. A pending invitee is enrolled — verified, with their invitation links retired — as if they had followed the link.
-- An address that has already had a trial, even one whose account was deleted, is refused with `?error=trial_used`.
-- An unknown address, when self-signup is enabled in platform settings (it is off by default; see [Trial onboarding](trial-onboarding.md#trials)), creates a verified User marked `signed_up_at`, their trial Organization, and their Owner Membership in one transaction, together with the `user.signed_up` (`method: google`) and `organization.created` Domain Events, then provisions the Organization's LiteLLM team. Enrolling a pending invitee through Google emits `user.signed_up` with `method: invite`. Google-only accounts hold an unusable password hash, as invitees do until they enroll.
+- An address that has already had a trial, even one whose account was deleted, gets an Organization on the none Tier when there is a paid Tier to subscribe to, and is otherwise refused with `?error=trial_used`. See [Tiers](tiers.md#free-and-sign-up), which also covers `?tier=` on `/signup` and `GET /auth/google/start`.
+- An unknown address, when self-signup is enabled in platform settings (it is off by default; see [Trial onboarding](trial-onboarding.md#trials)), creates a verified User marked `signed_up_at`, their trial Organization on the Free Tier, and their Owner Membership in one transaction, together with the `user.signed_up` (`method: google`) and `organization.created` Domain Events, then provisions the Organization's LiteLLM team. Enrolling a pending invitee through Google emits `user.signed_up` with `method: invite`. Google-only accounts hold an unusable password hash, as invitees do until they enroll.
 
 Success starts a session like password login: the refresh-token cookie, which the web app trades for an access token. The browser lands on `/onboarding` while a self-signed-up user has not finished onboarding, otherwise on `/dashboard`. Failure returns to the starting page with `?error=cancelled|failed|unavailable|unverified|signup_closed|trial_used` and nothing created. Trial onboarding itself is described in [Trial onboarding](trial-onboarding.md).
 
 ## Organization creation and membership flows
 
-Any authenticated user, including a Platform Administrator, creates an Organization through `POST /organizations` using only a name and optional description — except a self-signed-up user whose trial a Platform Administrator has not ended (`trial_ended_at` unset, even after deleting the trial) and the Owner of an active Trial Organization, who are refused with 403; the selector hides the option for them. The server records that user as the immutable Organization Creator, creates their Owner Membership in the same transaction, and applies the platform default model configuration. The configurable per-creator limit defaults to five non-deleted Organizations; Platform Privilege does not bypass it. A Platform-provisioned user's initial Organization follows the same creator and default-model rules and counts toward that limit.
+Any authenticated user, including a Platform Administrator, creates an Organization through `POST /organizations` using only a name and optional description — except a self-signed-up user whose trial a Platform Administrator has not ended (`trial_ended_at` unset, even after deleting the trial) and the Owner of an active Trial Organization, who are refused with 403; the selector hides the option for them. The server records that user as the immutable Organization Creator, creates their Owner Membership in the same transaction, and applies the platform default model configuration. Organizations created on Credit may land on the none Tier until they subscribe ([Tiers](tiers.md#free-and-sign-up)). The configurable per-creator limit defaults to five non-deleted Organizations; Platform Privilege does not bypass it. A Platform-provisioned user's initial Organization follows the same creator and default-model rules and counts toward that limit.
 
 Organization Owners and Admins can rename their Organization from its management page. The name editor trims surrounding whitespace and accepts 3–255 characters; saving refreshes the detail and membership-derived Organization selector.
 
@@ -83,15 +83,17 @@ The UI resolves Organization View from `/dashboard/[orgId]`; Platform View lives
 Every Organization has an Agent Limit: how many live Agents it may run. It is the
 Organization's own `agent_limit` when a Platform Administrator has set one
 (`PUT /platform/organizations/{id}/agent-limit`, audited as
-`organization.agent_limit.changed`), otherwise the trial setting for a Trial Organization
-or the platform's default Agent limit for any other. That default is a platform setting
+`organization.agent_limit.changed`), otherwise its [Tier](tiers.md#an-organizations-tier)'s
+when it is on one, otherwise the trial setting for a Trial Organization or the platform's
+default Agent limit for any other. That default is a platform setting
 (`GET`/`PUT /platform/settings/organizations`, the Organizations section of the platform
 settings page, audited as `platform.organization_settings.changed`); until a Platform
 Administrator saves one it is the deployment's `ORGANIZATION_DEFAULT_AGENT_LIMIT` (unset:
 10). Every Organization therefore has a limit. It is checked when
 an Agent is hired, and again under a lock when the Agent is stored, so two concurrent hires
-cannot both take the last place. Lowering it never removes Agents; it only refuses new
-hires. Members read the limit in force on the Organization read, which the hire dialog
+cannot both take the last place. An Agent on a [Tier Hold](tiers.md#tier-holds) takes no
+place. Lowering the limit never removes Agents and holds none by itself; it only refuses new
+hires. Only a Tier holds Agents. Members read the limit in force on the Organization read, which the hire dialog
 uses to say so before the form.
 
 ## Source map

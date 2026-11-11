@@ -20,6 +20,7 @@ from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, req
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.custom_api.models import CustomApiConnectionsApply
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.models import SuspensionReason
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
@@ -688,6 +689,45 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # Suspended: stopped, it can't start and doesn't count toward the Agent Limit until it is
+    # resumed. Everything it has is kept.
+    suspended_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    suspension_reason: SuspensionReason | None = SqlField(
+        default=None,
+        sa_column=Column(
+            sa.Enum(
+                SuspensionReason,
+                native_enum=False,
+                create_constraint=False,
+                length=16,
+                values_callable=lambda members: [member.value for member in members],
+            ),
+            nullable=True,
+        ),
+    )
+    # Memory turned off without being deleted; turning it on again resumes it.
+    memory_suspended_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    memory_suspension_reason: SuspensionReason | None = SqlField(
+        default=None,
+        sa_column=Column(
+            sa.Enum(
+                SuspensionReason,
+                native_enum=False,
+                create_constraint=False,
+                length=16,
+                values_callable=lambda members: [member.value for member in members],
+            ),
+            nullable=True,
+        ),
+    )
     file_sync_enabled: bool = SqlField(
         default=True,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
@@ -711,6 +751,25 @@ class Agent(BaseModel, table=True):
     )
     llm_alerted_threshold: int | None = SqlField(default=None, nullable=True)
     llm_alert_key: str | None = SqlField(default=None, nullable=True, max_length=128)
+
+    def suspend(self, reason: SuspensionReason, now: datetime) -> None:
+        """Stopping it is the caller's: a suspended Agent only refuses to start."""
+        self.suspended_at = now
+        self.suspension_reason = reason
+
+    def resume(self) -> None:
+        self.suspended_at = None
+        self.suspension_reason = None
+
+    def suspend_memory(self, reason: SuspensionReason, now: datetime) -> None:
+        self.memory_enabled = False
+        self.memory_suspended_at = now
+        self.memory_suspension_reason = reason
+
+    def resume_memory(self) -> None:
+        """Turning memory on again is the caller's; this only clears the suspension."""
+        self.memory_suspended_at = None
+        self.memory_suspension_reason = None
 
 
 # A managed update refreshes its heartbeat on every poll while it waits. It runs
@@ -1724,6 +1783,11 @@ class AgentRead(PydanticBaseModel):
     #: The limit a Hermes run actually gets: the Agent's own, or the platform default.
     effective_max_turns: int
     memory_enabled: bool = False
+    #: When it was suspended, and why; it can't start until resumed.
+    suspended_at: datetime | None = None
+    suspension_reason: SuspensionReason | None = None
+    memory_suspended_at: datetime | None = None
+    memory_suspension_reason: SuspensionReason | None = None
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     creator: AgentCreatorRead | None = None

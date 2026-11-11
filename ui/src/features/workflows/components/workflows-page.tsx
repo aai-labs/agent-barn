@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAgent } from "@/features/agents/hooks/use-agent";
 import { canAgent } from "@/features/agents/utils";
 import { ApiError } from "@/shared/api/error/errors";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import {
   useWorkflow,
@@ -122,10 +123,13 @@ export function WorkflowsPage({
   }, [startVersion, onStartingChange]);
   const canAuthor =
     canAgent(agent, "agent.update") && capabilities.data?.authoring;
+  // Without workflows in the tier, existing ones stay editable but none can be added or run.
+  const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
   const canRun = Boolean(
     capabilities.data?.execution &&
       detail.data?.executionAvailable &&
-      canAgent(agent, "agent.update"),
+      canAgent(agent, "agent.update") &&
+      tierAllowsWorkflows,
   );
   const maySave =
     canAuthor &&
@@ -394,7 +398,7 @@ export function WorkflowsPage({
                     </DropdownMenu>
                   )}
                 </>
-              ) : canAuthor ? (
+              ) : canAuthor && tierAllowsWorkflows ? (
                 <button
                   className="af-btn af-btn-primary"
                   onClick={() => {

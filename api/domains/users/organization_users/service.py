@@ -11,6 +11,7 @@ from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.users.organization_users.exceptions import (
     UserAlreadyPartOfOrganizationException,
 )
@@ -40,6 +41,7 @@ class OrganizationUserService:
     user_repository: UserRepository
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
+    usage: UsageGuard
 
     def find_by_user_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> OrganizationUserRead:
         organization_user = self.organization_user_repository.get_by_user_id_and_organization_id(
@@ -231,6 +233,7 @@ class OrganizationUserService:
             PermissionKey.MEMBERSHIP_INVITE,
             detail="You don't have permission to manage this organization's members",
         )
+        self.usage.check(organization_id, UsageAction.INVITE_MEMBER)
         if data.role == OrganizationRole.OWNER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

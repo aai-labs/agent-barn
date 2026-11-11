@@ -29,6 +29,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import type { Agent, WebChatMessage } from "../schemas";
 import { MAIN_THREAD_ID, useWebChat } from "../hooks/use-web-chat";
@@ -86,6 +88,8 @@ interface ChatThreadProps {
   isAgentWorking: boolean;
   isAwaitingReply: boolean;
   canAnswerApprovals: boolean;
+  /** False when the organization's tier leaves out Web Chat; approvals can still be answered. */
+  canSend: boolean;
   sendMessage: (text: string, approvalId?: string) => Promise<void>;
   stopGeneration: () => Promise<void>;
   onSent: () => void;
@@ -97,6 +101,7 @@ function ChatThread({
   isAgentWorking,
   isAwaitingReply,
   canAnswerApprovals,
+  canSend,
   sendMessage,
   stopGeneration,
   onSent,
@@ -110,7 +115,7 @@ function ChatThread({
   );
   const runtime = useExternalStoreRuntime<WebChatMessage>({
     messages,
-    isDisabled: !isAgentWorking,
+    isDisabled: !isAgentWorking || !canSend,
     isRunning: isAgentWorking && isAwaitingReply,
     convertMessage,
     onNew: async (message) => {
@@ -359,6 +364,8 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
   }, [isMaximized]);
 
   const isLive = streamStatus === "streaming";
+  const { tier, allowsPlatform } = useTierEntitlements();
+  const canSend = allowsPlatform("web");
 
   return (
       <div
@@ -431,6 +438,11 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
             </div>
           </div>
 
+          {!canSend && (
+            <div className="px-4 py-2" style={{ borderBottom: "1px solid var(--line)" }}>
+              <TierLockedNote tierName={tier?.name} what="Web Chat" />
+            </div>
+          )}
           <div className="flex-1 overflow-hidden">
             <ChatThread
               key={threadId}
@@ -439,6 +451,7 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
               isAgentWorking={isAgentWorking}
               isAwaitingReply={isAwaitingReply}
               canAnswerApprovals={agent.allowedActions.includes("agent.update")}
+              canSend={canSend}
               sendMessage={sendMessage}
               stopGeneration={stopGeneration}
               onSent={handleSent}

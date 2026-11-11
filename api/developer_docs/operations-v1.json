@@ -135,6 +135,11 @@
     "discard_draft_platform_templates__template_key__draft_delete"
   ],
   [
+    "DELETE",
+    "/platform/tiers/{tier_id}",
+    "delete_tier_platform_tiers__tier_id__delete"
+  ],
+  [
     "GET",
     "/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}",
     "download_artifact_agent_artifacts__organization_id___agent_id___artifact_id__get"
@@ -701,6 +706,16 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/subscription",
+    "read_subscription_organizations__organization_id__subscription_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/subscription/preview",
+    "preview_subscription_change_organizations__organization_id__subscription_preview_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/sync-providers",
     "list_sync_providers_organizations__organization_id__sync_providers_get"
   ],
@@ -738,6 +753,11 @@
     "GET",
     "/organizations/{organization_id}/templates/{template_key}/versions",
     "list_template_versions_organizations__organization_id__templates__template_key__versions_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/tier-holds",
+    "list_tier_holds_organizations__organization_id__tier_holds_get"
   ],
   [
     "GET",
@@ -838,6 +858,11 @@
     "GET",
     "/platform/organizations/{organization_id}/members",
     "list_platform_members_platform_organizations__organization_id__members_get"
+  ],
+  [
+    "GET",
+    "/platform/organizations/{organization_id}/subscription",
+    "read_subscription_for_platform_platform_organizations__organization_id__subscription_get"
   ],
   [
     "GET",
@@ -946,6 +971,11 @@
   ],
   [
     "GET",
+    "/platform/tiers",
+    "list_tiers_platform_tiers_get"
+  ],
+  [
+    "GET",
     "/platform/users",
     "list_users_platform_users_get"
   ],
@@ -953,6 +983,11 @@
     "GET",
     "/platform/users/{user_id}",
     "get_user_platform_users__user_id__get"
+  ],
+  [
+    "GET",
+    "/tiers",
+    "list_offered_tiers_tiers_get"
   ],
   [
     "PATCH",
@@ -1043,6 +1078,11 @@
     "PATCH",
     "/platform/templates/{template_key}/draft",
     "update_draft_platform_templates__template_key__draft_patch"
+  ],
+  [
+    "PATCH",
+    "/platform/tiers/{tier_id}",
+    "update_tier_platform_tiers__tier_id__patch"
   ],
   [
     "PATCH",
@@ -1386,6 +1426,26 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/subscription",
+    "start_subscription_organizations__organization_id__subscription_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/subscription/cancel",
+    "cancel_subscription_organizations__organization_id__subscription_cancel_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/subscription/portal",
+    "open_subscription_portal_organizations__organization_id__subscription_portal_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/subscription/resume",
+    "resume_subscription_organizations__organization_id__subscription_resume_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/sync-providers/{provider_key}/connection/disconnect",
     "disconnect_sync_provider_organizations__organization_id__sync_providers__provider_key__connection_disconnect_post"
   ],
@@ -1426,6 +1486,16 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/tier-holds/agents/{agent_id}/hold",
+    "hold_agent_organizations__organization_id__tier_holds_agents__agent_id__hold_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/tier-holds/agents/{agent_id}/release",
+    "release_agent_organizations__organization_id__tier_holds_agents__agent_id__release_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/transfer-ownership",
     "transfer_ownership_organizations__organization_id__transfer_ownership_post"
   ],
@@ -1448,6 +1518,11 @@
     "POST",
     "/platform/organizations/{organization_id}/llm-budget/enroll",
     "enroll_organization_llm_keys_platform_organizations__organization_id__llm_budget_enroll_post"
+  ],
+  [
+    "POST",
+    "/platform/organizations/{organization_id}/subscription/end-period",
+    "end_subscription_period_platform_organizations__organization_id__subscription_end_period_post"
   ],
   [
     "POST",
@@ -1478,6 +1553,11 @@
     "POST",
     "/platform/templates/{template_key}/draft/publish",
     "publish_draft_platform_templates__template_key__draft_publish_post"
+  ],
+  [
+    "POST",
+    "/platform/tiers",
+    "create_tier_platform_tiers_post"
   ],
   [
     "POST",
@@ -1558,6 +1638,11 @@
     "PUT",
     "/platform/organizations/{organization_id}/llm-budget",
     "set_organization_llm_budget_platform_organizations__organization_id__llm_budget_put"
+  ],
+  [
+    "PUT",
+    "/platform/organizations/{organization_id}/tier",
+    "set_organization_tier_platform_organizations__organization_id__tier_put"
   ],
   [
     "PUT",

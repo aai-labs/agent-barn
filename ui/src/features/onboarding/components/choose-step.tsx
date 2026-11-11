@@ -10,10 +10,16 @@ export function ChooseStep({
   path,
   onPathChange,
   agentLimit,
+  allowsCustom = true,
+  sharedBot = true,
 }: {
+  /** False on a paid tier: the ready-made assistant chats on the web, without the shared bot. */
+  sharedBot?: boolean;
   path: OnboardingPath;
   onPathChange: (path: OnboardingPath) => void;
   agentLimit: number | null;
+  /** False when the organization's tier allows only the ready-made assistant. */
+  allowsCustom?: boolean;
 }) {
   return (
     <>
@@ -24,17 +30,25 @@ export function ChooseStep({
           icon={<Zap width={16} height={16} />}
           title="Quick start"
           badge="Recommended"
-          description="We set up a general-purpose assistant for you. Chat with it in Telegram in under a minute."
-          points={["Ready to go, nothing to configure", "Chat in Telegram or on the web"]}
+          description={
+            sharedBot
+              ? "We set up a general-purpose assistant for you. Chat with it in Telegram in under a minute."
+              : "We set up a general-purpose assistant for you. Chat with it on the web straight away."
+          }
+          points={
+            sharedBot
+              ? ["Ready to go, nothing to configure", "Chat in Telegram or on the web"]
+              : ["Ready to go, nothing to configure", "Chat on the web; add Telegram, Slack or Discord later"]
+          }
         />
-        <Option
+        {allowsCustom && <Option
           selected={path === "own"}
           onSelect={() => onPathChange("own")}
           icon={<Wrench width={16} height={16} />}
           title="Build my own agent"
           description="Choose its template, runtime and model yourself."
           points={["Hermes or OpenClaw, any template", "Chat on the web; add Telegram, Slack or Discord later"]}
-        />
+        />}
       </div>
       {agentLimit != null && (
         <p

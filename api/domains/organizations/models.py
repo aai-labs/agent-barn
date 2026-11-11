@@ -14,6 +14,7 @@ from sqlmodel import CheckConstraint, Field, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.core.config import get_config
+from api.domains.usage.models import OrganizationTierRead, TierEntitlementsRead
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.postgres.models import BaseModel
 
@@ -57,6 +58,17 @@ class Organization(BaseModel, table=True):
     # How many Agents it may run, set by a Platform Administrator. NULL follows the
     # default: the trial setting for a trial, the deployment's for any other.
     agent_limit: int | None = Field(default=None, nullable=True)
+    # The Tier it is on. NULL: platform-managed, with no Tier restricting it.
+    tier_id: UUID | None = Field(default=None, foreign_key="tier.id", nullable=True, ondelete="RESTRICT", index=True)
+    # When holds apply to an Organization moved onto its Tier by a migration, unless its
+    # Owner chose first. NULL: nothing is waiting.
+    tier_holds_due_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    # A Platform Administrator chose the Tier, so no payment provider event replaces it.
+    tier_assigned_by_platform: bool = Field(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
 
     # Platform-administered LLM spend ceiling. Always set: a new Organization starts at
     # the deployment default, and 0 is a real zero allowance. A float is enough here
@@ -129,11 +141,18 @@ class CreditGrantKind(str, enum.Enum):
     # A platform administrator setting the ceiling of an Organization on credit; also
     # the opening balance of one that was on credit before the ledger existed.
     ADJUSTMENT = "adjustment"
+    # A paid Tier's one-time credit, granted once per Organization; Free's is the trial.
+    TIER_CREDIT = "tier_credit"
+    # A paid Tier's usage for one subscription period.
+    ALLOWANCE = "allowance"
+    # What was left of that period's allowance when it ended.
+    ALLOWANCE_EXPIRY = "allowance_expiry"
 
 
 # A purchase can only add credit, a refund or chargeback only take it back off. Trial
 # credit may be zero, as the platform's trial setting allows.
-_DEBITING_KINDS = frozenset({CreditGrantKind.REFUND, CreditGrantKind.CHARGEBACK})
+_DEBITING_KINDS = frozenset({CreditGrantKind.REFUND, CreditGrantKind.CHARGEBACK, CreditGrantKind.ALLOWANCE_EXPIRY})
+_CREDITING_KINDS = frozenset({CreditGrantKind.PURCHASE, CreditGrantKind.TIER_CREDIT, CreditGrantKind.ALLOWANCE})
 
 
 class OrganizationCreditGrant(BaseModel, table=True):
@@ -188,8 +207,8 @@ class CreditGrantCreate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def _sign_matches_kind(self) -> CreditGrantCreate:
-        if self.kind is CreditGrantKind.PURCHASE and self.credit_usd <= 0:
-            raise ValueError("A purchase must add credit")
+        if self.kind in _CREDITING_KINDS and self.credit_usd <= 0:
+            raise ValueError(f"A {self.kind.value} grant must add credit")
         if self.kind is CreditGrantKind.TRIAL and self.credit_usd < 0:
             raise ValueError("Trial credit cannot be negative")
         if self.kind in _DEBITING_KINDS and self.credit_usd >= 0:
@@ -218,6 +237,14 @@ class OrganizationRead(PydanticBaseModel):
     trial_agent_limit: int | None = None
     # Creation capacity, independent of which Agents this member may read.
     trial_agent_limit_reached: bool = False
+    # The Tier it is on; None when it is platform-managed and unrestricted. Only the single
+    # Organization read fills in these three.
+    tier: OrganizationTierRead | None = None
+    entitlements: TierEntitlementsRead | None = None
+    # Whether it already runs more than its Tier covers.
+    over_tier: bool = False
+    # When what it runs beyond its Tier is held unless its Owner chooses first.
+    tier_holds_due_at: datetime | None = None
 
 
 class PlatformOrganizationRead(PydanticBaseModel):
@@ -249,9 +276,14 @@ class PlatformOrganizationRead(PydanticBaseModel):
     trial_expired_at: datetime | None = None
     # Its own Agent limit; None when it follows the default.
     agent_limit: int | None = None
-    # The Agent limit in force, own or default; None means no limit. Only the single
-    # Organization read fills it in.
+    # The Agent limit in force, own, its Tier's or default; None means no limit. Only the
+    # single Organization read fills it in.
     agent_limit_in_force: int | None = None
+    tier_id: UUID | None = None
+    tier_assigned_by_platform: bool = False
+    # Only the single Organization read fills in these two.
+    tier: OrganizationTierRead | None = None
+    over_tier: bool = False
 
 
 class OrganizationBudgetEmailReceipt(BaseModel, table=True):

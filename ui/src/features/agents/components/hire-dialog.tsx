@@ -6,6 +6,7 @@ import { ArrowRight, Check, WandSparkles, Wrench, X } from "lucide-react";
 
 import { useOrganization } from "@/features/organizations/hooks/use-organization";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import type { HiredAgent } from "../hooks/use-hire-agent-form";
 import { DialogShell } from "./hire-dialog-primitives";
@@ -25,6 +26,8 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   const isTrial = Boolean(selectedOrganization?.isTrial);
   // The membership list doesn't carry the agent limit; the organization read does.
   const { organization, isLoading, isFetching, error, refetch } = useOrganization(selectedOrganization?.id ?? "");
+  // Without custom agents, the tier allows only the ready-made assistant.
+  const premadeOnly = !useTierEntitlements().hasFeature("custom_agents");
   const [selected, setSelected] = useState<HireChoice | null>(null);
   const [started, setStarted] = useState<HireChoice | null>(null);
   const limit = organization?.trialAgentLimit;
@@ -54,7 +57,13 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
         </DialogShell>
       );
     }
+    if (premadeOnly) return <QuickStartDialog onClose={onClose} onHired={onHired} />;
     return <HireFormDialog onClose={onClose} onHired={onHired} />;
+  }
+
+  if (premadeOnly && started === null && !disabled) {
+    setStarted("ready");
+    return null;
   }
 
   // An explicit dashboard choice advances as soon as its capacity check succeeds.

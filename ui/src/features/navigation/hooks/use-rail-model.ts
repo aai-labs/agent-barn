@@ -107,7 +107,7 @@ export function useRailModel(): RailModel {
           },
         ]
       : []),
-    ...(billing?.available
+    ...(billing?.available || billing?.subscriptionsAvailable || billing?.subscription
       ? [
           {
             key: "billing",

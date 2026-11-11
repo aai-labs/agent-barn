@@ -34,8 +34,10 @@ import api.domains.playbooks.platform_models
 import api.domains.rbac.models
 import api.domains.shared_credentials.models
 import api.domains.skills.models
+import api.domains.subscriptions.models
 import api.domains.sync_provider.models
 import api.domains.templates.models
+import api.domains.tiers.models
 import api.domains.tool_calls.models
 import api.domains.users.models
 import api.domains.users.organization_users.models

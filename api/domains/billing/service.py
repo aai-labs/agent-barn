@@ -47,6 +47,9 @@ from api.domains.organizations.service import OrganizationService
 from api.domains.platform_admin.service import PlatformAdminService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.domains.subscriptions.service import SubscriptionService
+from api.domains.subscriptions.stripe_sync import StripeSubscriptionSync, subscription_reference
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.users.service import UserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.stripe.client import PaymentProviderUnavailable, StripeGateway, StripeNotConfigured
@@ -89,6 +92,9 @@ class BillingService:
     users: UserService
     unapplied: UnappliedPurchaseRepository
     checkouts: BillingCheckoutRepository
+    usage: UsageGuard
+    subscriptions: SubscriptionService
+    subscription_sync: StripeSubscriptionSync
 
     # --- platform settings ----------------------------------------------------------
 
@@ -168,8 +174,19 @@ class BillingService:
         grants = self.organizations.list_credit_grants(organization_id)
         # The same spend the limit is enforced on: the team's, plus what it doesn't count.
         spend = self.budgets.get_organization_llm_budget(organization_id, context).spend_usd
+        upgrade_required = not self.usage.allows(organization_id, UsageAction.BUY_CREDIT)
+        organization = self.organization_service.organization_repository.get(organization_id)
+        assigned_by_platform = bool(organization and organization.tier_assigned_by_platform)
         return OrganizationBillingRead(
-            available=self._takes_payments(settings) and credit.runs_on_credit,
+            available=self._takes_payments(settings) and credit.runs_on_credit and not upgrade_required,
+            upgrade_required=upgrade_required,
+            tier=self.usage.summary(organization_id).tier,
+            subscriptions_available=(
+                self.subscriptions.available() and credit.runs_on_credit and not assigned_by_platform
+            ),
+            subscription_provider=(provider.key if (provider := self.subscriptions.provider()) else None),
+            tier_assigned_by_platform=assigned_by_platform,
+            subscription=self.subscriptions.read(organization_id),
             on_credit=credit.runs_on_credit,
             credit_usd=credit.credit_usd,
             spend_usd=spend,
@@ -220,6 +237,7 @@ class BillingService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This organization's spend limit is set by the platform, so it doesn't buy credit.",
             )
+        await run_in_threadpool(self.usage.check, organization_id, UsageAction.BUY_CREDIT)
         if not settings.min_purchase_usd <= float(data.credit_usd) <= settings.max_purchase_usd:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -289,6 +307,10 @@ class BillingService:
         event = json.loads(payload)
         data = event["data"]["object"]
         try:
+            if subscription_reference(event["type"], data) is not None:
+                # A Tier subscription's event: Checkout, the subscription itself, or its invoices.
+                await run_in_threadpool(self.subscription_sync.handle, event["type"], data)
+                return
             match event["type"]:
                 case "checkout.session.completed" | "checkout.session.async_payment_succeeded":
                     await run_in_threadpool(self._purchase, data)

@@ -25,6 +25,8 @@ from api.core.config import get_config
 
 PRE_AF368_REVISION = "b3c9e1f2a7d4"
 AF368_HEAD = "b3d8e1f4a6c2"
+# Adds the rule that self-signup needs positive credit; Free replacing the trial moves it off the table.
+SIGNUP_POLICY_REVISION = "c61a94e72b30"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 AF368_COLUMNS = {
     ("user", "google_sub"),
@@ -143,7 +145,7 @@ def test_signup_policy_upgrade_constraint_and_downgrade(scratch_database):
         connection.execute(
             text("INSERT INTO platform_trial_settings (id, credit_usd, updated_at) VALUES (1, 0, now())")
         )
-    command.upgrade(scratch_database.config, "head")
+    command.upgrade(scratch_database.config, SIGNUP_POLICY_REVISION)
     with scratch_database.engine.connect() as connection:
         assert_that(
             connection.execute(text("SELECT self_signup_enabled FROM platform_trial_settings")).scalar_one(),
@@ -158,7 +160,7 @@ def test_signup_policy_upgrade_constraint_and_downgrade(scratch_database):
         assert_that(
             connection.execute(text("SELECT credit_usd FROM platform_trial_settings")).scalar_one(), equal_to(20)
         )
-    command.upgrade(scratch_database.config, "head")
+    command.upgrade(scratch_database.config, SIGNUP_POLICY_REVISION)
     with scratch_database.engine.connect() as connection:
         assert_that(
             connection.execute(text("SELECT self_signup_enabled FROM platform_trial_settings")).scalar_one(),

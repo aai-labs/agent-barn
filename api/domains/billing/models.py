@@ -11,6 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlmodel import Field as SqlField
 from sqlmodel import SQLModel
 
+from api.domains.subscriptions.models import SubscriptionProviderKey, SubscriptionRead
+from api.domains.usage.models import OrganizationTierRead
+
 BILLING_SETTINGS_SUBJECT_DISPLAY = "Billing settings"
 DEFAULT_MIN_PURCHASE_USD = 5.0
 DEFAULT_MAX_PURCHASE_USD = 500.0
@@ -20,6 +23,8 @@ MAX_PURCHASE_CAP_USD = 100_000.0
 # The smallest card payment Stripe takes in US dollars.
 MIN_PURCHASE_FLOOR_USD = 0.5
 MAX_PURCHASE_FEE_PERCENT = 100.0
+DEFAULT_PAYMENT_GRACE_DAYS = 7
+MAX_PAYMENT_GRACE_DAYS = 60
 
 
 class PlatformBillingSettings(SQLModel, table=True):
@@ -32,6 +37,10 @@ class PlatformBillingSettings(SQLModel, table=True):
         sa.CheckConstraint("min_purchase_usd > 0", name="ck_platform_billing_settings_min_positive"),
         sa.CheckConstraint("max_purchase_usd >= min_purchase_usd", name="ck_platform_billing_settings_max_above_min"),
         sa.CheckConstraint("purchase_fee_percent >= 0", name="ck_platform_billing_settings_fee_non_negative"),
+        sa.CheckConstraint(
+            "payment_grace_days >= 0 AND payment_grace_days <= 60",
+            name="ck_platform_billing_settings_grace_days_range",
+        ),
     )
     id: int = SqlField(default=1, primary_key=True)
     # Whether Organizations on credit can buy more. Off until a Platform Administrator
@@ -42,6 +51,11 @@ class PlatformBillingSettings(SQLModel, table=True):
     # Added on top of every purchase, to cover the payment provider's fee or keep a margin.
     # $1 of credit is always $1 of model spend; this is the only markup.
     purchase_fee_percent: float
+    # How long a subscription whose payment failed keeps its Tier before the Organization
+    # drops to Free.
+    payment_grace_days: int = SqlField(
+        default=DEFAULT_PAYMENT_GRACE_DAYS, sa_column_kwargs={"server_default": str(DEFAULT_PAYMENT_GRACE_DAYS)}
+    )
     updated_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
     updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
 
@@ -90,6 +104,7 @@ class BillingSettingsRead(BaseModel):
     min_purchase_usd: float = DEFAULT_MIN_PURCHASE_USD
     max_purchase_usd: float = DEFAULT_MAX_PURCHASE_USD
     purchase_fee_percent: float = DEFAULT_PURCHASE_FEE_PERCENT
+    payment_grace_days: int = DEFAULT_PAYMENT_GRACE_DAYS
     # None until the first save.
     updated_at: datetime | None = None
 
@@ -106,6 +121,7 @@ class BillingSettingsUpdate(BaseModel):
         default=None, ge=MIN_PURCHASE_FLOOR_USD, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False
     )
     purchase_fee_percent: float | None = Field(default=None, ge=0, le=MAX_PURCHASE_FEE_PERCENT, allow_inf_nan=False)
+    payment_grace_days: int | None = Field(default=None, ge=0, le=MAX_PAYMENT_GRACE_DAYS)
 
     @model_validator(mode="after")
     def _settings_keep_a_value(self) -> Self:
@@ -114,7 +130,7 @@ class BillingSettingsUpdate(BaseModel):
                 raise ValueError(f"{setting} can't be removed")
         return self
 
-    def changes(self) -> dict[str, bool | float]:
+    def changes(self) -> dict[str, bool | float | int]:
         return self.model_dump(include=self.model_fields_set)
 
 
@@ -145,8 +161,20 @@ class PlatformCreditRecordRead(BaseModel):
 
 
 class OrganizationBillingRead(BaseModel):
-    # Whether this Organization can buy credit: payments are on and it runs on credit.
+    # Whether this Organization can buy credit: payments are on, it runs on credit, and its
+    # Tier isn't Free or none.
     available: bool
+    # Free and none subscribe to a paid Tier before they can buy credit.
+    upgrade_required: bool = False
+    # The Tier it is on; None when it is platform-managed.
+    tier: OrganizationTierRead | None = None
+    # Whether it may subscribe: a provider takes subscriptions and a paid Tier is offered.
+    subscriptions_available: bool = False
+    # Who takes a new subscription's payment: `stripe`, or `mock` for demo payments.
+    subscription_provider: SubscriptionProviderKey | None = None
+    # A platform administrator chose its Tier, so it doesn't subscribe.
+    tier_assigned_by_platform: bool = False
+    subscription: SubscriptionRead | None = None
     # Whether it runs on credit at all, rather than on a limit its plan renews.
     on_credit: bool
     credit_usd: float

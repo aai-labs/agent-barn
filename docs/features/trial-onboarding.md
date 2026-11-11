@@ -3,7 +3,8 @@
 ## Read when
 
 Read before changing self-signup, Trial Organizations, Trial Credit, the onboarding
-pages, or what a new user's Agent is set up with.
+pages, or what a new user's Agent is set up with. A trial is an Organization on the Free
+Tier; Tiers themselves are in [Tiers](tiers.md).
 
 ## Role in the system
 
@@ -30,12 +31,20 @@ targets: the refreshed API status no longer includes the trial setup details.
 
 After sign-in, `/onboarding` uses five steps: **Signed in → Choose how to start →
 Connect Telegram or Set up your agent → Connect Gmail → You're ready**. Signed in is
-already complete.
+already complete. While subscriptions are available, or for an Organization on none,
+**Choose your tier** comes before Choose how to start, in the same place on the rail: the
+offered Tiers, with continuing on Free, subscribing to a paid Tier (through Stripe's Checkout,
+or a demo payment where the deployment allows it), or booking a call for a contact-only one. A
+Tier picked on the pricing page (`?tier=`) is named and highlighted. Stripe sends the user back
+to `/onboarding?subscription=started`, which waits for the subscription to arrive before going
+on; an Organization that already has a subscription skips the step. See
+[Tiers](tiers.md#free-and-sign-up).
 The frame shows a step rail on desktop and compact progress on small screens; Trial
 Credit appears in the desktop rail.
 
 1. **Choose how to start**. Quick start is recommended and preselected. Build my own
-   lets the user choose their Agent's name, runtime, template and model. The trial's
+   lets the user choose their Agent's name, runtime, template and model; it is offered only
+   when the Organization's Tier includes custom agents, so not on Free. The trial's
    Agent limit is shown when available. Opening onboarding creates no Agent.
    **I'll do this later** records completion and opens the dashboard without creating
    an Agent. The user can hire from the dashboard whenever ready.
@@ -46,6 +55,11 @@ Credit appears in the desktop rail.
    `POST /onboarding/agent`. Each call does what is still missing: creates a Hermes
    Agent from `general-purpose`, names it like the hire dialog, gives it an enabled
    Agent Barn Telegram Connection before starting, and starts it if stopped or failed.
+   The shared bot is the free trial's way to try the Agent: an Organization that is no
+   longer a trial, such as one that subscribed in the tier step, gets its Agent without
+   the Connection, and the rail's step reads **Set up your assistant** instead. After setup
+   it goes to Connect Gmail when its Tier includes integrations, then to Web Chat; the
+   rail's credit card names the paid Tier instead of Free trial.
    Setup failures show an explanation and Try again. **I'll do this later** records
    completion and opens the dashboard, preserving any Agent already created.
    Setup status refreshes after a failed request so an Agent created before the
@@ -72,7 +86,8 @@ Credit appears in the desktop rail.
    generated name, required Skills, and entered credentials persist while browsing.
    **I'll do this later** is also available here when no hire/start request is in flight;
    it creates no Agent and preserves any Agent already created by a failed start.
-4. **Connect Gmail** (optional, both paths). Once the Agent exists, the user can give it
+4. **Connect Gmail** (optional, both paths, and only when the Tier includes integrations;
+   otherwise every way into it goes where it would have led). Once the Agent exists, the user can give it
    read-only Gmail with a Google app password, or **Skip** to the ready screen;
    **I'll do this later** records completion and opens the dashboard. Connecting uses the
    agent settings calls: stop the Agent if it is running, save the
@@ -110,24 +125,31 @@ self-signed-up user back to `/onboarding` until they finish.
 
 | Rule | Where |
 | --- | --- |
-| One trial per email inbox, ever: signup records a hash of the normalised address in `trial_grant` (lowercased, any `+tag` dropped, and for Gmail dots dropped and googlemail.com read as gmail.com), kept when the account is deleted; a recorded address, or one recorded before normalisation by its lowercased form, is refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
-| A self-signed-up user creates no Organizations until their trial has ended (`user.trial_ended_at`), by a credit purchase or a Platform Administrator, so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option). Once it has ended, every Organization they create runs on Credit, starting with none, as does every Organization created by anyone a Platform Administrator didn't set up, except that an invited member whose address never had a trial gets one as their first Organization ([Credit](credit.md)). Those trials skip onboarding, which is for self-signups | `OrganizationService.create_organization_for_current_user` |
+| A trial is the Free Tier: sign-up puts it on Free, with Free's one-time credit as its Trial Credit and Free's Agent limit. Sign-up is closed while Free isn't offered or grants no credit | `../../api/domains/auth/google_sign_in.py`, [Tiers](tiers.md#free-and-sign-up) |
+| One trial per email inbox, ever: signup records a hash of the normalised address in `trial_grant` (lowercased, any `+tag` dropped, and for Gmail dots dropped and googlemail.com read as gmail.com), kept when the account is deleted; a recorded address, or one recorded before normalisation by its lowercased form, gets an Organization on none when there is a paid Tier to subscribe to, and is otherwise refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
+| A self-signed-up user creates no Organizations until their trial has ended (`user.trial_ended_at`), by a credit purchase, a subscription or a Platform Administrator, so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option). Once it has ended, every Organization they create runs on Credit, starting with none, and on the none Tier while a paid Tier can be subscribed to ([Tiers](tiers.md#free-and-sign-up)), as does every Organization created by anyone a Platform Administrator didn't set up, except that an invited member whose address never had a trial gets one as their first Organization ([Credit](credit.md)). Those trials skip onboarding, which is for self-signups | `OrganizationService.create_organization_for_current_user` |
 | A Trial Organization runs at most the platform's trial agent limit, unless a Platform Administrator set its own [Agent Limit](identity-and-organizations.md#agent-limit), counted under a lock as an Agent is stored (409). The limit applies to existing trials at once; a trial over a lowered limit keeps its Agents but hires no more | `AgentRepository.create_with_creator_access`, `AgentService.create_agent` |
 | At most the platform's cap on active trials exist at once, counted under a lock at sign-up; a sign-up past it is refused (`?error=trials_full`) with nothing created or recorded, so the address can come back. Ending, expiring or deleting a trial frees its place; no cap is the default | `GoogleSignInService._sign_up`, `TrialSettingsService.trials_full` |
 | Trial Credit is a one-off Model Spend Limit: the first grant on the Organization's [Credit](credit.md) ledger | [Costs](costs.md#organization-llm-budgets) |
 | A trial whose credit runs out is expired (`trial_expired_at`, `organization.trial.expired`) when its budget-exhausted alert is delivered: it keeps its Agents and stays a trial, but no longer counts as active. A Platform Administrator raising its credit makes it active again (if still spent, the next alert expires it again). Buying credit converts it (or any trial) into an ordinary Organization that stays on Credit | `OrganizationTrialExpiryHandler`, `OrganizationService.convert_trial` |
-| A Platform Administrator ends a trial, choosing the spend limit and renewal window it goes on to | `POST /platform/organizations/{id}/end-trial` with `{budget_usd, budget_duration}`, the platform Organization page |
+| A Platform Administrator ends a trial, choosing the spend limit and renewal window it goes on to; it leaves Free and becomes platform-managed. Subscribing to a paid Tier also ends it, moving it onto that Tier | `POST /platform/organizations/{id}/end-trial` with `{budget_usd, budget_duration}`, the platform Organization page; [Tiers](tiers.md#subscriptions) |
 
 Platform Administrators enable or disable self-signup and set the Trial Credit for new trials, the trial agent limit and
 the cap on active trials on the platform settings page under **Signup & trials** (`GET`/`PUT
-/platform/settings/trial`, a singleton row; each setting that moves is audited as
-`platform.trial_settings.changed`, a removed cap as `null`). The page also shows how many
-trials are active. Until the first save, self-signup is disabled, Trial Credit is $0,
-the Agent limit is one, and there is no cap. Self-signup requires positive Trial Credit.
-Updates validate the combined persisted settings under a lock: administrators may enable
-signup and set credit in one save, or disable signup and clear credit together. Zero
+/platform/settings/trial`). Signup and the cap are a singleton row, and each of them that
+moves is audited as `platform.trial_settings.changed`, a removed cap as `null`. The Trial
+Credit and agent limit are the Free Tier's, so this page changes them through the Tier
+catalog, as **Tiers** does: audited as `platform.tier.changed`, and a lower agent limit
+holds what Free no longer covers ([Tier Holds](tiers.md#tier-holds)). The read also says
+whether Free is offered (`free_tier_offered`). The page shows how many trials are active.
+Until the first save, self-signup is disabled and there is no cap; the credit and limit are
+Free's seeded $10 and one Agent. Self-signup requires positive Trial Credit.
+Updates validate the combined settings first: administrators may enable signup and set
+credit in one save, or disable signup and clear credit together. Signup is turned off
+before the credit changes and anything else is stored after it, so signup is never open on
+no credit. Zero
 credit is refused while signup remains enabled; negative or non-finite credit is always
-refused. A database constraint also enforces the positive-credit requirement. Signup
+refused. Signup
 reads its enabled state and credit together and holds them stable until trial creation
 commits. Changes apply without a restart. An active trial is any Organization still
 on a trial whose credit has not run out. An existing trial's spend limit is changed on

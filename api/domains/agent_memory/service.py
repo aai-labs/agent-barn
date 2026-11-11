@@ -25,6 +25,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 ORGANIZATION_MEMORY_DISPLAY = "Organization Memory"
@@ -47,6 +48,7 @@ class AgentMemoryService:
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
     view_client: MemoryViewClient
+    usage: UsageGuard
 
     def set_memory(self, agent_id: UUID, enabled: bool, context: CurrentUserContext) -> AgentMemoryRead:
         agent = self.authorization.require_action(
@@ -55,6 +57,8 @@ class AgentMemoryService:
             PermissionKey.AGENT_MEMORY_MANAGE,
             detail="You don't have permission to manage memory for this Agent.",
         )
+        if enabled and not agent.memory_enabled:
+            self.usage.check(agent.organization_id, UsageAction.ENABLE_MEMORY)
         delivery_ids = self.repository.set_enabled_with_event(
             agent.id,
             agent.organization_id,
@@ -131,6 +135,7 @@ class AgentMemoryService:
         context: CurrentUserContext,
     ) -> AgentMemoryGrantRead:
         scope = self._require_manage(organization_id, context)
+        self.usage.check(organization_id, UsageAction.GRANT_MEMORY_ACCESS)
         if payload.source_agent_id is not None and payload.access == "read_write":
             raise HTTPException(400, "Another Agent's memory can only be granted read access.")
         if payload.source_agent_id == payload.agent_id:

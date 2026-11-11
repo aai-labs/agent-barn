@@ -45,6 +45,7 @@ from api.domains.sync_provider.plugins.base import (
 )
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.domains.sync_provider.repository import SyncProviderConnectionConflict, SyncProviderRepository
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,7 @@ class SyncProviderService:
     sharepoint: SharePointService
     file_sync_folders: FileSyncFolderRemoval
     config: Config
+    usage: UsageGuard
 
     def providers(self, organization_id: UUID, context: CurrentUserContext) -> list[SyncProviderRead]:
         """Every provider shipped with Agent Barn, with its connection. One not set up on this server is
@@ -204,6 +206,7 @@ class SyncProviderService:
         if purpose == "connect":
             if active:
                 raise HTTPException(status.HTTP_409_CONFLICT, f"{plugin.display_name} is already connected.")
+            self.usage.check(organization_id, UsageAction.ADD_INTEGRATION)
             self._refuse_while_blocked(organization_id, provider_key)
         if purpose == "disconnect" and not active:
             raise HTTPException(status.HTTP_409_CONFLICT, f"{plugin.display_name} isn't connected.")
@@ -247,6 +250,7 @@ class SyncProviderService:
         self._require_manage(organization_id, context)
         plugin = self._offered(provider_key)
         state = self._verified_state(state_token, provider_key, "connect", organization_id, context)
+        self.usage.check(organization_id, UsageAction.ADD_INTEGRATION)
         self._refuse_while_blocked(organization_id, provider_key)
         signed_in = self._call(lambda: plugin.complete_sign_in(**self._redemption(code, state)))
         self.repository.delete_expired_pending(organization_id)

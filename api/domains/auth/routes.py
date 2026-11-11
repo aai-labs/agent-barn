@@ -204,10 +204,11 @@ def signup():
 @auth_router.get("/google/start")
 def start_google_sign_in(
     origin: str = Query(default="signup"),
+    tier: str | None = Query(default=None, max_length=32),
     service: GoogleSignInService = Injected(GoogleSignInService),
     config: Config = Injected(Config),
 ):
-    started = service.start(origin)
+    started = service.start(origin, tier)
     response = RedirectResponse(started.redirect_url, status_code=status.HTTP_302_FOUND)
     if started.nonce is not None:
         # Lax, not None: the browser must send it on Google's top-level redirect back to

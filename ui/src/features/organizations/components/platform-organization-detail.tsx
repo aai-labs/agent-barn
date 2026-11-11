@@ -20,6 +20,7 @@ import { usePlatformOrganization } from "../hooks/use-platform-organization";
 import { usePlatformOrganizationMembers } from "../hooks/use-platform-organization-members";
 import type { PlatformOrganizationMember } from "../schemas";
 import { AgentLimitCard } from "./agent-limit-card";
+import { TierCard } from "./tier-card";
 import { LlmBudgetCard } from "./llm-budget-card";
 import { TrialCard } from "./trial-card";
 import { organizationInitials } from "./organization-detail-utils";
@@ -149,6 +150,8 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
       <LlmBudgetCard organization={organization} />
 
       <OrganizationAgentSizesCard organization={organization} />
+
+      <TierCard organization={organization} />
 
       <AgentLimitCard organization={organization} />
 

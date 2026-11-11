@@ -81,6 +81,7 @@ from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_SECRET_ADDED, AGENT_SECRET_UPDATED
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.sync_provider.lookup import SyncProviderLookupService
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,7 @@ class SharePointService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     sync_provider: SyncProviderLookupService
     config: Config
+    usage: UsageGuard
     # App-only tokens per Teams app, until shortly before they lapse: pods ask for one per
     # command. Keyed by a hash of the secret too, so a rotated secret is never served a token
     # minted with the old one. Per process, like the Teams bot's own token cache.
@@ -367,7 +369,10 @@ class SharePointService:
         the complete set the agent should reach afterwards. With ``remove_all`` it revokes
         every granted site instead, and SharePoint is disconnected.
         """
-        self._require_manage(agent_id, context)
+        agent = self._require_manage(agent_id, context)
+        # Signing in again to an Agent's existing SharePoint is editing it, not adding one.
+        if self._stored_content(agent_id) is None:
+            self.usage.check(agent.organization_id, UsageAction.ADD_INTEGRATION)
         if remove_all:
             current = self._stored_content(agent_id)
             if current is None or current.mode != "selected_sites":
