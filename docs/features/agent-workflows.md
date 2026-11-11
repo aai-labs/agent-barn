@@ -360,9 +360,10 @@ stops a Hermes run) and CANCELLED is recorded. Work the session already performe
 is not undone. Completed summaries remain
 available. Soft deletion conceals the run tree and fences/stops attempts. Existing
 hard Agent/Organization deletion cascades workflow-owned records. Active runs
-retain their checkpoint summaries. Settled inputs, checkpoints and content-bearing
-history expire after the module-owned 90-day retention period, while run status
-and metadata remain. File retention and purge are independent and follow the
+retain their checkpoint summaries. Settled inputs, checkpoints, content-bearing
+history and approval commands and guidance expire after the module-owned 90-day
+retention period, while run status and metadata (including who decided each
+approval, and when) remain. File retention and purge are independent and follow the
 [shared artifact lifecycle](agent-artifacts.md#retention-deletion-and-recovery).
 
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
@@ -428,7 +429,8 @@ Hermes command approval; they never widen what its approval mode allows.
 - **Authority.** Deciding requires current `agent.update` on the Agent, checked at
   decision time; the decider is recorded. Runtime callbacks use the attempt
   capability and cannot decide. Initiator authority loss still pauses the run and
-  lapses open requests; cancellation lapses them too. A decided, lapsed or stale
+  lapses open requests; cancellation, a reported failure and settlement lapse them
+  in the same transaction, so a stopped run never waits in the inbox. A decided, lapsed or stale
   request returns 409.
 - **Interruption.** An attempt that expires (restart, lost session) while its request
   is unanswered parks the run. An approval Hermes never confirmed blocks the run as

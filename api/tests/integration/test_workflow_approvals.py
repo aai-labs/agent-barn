@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from hamcrest import assert_that, equal_to
 from sqlmodel import Session
 
@@ -251,3 +252,58 @@ def test_the_run_keeps_every_decision_with_its_decider_and_guidance() -> None:
             equal_to([("mkdir -p /tmp/af390", "RELEASED", None), (COMMAND, "DECLINED", "List the folder instead")]),
         )
         assert_that({item["decided_by_user_id"] for item in approvals}, equal_to({str(context.user.id)}))
+
+
+@pytest.mark.parametrize("retryable", [False, True])
+def test_a_failed_run_closes_its_open_request_and_leaves_the_inbox(retryable) -> None:
+    with given(_RUN_GIVEN) as context:
+        _, row, token = _started(context)
+        request_id = _raise(context, row, token)
+        failed = context.client.post(
+            f"/workflow-runtime/v1/attempts/{row.id}/failure",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"reason": "The Agent session ended", "retryable": retryable},
+        )
+        assert_that(failed.status_code, equal_to(204))
+        run = _run(context, row.run_id)
+        assert_that(
+            (run["state"], run["approval"]["state"], run["allowed_actions"]),
+            equal_to(("BLOCKED" if retryable else "FAILED", "LAPSED", ["cancel"] if retryable else ["rerun"])),
+        )
+        inbox = context.client.get(
+            base(context) + "/workflow-runs?awaiting_decision=true", headers=auth(context)
+        ).json()
+        assert_that(inbox["total"], equal_to(0))
+        assert_that(_decide(context, row.run_id, request_id, "approve").status_code, equal_to(409))
+
+
+def test_retention_removes_approval_commands_and_guidance() -> None:
+    from api.domains.workflows.run_models import WorkflowApprovalRequest, WorkflowRun
+
+    with given(_RUN_GIVEN) as context:
+        repository, row, token = _started(context)
+        request_id = _raise(context, row, token)
+        _decide(context, row.run_id, request_id, "decline", "Use the staging bucket instead")
+        run = _run(context, row.run_id)
+        context.client.post(
+            base(context) + f"/workflow-runs/{row.run_id}/cancel",
+            headers=auth(context),
+            json={"expected_revision": run["revision"]},
+        )
+        repository.advance(row.run_id)
+        repository.advance(row.run_id, stopped=True)
+        with Session(context.postgres_delegate.engine) as session:
+            stored = session.get_one(WorkflowRun, row.run_id)
+            assert stored.settled_at is not None
+            stored.settled_at = datetime.now(UTC) - timedelta(days=91)
+            session.add(stored)
+            session.commit()
+        repository.expire_content()
+        approval = _run(context, row.run_id)["approvals"][0]
+        assert COMMAND not in approval["command"]
+        assert_that(approval["guidance"], equal_to(None))
+        assert_that(approval["decided_by_user_id"], equal_to(str(context.user.id)))
+        with Session(context.postgres_delegate.engine) as session:
+            stored_request = session.get_one(WorkflowApprovalRequest, request_id)
+            assert COMMAND not in stored_request.command
+            assert stored_request.command_sha256 == ""

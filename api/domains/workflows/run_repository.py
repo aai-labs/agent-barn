@@ -517,6 +517,8 @@ class WorkflowRunRepository:
             session.add(attempt)
             run.state = "BLOCKED" if failure.needs_attention or failure.retryable else "FAILED"
             run.reason = failure.reason
+            # The session that held any open request has ended; nothing is left to decide.
+            self._lapse(session, run.id)
             if run.state == "FAILED":
                 self._settle(session, run)
             delivery_ids = self._event(
@@ -534,6 +536,7 @@ class WorkflowRunRepository:
                 session.commit()
 
     def _settle(self, session: Session, run: WorkflowRun) -> None:
+        self._lapse(session, run.id)
         release(session, "run", run.id, self.config.artifact_retention_days)
         run.settled_at = datetime.now(UTC)
 
@@ -906,5 +909,15 @@ class WorkflowRunRepository:
                     sa.update(WorkflowHistory)
                     .where(col(WorkflowHistory.run_id) == run.id)
                     .values(detail="Content expired under the installation retention policy")
+                )
+                # Commands and guidance are content too; who decided and when remain.
+                session.exec(
+                    sa.update(WorkflowApprovalRequest)
+                    .where(col(WorkflowApprovalRequest.run_id) == run.id)
+                    .values(
+                        command="Content expired under the installation retention policy",
+                        command_sha256="",
+                        guidance=None,
+                    )
                 )
             session.commit()
