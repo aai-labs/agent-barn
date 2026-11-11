@@ -12,7 +12,6 @@ from hamcrest import assert_that, equal_to, has_entries, has_length, none, not_n
 from api.core.config import Config
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.agents.repository import AgentRepository
-from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.service import OnboardingService
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.templates.service import TemplateService
@@ -24,7 +23,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.google_sign_in import GOOGLE_EMAIL, WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
-from api.tests.steps.onboarding import trial_settings_are_configured
+from api.tests.steps.onboarding import the_free_tier_has, trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user
 
@@ -306,9 +305,7 @@ def test_onboarding_follows_the_trials_first_agent():
     with given(_setup(someone_signed_up_with_google())) as context:
         first = _set_up_agent(context).json()
         there_is_a_user(email="limit-admin@example.com", is_platform_admin=True, organization_id=None)(context)
-        context.injector.get(TrialSettingsRepository).set_settings(
-            {"agent_limit": 2}, context.user.id, "Platform Admin"
-        )
+        the_free_tier_has(context, agent_limit=2)
         hired = context.client.post(
             f"/api/v1/organizations/{first['organization_id']}/agents",
             json={"name": "Aardvark", "template_key": "general-purpose", "agent_type": "hermes"},

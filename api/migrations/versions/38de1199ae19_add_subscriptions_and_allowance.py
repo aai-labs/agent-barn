@@ -4,8 +4,10 @@ Revision ID: 38de1199ae19
 Revises: 86bca32c95be
 Create Date: 2026-11-08
 
-Tiers, PR 5: `organization_subscription` keeps an Organization on a paid Tier, whichever
-provider takes the payment; at most one per Organization is live. Three Credit Grant kinds
+`organization_subscription` keeps an Organization on a paid Tier, whichever provider takes
+the payment; at most one per Organization is live. It records the smaller Tier a downgrade
+moves to when the period ends, with the provider's record of that change, and when
+activation finished, so one that stopped partway is taken up again. Three Credit Grant kinds
 record what a paid Tier grants: its one-time credit, each period's allowance, and what is
 left of an allowance when its period ends.
 
@@ -45,10 +47,19 @@ def upgrade() -> None:
         sa.Column("cancel_at_period_end", sa.Boolean(), nullable=False),
         sa.Column("past_due_since", sa.DateTime(timezone=True), nullable=True),
         sa.Column("canceled_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("activated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("scheduled_tier_id", sa.Uuid(), nullable=True),
+        sa.Column("provider_schedule_id", sa.String(length=255), nullable=True),
         sa.Column("period_allowance_usd", sa.Numeric(10, 2), nullable=False, server_default="0"),
         sa.Column("period_spend_start_usd", sa.Numeric(14, 6), nullable=False, server_default="0"),
         sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["tier_id"], ["tier.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["scheduled_tier_id"],
+            ["tier.id"],
+            name="organization_subscription_scheduled_tier_id_fkey",
+            ondelete="RESTRICT",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "provider", "provider_subscription_id", name="uq_organization_subscription_provider_reference"

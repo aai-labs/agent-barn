@@ -1,5 +1,6 @@
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -14,6 +15,9 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
 from api.domains.subscriptions.models import OrganizationSubscription, SubscriptionStatus
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+# The Organizations whose subscription lock this context holds.
+_held_locks: ContextVar[frozenset[UUID]] = ContextVar("subscription_locks", default=frozenset())
 
 
 @inject
@@ -93,23 +97,40 @@ class SubscriptionRepository:
                 ).all()
             )
 
+    def unactivated(self) -> list[OrganizationSubscription]:
+        """Live subscriptions whose activation didn't finish."""
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(OrganizationSubscription).where(
+                        col(OrganizationSubscription.status) != SubscriptionStatus.CANCELED.value,
+                        col(OrganizationSubscription.activated_at).is_(None),
+                    )
+                ).all()
+            )
+
     @contextmanager
-    def provider_lock(self, reference: str | None) -> Iterator[None]:
-        """Held while one provider subscription is changed, so its events and an Owner's
-        change are applied one at a time. A session-level lock on its own connection,
-        released however the block ends."""
-        if not reference:
+    def organization_lock(self, organization_id: UUID) -> Iterator[None]:
+        """Held while an Organization's subscription is changed, so an Owner's change, a
+        platform assignment, the sweep and the provider's events apply one at a time.
+
+        A transaction-level lock in a transaction held open on its own connection, so a
+        transaction-pooling proxy keeps it on one server connection; it is released when the
+        block ends, however it ends. Taking it again inside the block doesn't wait.
+        """
+        held = _held_locks.get()
+        if organization_id in held:
             yield
             return
-        with self.delegate.engine.connect() as connection:
-            key = {"key": f"subscription:{reference}"}
-            connection.execute(text("SELECT pg_advisory_lock(hashtext(:key))"), key)
-            connection.commit()
+        with self.delegate.engine.connect() as connection, connection.begin():
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"subscription:{organization_id}"}
+            )
+            token = _held_locks.set(held | {organization_id})
             try:
                 yield
             finally:
-                connection.execute(text("SELECT pg_advisory_unlock(hashtext(:key))"), key)
-                connection.commit()
+                _held_locks.reset(token)
 
     def save(self, subscription: OrganizationSubscription) -> OrganizationSubscription:
         with Session(self.delegate.engine, expire_on_commit=False) as session:

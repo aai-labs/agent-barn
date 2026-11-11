@@ -2,16 +2,18 @@
 
 Sign-up, Organization creation and the trial settings ask here instead of reading the Tier
 catalog. The implementation bound to `OrganizationPlans` decides; today that is the Tier
-catalog (`api.domains.tiers.plans`), where the trial is the Free Tier.
+catalog (`api.domains.subscriptions.plans`, beside what can be bought), where the trial is the Free Tier.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
 from sqlmodel import Session
+
+from api.domains.auth.models import CurrentUserContext
 
 
 @dataclass(frozen=True)
@@ -47,5 +49,7 @@ class OrganizationPlans(ABC):
         transaction. `for_update` locks them until it ends."""
 
     @abstractmethod
-    def store_trial_terms(self, session: Session, credit_usd: Decimal, agent_limit: int, now: datetime) -> None:
-        """Store the trial's credit and Agent limit in the caller's transaction."""
+    def change_trial_terms(self, changes: Mapping[str, float | int], context: CurrentUserContext) -> None:
+        """Change the trial's `credit_usd` or `agent_limit` as a change to its plan: audited
+        as one, and holding what a lower Agent limit no longer covers. Raises the plan's own
+        refusal (an HTTPException) when it can't take the values."""

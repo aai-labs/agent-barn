@@ -41,7 +41,7 @@ from api.tests.steps.google_sign_in import (
     start_google_sign_in,
     state_from,
 )
-from api.tests.steps.onboarding import trial_settings_are_configured
+from api.tests.steps.onboarding import the_free_tier_has, trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -656,9 +656,7 @@ def test_a_callback_cannot_be_replayed():
 
 def _set_trial_credit(context, credit: float) -> None:
     there_is_a_user(email="platform-admin@example.com", is_platform_admin=True)(context)
-    context.injector.get(TrialSettingsRepository).set_settings(
-        {"credit_usd": credit}, context.user.id, "Platform Admin"
-    )
+    the_free_tier_has(context, credit=credit)
 
 
 def _set_trial_cap(context, cap: int) -> None:

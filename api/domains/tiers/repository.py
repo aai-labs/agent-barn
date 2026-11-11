@@ -100,6 +100,8 @@ class TierCoverage:
     enabled_platform_keys: frozenset[str]
     memory_agents: int
     enabled_webhooks: int
+    # The Organization's own Agent Limit, which takes precedence over its Tier's.
+    own_agent_limit: int | None = None
 
 
 def _event_value(value: object) -> object:
@@ -135,11 +137,12 @@ class TierRepository:
             if organization is None:
                 return None
             tier_id = tier.id if tier is not None else None
-            if organization.tier_id == tier_id:
+            assigned_by_platform = by_platform and tier is not None
+            if organization.tier_id == tier_id and organization.tier_assigned_by_platform == assigned_by_platform:
                 return organization, []
             previous = session.get(Tier, organization.tier_id) if organization.tier_id is not None else None
             organization.tier_id = tier_id
-            organization.tier_assigned_by_platform = by_platform and tier is not None
+            organization.tier_assigned_by_platform = assigned_by_platform
             organization.tier_holds_due_at = None
             organization.updated_at = datetime.now(UTC)
             session.add(organization)
@@ -241,11 +244,13 @@ class TierRepository:
                 )
                 or 0
             )
+            organization = session.get(Organization, organization_id)
             return TierCoverage(
                 agents=agents,
                 enabled_platform_keys=frozenset(platform_keys),
                 memory_agents=memory_agents,
                 enabled_webhooks=webhooks,
+                own_agent_limit=organization.agent_limit if organization is not None else None,
             )
 
     def organizations_on(self, tier_id: UUID) -> list[UUID]:
@@ -338,19 +343,18 @@ class TierRepository:
 
     @staticmethod
     def _plan_holds(session: Session, organization_id: UUID, tier: Tier, agent_limit: int) -> _HoldPlan:
-        """What the Tier would hold among what the Organization runs and isn't held yet."""
+        """What the Tier would hold: the newest Agents beyond the limit among those not held
+        yet, and on every live Agent, held or not, the Connections, memory and Webhooks it
+        leaves out, so releasing an Agent later brings back nothing the Tier doesn't cover."""
         live = list(
             session.exec(
                 select(Agent)
-                .where(
-                    col(Agent.organization_id) == organization_id,
-                    col(Agent.deleted_at).is_(None),
-                    col(Agent.suspended_at).is_(None),
-                )
+                .where(col(Agent.organization_id) == organization_id, col(Agent.deleted_at).is_(None))
                 .order_by(col(Agent.created_at), col(Agent.id))
             ).all()
         )
-        held = live[agent_limit:]
+        unheld = [agent for agent in live if agent.suspended_at is None]
+        held = unheld[agent_limit:]
         live_ids = [agent.id for agent in live]
         connections = [
             connection
@@ -386,7 +390,7 @@ class TierRepository:
             connections=connections,
             memory_agents=memory_agents,
             webhooks=webhooks,
-            kept_running={a.id for a in live if a.id not in held_ids and a.status == AgentStatus.RUNNING},
+            kept_running={a.id for a in unheld if a.id not in held_ids and a.status == AgentStatus.RUNNING},
         )
 
     def hold_agent(

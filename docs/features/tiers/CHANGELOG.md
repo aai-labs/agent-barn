@@ -52,6 +52,22 @@ Related context: [Tiers](../tiers.md), [Credit](../credit.md), [Trial onboarding
 
 ## Changes
 
+### 2026-11-12 — Tiers — architecture review fixes (PR pending)
+
+- Fixed:
+  - An activation that stopped partway is finished by the provider's next event or the Tier sweep (`activated_at`), and a paid period without its allowance gets it; a grant that already landed is recorded rather than lost.
+  - A Platform Administrator's assignment ends a live subscription first, so it stops charging, and a subscription's end keeps a Tier the platform chose.
+  - An Agent already held loses the Connections, Webhooks and memory a lower Tier leaves out.
+  - Lowering Free's credit or Agent limit under **Signup & trials** is a Free Tier change: audited as `platform.tier.changed`, with holds.
+  - A second paid Stripe subscription, or one paid after the platform chose the Tier, is refunded and cancelled at Stripe.
+  - `over_tier` counts Agents against the Agent Limit in force.
+  - Every subscription change takes the Organization's subscription lock, a transaction-level advisory lock that a transaction-pooling proxy keeps on one connection.
+- Changed:
+  - the tiers and subscriptions packages no longer import each other: Tier assignment and `TierPlans` moved to the subscriptions domain;
+  - assigning the Tier an Organization is already on, as the platform's choice, records the change of who chose it;
+  - schema: the seven Tier migrations are squashed into three (`55e07653f502`, `86bca32c95be`, `38de1199ae19`); `organization_subscription.activated_at` is new. The revisions the entries below name no longer exist;
+  - docs: `tiers.md`.
+
 ### 2026-11-10 — Tiers — Stripe subscriptions (PR pending)
 
 - Delivered:

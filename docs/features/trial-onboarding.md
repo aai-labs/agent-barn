@@ -136,17 +136,20 @@ self-signed-up user back to `/onboarding` until they finish.
 
 Platform Administrators enable or disable self-signup and set the Trial Credit for new trials, the trial agent limit and
 the cap on active trials on the platform settings page under **Signup & trials** (`GET`/`PUT
-/platform/settings/trial`; each setting that moves is audited as
-`platform.trial_settings.changed`, a removed cap as `null`). Signup and the cap are a
-singleton row; the Trial Credit and agent limit are stored on the Free Tier's row, which
-**Tiers** edits too, auditing its own changes as `platform.tier.changed`. The read also says
+/platform/settings/trial`). Signup and the cap are a singleton row, and each of them that
+moves is audited as `platform.trial_settings.changed`, a removed cap as `null`. The Trial
+Credit and agent limit are the Free Tier's, so this page changes them through the Tier
+catalog, as **Tiers** does: audited as `platform.tier.changed`, and a lower agent limit
+holds what Free no longer covers ([Tier Holds](tiers.md#tier-holds)). The read also says
 whether Free is offered (`free_tier_offered`). The page shows how many trials are active.
 Until the first save, self-signup is disabled and there is no cap; the credit and limit are
 Free's seeded $10 and one Agent. Self-signup requires positive Trial Credit.
-Updates validate the combined persisted settings under a lock: administrators may enable
-signup and set credit in one save, or disable signup and clear credit together. Zero
+Updates validate the combined settings first: administrators may enable signup and set
+credit in one save, or disable signup and clear credit together. Signup is turned off
+before the credit changes and anything else is stored after it, so signup is never open on
+no credit. Zero
 credit is refused while signup remains enabled; negative or non-finite credit is always
-refused. A database constraint also enforces the positive-credit requirement. Signup
+refused. Signup
 reads its enabled state and credit together and holds them stable until trial creation
 commits. Changes apply without a restart. An active trial is any Organization still
 on a trial whose credit has not run out. An existing trial's spend limit is changed on

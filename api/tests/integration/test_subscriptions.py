@@ -13,12 +13,14 @@ from uuid import UUID
 
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_item, has_length, is_, not_none
+from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from api.domains.organizations.models import CreditGrantKind, Organization, OrganizationCreditGrant
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.subscriptions.models import OrganizationSubscription
+from api.domains.subscriptions.repository import SubscriptionRepository
 from api.domains.subscriptions.service import SubscriptionService
 from api.domains.tiers.models import SEED_TIERS
 from api.domains.tiers.repository import Actor, TierRepository
@@ -486,3 +488,23 @@ def test_the_public_catalog_lists_what_is_offered():
         response = context.client.get("/api/v1/tiers")
 
         assert_that([tier["key"] for tier in response.json()], equal_to(["free", "cloud_1", "cloud_2"]))
+
+
+# --- one change at a time --------------------------------------------------------------------
+
+
+def test_an_organizations_subscription_lock_holds_others_off_and_can_be_taken_again():
+    with given(_setup()) as context:
+        repository = context.injector.get(SubscriptionRepository)
+        key = {"key": f"subscription:{context.organization.id}"}
+
+        def someone_else_could_take_it() -> bool:
+            with context.postgres_delegate.engine.connect() as connection, connection.begin():
+                return connection.execute(text("SELECT pg_try_advisory_xact_lock(hashtext(:key))"), key).scalar_one()
+
+        with repository.organization_lock(context.organization.id):
+            with repository.organization_lock(context.organization.id):
+                assert_that(someone_else_could_take_it(), is_(False))
+            assert_that(someone_else_could_take_it(), is_(False))
+
+        assert_that(someone_else_could_take_it(), is_(True))

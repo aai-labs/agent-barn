@@ -31,9 +31,9 @@ from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetSe
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
+from api.domains.subscriptions.plans import TierPlans
 from api.domains.sync_provider.plugins.providers import shipped_plugins
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
-from api.domains.tiers.plans import TierPlans
 from api.domains.tiers.usage_policy import TierUsagePolicy
 from api.domains.usage.guard import UsageGuard
 from api.domains.usage.plans import OrganizationPlans

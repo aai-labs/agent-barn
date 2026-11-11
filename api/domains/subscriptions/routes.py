@@ -6,6 +6,8 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
+from api.domains.organizations.models import PlatformOrganizationRead
+from api.domains.subscriptions.assignment import TierAssignmentService
 from api.domains.subscriptions.models import (
     SubscriptionPortal,
     SubscriptionRead,
@@ -13,7 +15,7 @@ from api.domains.subscriptions.models import (
     SubscriptionStartRead,
 )
 from api.domains.subscriptions.service import SubscriptionService
-from api.domains.tiers.models import TierHoldPreviewRead
+from api.domains.tiers.models import OrganizationTierAssignment, TierHoldPreviewRead
 
 organization_subscription_router = APIRouter(
     prefix="/organizations/{organization_id}/subscription", tags=["organization-subscription"]
@@ -103,3 +105,20 @@ def end_subscription_period(
 ):
     """End the current period now: expire its unused allowance, then renew or end."""
     return service.end_period_now(organization_id, context)
+
+
+# A Platform Administrator puts an Organization on a Tier from its Platform page. Here, beside
+# subscriptions, because choosing its Tier ends a subscription it pays for.
+platform_organization_tier_router = APIRouter(prefix="/platform/organizations", tags=["platform-organizations"])
+
+
+@platform_organization_tier_router.put("/{organization_id}/tier", response_model=PlatformOrganizationRead)
+def set_organization_tier(
+    organization_id: UUID,
+    data: OrganizationTierAssignment,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[TierAssignmentService, Injected(TierAssignmentService)],
+):
+    """Put an Organization on a Tier; null takes it off any Tier. A subscription it pays for
+    ends at once."""
+    return service.assign(organization_id, data.tier_id, context)

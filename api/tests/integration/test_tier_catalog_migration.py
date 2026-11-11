@@ -2,35 +2,28 @@
 database of their own."""
 
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID, uuid7
+from uuid import uuid7
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from hamcrest import assert_that, equal_to
-from sqlalchemy import MetaData, Table, create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session
 
-from api.domains.agents.models import Agent
-from api.domains.organizations.models import Organization
 from api.domains.tiers.models import SEED_TIERS
 
 PRE_MIGRATION_REVISION = "c8e41f7a2d96"
 TIER_CATALOG_REVISION = "55e07653f502"
-ORGANIZATION_TIER_REVISION = "9b0aec4da777"
-TIER_HOLDS_REVISION = "53961518cfc3"
 FREE_REPLACES_TRIAL_REVISION = "86bca32c95be"
 SUBSCRIPTIONS_REVISION = "38de1199ae19"
-SUSPENSIONS_REVISION = "0c24c221ee1e"
-_HELD_COLUMNS = {
-    "agent": {"tier_held_at", "memory_tier_held_at"},
-    "communication_connection": {"tier_held_at"},
-    "agent_webhook": {"tier_held_at"},
+_SUSPENSION_COLUMNS = {
+    "agent": {"suspended_at", "suspension_reason", "memory_suspended_at", "memory_suspension_reason"},
+    "communication_connection": {"suspended_at", "suspension_reason"},
+    "agent_webhook": {"suspended_at", "suspension_reason"},
 }
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 
@@ -62,6 +55,10 @@ def database_before_tiers(monkeypatch):
             )
             connection.execute(text(f'DROP DATABASE "{database_name}"'))
         admin_engine.dispose()
+
+
+def _columns(engine, table: str) -> set[str]:
+    return {column["name"] for column in inspect(engine).get_columns(table)}
 
 
 def _insert(connection, **overrides):
@@ -182,8 +179,13 @@ def test_the_migration_downgrades_cleanly(database_before_tiers):
     command.downgrade(database.config, PRE_MIGRATION_REVISION)
 
     assert_that(inspect(database.engine).has_table("tier"), equal_to(False))
-    columns = {column["name"] for column in inspect(database.engine).get_columns("platform_billing_settings")}
-    assert_that("payment_grace_days" in columns, equal_to(False))
+    assert_that("payment_grace_days" in _columns(database.engine, "platform_billing_settings"), equal_to(False))
+    assert_that({"tier_id", "tier_assigned_by_platform"} & _columns(database.engine, "organization"), equal_to(set()))
+    for table, columns in _SUSPENSION_COLUMNS.items():
+        assert_that(columns & _columns(database.engine, table), equal_to(set()))
+    with database.engine.begin() as connection:
+        remaining = connection.execute(text("SELECT count(*) FROM permissions WHERE key = 'tier_hold.manage'")).scalar()
+    assert_that(remaining, equal_to(0))
 
 
 def _organization(connection, name: str = "Acme"):
@@ -203,7 +205,7 @@ def test_existing_organizations_stay_off_any_tier(database_before_tiers):
     with database.engine.begin() as connection:
         organization_id = _organization(connection)
 
-    command.upgrade(database.config, ORGANIZATION_TIER_REVISION)
+    command.upgrade(database.config, TIER_CATALOG_REVISION)
 
     with database.engine.begin() as connection:
         row = connection.execute(
@@ -214,7 +216,7 @@ def test_existing_organizations_stay_off_any_tier(database_before_tiers):
 
 def test_a_tier_an_organization_is_on_cannot_be_deleted(database_before_tiers):
     database = database_before_tiers
-    command.upgrade(database.config, ORGANIZATION_TIER_REVISION)
+    command.upgrade(database.config, TIER_CATALOG_REVISION)
     free_id = next(seed["id"] for seed in SEED_TIERS if seed["key"] == "free")
     with database.engine.begin() as connection:
         organization_id = _organization(connection)
@@ -226,44 +228,17 @@ def test_a_tier_an_organization_is_on_cannot_be_deleted(database_before_tiers):
         connection.execute(text("DELETE FROM tier WHERE id = :id"), {"id": free_id})
 
 
-def test_the_organization_tier_migration_downgrades_cleanly(database_before_tiers):
+def test_nothing_is_suspended_and_owners_may_choose_what_stays_held(database_before_tiers):
     database = database_before_tiers
-    command.upgrade(database.config, ORGANIZATION_TIER_REVISION)
+    command.upgrade(database.config, TIER_CATALOG_REVISION)
 
-    command.downgrade(database.config, TIER_CATALOG_REVISION)
-
-    columns = {column["name"] for column in inspect(database.engine).get_columns("organization")}
-    assert_that({"tier_id", "tier_assigned_by_platform"} & columns, equal_to(set()))
-
-
-def _columns(engine, table: str) -> set[str]:
-    return {column["name"] for column in inspect(engine).get_columns(table)}
-
-
-def test_the_tier_holds_migration_holds_nothing_and_adds_the_permission(database_before_tiers):
-    database = database_before_tiers
-    command.upgrade(database.config, TIER_HOLDS_REVISION)
-
-    for table, columns in _HELD_COLUMNS.items():
+    for table, columns in _SUSPENSION_COLUMNS.items():
         assert_that(columns <= _columns(database.engine, table), equal_to(True))
     with database.engine.begin() as connection:
         key = connection.execute(
             text("SELECT key FROM permissions WHERE id = 'f236e2c1-a221-559e-946b-9c25232caa30'")
         ).scalar()
     assert_that(key, equal_to("tier_hold.manage"))
-
-
-def test_the_tier_holds_migration_downgrades_cleanly(database_before_tiers):
-    database = database_before_tiers
-    command.upgrade(database.config, TIER_HOLDS_REVISION)
-
-    command.downgrade(database.config, ORGANIZATION_TIER_REVISION)
-
-    for table, columns in _HELD_COLUMNS.items():
-        assert_that(columns & _columns(database.engine, table), equal_to(set()))
-    with database.engine.begin() as connection:
-        remaining = connection.execute(text("SELECT count(*) FROM permissions WHERE key = 'tier_hold.manage'")).scalar()
-    assert_that(remaining, equal_to(0))
 
 
 def _trial_settings(connection, *, signup: bool, credit: float, agent_limit: int) -> None:
@@ -278,7 +253,7 @@ def _trial_settings(connection, *, signup: bool, credit: float, agent_limit: int
 
 def test_free_replacing_the_trial_moves_the_trial_settings_and_trials_onto_free(database_before_tiers):
     database = database_before_tiers
-    command.upgrade(database.config, TIER_HOLDS_REVISION)
+    command.upgrade(database.config, TIER_CATALOG_REVISION)
     with database.engine.begin() as connection:
         _trial_settings(connection, signup=True, credit=15, agent_limit=2)
         trial = _organization(connection, "A trial")
@@ -304,12 +279,12 @@ def test_free_replacing_the_trial_moves_the_trial_settings_and_trials_onto_free(
 
 def test_free_replacing_the_trial_downgrades_with_the_settings_back(database_before_tiers):
     database = database_before_tiers
-    command.upgrade(database.config, TIER_HOLDS_REVISION)
+    command.upgrade(database.config, TIER_CATALOG_REVISION)
     with database.engine.begin() as connection:
         _trial_settings(connection, signup=True, credit=15, agent_limit=2)
     command.upgrade(database.config, FREE_REPLACES_TRIAL_REVISION)
 
-    command.downgrade(database.config, TIER_HOLDS_REVISION)
+    command.downgrade(database.config, TIER_CATALOG_REVISION)
 
     with database.engine.begin() as connection:
         settings = connection.execute(text("SELECT credit_usd, agent_limit FROM platform_trial_settings")).one()
@@ -324,68 +299,12 @@ def test_the_subscriptions_migration_adds_the_table_and_the_credit_kinds(databas
     with database.engine.begin() as connection:
         kinds = set(connection.execute(text("SELECT unnest(enum_range(NULL::credit_grant_kind))::text")).scalars())
     assert_that({"TIER_CREDIT", "ALLOWANCE", "ALLOWANCE_EXPIRY"} <= kinds, equal_to(True))
-    assert_that(inspect(database.engine).has_table("organization_subscription"), equal_to(True))
+    assert_that(
+        {"scheduled_tier_id", "provider_schedule_id", "activated_at"}
+        <= _columns(database.engine, "organization_subscription"),
+        equal_to(True),
+    )
 
     command.downgrade(database.config, FREE_REPLACES_TRIAL_REVISION)
 
     assert_that(inspect(database.engine).has_table("organization_subscription"), equal_to(False))
-
-
-def _held_agent(engine, *, held: bool) -> UUID:
-    """An Agent row at the subscriptions revision, held by its Tier or not."""
-    organization = Organization(name=f"Held {uuid7().hex[:6]}")
-    # Deleted, so the row needs no Template pin; the migration doesn't look at either.
-    agent = Agent(name="Held Agent", organization_id=organization.id, deleted_at=datetime.now(UTC))
-    with Session(engine) as session:
-        for model, table_name in ((organization, "organization"), (agent, "agent")):
-            table = Table(table_name, MetaData(), autoload_with=engine)
-            values = {key: value for key, value in model.model_dump().items() if key in table.c}
-            session.connection().execute(table.insert().values(**values))
-        if held:
-            session.connection().execute(
-                text("UPDATE agent SET tier_held_at = now(), memory_tier_held_at = now() WHERE id = :id"),
-                {"id": agent.id},
-            )
-        session.commit()
-    return agent.id
-
-
-def test_tier_holds_become_suspensions_with_their_reason(database_before_tiers):
-    database = database_before_tiers
-    command.upgrade(database.config, SUBSCRIPTIONS_REVISION)
-    held = _held_agent(database.engine, held=True)
-    free = _held_agent(database.engine, held=False)
-
-    command.upgrade(database.config, SUSPENSIONS_REVISION)
-
-    for table, columns in _HELD_COLUMNS.items():
-        assert_that(columns & _columns(database.engine, table), equal_to(set()))
-    with database.engine.begin() as connection:
-        rows = {
-            row.id: (row.suspended, row.suspension_reason, row.memory_suspended, row.memory_suspension_reason)
-            for row in connection.execute(
-                text(
-                    "SELECT id, suspended_at IS NOT NULL AS suspended, suspension_reason,"
-                    " memory_suspended_at IS NOT NULL AS memory_suspended, memory_suspension_reason FROM agent"
-                )
-            )
-        }
-    assert_that(rows[held], equal_to((True, "tier", True, "tier")))
-    assert_that(rows[free], equal_to((False, None, False, None)))
-
-
-def test_tier_holds_as_suspensions_downgrade_with_the_holds_kept(database_before_tiers):
-    database = database_before_tiers
-    command.upgrade(database.config, SUBSCRIPTIONS_REVISION)
-    held = _held_agent(database.engine, held=True)
-    command.upgrade(database.config, SUSPENSIONS_REVISION)
-
-    command.downgrade(database.config, SUBSCRIPTIONS_REVISION)
-
-    for table, columns in _HELD_COLUMNS.items():
-        assert_that(columns <= _columns(database.engine, table), equal_to(True))
-    with database.engine.begin() as connection:
-        still_held = connection.execute(
-            text("SELECT tier_held_at IS NOT NULL FROM agent WHERE id = :id"), {"id": held}
-        ).scalar()
-    assert_that(still_held, equal_to(True))

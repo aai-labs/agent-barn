@@ -231,6 +231,12 @@ class TierHoldPreviewRead(PydanticBaseModel):
     memory: list[TierHeldItemRead]
 
 
+def agent_limit_in_force(own: int | None, tier: Tier) -> int:
+    """An Organization on a Tier runs up to its own Agent Limit when one is set, otherwise the
+    Tier's. Holds and `over_tier` both count against this."""
+    return own if own is not None else tier.agent_limit
+
+
 def allows_feature(tier: Tier | None, feature: TierFeature) -> bool:
     return tier is None or feature.value in tier.features
 

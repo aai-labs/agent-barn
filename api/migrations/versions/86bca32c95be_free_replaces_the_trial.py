@@ -1,10 +1,10 @@
 """Free replaces the trial
 
 Revision ID: 86bca32c95be
-Revises: 53961518cfc3
+Revises: 55e07653f502
 Create Date: 2026-11-08
 
-Tiers, PR 4: a trial is an Organization on the Free Tier. The trial's credit and Agent
+A trial is an Organization on the Free Tier. The trial's credit and Agent
 limit move from `platform_trial_settings` onto the Free row, and Free is offered exactly
 where self-signup already is. Every existing trial moves onto Free. A trial that runs
 more than Free covers gets 14 days (`organization.tier_holds_due_at`) for its Owner to
@@ -19,7 +19,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "86bca32c95be"
-down_revision: str | Sequence[str] | None = "53961518cfc3"
+down_revision: str | Sequence[str] | None = "55e07653f502"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

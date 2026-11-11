@@ -97,6 +97,9 @@ class OrganizationSubscription(BaseModel, table=True):
     provider_schedule_id: str | None = SqlField(default=None, max_length=255)
     past_due_since: datetime | None = SqlField(default=None, sa_type=sa.DateTime(timezone=True))  # type: ignore
     canceled_at: datetime | None = SqlField(default=None, sa_type=sa.DateTime(timezone=True))  # type: ignore
+    # When activation finished: the Tier, the one-time credit, the first allowance and the
+    # holds. Until then each provider event and the sweep take it up where it stopped.
+    activated_at: datetime | None = SqlField(default=None, sa_type=sa.DateTime(timezone=True))  # type: ignore
     # The allowance granted for this period, and the Organization's spend when it began, so
     # what is left of the allowance can expire when it ends.
     period_allowance_usd: Decimal = SqlField(
