@@ -34,6 +34,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 _SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
@@ -46,6 +47,9 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+LISTEN_IN_PLUGIN_YAML: str = (_LISTEN_IN / "plugin.yaml").read_text()
+LISTEN_IN_PLUGIN_INIT: str = (_LISTEN_IN / "__init__.py").read_text()
+LISTEN_IN_CHECK_PY: str = (_SCRIPTS / "listen-in-check.py").read_text()
 SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
 SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
@@ -90,6 +94,13 @@ _HERMES_AUXILIARY_TASKS = (
 _HERMES_RUNTIME_INHERITING_TASKS = ("curator", "background_review")
 
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
+
+
+_LISTEN_IN_ROOM_SETTINGS = {
+    "slack": "free_response_channels",
+    "discord": "free_response_channels",
+    "telegram": "free_response_chats",
+}
 
 
 # Persistent working directory for the agent's terminal and messaging layer.
@@ -174,6 +185,19 @@ def _hermes_config_core(
     }
 
 
+def _enable_listen_in(config: dict, rooms_by_platform: dict[str, list[str]]) -> None:
+    for platform, rooms in rooms_by_platform.items():
+        config[platform][_LISTEN_IN_ROOM_SETTINGS[platform]] = rooms
+        # Verbose output would post a listening turn's progress into the room.
+        config["display"]["platforms"][platform].update(tool_progress="off", interim_assistant_messages=False)
+    config["plugins"]["enabled"].append("agentbarn-listen-in")
+    # Each queued message must stay its own turn with its own classification, and
+    # an unaddressed message must neither interrupt a turn nor be acknowledged.
+    config["display"].update(busy_input_mode="queue", busy_text_mode="interrupt", busy_ack_enabled=False)
+    # Hermes otherwise hides plugin tools, post_to_room included, behind its tool search.
+    config["tools"] = {"tool_search": {"enabled": "off"}}
+
+
 def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -187,6 +211,8 @@ def build_hermes_gateway_config(
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
     max_turns: int | None = None,
+    slack_listen_in: list[str] | None = None,
+    discord_listen_in: list[str] | None = None,
 ) -> dict:
     plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
@@ -265,6 +291,13 @@ def build_hermes_gateway_config(
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
         }
+    listen_in = {
+        "slack": slack_listen_in if native_slack else None,
+        "discord": discord_listen_in if native_discord else None,
+        "telegram": _setting_ids(telegram_settings or {}, "listen_in_chat_ids") if not agentbarn_telegram else None,
+    }
+    if rooms_by_platform := {platform: rooms for platform, rooms in listen_in.items() if rooms}:
+        _enable_listen_in(config, rooms_by_platform)
     return config
 
 
@@ -441,6 +474,9 @@ def build_hermes_config_map(
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
+        "agentbarn-listen-in-plugin.yaml": LISTEN_IN_PLUGIN_YAML,
+        "agentbarn-listen-in-init.py": LISTEN_IN_PLUGIN_INIT,
+        "listen-in-check.py": LISTEN_IN_CHECK_PY,
         "slack-access-plugin.yaml": SLACK_ACCESS_PLUGIN_YAML,
         "slack-access-init.py": SLACK_ACCESS_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,

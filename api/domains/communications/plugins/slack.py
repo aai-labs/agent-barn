@@ -71,7 +71,8 @@ class SlackSettings(NativeHomeDeliverySettings, PlatformSettings):
             "Channel IDs where the Agent reads every message without an @mention and posts only when it has "
             "something useful to add, such as a correction or missing context. Each message there costs one model "
             "turn, even when the Agent stays silent. Under Allowlist, these must also be Allowed channels. "
-            "OpenClaw only for now; Hermes Agents still answer only when mentioned."
+            "On Hermes, Verbose mode is off for this platform and new messages wait for the running "
+            "turn instead of interrupting it."
         ),
     )
 

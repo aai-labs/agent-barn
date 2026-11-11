@@ -58,7 +58,8 @@ class TelegramSettings(PlatformSettings):
             "something useful to add, such as a correction or missing context. Each message there costs one model "
             "turn, even when the Agent stays silent. The bot must see every group message: disable privacy mode "
             "or make it an administrator. Under Allowlist, these must also be Allowed groups. "
-            "OpenClaw only for now; Hermes Agents still answer only when mentioned."
+            "On Hermes, Verbose mode is off for this platform and new messages wait for the running "
+            "turn instead of interrupting it."
         ),
     )
 
