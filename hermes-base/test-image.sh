@@ -15,6 +15,8 @@ docker run --rm \
     uv run --frozen python tests/fixtures/hermes_pvc_permissions_driver.py "$image"
     # Native Telegram access policy through Hermes' real adapter and auth chain.
     uv run --frozen python tests/fixtures/hermes_telegram_access_driver.py "$image"
+    # Slack channel admission must not inherit the DM sender allowlist.
+    uv run --frozen python tests/fixtures/hermes_slack_access_driver.py "$image"
 )
 
 # Run telemetry-push against Hermes' real SessionStore. Unit-test fakes cannot
@@ -36,6 +38,16 @@ docker run --rm --network none \
     -e INGEST_API_KEY=ci \
     -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-observer:/plugin:ro" \
     -v "$repo_root/api/tests/fixtures/hermes_observer_driver.py:/driver.py:ro" \
+    --entrypoint python3 \
+    "$image" \
+    /driver.py
+
+# The listen-in guard relies on private Hermes code. Without it a free-response room
+# answers every message, so an upgrade that changes any of it must fail here.
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-listen-in:/plugin:ro" \
+    -v "$repo_root/api/domains/agents/scripts/hermes/listen-in-check.py:/listen-in-check.py:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_listen_in_driver.py:/driver.py:ro" \
     --entrypoint python3 \
     "$image" \
     /driver.py

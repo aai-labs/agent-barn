@@ -520,6 +520,7 @@ export function IntegrationsStep({
   integrations,
   onChange,
   credentialError,
+  credentialErrorProvider,
   agentId,
   renderIsolation,
   canRemoveProvider,
@@ -531,6 +532,7 @@ export function IntegrationsStep({
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
   credentialError?: string | null;
+  credentialErrorProvider?: string;
   // The existing agent, when editing one. Providers that sign in on one of the agent's
   // connections can only be connected once it exists.
   agentId?: string;
@@ -598,13 +600,14 @@ export function IntegrationsStep({
           !!SHARED_CREDENTIAL_PROVIDER_LABELS[draft.provider];
         const useShared = draft.sharedCredentialId !== undefined;
         const showCredentialError = Boolean(
-          credentialError && draft.provider === firstCredentialProviderId,
+          credentialError && draft.provider === (credentialErrorProvider ?? firstCredentialProviderId),
         );
 
         return (
           <details
             key={draft.provider}
-            open={!draft.existing}
+            ref={(element) => { if (showCredentialError && element) element.open = true; }}
+            open={!draft.existing || showCredentialError}
             className="p-4 rounded-2xl"
             style={{
               border: "1px solid var(--line)",

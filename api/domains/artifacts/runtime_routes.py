@@ -51,7 +51,11 @@ def list_artifacts(
 
 @router.get("/artifacts/{artifact_id}/download-link")
 def download_link(
-    artifact_id: UUID, credential: Credential, service: Service, seconds: Annotated[int, Query(ge=1)] = 900
+    artifact_id: UUID,
+    credential: Credential,
+    service: Service,
+    seconds: Annotated[int, Query(ge=1)] = 900,
+    attempt_id: UUID | None = None,
 ):
     agent_id, scope = service.runtime_scope(credential.credentials)
-    return service.link(artifact_id, agent_id, scope, seconds)
+    return service.link(artifact_id, agent_id, scope, seconds, attempt_id=attempt_id)

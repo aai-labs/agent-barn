@@ -385,6 +385,48 @@ def test_a_folder_with_sync_turned_off_is_left_alone():
         agent = _agent(context, "Sales Bot")
         there_is_a_sync_connection()(context)
         _reconcile(context)
+        _update_agent(context, agent, file_sync_enabled=False)
+        _reconcile(context)
+
+        _update_agent(context, agent, name="Sales Team")
+        _reconcile(context)
+
+        assert_that(_folder(context, agent).folder_name, equal_to("Sales Bot"))
+        assert_that(_provider_folders(context), equal_to(["Sales Bot"]))
+
+
+def test_an_agent_with_sync_turned_off_gets_no_folder():
+    with given(_BASE) as context:
+        off = _agent(context, "Sales Bot")
+        _update_agent(context, off, file_sync_enabled=False)
+        on = _agent(context, "Support")
+        there_is_a_sync_connection()(context)
+
+        _reconcile(context)
+        _reconcile(context)
+
+        assert_that([folder.agent_id for folder in _folders(context)], equal_to([on.id]))
+        assert_that(_provider_folders(context), equal_to(["Support"]))
+
+
+def test_an_active_folder_is_disabled_and_kept_when_the_agents_sync_is_off():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
+        _update_agent(context, agent, file_sync_enabled=False)
+
+        _reconcile(context)
+
+        assert_that(_folder(context, agent).status, equal_to(SyncFolderStatus.DISABLED))
+        assert_that(_provider_folders(context), equal_to(["Sales Bot"]))
+
+
+def test_a_disabled_folder_is_resumed_with_a_re_check_when_the_agents_sync_is_on():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
         with Session(context.postgres_delegate.engine) as session:
             row = session.get(SyncAgentFolder, _folder(context, agent).id)
             assert row is not None
@@ -392,11 +434,11 @@ def test_a_folder_with_sync_turned_off_is_left_alone():
             session.add(row)
             session.commit()
 
-        _update_agent(context, agent, name="Sales Team")
         _reconcile(context)
 
-        assert_that(_folder(context, agent).folder_name, equal_to("Sales Bot"))
-        assert_that(_provider_folders(context), equal_to(["Sales Bot"]))
+        folder = _folder(context, agent)
+        assert_that(folder.status, equal_to(SyncFolderStatus.ACTIVE))
+        assert_that(folder.resync_requested_at, not_none())
 
 
 def test_a_name_already_used_at_the_provider_gets_a_number():

@@ -19,6 +19,12 @@ mkdir -p "$OBSERVER_DIR"
 cp /app/config/agentbarn-observer-index.js "$OBSERVER_DIR/index.js"
 cp /app/config/agentbarn-observer-package.json "$OBSERVER_DIR/package.json"
 cp /app/config/agentbarn-observer-plugin.json "$OBSERVER_DIR/openclaw.plugin.json"
+# Loaded only with room events via plugins.load.paths.
+LISTEN_IN_DIR="/home/node/.openclaw/local-plugins/agentbarn-listen-in"
+mkdir -p "$LISTEN_IN_DIR"
+cp /app/config/agentbarn-listen-in-index.js "$LISTEN_IN_DIR/index.js"
+cp /app/config/agentbarn-listen-in-package.json "$LISTEN_IN_DIR/package.json"
+cp /app/config/agentbarn-listen-in-plugin.json "$LISTEN_IN_DIR/openclaw.plugin.json"
 sh /app/config/legacy-workspace-migration.sh || echo "[start] legacy workspace migration failed; continuing"
 
 OPENCLAW_VERSION="$(openclaw --version | cut -d' ' -f2)"

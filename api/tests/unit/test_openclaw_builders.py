@@ -25,6 +25,7 @@ from api.domains.agents.builders import (
 )
 from api.domains.agents.builders.openclaw import (
     LEGACY_WORKSPACE_MIGRATION_SH,
+    LISTEN_IN_SYSTEM_PROMPT,
     OPENCLAW_GATEWAY_PORT,
     OPENCLAW_PLUGINS_SH,
     OPENCLAW_WORKSPACE_DIR,
@@ -253,6 +254,108 @@ def test_native_channels_enable_installed_plugins_and_the_observer() -> None:
     assert "agentbarn-observer" not in build_openclaw_gateway_config("litellm/gpt-5", "http://x")["plugins"]["allow"]
 
 
+def test_gateway_config_turns_unmentioned_chatter_into_room_events_with_listen_in_rooms() -> None:
+    listening = {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C1"]}),
+        "discord": native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]}),
+        "telegram": native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-100"]}),
+    }
+    for key, channel in listening.items():
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {key: channel})
+
+        assert config["messages"] == {"groupChat": {"unmentionedInbound": "room_event"}}
+
+
+def test_gateway_config_answers_unmentioned_messages_without_listen_in_rooms() -> None:
+    for channels in (
+        None,
+        {"msteams": {"enabled": True}},
+        {"slack": native_slack_channel({"group_policy": "open"})},
+        {"discord": native_discord_channel({"allow_all_users": True, "require_mention": False})},
+        {"telegram": native_telegram_channel({"group_policy": "open"})},
+    ):
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels)
+
+        assert config["messages"] == {"groupChat": {"unmentionedInbound": "user_request"}}
+
+
+def test_gateway_config_enables_the_listen_in_guard_with_room_events() -> None:
+    listening = {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C1"]}),
+        "discord": native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]}),
+        "telegram": native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-100"]}),
+    }
+    for key, channel in listening.items():
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {key: channel})
+
+        assert "agentbarn-listen-in" in config["plugins"]["allow"]
+        assert "/home/node/.openclaw/local-plugins/agentbarn-listen-in" in config["plugins"]["load"]["paths"]
+        assert config["plugins"]["entries"]["agentbarn-listen-in"] == {
+            "enabled": True,
+            "hooks": {"allowConversationAccess": True},
+            "config": {"slackRooms": ["C1"] if key == "slack" else []},
+        }
+
+
+def test_gateway_config_leaves_the_listen_in_guard_off_without_room_events() -> None:
+    for channels in (None, {"msteams": {"enabled": True}}):
+        config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels)
+
+        assert "agentbarn-listen-in" not in config["plugins"]["allow"]
+        assert "agentbarn-listen-in" not in config["plugins"]["entries"]
+
+
+def test_config_map_and_startup_ship_the_listen_in_guard() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        openclaw_config_overlay=build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+
+    for key, target in (
+        ("agentbarn-listen-in-index.js", "index.js"),
+        ("agentbarn-listen-in-package.json", "package.json"),
+        ("agentbarn-listen-in-plugin.json", "openclaw.plugin.json"),
+    ):
+        assert key in config_map.data
+        assert f'cp /app/config/{key} "$LISTEN_IN_DIR/{target}"' in START_SH
+
+
+def test_listen_in_prompt_never_leaves_a_mention_unanswered() -> None:
+    assert "Never answer an @mention with silence" in LISTEN_IN_SYSTEM_PROMPT
+
+
+def test_listen_in_prompt_says_when_to_stay_silent_and_when_to_speak() -> None:
+    assert "Stay silent" in LISTEN_IN_SYSTEM_PROMPT
+    assert "factual error" in LISTEN_IN_SYSTEM_PROMPT
+    assert "@mention" in LISTEN_IN_SYSTEM_PROMPT
+
+
+def test_native_slack_channel_listens_in_on_chosen_channels() -> None:
+    allowlisted = native_slack_channel({"channel_ids": ["C1", "C2"], "listen_in_channel_ids": ["C2"]})
+    assert allowlisted["requireMention"] is True
+    assert allowlisted["channels"] == {
+        "C1": {"enabled": True},
+        "C2": {"enabled": True, "requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT},
+    }
+
+    unlisted = native_slack_channel({"channel_ids": ["C1"], "listen_in_channel_ids": ["C2"]})
+    assert unlisted["channels"] == {"C1": {"enabled": True}}
+
+    open_ = native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C9"]})
+    assert open_["groupPolicy"] == "open"
+    assert open_["channels"] == {"C9": {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}}
+
+
 def test_native_slack_channel_maps_connection_policy() -> None:
     locked = native_slack_channel({"channel_ids": ["C1"], "dm_user_ids": ["U1"], "dm_policy": "allowlist"})
     assert locked["streaming"] == {"mode": "partial"}
@@ -322,6 +425,30 @@ def test_native_discord_channel_maps_global_gates_to_every_guild() -> None:
     assert "guilds" not in closed
 
 
+def test_native_discord_channel_listen_in_rooms_ignore_require_mention() -> None:
+    listen_in = {"enabled": True, "autoThread": True, "requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+
+    gated = native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]})
+
+    assert gated["guilds"]["*"]["requireMention"] is True
+    assert gated["guilds"]["*"]["channels"]["c9"] == listen_in
+
+
+def test_native_discord_channel_listens_in_on_chosen_channels() -> None:
+    listen_in = {"enabled": True, "autoThread": True, "requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+
+    everyone = native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["c9"]})
+    assert everyone["guilds"]["*"]["requireMention"] is True
+    assert everyone["guilds"]["*"]["channels"] == {"*": {"enabled": True, "autoThread": True}, "c9": listen_in}
+
+    allowed = native_discord_channel({"allowed_channel_ids": ["c1", "c2"], "listen_in_channel_ids": ["c2", "c3"]})
+    assert allowed["guilds"]["*"]["channels"] == {"c1": {"enabled": True, "autoThread": True}, "c2": listen_in}
+
+    closed = native_discord_channel({"listen_in_channel_ids": ["c9"]})
+    assert closed["groupPolicy"] == "disabled"
+    assert "guilds" not in closed
+
+
 def test_native_telegram_channel_confines_groups_to_the_allowlist_and_requires_mentions() -> None:
     channel = native_telegram_channel(
         {"allowed_chat_ids": ["-1001"], "dm_policy": "allowlist", "allowed_user_ids": ["111"]}
@@ -335,6 +462,22 @@ def test_native_telegram_channel_confines_groups_to_the_allowlist_and_requires_m
         "groups": {"-1001": {"requireMention": True}},
         "defaultTo": "channel:__agentbarn_no_home_channel__",
     }
+
+
+def test_native_telegram_channel_listens_in_on_chosen_groups() -> None:
+    listen_in = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
+
+    open_ = native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-1009"]})
+    assert open_["groups"] == {"*": {"requireMention": True}, "-1009": listen_in}
+
+    allowed = native_telegram_channel(
+        {"allowed_chat_ids": ["-1001", "-1002"], "listen_in_chat_ids": ["-1002", "-1003"]}
+    )
+    assert allowed["groups"] == {"-1001": {"requireMention": True}, "-1002": listen_in}
+
+    closed = native_telegram_channel({"listen_in_chat_ids": ["-1009"]})
+    assert closed["groupPolicy"] == "disabled"
+    assert "groups" not in closed
 
 
 def test_native_telegram_channel_opens_groups_and_dms() -> None:
@@ -499,3 +642,96 @@ def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
         _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
     )
     assert "Files and download links" not in config_map.data["AGENTS.md"]
+
+
+def _listening_channels() -> dict[str, dict]:
+    return {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C0B3K981AAK"]}),
+        "discord": native_discord_channel({"allow_all_users": True, "listen_in_channel_ids": ["111"]}),
+        "telegram": native_telegram_channel({"group_policy": "open", "listen_in_chat_ids": ["-100"]}),
+    }
+
+
+def _hindsight(config: dict) -> dict:
+    return config["plugins"]["entries"]["hindsight-openclaw"]["config"]
+
+
+def test_memory_does_not_save_listen_in_rooms_but_still_recalls() -> None:
+    config = build_openclaw_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", _listening_channels(), memory_enabled=True
+    )
+
+    memory = _hindsight(config)
+    assert memory["statelessSessionPatterns"] == [
+        "agent:*:slack:channel:c0b3k981aak",
+        "agent:*:slack:channel:c0b3k981aak:**",
+        "agent:*:discord:channel:111",
+        "agent:*:discord:channel:111:**",
+        "agent:*:telegram:group:-100",
+        "agent:*:telegram:group:-100:**",
+    ]
+    assert memory["skipStatelessSessions"] is False
+    assert memory["autoRecall"] is True
+
+
+def test_memory_settings_are_unchanged_without_listen_in_rooms() -> None:
+    channels = {"slack": native_slack_channel({"group_policy": "open"})}
+
+    memory = _hindsight(
+        build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels, memory_enabled=True)
+    )
+
+    assert "statelessSessionPatterns" not in memory
+    assert "skipStatelessSessions" not in memory
+
+
+def test_the_listen_in_guard_knows_the_slack_rooms() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", _listening_channels())
+
+    assert config["plugins"]["entries"]["agentbarn-listen-in"]["config"] == {"slackRooms": ["C0B3K981AAK"]}
+
+
+def test_a_room_that_only_requires_a_mention_is_not_a_listen_in_room() -> None:
+    channels = {"slack": native_slack_channel({"group_policy": "allowlist", "channel_ids": ["C1"]})}
+
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels, memory_enabled=True)
+
+    assert "agentbarn-listen-in" not in config["plugins"]["entries"]
+    assert "statelessSessionPatterns" not in _hindsight(config)
+
+
+def _discord_rooms(config: dict) -> dict:
+    return config["channels"]["discord"]["guilds"]["*"]["channels"]
+
+
+def test_discord_does_not_auto_thread_normal_channels_while_the_agent_listens_in() -> None:
+    channels = {
+        "discord": native_discord_channel(
+            {"allowed_channel_ids": ["c1", "c9"], "allowed_user_ids": ["u1"], "listen_in_channel_ids": ["c9"]}
+        )
+    }
+
+    rooms = _discord_rooms(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels))
+
+    assert rooms["c1"]["autoThread"] is False
+    assert rooms["c9"]["autoThread"] is True
+    assert rooms["c9"]["systemPrompt"] == LISTEN_IN_SYSTEM_PROMPT
+
+
+def test_discord_stops_auto_threading_when_another_platform_listens_in() -> None:
+    channels = {
+        "slack": native_slack_channel({"group_policy": "open", "listen_in_channel_ids": ["C1"]}),
+        "discord": native_discord_channel({"allow_all_users": True}),
+    }
+
+    rooms = _discord_rooms(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels))
+
+    assert rooms["*"]["autoThread"] is False
+
+
+def test_discord_keeps_auto_threads_without_listen_in_rooms() -> None:
+    channels = {"discord": native_discord_channel({"allow_all_users": True, "require_mention": False})}
+
+    rooms = _discord_rooms(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", channels))
+
+    assert rooms["*"]["autoThread"] is True

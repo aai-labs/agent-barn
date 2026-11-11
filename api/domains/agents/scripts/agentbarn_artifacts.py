@@ -7,6 +7,7 @@ import mimetypes
 import os
 import stat
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -31,6 +32,8 @@ def main() -> int:
         sub.add_argument("artifact_id")
         if command == "retrieve":
             sub.add_argument("destination")
+            sub.add_argument("--checksum")
+            sub.add_argument("--attempt-id")
         else:
             sub.add_argument("--seconds", type=int, default=900)
     args = parser.parse_args()
@@ -74,23 +77,36 @@ def main() -> int:
                 content = stream.read(limit + 1)
             if len(content) > limit:
                 raise ValueError("File exceeds the configured upload limit")
-            headers = {"Content-Type": "application/json"}
             query = "?" + urlencode({"attempt_id": args.attempt_id}) if args.attempt_id else ""
-            artifact = request(
-                "/artifacts" + query,
-                "POST",
-                json.dumps(
-                    {
-                        "filename": resolved.name,
-                        "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
-                        "size": len(content),
-                        "checksum": hashlib.sha256(content).hexdigest(),
-                    }
-                ).encode(),
-                headers,
-            )
-            headers["Content-Type"] = "application/octet-stream"
-            artifact = request("/artifacts/" + artifact["id"] + "/content", "PUT", content, headers)
+            metadata = json.dumps(
+                {
+                    "filename": resolved.name,
+                    "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
+                    "size": len(content),
+                    "checksum": hashlib.sha256(content).hexdigest(),
+                }
+            ).encode()
+            deadline = time.monotonic() + 30
+            while True:
+                artifact = None
+                try:
+                    artifact = request("/artifacts" + query, "POST", metadata, {"Content-Type": "application/json"})
+                    if artifact["state"] == "READY":
+                        break
+                    artifact = request(
+                        "/artifacts/" + artifact["id"] + "/content",
+                        "PUT",
+                        content,
+                        {"Content-Type": "application/octet-stream"},
+                    )
+                    break
+                except urllib.error.HTTPError as exc:
+                    # A shared chat staging row can be busy or invalidated by a
+                    # failed publisher. Restage so another attempt can recover.
+                    retryable = exc.code == 409 or (artifact is not None and exc.code in {404, 503})
+                    if args.attempt_id or not retryable or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
             print(json.dumps(request("/artifacts/" + artifact["id"] + "/download-link")))
         elif args.command == "list":
             print(json.dumps(request("/artifacts?" + urlencode({"page": args.page}))))
@@ -99,7 +115,15 @@ def main() -> int:
 
             artifact_id = str(UUID(args.artifact_id))
             link = request(
-                "/artifacts/" + artifact_id + "/download-link?" + urlencode({"seconds": getattr(args, "seconds", 900)})
+                "/artifacts/"
+                + artifact_id
+                + "/download-link?"
+                + urlencode(
+                    {
+                        "seconds": getattr(args, "seconds", 900),
+                        **({"attempt_id": args.attempt_id} if getattr(args, "attempt_id", None) else {}),
+                    }
+                )
             )
             if args.command == "link":
                 print(json.dumps(link))
@@ -107,6 +131,8 @@ def main() -> int:
                 # Use the Agent's reachable app origin, not the human-facing one.
                 # Provider authority is opaque and unchanged; no service bearer
                 # is forwarded to the app's capability-only byte route.
+                if args.checksum and link["artifact"]["checksum"] != args.checksum:
+                    raise ValueError("Artifact does not match the pinned checksum")
                 download = urlsplit(link["url"])
                 if not download.path.startswith("/api/v1/agent-artifacts/"):
                     raise ValueError("Unexpected artifact download route")

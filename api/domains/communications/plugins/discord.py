@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from api.domains.communications.models import (
     CredentialUniquenessScope,
@@ -46,11 +46,33 @@ class DiscordSettings(PlatformSettings):
         ),
     )
     require_mention: bool = Field(
-        default=True, title="Require @mention", description="Only respond in servers when directly @mentioned."
+        default=True,
+        title="Require @mention",
+        description=(
+            "Only respond in servers when directly @mentioned. Listen-in channels ignore this. On OpenClaw Agents it "
+            "can't be off while the Agent has listen-in channels."
+        ),
     )
     home_channel_id: str | None = Field(
         default=None, title="Alert channel", description="Optional channel ID for scheduled or proactive updates."
     )
+    listen_in_channel_ids: list[str] = Field(
+        default_factory=list,
+        title="Listen-in channels",
+        description=(
+            "Channel IDs where the Agent reads every message without an @mention and posts only when it has "
+            "something useful to add, such as a correction or missing context. Each message there costs one model "
+            "turn, even when the Agent stays silent. When Allowed channels is set, these must be in it. "
+            "On Hermes, Verbose mode is off for this platform and new messages wait for the running "
+            "turn instead of interrupting it."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_allowed_listen_in_channels(self) -> DiscordSettings:
+        if self.allowed_channel_ids and (outside := set(self.listen_in_channel_ids) - set(self.allowed_channel_ids)):
+            raise ValueError(f"Listen-in channels must also be Allowed channels: {', '.join(sorted(outside))}")
+        return self
 
 
 class DiscordCredentials(PlatformCredentials):

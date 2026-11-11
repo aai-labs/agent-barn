@@ -2,12 +2,13 @@
 
 import base64
 import http.client
-import ipaddress
 import json
 import re
 import socket
 import ssl
 from urllib.parse import unquote, urlencode, urlsplit
+
+from api.infrastructure import public_http
 
 MAX_BYTES = 1024 * 1024
 #: Authentication through an OAuth2 client-credentials grant (RFC 6749 section 4.4). The
@@ -108,14 +109,10 @@ def check_scope(base_url: str, url: str) -> None:
 
 
 def public_addresses(host: str, port: int = 443) -> list[str]:
-    addresses = sorted({str(row[4][0]) for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
-    if not addresses:
-        raise RequestRefused("Destination has no public address")
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if not ip.is_global or ip.is_multicast or ip.is_reserved or getattr(ip, "ipv4_mapped", None):
-            raise RequestRefused("Private, internal and special network destinations are unsupported")
-    return addresses
+    try:
+        return public_http.public_addresses(host, port)
+    except public_http.NonPublicDestination as exc:
+        raise RequestRefused(str(exc)) from exc
 
 
 def header_value(value: str, *, allow_empty: bool = False) -> str:

@@ -206,6 +206,9 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             slack = next(item for item in catalogue if item["key"] == "slack")
             assert_that(slack["schema_version"], equal_to(2))
             assert_that(slack["settings_schema"]["properties"], not_(has_key("verbose_mode")))
+            discord = next(item for item in catalogue if item["key"] == "discord")
+            assert_that(discord["schema_version"], equal_to(2))
+            assert_that(discord["settings_schema"]["properties"], has_key("require_mention"))
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
                 hints["slack"],
@@ -239,6 +242,7 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("/setprivacy"),
                     contains_string("remove and re-add"),
                     contains_string("only when mentioned or replied to"),
+                    contains_string("Listen-in groups"),
                     contains_string("webhook"),
                 ),
             )
@@ -834,12 +838,104 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                         "allow_all_users": False,
                         "require_mention": True,
                         "home_channel_id": None,
+                        "listen_in_channel_ids": [],
                     },
                     external_identity="validation-skipped",
                     revision=2,
                 ),
             )
             assert_that(response.json(), not_(has_key("credentials")))
+
+
+def _discord_with(**settings) -> dict:
+    return {**_discord_payload(), "settings": {"allowed_channel_ids": ["channel-one"], **settings}}
+
+
+def _slack_listening_in() -> dict:
+    return {**_slack_payload(), "settings": {"group_policy": "open", "listen_in_channel_ids": ["C1"]}}
+
+
+def test_openclaw_refuses_require_mention_off_with_discord_listen_in() -> None:
+    with given(_GIVEN) as context:
+        response = context.client.post(
+            _base(context),
+            json=_discord_with(require_mention=False, listen_in_channel_ids=["channel-one"]),
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], contains_string("Require @mention"))
+
+
+def test_openclaw_refuses_listen_in_on_another_platform_while_require_mention_is_off() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        discord = client.post(_base(context), json=_discord_with(require_mention=False), headers=_auth(context))
+
+        slack = client.post(_base(context), json=_slack_listening_in(), headers=_auth(context))
+
+        assert_that(discord.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(slack.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(slack.json()["detail"], contains_string("Require @mention"))
+
+
+def test_openclaw_refuses_turning_require_mention_off_while_listening_in() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        created = client.post(
+            _base(context), json=_discord_with(listen_in_channel_ids=["channel-one"]), headers=_auth(context)
+        ).json()
+
+        response = client.patch(
+            f"{_base(context)}/{created['id']}",
+            json={
+                "revision": created["revision"],
+                "settings": {
+                    "allowed_channel_ids": ["channel-one"],
+                    "listen_in_channel_ids": ["channel-one"],
+                    "require_mention": False,
+                },
+            },
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_openclaw_allows_require_mention_off_without_listen_in() -> None:
+    with given(_GIVEN) as context:
+        response = context.client.post(
+            _base(context), json=_discord_with(require_mention=False), headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.json()["settings"]["require_mention"], equal_to(False))
+
+
+def test_openclaw_ignores_a_disabled_connection_when_checking_require_mention() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        discord = client.post(_base(context), json=_discord_with(require_mention=False), headers=_auth(context)).json()
+        client.patch(
+            f"{_base(context)}/{discord['id']}",
+            json={"revision": discord["revision"], "enabled": False},
+            headers=_auth(context),
+        )
+
+        slack = client.post(_base(context), json=_slack_listening_in(), headers=_auth(context))
+
+        assert_that(slack.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_hermes_allows_require_mention_off_with_listen_in() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        response = context.client.post(
+            _base(context),
+            json=_discord_with(require_mention=False, listen_in_channel_ids=["channel-one"]),
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
 
 
 def test_unknown_connection_update_returns_404() -> None:

@@ -51,7 +51,7 @@ Every Organization can use these locked defaults:
 
 | Role         | Permissions                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------------- |
-| Agent Viewer | Read Agent metadata, conversations, tool calls, activity, logs, and Agent-specific costs.         |
+| Agent Viewer | Read Agent metadata, conversations, tool calls, activity, logs, Agent-specific costs, and Tasks.  |
 | Agent Editor | Viewer capabilities plus configuration, lifecycle, Skill assignment, and Agent Secret management. |
 | Agent Owner  | Editor capabilities plus Agent deletion, access management, and Agent Memory management.          |
 
@@ -62,6 +62,8 @@ An Agent operation is allowed when the actor has the corresponding Permission th
 Choosing an Agent's [Agent Size](../agent-sizes.md#organization-choice) uses the Organization Permission `agent.size.manage`, held only by Organization Owners and Admins; no Agent Access Role carries it, so an Agent's creator or explicit Agent Owner who is a Member cannot choose, since a bigger size spends the Organization's shared capacity. Restarting an Agent whose size is pending applies it, and needs only `agent.lifecycle.manage`: a start applies the size already chosen, so it is not a size decision. The size route still resolves the Agent through `AgentAuthorization.require_action` first (`404` when concealed, `403` when visible without the grant) and then checks the Organization grant; `allowed_actions` lists it for Owners and Admins. Which sizes may be chosen is the Platform Administrator's, per Organization, and reading that list needs only `organization.read`. A Platform Administrator may also set one Agent's size through `PUT /platform/agents/{agent_id}/agent-size`, and restart any Agent (or start one that is not running) through `POST /platform/agents/{agent_id}/restart` (both `require_platform_admin`, no Membership): the only platform writes on an Organization's Agent, limited to these two by [their ADR](../../adr/2026-10-22-platform-administrators-set-an-agents-size.md). While that override stands, the Organization's size route answers `409` to Owners and Admins alike; `allowed_actions` still lists `agent.size.manage`, and `AgentRead.agent_size_set_by_platform` tells the UI to show the size locked.
 
 Agent Memory adds `agent.memory.manage` to the locked Agent Owner role, allowing the creator through their explicit access and Organization Owners/Admins through implicit Agent Owner authority to toggle memory. Editors and Viewers do not receive it. The separate Organization Permission `memory.access.manage` is held only by Organization Owners and Admins; it governs listing, creating, and revoking Memory Grants and viewing shared Organization Memory across that Organization. Owning an Agent does not confer this Organization capability. See [`Agent Memory`](../agent-memory.md) for grant semantics and API contracts.
+
+Agent Tasks add `task.read` to every locked Agent Access Role, so anyone who can view an Agent can read its Tasks, Task Notes and Task Files; it is reported in `allowed_actions` and kept by read-only Personal API Keys. Tasks are written only by their Agent, so no human write Permission exists.
 
 ## Agent Access
 
@@ -100,6 +102,8 @@ Agent file sync traffic from the pod has no user Membership either.
 - **Tenant:** the Organization, connection and Agent Folder come only from that Agent's persisted rows. No request value can name another Agent, folder or Organization.
 - **Paths:** they are checked against the Agent's own runtime's sync rules.
 - **Not background work:** these methods are reachable from an Ingest router, so the background-work exception below does not cover them. See [Activity and Ingest](../activity-and-ingest.md).
+- **Turning File Sync off or on** is a user request, not background work: `PUT …/agents/{agent_id}/file-sync` requires `agent.update` through `AgentAuthorization.require_action`, and `AgentFileSyncRepository` changes only that Agent and its own folder, inside the caller's Organization. It is a separate repository from the Sync Engine's `FileSyncRepository`, so the exception below keeps covering only engine work ([Sync providers](../sync-provider/README.md#turning-sync-off)).
+- **Reading an Agent's File Sync status and history** (`GET …/agents/{agent_id}/file-sync` and `…/file-sync/activity`) requires `activity.read`. `AgentFileSyncRepository.status_inputs` reads the Agent through `agent_scope_predicates` and then only that Agent's Organization's active connection and that Agent's own folder ([Sync providers](../sync-provider/README.md#status)). `activity_page` joins `sync_activity` to the Agent under the same predicates before counting, ordering and paging.
 - **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
 
 Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
@@ -107,7 +111,10 @@ A purpose-separated credential derived from the per-start Agent secret resolves 
 undeleted, running Agent and its Organization. Runtime callers cannot choose another
 owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
 against that owning Agent, current generation/state/deadline and initiating Membership
-authority. Completion credentials never enter model prompts or file-tool arguments.
+authority. Workflow retrieval with an attempt ID uses those same fences and
+requires an active reference owned by that run. Human run start resolves and pins
+only READY files of the authorized Agent and Organization under `agent.update`.
+Completion credentials never enter model prompts or file-tool arguments.
 The entire owning Agent is the runtime trust boundary: all of its sessions share
 that identity and may publish into its current workflow attempts. Attempt IDs are
 non-secret provenance, not per-session capabilities; this is not session isolation.
@@ -138,6 +145,8 @@ Background work is the one exception, and it is narrow. It covers scheduled work
 - the method is never reachable from a router
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged
 - the work is driven by a schedule, a deploy, or an operator with cluster access, never by anything a product user can trigger
+
+One bounded case: turning an Agent's File Sync back on (an authorized `agent.update` request) leaves a request, `sync_agent_folder.resync_requested_at`, on that Agent's own folder. The Sync Engine reads it on its next scheduled pass and re-lists the whole connection, as it already does when the provider expires the change cursor. The request chooses only *when* that re-list happens, never what it may touch: the re-list keys by the connection's own persisted rows, and changes any folder or file only by the same rules as every other pass. So the user's input reaches the engine as a timing hint, and the exception still holds.
 
 A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
 

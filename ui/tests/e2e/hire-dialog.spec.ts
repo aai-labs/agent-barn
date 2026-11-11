@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
   mockAgent,
@@ -14,6 +14,56 @@ import {
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 import { ORG_A_ID } from "../pages/data-support/organization-data-support.po";
+import {
+  activeOneDriveConnection,
+  activeOtherDriveConnection,
+  oneDriveEntry,
+  otherDriveEntry,
+} from "../pages/data-support/sync-provider-data-support.po";
+
+function syncFilesCheckbox(page: Page) {
+  return page.getByRole("switch", { name: "Sync files with OneDrive" });
+}
+
+async function hirePayload(page: Page, dataSupport: DataSupport) {
+  await dataSupport.agents.interceptCreateAgentRequest({
+    body: { ...mockAgent, name: "Brandon the Assistant", status: "STOPPED", agent_type: "hermes" },
+  });
+  await dataSupport.agents.interceptStartAgentRequest();
+  await chooseTemplate(page);
+  const createRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/agents") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+  return (await createRequest).postDataJSON();
+}
+
+const HINT = "Communication connections and integration credentials are configured independently after hiring.";
+
+type Box = { x: number; y: number; width: number; height: number };
+
+async function box(locator: Locator): Promise<Box> {
+  const found = await locator.boundingBox();
+  if (!found) throw new Error("element has no box");
+  return found;
+}
+
+function sameRow(a: Box, b: Box) {
+  return a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+async function openHire(page: Page, dataSupport: DataSupport, dashboardPage: DashboardPage, withProvider: boolean) {
+  await dataSupport.syncProviders.interceptProviders({
+    providers: [withProvider ? oneDriveEntry({ connection: activeOneDriveConnection() }) : oneDriveEntry()],
+  });
+  await dashboardPage.goto();
+  await dashboardPage.openHireCard();
+  await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+}
+
+async function chooseOpenClaw(page: Page) {
+  await page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "OpenClaw", exact: true }).click();
+}
 
 async function chooseTemplate(page: Page) {
   await page.getByRole("combobox", { name: "Template", exact: true }).click();
@@ -78,6 +128,116 @@ test.describe("Hire Dialog", () => {
     });
     await startRequest;
     await expect(page.getByText("Brandon the Assistant was hired successfully.")).toBeVisible();
+  });
+
+  test("hires on a specific model picked from the model menu", async ({ page }) => {
+    await page.getByRole("radio", { name: "Choose a specific model" }).check();
+    await page.getByRole("button", { name: "Model", exact: true }).click();
+    await page.getByPlaceholder("Search models…").fill("mini");
+    await page.getByRole("option", { name: "GPT-5 mini" }).click();
+
+    await expect(page.getByRole("option")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Build your own agent" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveText("GPT-5 mini");
+    expect(await hirePayload(page, dataSupport)).toEqual({
+      name: "Brandon the Assistant",
+      agent_type: "hermes",
+      template_key: "general-purpose",
+      template_version: 1,
+      approval_mode: "auto",
+      model: "litellm/openrouter/openai/gpt-5-mini",
+    });
+  });
+
+  test("offers file sync, on by default, when a connected provider syncs files", async ({ page }) => {
+    await dataSupport.syncProviders.interceptProviders({
+      providers: [oneDriveEntry({ connection: activeOneDriveConnection() })],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await expect(syncFilesCheckbox(page)).toBeChecked();
+    expect(await hirePayload(page, dataSupport)).toEqual({
+      name: "Brandon the Assistant",
+      agent_type: "hermes",
+      template_key: "general-purpose",
+      template_version: 1,
+      approval_mode: "auto",
+    });
+  });
+
+  test("hires with file sync off when it is unchecked", async ({ page }) => {
+    await dataSupport.syncProviders.interceptProviders({
+      providers: [oneDriveEntry({ connection: activeOneDriveConnection() })],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await syncFilesCheckbox(page).click();
+
+    expect(await hirePayload(page, dataSupport)).toEqual({
+      name: "Brandon the Assistant",
+      agent_type: "hermes",
+      template_key: "general-purpose",
+      template_version: 1,
+      approval_mode: "auto",
+      file_sync_enabled: false,
+    });
+  });
+
+  test("offers no file sync without a connected provider that syncs files", async ({ page }) => {
+    await dataSupport.syncProviders.interceptProviders({
+      providers: [oneDriveEntry(), otherDriveEntry({ connection: activeOtherDriveConnection() })],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+    await expect(page.getByRole("switch", { name: /^Sync files with/ })).toHaveCount(0);
+  });
+
+  test("puts the hint beside Command approval for Hermes without a sync provider", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, false);
+
+    const hint = await box(page.getByText(HINT));
+    const approval = await box(page.getByRole("combobox", { name: "Command approval" }));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(sameRow(hint, approval)).toBe(true);
+    expect(hint.width).toBeLessThan(name.width * 1.5);
+  });
+
+  test("puts the hint on its own full row below the sync toggle for Hermes", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, true);
+
+    const hint = await box(page.getByText(HINT));
+    const toggle = await box(syncFilesCheckbox(page));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(hint.y).toBeGreaterThan(toggle.y + toggle.height);
+    expect(hint.width).toBeGreaterThan(name.width * 1.5);
+  });
+
+  test("puts the hint on its own full row for OpenClaw without a sync provider", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, false);
+    await chooseOpenClaw(page);
+
+    const hint = await box(page.getByText(HINT));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(hint.width).toBeGreaterThan(name.width * 1.5);
+  });
+
+  test("puts the hint beside the sync toggle for OpenClaw", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, true);
+    await chooseOpenClaw(page);
+
+    const hint = await box(page.getByText(HINT));
+    const toggle = await box(syncFilesCheckbox(page));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(sameRow(hint, toggle)).toBe(true);
+    expect(hint.width).toBeLessThan(name.width * 1.5);
   });
 
   test("preserves manual edits when selecting a template", async ({ page }) => {
@@ -184,6 +344,179 @@ test.describe("Hire Dialog", () => {
         },
       },
     ]);
+  });
+
+  test("shows the selected template's description", async ({ page }) => {
+    const description = "Requires Google Workspace with Gmail selected.";
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [{ ...mockTemplates[0], description }] },
+    });
+
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+    await chooseTemplate(page);
+
+    await expect(page.getByText(description, { exact: true })).toBeVisible();
+  });
+
+  test.describe("Connecting Google", () => {
+    const FAKE_GOOGLE_URL = "https://accounts.example.test/consent?state=the-state";
+    const CALLBACK_PATH = "/api/v1/integrations/google/callback";
+    const WAITING_TEXT = "Finish signing in in the Google window.";
+    const CONNECTED_TEXT = "✓ Connected as someone@example.com";
+    const FAILED_TEXT = "Google authentication failed";
+
+    async function mockGoogle(page: Page, authorizeUrl: string) {
+      const tokenCodes: unknown[] = [];
+      await page.route("**/api/v1/integrations/google/authorize-url*", async (route) => {
+        await route.fulfill({ json: { authorize_url: authorizeUrl } });
+      });
+      await page.route("**/api/v1/integrations/google/token", async (route) => {
+        tokenCodes.push((route.request().postDataJSON() as { code: unknown }).code);
+        await route.fulfill({
+          json: {
+            refresh_token: "the-refresh-token",
+            email: "someone@example.com",
+            granted_scopes: ["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+          },
+        });
+      });
+      return tokenCodes;
+    }
+
+    async function mockCallback(page: Page, script: string) {
+      await page.context().route(`**${CALLBACK_PATH}*`, async (route) => {
+        await route.fulfill({ contentType: "text/html", body: `<script>${script}</script>` });
+      });
+    }
+
+    async function mockGoogleCuttingThePopupLink(page: Page, nextUrl: string | null) {
+      const redirect = nextUrl ? `setTimeout(() => { location.href = ${JSON.stringify(nextUrl)}; }, 2000);` : "";
+      await page.context().route("https://accounts.example.test/**", async (route) => {
+        await route.fulfill({
+          contentType: "text/html",
+          headers: { "Cross-Origin-Opener-Policy": "same-origin" },
+          body: `<script>${redirect}</script>`,
+        });
+      });
+    }
+
+    async function openGoogleForm(page: Page) {
+      const googleSkill = {
+        id: mockJiraSkill.id,
+        name: "Google Workspace",
+        source: mockJiraSkill.source,
+        required_providers: ["google_workspace"],
+        tools_pointer: null,
+        required: true,
+        created_at: mockJiraSkill.createdAt,
+        updated_at: mockJiraSkill.updatedAt,
+        group_key: null,
+      };
+      await dataSupport.agents.interceptGetTemplatesRequest({
+        body: { page: 1, page_size: 50, total: 1, items: [{ ...mockTemplates[0], required_skills: [googleSkill] }] },
+      });
+      await dataSupport.skills.interceptGetSkillsRequest({ body: [mockCustomSkill] });
+      await dashboardPage.goto();
+      await dashboardPage.openHireCard();
+      await chooseTemplate(page);
+      await page.getByRole("checkbox", { name: "Gmail" }).check();
+      await page.getByRole("radio", { name: "Read-only" }).check();
+      await page.getByPlaceholder("1234567890-abc….apps.googleusercontent.com").fill("own.apps.googleusercontent.com");
+      await page.getByPlaceholder("GOCSPX-…").fill("GOCSPX-secret");
+    }
+
+    function authenticateButton(page: Page) {
+      return page.getByRole("button", { name: "Authenticate with Google" });
+    }
+
+    test("keeps waiting when Google cuts the popup link, then connects", async ({ page }) => {
+      const origin = new URL(page.url()).origin;
+      const tokenCodes = await mockGoogle(page, FAKE_GOOGLE_URL);
+      await mockGoogleCuttingThePopupLink(page, `${origin}${CALLBACK_PATH}?code=the-code&state=the-state`);
+      await mockCallback(
+        page,
+        `new BroadcastChannel("google-oauth").postMessage({ type: "google-oauth", provider: "google_workspace", code: "the-code", state: "the-state" }); window.close();`,
+      );
+      await openGoogleForm(page);
+
+      await authenticateButton(page).click();
+
+      await expect(page.getByText(WAITING_TEXT)).toBeVisible();
+      await expect(page.getByText(FAILED_TEXT)).toHaveCount(0);
+      await expect(page.getByText(CONNECTED_TEXT)).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(WAITING_TEXT)).toHaveCount(0);
+      expect(tokenCodes).toEqual(["the-code"]);
+    });
+
+    test("shows a Google denial that arrives after the popup link was cut", async ({ page }) => {
+      const origin = new URL(page.url()).origin;
+      const tokenCodes = await mockGoogle(page, FAKE_GOOGLE_URL);
+      await mockGoogleCuttingThePopupLink(page, `${origin}${CALLBACK_PATH}?error=access_denied&state=the-state`);
+      await mockCallback(
+        page,
+        `new BroadcastChannel("google-oauth").postMessage({ type: "google-oauth", provider: "google_workspace", error: "Google authorization was denied or failed (access_denied).", state: "the-state" }); window.close();`,
+      );
+      await openGoogleForm(page);
+
+      await authenticateButton(page).click();
+
+      await expect(page.getByText("Google authorization was denied or failed (access_denied).")).toBeVisible({ timeout: 10_000 });
+      await expect(authenticateButton(page)).toBeEnabled();
+      expect(tokenCodes).toEqual([]);
+    });
+
+    test("ignores a result from another sign-in and can be cancelled", async ({ page }) => {
+      const tokenCodes = await mockGoogle(page, FAKE_GOOGLE_URL);
+      await mockGoogleCuttingThePopupLink(page, null);
+      await openGoogleForm(page);
+
+      await authenticateButton(page).click();
+      await expect(page.getByText(WAITING_TEXT)).toBeVisible();
+
+      await page.evaluate(() => {
+        new BroadcastChannel("google-oauth").postMessage({ type: "google-oauth", code: "other-code", state: "other-state" });
+      });
+      await page.waitForTimeout(300);
+      expect(tokenCodes).toEqual([]);
+      await expect(page.getByText(WAITING_TEXT)).toBeVisible();
+
+      await page.getByRole("button", { name: "Cancel sign-in" }).click();
+
+      await expect(authenticateButton(page)).toBeEnabled();
+      await expect(page.getByText(WAITING_TEXT)).toHaveCount(0);
+      await expect(page.getByText(FAILED_TEXT)).toHaveCount(0);
+    });
+
+    test("stops waiting when the sign-in times out", async ({ page }) => {
+      await page.clock.install();
+      await mockGoogle(page, FAKE_GOOGLE_URL);
+      await mockGoogleCuttingThePopupLink(page, null);
+      await openGoogleForm(page);
+
+      await authenticateButton(page).click();
+      await expect(page.getByText(WAITING_TEXT)).toBeVisible();
+      await page.clock.fastForward("10:01");
+
+      await expect(page.getByText("Google sign-in timed out. Please try again.")).toBeVisible();
+      await expect(authenticateButton(page)).toBeEnabled();
+    });
+
+    test("connects through the popup link when it stays intact", async ({ page }) => {
+      const origin = new URL(page.url()).origin;
+      const tokenCodes = await mockGoogle(page, `${origin}${CALLBACK_PATH}?code=the-code&state=the-state`);
+      await mockCallback(
+        page,
+        `window.opener.postMessage({ type: "google-oauth", provider: "google_workspace", code: "the-code", state: "the-state" }, window.location.origin); window.close();`,
+      );
+      await openGoogleForm(page);
+
+      await authenticateButton(page).click();
+
+      await expect(page.getByText(CONNECTED_TEXT)).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(FAILED_TEXT)).toHaveCount(0);
+      expect(tokenCodes).toEqual(["the-code"]);
+    });
   });
 
   test("keeps standalone template-required skills in the required section", async ({ page }) => {

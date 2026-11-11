@@ -24,6 +24,7 @@ from api.domains.agents.models import (
     ConfluenceContent,
     FirecrawlContent,
     GithubContent,
+    GitlabContent,
     GmailAppPasswordContent,
     GmailContent,
     GoogleWorkspaceContent,
@@ -61,6 +62,7 @@ from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
+from api.infrastructure.integration_validators.gitlab import validate_gitlab
 from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
@@ -409,6 +411,87 @@ class BitbucketPlugin(AaiCliPlugin[BitbucketContent]):
         return repo_scoped_profile_line("Bitbucket", self.aai_cli_slug, content.workspace, "workspace", content.repos)
 
 
+class GitlabPlugin(AaiCliPlugin[GitlabContent]):
+    key = "gitlab"
+    egress_mode = EgressMode.GATEWAY_PROXY
+    provider = SecretProvider.GITLAB
+    display_name = "GitLab credential"
+    credentials_model = GitlabContent
+    shared_credential_eligible = True
+    bundled_skill_slugs = ("aai-gitlab",)
+    upstream_public_only = True
+    preserve_encoded_path = True
+
+    aai_cli_slug = "gitlab-work"
+    aai_cli_label = "GitLab"
+    aai_cli_capability = (
+        "merge requests (diffs, notes, discussions, approvals), issues, branches, repo source, pipelines and job logs"
+    )
+    aai_cli_secret_entries = (("gitlab.token", "token"),)
+
+    def validate_external(self, content: GitlabContent) -> IntegrationValidationResult:
+        return validate_gitlab(content)
+
+    def upstream_base_url(self, content: GitlabContent) -> str:
+        return f"{content.base_url}/api/v4"
+
+    def apply_upstream_auth(self, content: GitlabContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers({"Authorization": f"Bearer {content.token}"}, sensitive=True)
+
+    def aai_cli_profile_block(self, content: GitlabContent) -> str:
+        blocks = []
+        for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos):
+            lines = [
+                f"[profiles.{name}]\n",
+                'provider = "gitlab"\n',
+                'auth_type = "bearer_token"\n',
+                f"base_url = {quote(self.upstream_base_url(content))}\n",
+                'token_secret = "gitlab.token"\n',
+            ]
+            if repo is not None:
+                lines.append(f"repo = {quote(repo)}\n")
+            blocks.append("".join(lines))
+        return "\n".join(blocks)
+
+    def aai_cli_gateway_profile_block(self, content: GitlabContent, *, base_url: str, token_env: str) -> str:
+        blocks = []
+        for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos):
+            lines = [
+                f"[profiles.{name}]\n",
+                'provider = "gitlab"\n',
+                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
+            ]
+            if repo is not None:
+                lines.append(f"repo = {quote(repo)}\n")
+            blocks.append("".join(lines))
+        return "\n".join(blocks)
+
+    def aai_cli_context_line(self, content: GitlabContent) -> str:
+        instance = urlsplit(content.base_url).netloc
+        if content.repos:
+            pairs = "; ".join(
+                f"`{name}`: {repo}" for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos)
+            )
+            return f"- **GitLab** ({instance}): {pairs}"
+        return (
+            f"- **GitLab** (`{self.aai_cli_slug}`): instance `{instance}` — "
+            "no project configured; pass --project explicitly"
+        )
+
+    def aai_cli_policy_line(self, content: GitlabContent) -> str:
+        # Not `repo_scoped_profile_line`: GitLab has no owner/repo split, and its flag is
+        # `--project`, so that helper's `--repo` advice would send agents to a flag that
+        # does not exist.
+        if content.repos:
+            segments = ", ".join(
+                f"`--profile {name}` → {repo}" for name, repo in profile_repo_pairs(self.aai_cli_slug, content.repos)
+            )
+            return f"- **GitLab**: {segments}"
+        return (
+            f"- **GitLab**: `--profile {self.aai_cli_slug}` (no project configured — pass `--project <group/project>`)"
+        )
+
+
 class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
     key = "pipedrive"
     egress_mode = EgressMode.GATEWAY_PROXY
@@ -599,7 +682,7 @@ class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
     #: OAuth-based, so its consent is per-agent and it cannot be an org-scoped
     #: Shared Credential.
     shared_credential_eligible = False
-    bundled_skill_slugs = ()
+    bundled_skill_slugs = ("aai-google-workspace",)
 
     def validate_external(self, content: GoogleWorkspaceContent) -> IntegrationValidationResult:
         return validate_google_workspace(content)
@@ -919,6 +1002,7 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     JiraPlugin(),
     ConfluencePlugin(),
     BitbucketPlugin(),
+    GitlabPlugin(),
     FirecrawlPlugin(),
     PipedrivePlugin(),
     ApolloPlugin(),

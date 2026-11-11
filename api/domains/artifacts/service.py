@@ -7,11 +7,13 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from injector import inject, singleton
+from sqlmodel import Session
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.artifacts.buckets import ArtifactBucketRepository
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead, ArtifactStorageRead
+from api.domains.artifacts.references import pin_published, release, release_beyond_newest
 from api.domains.artifacts.repository import ArtifactRepository, PublicationBusy
 from api.domains.artifacts.storage import (
     ArtifactCredentialsUnavailable,
@@ -51,13 +53,16 @@ class ArtifactService:
     def storage_status(self, agent_id: UUID, context: CurrentUserContext) -> ArtifactStorageRead:
         scope = self.scope(agent_id, context)
         if not self.config.artifact_s3_endpoint_url:
-            return ArtifactStorageRead(state="NOT_CONFIGURED")
+            return ArtifactStorageRead(max_bytes=self.config.artifact_max_bytes, state="NOT_CONFIGURED")
         row = self.buckets.status(agent_id, scope.organization_id)
         if row is None or row.state == "DELETED":
-            return ArtifactStorageRead(state="NOT_PROVISIONED")
+            return ArtifactStorageRead(max_bytes=self.config.artifact_max_bytes, state="NOT_PROVISIONED")
         if row.state == "READY":
-            return ArtifactStorageRead(state="READY")
-        return ArtifactStorageRead(state="FAILED" if row.last_error or row.state == "DELETING" else "PROVISIONING")
+            return ArtifactStorageRead(max_bytes=self.config.artifact_max_bytes, state="READY")
+        return ArtifactStorageRead(
+            max_bytes=self.config.artifact_max_bytes,
+            state="FAILED" if row.last_error or row.state == "DELETING" else "PROVISIONING",
+        )
 
     def request_storage(self, agent_id: UUID, context: CurrentUserContext) -> ArtifactStorageRead:
         scope = self.scope(agent_id, context, True)
@@ -138,6 +143,16 @@ class ArtifactService:
                         raise HTTPException(403, "Publication authority was revoked")
                     self.repository.get(artifact_id, agent_id, current_scope)
 
+        # A runtime may reuse a READY workflow file after its attempt has ended.
+        # This is a read of immutable bytes, not publication into that attempt.
+        if runtime_token is not None:
+            existing = self.repository.get(artifact_id, agent_id, scope)
+            if existing.state == "READY":
+                if len(content) != existing.size or hashlib.sha256(content).hexdigest() != existing.checksum:
+                    raise HTTPException(422, "File bytes do not match the declared size and SHA-256")
+                revalidate()
+                return ArtifactRead.model_validate(existing)
+
         admitted = False
         try:
             with self.repository.publication(
@@ -178,6 +193,22 @@ class ArtifactService:
         rows, total = self.repository.list_ready(agent_id, scope, page, size, run_id, step_id)
         return PaginatedItems(page, size, total, [ArtifactRead.model_validate(row) for row in rows])
 
+    def pin(
+        self, session: Session, artifact_id: UUID, agent_id: UUID, organization_id: UUID, kind: str, owner_id: UUID
+    ) -> ArtifactRead:
+        """Keep a READY Artifact from expiring while `owner_id` uses it, in the caller's transaction."""
+        return ArtifactRead.model_validate(
+            pin_published(session, artifact_id, agent_id, organization_id, kind, owner_id)
+        )
+
+    def release(self, session: Session, kind: str, owner_id: UUID) -> None:
+        """Let `owner_id`'s pinned Artifacts expire again, a full retention from now, in the caller's transaction."""
+        release(session, kind, owner_id, self.config.artifact_retention_days)
+
+    def keep_newest_pins(self, session: Session, kind: str, agent_id: UUID, keep: int) -> None:
+        """Release the Agent's `kind` pins past its newest `keep`, in the caller's transaction."""
+        release_beyond_newest(session, kind, agent_id, keep, self.config.artifact_retention_days)
+
     def ready(self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope) -> Artifact:
         row = self.repository.get(artifact_id, agent_id, scope)
         if row.state != "READY":
@@ -185,8 +216,19 @@ class ArtifactService:
         return row
 
     def link(
-        self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope, seconds: int = 900
+        self,
+        artifact_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        seconds: int = 900,
+        *,
+        attempt_id: UUID | None = None,
     ) -> ArtifactLinkRead:
+        if attempt_id is not None:
+            try:
+                self.repository.authorize_workflow_read(artifact_id, attempt_id, agent_id)
+            except WorkflowConflict as exc:
+                raise HTTPException(409, str(exc)) from exc
         self.enabled()
         row = self.ready(artifact_id, agent_id, scope)
         if not 1 <= seconds <= self.config.artifact_link_max_seconds:

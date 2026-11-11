@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
@@ -21,6 +21,7 @@ from api.domains.agents.models import (
     AgentLlmBudgetUpdate,
     AgentLogHistoryRead,
     AgentLogsRead,
+    AgentManagedUpdateRequest,
     AgentNameSuggestionRead,
     AgentRead,
     AgentRuntimeDiagnosticsRead,
@@ -38,6 +39,7 @@ from api.domains.agents.service import AgentService
 from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.custom_api.service import CustomApiService
 from api.domains.integrations.service import IntegrationIsolationService
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -303,8 +305,9 @@ def update_agent(
     data: AgentUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    custom_api: Annotated[CustomApiService, Injected(CustomApiService)],
 ):
-    return service.update_agent(agent_id, data, context)
+    return service.update_agent(agent_id, data, context, custom_api=custom_api)
 
 
 @agents_router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -345,13 +348,16 @@ def managed_update(
     background_tasks: BackgroundTasks,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    # Optional: a bare POST still means "take the backup, and stop if it fails".
+    payload: Annotated[AgentManagedUpdateRequest | None, Body()] = None,
 ):
     """Stop, capture, start on the new image, roll back if it never comes up.
 
     The orchestration is scheduled, not awaited: the 202 means "accepted",
     and the Agent's own status plus its restore points tell the story.
     """
-    return service.managed_update(agent_id, context, background_tasks.add_task)
+    skip_backup = payload.skip_backup if payload else False
+    return service.managed_update(agent_id, context, background_tasks.add_task, skip_backup=skip_backup)
 
 
 @agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)

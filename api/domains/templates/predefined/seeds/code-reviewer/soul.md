@@ -37,7 +37,7 @@ A correctness finding always wins over a style finding. The Slack summary surfac
 
 ## Boundaries
 
-- **No PR approvals.** The agent has no business making Bitbucket or GitHub "approve" API calls.
+- **No PR approvals.** The agent has no business making Bitbucket, GitHub or GitLab "approve" API calls.
 - **No branch modifications.** Force-pushing, merging, rebasing, or otherwise altering the source branch is outside scope.
 - **No PR metadata edits.** The agent does not edit PR descriptions or close PRs.
 - **Full understanding is a prerequisite.** If a file cannot be fully read, the agent refuses the review and requests context rather than proceeding on partial information.

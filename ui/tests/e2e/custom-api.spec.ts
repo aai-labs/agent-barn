@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { AgentConfigurationPage } from "../pages/agent-configuration-page.po";
 import { CustomApiPage } from "../pages/custom-api-page.po";
 import { CustomApiDataSupport } from "../pages/data-support/custom-api-data-support.po";
 import { mockAgentAllowedActions } from "../pages/data-support/agent-data-support.po";
@@ -190,7 +191,46 @@ test.describe("Custom API integrations", () => {
       await expect(ui.section.getByRole("alert")).toContainText("Invalid Custom API configuration");
       await expect(ui.form).toHaveCount(2);
       expect(data.lifecycleRequests).toEqual([]);
-      expect(data.requests[0].url).toMatch(mixed ? /\/preflight$/ : /\/apply$/);
+      expect(data.requests[0].url).toMatch(mixed ? /\/agents\/[^/]+$/ : /\/apply$/);
+      if (mixed) expect(data.requests[0].body).toHaveProperty("custom_api");
+      if (mixed) await new AgentConfigurationPage(page).removeIntegration("GitHub");
+      await ui.removeConnection("Inventory API");
+      await ui.removeConnection("Inventory/API");
+      await expect(ui.save).toBeDisabled();
+      expect(data.requests).toHaveLength(1);
+      expect(data.lifecycleRequests).toEqual([]);
+    });
+  }
+
+  for (const policyOnly of [false, true]) {
+    test(`retry after ${policyOnly ? "a policy" : "a credential"} save and failed start reuses the saved connection ID`, async ({ page }) => {
+      const data = new CustomApiDataSupport(page);
+      const ui = new CustomApiPage(page);
+      await data.open({ running: true, empty: true, failStartOnce: true, withGithub: policyOnly });
+      await ui.beginEditing();
+      if (policyOnly) await ui.changeGithubIsolation();
+      else await ui.addGithubCredential();
+      await ui.add.click();
+      await ui.field("Connection name").fill("Inventory API");
+      await ui.field("Allowed base URL").fill("https://api.example.com/v1");
+      await ui.confirmApply();
+      await expect(ui.section.getByRole("alert")).toContainText("runtime could not start");
+      await ui.confirmApply();
+      await expect(ui.form).toHaveCount(0);
+      expect(data.requests).toHaveLength(2);
+      const retry = data.requests[1];
+      if (policyOnly) {
+        expect(retry.method).toBe("POST");
+        expect(retry.url).toContain(`/custom-api-connections/${data.savedConnectionId}/apply`);
+        expect(retry.body).toMatchObject({ restart: true, name: "Inventory API" });
+        expect(retry.body).not.toHaveProperty("creates");
+        expect(retry.body).not.toHaveProperty("deletes");
+      } else {
+        expect(retry.body).toMatchObject({ restart: true, custom_api: {
+          creates: [], deletes: [], updates: [{ id: data.savedConnectionId, data: { name: "Inventory API" } }],
+        } });
+      }
+      expect(data.lifecycleRequests).toEqual([]);
     });
   }
 

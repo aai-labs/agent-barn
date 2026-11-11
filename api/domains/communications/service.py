@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.agents.models import Agent
+from api.domains.agents.models import Agent, AgentType
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.addressing import build_local_part, compose_address
 from api.domains.communications.delivery_repository import (
@@ -53,6 +53,13 @@ from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
+
+# OpenClaw has one rule per Agent for untagged messages, so it can't answer them in
+# some channels while only listening in others.
+_OPENCLAW_MENTION_CONFLICT = (
+    "On OpenClaw, Require @mention can't be off while the Agent has listen-in channels. "
+    "Turn it on, or remove the listen-in channels."
+)
 
 # A directory read talks to the provider, so a failure is usually the operator's
 # credentials or scopes rather than a bug. 401/403 are deliberately never used:
@@ -221,6 +228,7 @@ class CommunicationsService:
             organization_id=agent.organization_id,
             agent_id=agent.id,
         )
+        self._require_openclaw_mention_rule(agent, context, plugin.key, validated.settings, data.enabled)
         connection = CommunicationConnection(
             organization_id=agent.organization_id,
             agent_id=agent.id,
@@ -289,6 +297,10 @@ class CommunicationsService:
             credentials,
             organization_id=agent.organization_id,
             agent_id=agent.id,
+        )
+        enabled = connection.enabled if data.enabled is None else data.enabled
+        self._require_openclaw_mention_rule(
+            agent, context, connection.platform_key, validated.settings, enabled, replacing=connection.id
         )
         if data.display_name is not None:
             connection.display_name = data.display_name.strip()
@@ -578,6 +590,32 @@ class CommunicationsService:
             return self.plugins.require(key)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    def _require_openclaw_mention_rule(
+        self,
+        agent: Agent,
+        context: CurrentUserContext,
+        platform_key: str,
+        settings: dict,
+        enabled: bool,
+        replacing: UUID | None = None,
+    ) -> None:
+        if agent.agent_type != AgentType.OPENCLAW:
+            return
+        scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+        connections = [
+            (connection.platform_key, connection.settings)
+            for connection in self.repository.list_active_for_agent(agent.id, scope)
+            if connection.enabled and connection.id != replacing
+        ]
+        if enabled:
+            connections.append((platform_key, settings))
+        mention_off = any(key == "discord" and not values.get("require_mention", True) for key, values in connections)
+        listening = any(
+            values.get("listen_in_channel_ids") or values.get("listen_in_chat_ids") for _, values in connections
+        )
+        if mention_off and listening:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_OPENCLAW_MENTION_CONFLICT)
 
     @staticmethod
     def _validate(plugin, settings, credentials, *, organization_id, agent_id):

@@ -34,6 +34,8 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
+_SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
@@ -45,6 +47,11 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+LISTEN_IN_PLUGIN_YAML: str = (_LISTEN_IN / "plugin.yaml").read_text()
+LISTEN_IN_PLUGIN_INIT: str = (_LISTEN_IN / "__init__.py").read_text()
+LISTEN_IN_CHECK_PY: str = (_SCRIPTS / "listen-in-check.py").read_text()
+SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
+SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -87,6 +94,13 @@ _HERMES_AUXILIARY_TASKS = (
 _HERMES_RUNTIME_INHERITING_TASKS = ("curator", "background_review")
 
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
+
+
+_LISTEN_IN_ROOM_SETTINGS = {
+    "slack": "free_response_channels",
+    "discord": "free_response_channels",
+    "telegram": "free_response_chats",
+}
 
 
 # Persistent working directory for the agent's terminal and messaging layer.
@@ -171,6 +185,19 @@ def _hermes_config_core(
     }
 
 
+def _enable_listen_in(config: dict, rooms_by_platform: dict[str, list[str]]) -> None:
+    for platform, rooms in rooms_by_platform.items():
+        config[platform][_LISTEN_IN_ROOM_SETTINGS[platform]] = rooms
+        # Verbose output would post a listening turn's progress into the room.
+        config["display"]["platforms"][platform].update(tool_progress="off", interim_assistant_messages=False)
+    config["plugins"]["enabled"].append("agentbarn-listen-in")
+    # Each queued message must stay its own turn with its own classification, and
+    # an unaddressed message must neither interrupt a turn nor be acknowledged.
+    config["display"].update(busy_input_mode="queue", busy_text_mode="interrupt", busy_ack_enabled=False)
+    # Hermes otherwise hides plugin tools, post_to_room included, behind its tool search.
+    config["tools"] = {"tool_search": {"enabled": "off"}}
+
+
 def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -184,10 +211,14 @@ def build_hermes_gateway_config(
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
     max_turns: int | None = None,
+    slack_listen_in: list[str] | None = None,
+    discord_listen_in: list[str] | None = None,
 ) -> dict:
     plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
+    if native_slack:
+        plugins.append("agentbarn-slack-access")
     config = _hermes_config_core(
         model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
     )
@@ -260,6 +291,13 @@ def build_hermes_gateway_config(
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
         }
+    listen_in = {
+        "slack": slack_listen_in if native_slack else None,
+        "discord": discord_listen_in if native_discord else None,
+        "telegram": _setting_ids(telegram_settings or {}, "listen_in_chat_ids") if not agentbarn_telegram else None,
+    }
+    if rooms_by_platform := {platform: rooms for platform, rooms in listen_in.items() if rooms}:
+        _enable_listen_in(config, rooms_by_platform)
     return config
 
 
@@ -273,9 +311,8 @@ def native_slack_env(
     ``home_channel`` is the Connection's resolved default delivery target, which
     native cron jobs without an origin deliver to.
 
-    ponytail: Hermes has one user allowlist for channels and DMs alike, so a DM
-    allowlist also restricts channel senders; model it separately if that matters
-    beyond the spike.
+    The Slack access plugin enforces the DM sender and channel allowlists
+    independently, before the adapter fetches attachments.
     """
     env = {
         "SLACK_BOT_TOKEN": credentials["bot_token"],
@@ -283,13 +320,15 @@ def native_slack_env(
         "SLACK_REQUIRE_MENTION": "true",
         "SLACK_THREAD_REQUIRE_MENTION": "true" if settings.get("thread_mention_policy") != "start_only" else "false",
         "SLACK_DISABLE_DMS": "true" if settings.get("dm_policy", "off") == "off" else "false",
+        # Delegate Slack admission to the mandatory Connection-policy plugin.
+        # Also prevents Hermes' startup warning from claiming all senders are denied.
+        "SLACK_ALLOW_ALL_USERS": "true",
+        "AGENTBARN_SLACK_DM_POLICY": settings.get("dm_policy", "off"),
+        "AGENTBARN_SLACK_GROUP_POLICY": settings.get("group_policy", "allowlist"),
+        "AGENTBARN_SLACK_DM_ALLOWED_USERS": ",".join(settings.get("dm_user_ids") or []),
     }
     if settings.get("group_policy", "allowlist") == "allowlist":
         env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
-    if settings.get("dm_policy") == "allowlist":
-        env["SLACK_ALLOWED_USERS"] = ",".join(settings.get("dm_user_ids") or [])
-    else:
-        env["SLACK_ALLOW_ALL_USERS"] = "true"
     if home_channel is not None:
         env["SLACK_HOME_CHANNEL"] = home_channel.id
         env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
@@ -435,6 +474,11 @@ def build_hermes_config_map(
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
+        "agentbarn-listen-in-plugin.yaml": LISTEN_IN_PLUGIN_YAML,
+        "agentbarn-listen-in-init.py": LISTEN_IN_PLUGIN_INIT,
+        "listen-in-check.py": LISTEN_IN_CHECK_PY,
+        "slack-access-plugin.yaml": SLACK_ACCESS_PLUGIN_YAML,
+        "slack-access-init.py": SLACK_ACCESS_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,

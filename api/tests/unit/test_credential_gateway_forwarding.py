@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 from hamcrest import assert_that, equal_to, is_, is_not
 
 from api.domains.agents.models import (
@@ -19,6 +21,7 @@ from api.domains.credential_gateway.forwarding import (
     sanitize_request_headers,
     sanitize_response_headers,
 )
+from api.domains.credential_gateway.routes import encoded_upstream_path
 from api.domains.integrations.plugins.base import OutboundRequest
 from api.domains.integrations.plugins.providers import (
     BitbucketPlugin,
@@ -286,3 +289,133 @@ def test_explicit_default_port_retains_same_origin_credentials():
             "GET", "https://api.github.com/export", headers={"Authorization": "Bearer fixture"}, params={}, content=b""
         )
     assert_that(client.request.call_args_list[1].kwargs["headers"]["Authorization"], equal_to("Bearer fixture"))
+
+
+# --- public-only forwarding, for providers whose host the user chooses ---
+
+
+def _gateway_client(*responses: httpx.Response) -> MagicMock:
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.request.side_effect = list(responses)
+    return client
+
+
+def _forward_public_only(client: MagicMock, url: str = "https://gitlab.example.com/api/v4/projects/group%2Fapp"):
+    with patch("api.domains.credential_gateway.forwarding.httpx.Client", return_value=client):
+        return UpstreamForwarder().send(
+            "GET", url, headers={"Authorization": "Bearer real"}, params={}, content=b"", public_only=True
+        )
+
+
+def _resolving(answers: dict[str, str]):
+    def resolve(host, port, **_):
+        return [(2, 1, 6, "", (answers[host], port))]
+
+    return patch("api.infrastructure.public_http.socket.getaddrinfo", side_effect=resolve)
+
+
+def test_public_only_sends_to_the_checked_address_under_the_real_name():
+    client = _gateway_client(httpx.Response(200, json={}))
+    with _resolving({"gitlab.example.com": "8.8.8.8"}):
+        _forward_public_only(client)
+    args, kwargs = client.request.call_args
+    assert_that(args[1], equal_to("https://8.8.8.8/api/v4/projects/group%2Fapp"))
+    assert_that(kwargs["headers"]["Host"], equal_to("gitlab.example.com"))
+    assert_that(kwargs["extensions"], equal_to({"sni_hostname": "gitlab.example.com"}))
+
+
+def test_public_only_never_sends_to_a_private_address():
+    client = _gateway_client()
+    with _resolving({"gitlab.example.com": "10.0.0.5"}), pytest.raises(UpstreamUnreachable):
+        _forward_public_only(client)
+    client.request.assert_not_called()
+
+
+def test_public_only_rechecks_a_redirect_target():
+    # The first host is public, so only a check on the second hop can stop this reaching
+    # an internal service.
+    redirect = httpx.Response(302, headers={"location": "https://internal.example/admin"})
+    client = _gateway_client(redirect)
+    with (
+        _resolving({"gitlab.example.com": "8.8.8.8", "internal.example": "10.0.0.5"}),
+        pytest.raises(UpstreamUnreachable),
+    ):
+        _forward_public_only(client)
+    assert_that(client.request.call_count, equal_to(1))
+
+
+def test_public_only_refuses_a_redirect_down_to_plain_http():
+    redirect = httpx.Response(302, headers={"location": "http://gitlab.example.com/api/v4/user"})
+    client = _gateway_client(redirect)
+    with _resolving({"gitlab.example.com": "8.8.8.8"}), pytest.raises(UpstreamUnreachable):
+        _forward_public_only(client)
+
+
+def test_a_same_origin_redirect_keeps_the_credential_and_the_pin():
+    redirect = httpx.Response(302, headers={"location": "/api/v4/next"})
+    client = _gateway_client(redirect, httpx.Response(200, json={}))
+    with _resolving({"gitlab.example.com": "8.8.8.8"}):
+        _forward_public_only(client)
+    args, kwargs = client.request.call_args
+    assert_that(args[1], equal_to("https://8.8.8.8/api/v4/next"))
+    assert_that(kwargs["headers"]["Authorization"], equal_to("Bearer real"))
+
+
+def test_forwarding_is_unpinned_unless_the_provider_asks():
+    client = _gateway_client(httpx.Response(200, json={}))
+    with (
+        patch("api.domains.credential_gateway.forwarding.httpx.Client", return_value=client),
+        patch("api.infrastructure.public_http.socket.getaddrinfo") as resolve,
+    ):
+        UpstreamForwarder().send("GET", "https://api.github.com/user", headers={}, params={}, content=b"")
+    resolve.assert_not_called()
+    assert_that(client.request.call_args.args[1], equal_to("https://api.github.com/user"))
+
+
+# --- encoded paths ---
+
+
+def _route_request(raw_path: bytes) -> MagicMock:
+    request = MagicMock()
+    request.scope = {"raw_path": raw_path}
+    return request
+
+
+def test_the_encoded_upstream_path_is_recovered_from_the_raw_request():
+    request = _route_request(b"/gateway/v1/p/gitlab/projects/group%2Fapp/merge_requests/7")
+    assert_that(
+        encoded_upstream_path(request, "gitlab", "projects/group/app/merge_requests/7"),
+        equal_to("projects/group%2Fapp/merge_requests/7"),
+    )
+
+
+def test_a_raw_path_that_does_not_match_the_route_is_ignored():
+    request = _route_request(b"/gateway/v1/p/gitlab/projects/other")
+    assert_that(encoded_upstream_path(request, "gitlab", "projects/group/app"), equal_to(None))
+
+
+def test_a_missing_raw_path_is_ignored():
+    request = MagicMock()
+    request.scope = {}
+    assert_that(encoded_upstream_path(request, "gitlab", "projects/1"), equal_to(None))
+
+
+def test_a_real_request_keeps_the_encoded_slash_the_router_decodes():
+    # Pins what the helper relies on: the router decoding %2F, and the ASGI scope not.
+    app = FastAPI()
+
+    @app.get("/gateway/v1/p/{provider_key}/{upstream_path:path}")
+    def forward(provider_key: str, upstream_path: str, request: Request) -> dict[str, str | None]:
+        return {
+            "decoded": upstream_path,
+            "encoded": encoded_upstream_path(request, provider_key, upstream_path),
+        }
+
+    response = TestClient(app).get("/gateway/v1/p/gitlab/projects/group%2Fsub%2Fapp/repository/files/a%20b%2Fc.rs/raw")
+
+    assert_that(response.json()["decoded"], equal_to("projects/group/sub/app/repository/files/a b/c.rs/raw"))
+    assert_that(
+        response.json()["encoded"],
+        equal_to("projects/group%2Fsub%2Fapp/repository/files/a%20b%2Fc.rs/raw"),
+    )

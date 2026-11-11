@@ -35,6 +35,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -44,6 +45,19 @@ OPENCLAW_GATEWAY_PORT = 18789
 # The agent workspace on the persistent volume; OpenClaw attaches local files from here.
 # The OpenClaw config, the legacy-migration script, and the file-delivery policy all use it.
 OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
+
+LISTEN_IN_SYSTEM_PROMPT = (
+    "You are listening in on this room. Most messages here are not meant for you. "
+    "Stay silent (do not call the message tool) for greetings, small talk, thanks, jokes, "
+    "messages aimed at someone else, and anything you would only acknowledge or agree with. "
+    "Speak (message action=send) only when you can add something concrete the people here are missing: "
+    "a factual error or outdated claim worth correcting, missing context or a relevant fact you know, "
+    "a risk or blocker, or an open question nobody has answered that you can answer. "
+    "When you speak, send one short message with no greeting and get straight to the point. "
+    "Messages that @mention you are normal requests; answer those as usual. "
+    "Never answer an @mention with silence: if it asks for something you cannot do here, say so briefly."
+)
+_LISTEN_IN_ROOM = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
 
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
@@ -59,6 +73,9 @@ TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").rea
 OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
+LISTEN_IN_INDEX_JS: str = (_LISTEN_IN / "index.js").read_text()
+LISTEN_IN_PACKAGE_JSON: str = (_LISTEN_IN / "package.json").read_text()
+LISTEN_IN_PLUGIN_JSON: str = (_LISTEN_IN / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -140,7 +157,46 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_LISTEN_IN_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-listen-in"
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
+
+
+def _listen_in_rooms(channels: dict[str, dict]) -> dict[str, list[str]]:
+    rooms_by_platform = {
+        "slack": (channels.get("slack") or {}).get("channels") or {},
+        "discord": {
+            channel_id: room
+            for guild in ((channels.get("discord") or {}).get("guilds") or {}).values()
+            for channel_id, room in (guild.get("channels") or {}).items()
+        },
+        "telegram": (channels.get("telegram") or {}).get("groups") or {},
+    }
+    return {
+        platform: [room_id for room_id, room in rooms.items() if room.get("systemPrompt") == LISTEN_IN_SYSTEM_PROMPT]
+        for platform, rooms in rooms_by_platform.items()
+    }
+
+
+def _no_memory_saving_patterns(rooms: dict[str, list[str]]) -> list[str]:
+    sessions = {"slack": "slack:channel", "discord": "discord:channel", "telegram": "telegram:group"}
+    return [
+        pattern
+        for platform, room_ids in rooms.items()
+        for room_id in room_ids
+        for pattern in (
+            f"agent:*:{sessions[platform]}:{room_id.lower()}",
+            f"agent:*:{sessions[platform]}:{room_id.lower()}:**",
+        )
+    ]
+
+
+def _stop_auto_threads_outside_listen_in(discord: dict) -> None:
+    # OpenClaw skips requireMention in threads it auto-created, so with room events on
+    # an untagged follow-up there would become a room event outside any listen-in room.
+    for guild in (discord.get("guilds") or {}).values():
+        for room in (guild.get("channels") or {}).values():
+            if room.get("systemPrompt") != LISTEN_IN_SYSTEM_PROMPT:
+                room["autoThread"] = False
 
 
 def build_openclaw_gateway_config(
@@ -152,6 +208,10 @@ def build_openclaw_gateway_config(
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    unmentioned = "room_event" if any(_listen_in_rooms(channels).values()) else "user_request"
+    if unmentioned == "room_event":
+        _stop_auto_threads_outside_listen_in(channels.get("discord") or {})
+    config["messages"] = {"groupChat": {"unmentionedInbound": unmentioned}}
     config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
     if memory_enabled:
         config["plugins"]["allow"].append("hindsight-openclaw")
@@ -159,6 +219,12 @@ def build_openclaw_gateway_config(
         config["plugins"]["entries"]["hindsight-openclaw"].update(
             {"config": openclaw_memory_settings(), "hooks": {"allowConversationAccess": True}}
         )
+        # Hindsight would save every unmentioned message. It decides per session, so
+        # mentions in these rooms aren't auto-saved either; recall stays on.
+        if patterns := _no_memory_saving_patterns(_listen_in_rooms(channels)):
+            config["plugins"]["entries"]["hindsight-openclaw"]["config"].update(
+                statelessSessionPatterns=patterns, skipStatelessSessions=False
+            )
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
@@ -168,6 +234,15 @@ def build_openclaw_gateway_config(
         for key in channels:
             plugins["entries"][key] = {"enabled": True}
         plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
+    if unmentioned == "room_event":
+        plugins = config["plugins"]
+        plugins["allow"].append("agentbarn-listen-in")
+        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
+        plugins["entries"]["agentbarn-listen-in"] = {
+            "enabled": True,
+            "hooks": {"allowConversationAccess": True},
+            "config": {"slackRooms": _listen_in_rooms(channels)["slack"]},
+        }
     return config
 
 
@@ -178,7 +253,7 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
     config file persisted on the PVC.
     """
     dm_policy = settings.get("dm_policy", "off")
-    channel = {
+    channel: dict = {
         "enabled": True,
         "mode": "socket",
         "requireMention": True,
@@ -197,6 +272,12 @@ def native_slack_channel(settings: dict, home_channel: ConversationLocation | No
     }
     if channel["groupPolicy"] == "allowlist":
         channel["channels"] = {channel_id: {"enabled": True} for channel_id in settings.get("channel_ids") or []}
+    if listen_in := settings.get("listen_in_channel_ids") or []:
+        rooms = channel.setdefault("channels", {})
+        allowed = set(rooms) if channel["groupPolicy"] == "allowlist" else set(listen_in)
+        for channel_id in listen_in:
+            if channel_id in allowed:
+                rooms[channel_id] = {**rooms.get(channel_id, {}), **_LISTEN_IN_ROOM}
     if dm_policy == "open":
         channel["allowFrom"] = ["*"]
     elif dm_policy == "allowlist":
@@ -223,7 +304,7 @@ def native_discord_channel(settings: dict) -> dict:
     roles = _setting_ids(settings, "allowed_role_ids")
     channel_ids = _setting_ids(settings, "allowed_channel_ids")
     channel: dict = {"enabled": True, "groupPolicy": "allowlist"}
-    guild: dict = {"requireMention": settings.get("require_mention", True)}
+    guild: dict = {"requireMention": bool(settings.get("require_mention", True))}
     if not allow_all:
         if users:
             guild["users"] = users
@@ -232,8 +313,13 @@ def native_discord_channel(settings: dict) -> dict:
     # Reply in a thread per message, as Hermes does. Threads inherit their parent
     # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
     # ponytail: OpenClaw skips requireMention inside threads the bot created, and
-    # has no switch to keep it; Hermes still requires the mention there.
-    guild["channels"] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    # has no switch to keep it; Hermes still requires the mention there. With
+    # listen-in rooms the gateway config stops auto-threading the other channels.
+    rooms: dict[str, dict] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
+    for channel_id in _setting_ids(settings, "listen_in_channel_ids"):
+        if not channel_ids or channel_id in channel_ids:
+            rooms[channel_id] = {"enabled": True, "autoThread": True, **_LISTEN_IN_ROOM}
+    guild["channels"] = rooms
     if allow_all or users or roles or channel_ids:
         channel["guilds"] = {"*": guild}
     else:
@@ -287,7 +373,7 @@ def native_telegram_channel(settings: dict) -> dict:
     """Map a Telegram Connection onto OpenClaw's bundled Telegram channel.
 
     ``groups`` is the group allowlist and ``groupPolicy: "open"`` admits any member
-    of those groups. Groups always require a mention; DMs never do.
+    of those groups. Groups require a mention, except listen-in groups; DMs never do.
     """
     channel: dict = {"enabled": True, "dmPolicy": "disabled", "groupPolicy": "disabled"}
     user_ids = _setting_ids(settings, "allowed_user_ids")
@@ -297,12 +383,15 @@ def native_telegram_channel(settings: dict) -> dict:
     elif dm_policy == "allowlist" and user_ids:
         # An empty allowlist drops every DM anyway and OpenClaw warns about it.
         channel.update(dmPolicy="allowlist", allowFrom=user_ids)
-    group_ids = (
-        ["*"] if settings.get("group_policy", "allowlist") == "open" else _setting_ids(settings, "allowed_chat_ids")
-    )
+    open_groups = settings.get("group_policy", "allowlist") == "open"
+    group_ids = ["*"] if open_groups else _setting_ids(settings, "allowed_chat_ids")
     if group_ids:
+        groups: dict[str, dict] = {group_id: {"requireMention": True} for group_id in group_ids}
+        for chat_id in _setting_ids(settings, "listen_in_chat_ids"):
+            if open_groups or chat_id in group_ids:
+                groups[chat_id] = dict(_LISTEN_IN_ROOM)
         channel["groupPolicy"] = "open"
-        channel["groups"] = {group_id: {"requireMention": True} for group_id in group_ids}
+        channel["groups"] = groups
     if home_channel_id := settings.get("home_channel_id"):
         channel["defaultTo"] = str(home_channel_id)
     else:
@@ -403,6 +492,9 @@ def build_config_map(
         data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
         data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
+        data["agentbarn-listen-in-index.js"] = LISTEN_IN_INDEX_JS
+        data["agentbarn-listen-in-package.json"] = LISTEN_IN_PACKAGE_JSON
+        data["agentbarn-listen-in-plugin.json"] = LISTEN_IN_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["retire-messaging.py"] = RETIRE_MESSAGING_PY

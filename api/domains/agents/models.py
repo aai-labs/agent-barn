@@ -18,6 +18,7 @@ from sqlmodel import Field as SqlField
 from api.domains.agent_sizes.models import AgentSizeOption
 from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
+from api.domains.custom_api.models import CustomApiConnectionsApply
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -46,6 +47,7 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+    SCHEDULED = "SCHEDULED"
 
 
 class ManagedUpdateOutcome(str, enum.Enum):
@@ -54,6 +56,9 @@ class ManagedUpdateOutcome(str, enum.Enum):
     SUCCEEDED = "SUCCEEDED"
     # The automatic backup could not be taken. The Agent was stopped but not changed.
     BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy and, with no backup, nothing was rolled back.
+    # The Agent was stopped.
+    UPDATE_FAILED = "UPDATE_FAILED"
     # The new version never became healthy; the backup and the old image are back.
     ROLLED_BACK = "ROLLED_BACK"
     # The rollback did not finish. The backup holds the pre-update state.
@@ -95,6 +100,7 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
+    GITLAB = "gitlab"
     FIRECRAWL = "firecrawl"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
@@ -116,6 +122,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
+    SecretProvider.GITLAB: "GitLab credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
@@ -179,6 +186,50 @@ class BitbucketContent(_RepoListCompat):
     repos: list[str] = Field(default_factory=list)
     email: str
     api_token: str
+
+
+class GitlabContent(_RepoListCompat):
+    # Unlike GitHub and Bitbucket, GitLab is self-hosted as often as not, so the origin is
+    # part of the credential. It is reduced to a bare https origin because the API server,
+    # the agent's aai-cli and the credential gateway all send the token there. Whether the
+    # host is public is decided when it resolves, not here: see `public_http`.
+    base_url: str = "https://gitlab.com"
+    token: str = Field(min_length=1)
+    repos: list[str] = Field(default_factory=list)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return "https://gitlab.com"
+        parsed = urlsplit(value)
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("base_url has an invalid port") from exc
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme != "https"
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("base_url must be an https origin such as https://gitlab.example.com")
+        if host == "localhost" or host.endswith(".localhost"):
+            raise ValueError("base_url must not point at localhost")
+        return f"https://{parsed.netloc.lower()}"
+
+    @field_validator("token")
+    @classmethod
+    def _validate_token(cls, value: str) -> str:
+        token = value.strip()
+        if not token or any(ch.isspace() for ch in token):
+            raise ValueError("token must not be empty or contain whitespace")
+        return token
 
 
 class GoogleWorkspaceContent(SecretContent):
@@ -439,6 +490,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
+    SecretProvider.GITLAB: GitlabContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
@@ -636,6 +688,10 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    file_sync_enabled: bool = SqlField(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
     # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
     # Organization's default Agent limit. Never above the Organization's own limit.
     llm_budget_usd: float | None = SqlField(default=None, nullable=True)
@@ -820,6 +876,9 @@ class AgentRestorePoint(BaseModel, table=True):
     job_name: str | None = SqlField(default=None, nullable=True, max_length=253)
     archive_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     file_count: int | None = SqlField(default=None, nullable=True)
+    # Files that shrank (zero-padded) or vanished while a live capture read them.
+    changed_file_count: int | None = SqlField(default=None, nullable=True)
+    skipped_file_count: int | None = SqlField(default=None, nullable=True)
     config_manifest: dict[str, Any] = SqlField(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
@@ -829,6 +888,9 @@ class AgentRestorePoint(BaseModel, table=True):
     # The configuration is written only after the Job confirms the volume is back,
     # so the intent has to outlive the request that made it.
     reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Set when the user chose to restore without a safety copy. A failed or lost restore
+    # then leaves this archive restorable, since nothing else holds the Agent's old files.
+    backup_skipped_by_user: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
     # Why the recorded configuration did not land, once the volume already has.
     configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
     # Who asked for the restore, which is who authorized the configuration write that
@@ -1166,6 +1228,7 @@ class AgentCreate(PydanticBaseModel):
     verbose_mode: bool = False
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
+    file_sync_enabled: bool = True
     # None, or the default's id, follows the platform default. Anything else needs
     # agent.size.manage and a size the Organization may choose.
     agent_size_id: UUID | None = None
@@ -1176,6 +1239,12 @@ class AgentCreate(PydanticBaseModel):
         if len(providers) != len(set(providers)):
             raise ValueError("Duplicate secret providers are not allowed")
         return self
+
+
+class IntegrationPolicyUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: SecretProvider
+    isolated: bool
 
 
 class AgentUpdate(PydanticBaseModel):
@@ -1199,6 +1268,10 @@ class AgentUpdate(PydanticBaseModel):
     secrets: list[AgentSecretCreate] | None = None
     shared_credentials: list[AgentSharedCredentialAttach] | None = None
     removed_secret_providers: list[SecretProvider] | None = None
+    # Opt in to a server-owned validate/stop/save/start operation.
+    restart: bool = False
+    policies: list[IntegrationPolicyUpdate] = Field(default_factory=list)
+    custom_api: CustomApiConnectionsApply | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
     # Unset leaves the limit alone; an explicit null returns the Agent to the
@@ -1242,6 +1315,20 @@ class AgentUpdate(PydanticBaseModel):
 
     @model_validator(mode="after")
     def validate_secret_operations(self) -> AgentUpdate:
+        if self.restart and self.model_fields_set - {
+            "restart",
+            "secrets",
+            "shared_credentials",
+            "removed_secret_providers",
+            "policies",
+            "custom_api",
+        }:
+            raise ValueError("Restart on PATCH is supported for integration changes only")
+        policies = [policy.provider for policy in self.policies]
+        if len(policies) != len(set(policies)):
+            raise ValueError("Duplicate isolation policy providers are not allowed")
+        if self.custom_api and (self.custom_api.restart or any(create.restart for create in self.custom_api.creates)):
+            raise ValueError("Use the top-level restart choice")
         upserts = [s.provider for s in self.secrets or []]
         if len(upserts) != len(set(upserts)):
             raise ValueError("Duplicate secret providers are not allowed")
@@ -1545,6 +1632,12 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 
 
 AgentModelSource = Literal["default", "override"]
+
+
+class AgentManagedUpdateRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skip_backup: bool = False
 
 
 class AgentManagedUpdateRead(PydanticBaseModel):

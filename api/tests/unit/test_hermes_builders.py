@@ -1,6 +1,11 @@
+import importlib.util
 import json
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 from uuid import UUID
+
+import yaml
 
 from api.domains.agent_sizes.models import (
     STANDARD_CPU_LIMIT_MILLICORES,
@@ -28,6 +33,13 @@ from api.domains.file_sync.rules import rules_manifest
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
+_LISTEN_IN_CHECK = Path(__file__).parents[2] / "domains" / "agents" / "scripts" / "hermes" / "listen-in-check.py"
+_LISTENING_CONFIG = {
+    "plugins": {"enabled": ["telemetry-push", "agentbarn-listen-in"]},
+    "slack": {"reply_in_thread": True, "free_response_channels": ["C1"]},
+    "discord": {"require_mention": True, "free_response_channels": ["channel-1"]},
+    "telegram": {"free_response_chats": ["-1001"]},
+}
 
 # The Standard size, which every Agent ran on before sizes existed.
 STANDARD = container_resources(
@@ -51,7 +63,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
 def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer", "agentbarn-slack-access"]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
     assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
     assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
@@ -61,6 +73,30 @@ def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> N
     assert verbose["display"]["platforms"]["slack"]["tool_progress"] == "all"
     assert verbose["display"]["platforms"]["slack"]["tool_progress_grouping"] == "accumulate"
     assert verbose["display"]["platforms"]["slack"]["interim_assistant_messages"] is True
+
+
+def test_config_map_ships_the_listen_in_guard_but_only_listening_agents_enable_it() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_discord=True)
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", config
+    )
+
+    assert "agentbarn-listen-in" not in config["plugins"]["enabled"]
+    for key, target in (
+        ("agentbarn-listen-in-plugin.yaml", "plugin.yaml"),
+        ("agentbarn-listen-in-init.py", "__init__.py"),
+    ):
+        assert key in config_map.data
+        assert f"cp /app/config/{key} /opt/data/plugins/agentbarn-listen-in/{target}" in config_map.data["start.sh"]
+
+
+def test_native_slack_env_ignores_listen_in_channels() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
+    settings = {"group_policy": "allowlist", "channel_ids": ["C1"]}
+
+    assert native_slack_env({**settings, "listen_in_channel_ids": ["C1"]}, credentials) == native_slack_env(
+        settings, credentials
+    )
 
 
 def test_native_slack_env_maps_connection_policy() -> None:
@@ -75,6 +111,8 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert locked["SLACK_ALLOWED_CHANNELS"] == "C1,C2"
     assert locked["SLACK_DISABLE_DMS"] == "true"
     assert locked["SLACK_ALLOW_ALL_USERS"] == "true"
+    assert locked["AGENTBARN_SLACK_DM_POLICY"] == "off"
+    assert locked["AGENTBARN_SLACK_GROUP_POLICY"] == "allowlist"
     assert locked["SLACK_THREAD_REQUIRE_MENTION"] == "true"
 
     open_env = native_slack_env(
@@ -88,8 +126,11 @@ def test_native_slack_env_maps_connection_policy() -> None:
     )
     assert "SLACK_ALLOWED_CHANNELS" not in open_env
     assert open_env["SLACK_DISABLE_DMS"] == "false"
-    assert open_env["SLACK_ALLOWED_USERS"] == "U1"
-    assert "SLACK_ALLOW_ALL_USERS" not in open_env
+    assert open_env["AGENTBARN_SLACK_DM_ALLOWED_USERS"] == "U1"
+    assert "SLACK_ALLOWED_USERS" not in open_env
+    assert open_env["AGENTBARN_SLACK_DM_POLICY"] == "allowlist"
+    assert open_env["AGENTBARN_SLACK_GROUP_POLICY"] == "open"
+    assert open_env["SLACK_ALLOW_ALL_USERS"] == "true"
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
     assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
@@ -104,15 +145,10 @@ def test_native_slack_env_maps_connection_policy() -> None:
 
 
 def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
-    config = build_hermes_gateway_config(
-        "litellm/gpt-5",
-        "http://litellm:4000",
-        native_discord=True,
-        discord_require_mention=False,
-    )
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_discord=True)
 
     assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
-    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
+    assert config["discord"] == {"require_mention": True, "thread_require_mention": True}
     assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
 
     verbose = build_hermes_gateway_config(
@@ -121,6 +157,14 @@ def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
     assert verbose["display"]["platforms"]["discord"]["tool_progress"] == "all"
     assert verbose["display"]["platforms"]["discord"]["tool_progress_grouping"] == "accumulate"
     assert verbose["display"]["platforms"]["discord"]["interim_assistant_messages"] is True
+
+
+def test_native_discord_config_follows_require_mention() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_discord=True, discord_require_mention=False
+    )
+
+    assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
 
 
 def test_native_discord_env_maps_hermes_authorization_gates() -> None:
@@ -141,6 +185,15 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert env["DISCORD_ALLOWED_ROLES"] == "role-1"
     assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
     assert "AGENTBARN_DISCORD_POLICY" not in env
+
+
+def test_native_discord_env_ignores_listen_in_channels() -> None:
+    credentials = {"bot_token": "discord-token"}
+    settings = {"allowed_channel_ids": ["channel-1"]}
+
+    assert native_discord_env({**settings, "listen_in_channel_ids": ["channel-1"]}, credentials) == native_discord_env(
+        settings, credentials
+    )
 
 
 def test_native_discord_env_uses_a_sentinel_when_home_is_unset() -> None:
@@ -195,6 +248,14 @@ def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_menti
         "TELEGRAM_GROUP_ALLOWED_CHATS": "-1001",
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
     }
+
+
+def test_native_telegram_env_ignores_listen_in_groups() -> None:
+    settings = {"allowed_chat_ids": ["-1001"]}
+
+    assert native_telegram_env({**settings, "listen_in_chat_ids": ["-1001"]}, _TELEGRAM_TOKEN) == native_telegram_env(
+        settings, _TELEGRAM_TOKEN
+    )
 
 
 def test_native_telegram_env_opens_groups_and_dms() -> None:
@@ -339,7 +400,7 @@ def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_def
     }
 
 
-def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() -> None:
+def test_config_map_contains_runtime_adapter_and_scoped_slack_access_plugin() -> None:
     config_map = build_hermes_config_map(
         _AGENT_ID,
         _ORG_ID,
@@ -360,6 +421,8 @@ def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() ->
     assert "boot-run.py" in config_map.data
     assert "agentbarn_message.py" not in config_map.data
     assert "retire-messaging.py" in config_map.data
+    assert "slack-access-plugin.yaml" in config_map.data
+    assert "slack-access-init.py" in config_map.data
     # OpenClaw's plugin has no business in a Hermes ConfigMap.
     assert "openclaw-messaging.js" not in config_map.data
     assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)
@@ -569,3 +632,179 @@ def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
         _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", {}
     )
     assert "Files and download links" not in config_map.data["AGENTS.md"]
+
+
+def test_slack_listen_in_channels_enable_the_guard() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_slack=True, slack_listen_in=["C1", "C2"]
+    )
+
+    assert config["slack"]["free_response_channels"] == ["C1", "C2"]
+    _assert_guarded(config)
+
+
+def test_discord_listen_in_channels_enable_the_guard() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_discord=True, discord_listen_in=["channel-1"]
+    )
+
+    assert config["discord"]["free_response_channels"] == ["channel-1"]
+    assert config["discord"]["require_mention"] is True
+    _assert_guarded(config)
+
+
+def test_telegram_listen_in_groups_enable_the_guard() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        telegram_settings={"allowed_chat_ids": ["-1001"], "listen_in_chat_ids": ["-1001"]},
+    )
+
+    assert config["telegram"]["free_response_chats"] == ["-1001"]
+    _assert_guarded(config)
+
+
+def _assert_guarded(config: dict) -> None:
+    assert "agentbarn-listen-in" in config["plugins"]["enabled"]
+    assert config["tools"] == {"tool_search": {"enabled": "off"}}
+    assert config["display"]["busy_input_mode"] == "queue"
+    assert config["display"]["busy_text_mode"] == "interrupt"
+    assert config["display"]["busy_ack_enabled"] is False
+
+
+def test_no_listen_in_rooms_leave_the_config_unchanged() -> None:
+    plain = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_slack=True, native_discord=True, telegram_settings={}
+    )
+    empty = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        native_slack=True,
+        native_discord=True,
+        telegram_settings={"listen_in_chat_ids": []},
+        slack_listen_in=[],
+        discord_listen_in=[],
+    )
+
+    assert empty == plain
+    assert "agentbarn-listen-in" not in plain["plugins"]["enabled"]
+    assert "tools" not in plain
+    assert "busy_input_mode" not in plain["display"]
+    assert "free_response_channels" not in plain["slack"]
+    assert "free_response_channels" not in plain["discord"]
+    assert "free_response_chats" not in plain["telegram"]
+
+
+def test_verbose_mode_is_off_only_where_the_agent_listens() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        native_slack=True,
+        native_discord=True,
+        verbose_mode=True,
+        slack_listen_in=["C1"],
+    )
+
+    assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
+    assert config["display"]["platforms"]["slack"]["interim_assistant_messages"] is False
+    assert config["display"]["platforms"]["discord"]["tool_progress"] == "all"
+    assert config["display"]["platforms"]["discord"]["interim_assistant_messages"] is True
+
+
+def test_agentbarn_telegram_never_listens() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        telegram_settings={"listen_in_chat_ids": ["-1001"]},
+        agentbarn_telegram=_AGENTBARN_TELEGRAM,
+    )
+
+    assert "free_response_chats" not in config["telegram"]
+    assert "agentbarn-listen-in" not in config["plugins"]["enabled"]
+
+
+def test_listen_in_never_widens_an_allowlist() -> None:
+    settings = {"group_policy": "allowlist", "channel_ids": ["C1"], "listen_in_channel_ids": ["C1", "C2"]}
+
+    env = native_slack_env(settings, {"bot_token": "xoxb-1", "app_token": "xapp-1"})
+
+    assert env["SLACK_ALLOWED_CHANNELS"] == "C1"
+
+
+def test_the_listen_in_check_runs_before_the_gateway_starts() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_discord=True)
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", config
+    )
+    start = config_map.data["start.sh"]
+
+    assert "listen-in-check.py" in config_map.data
+    check = "python3 /app/config/listen-in-check.py /opt/data/config.yaml"
+    assert start.index("cp /app/config/agentbarn-listen-in-init.py") < start.index(check) < start.index("exec hermes")
+
+
+def _listen_in_check(tmp_path: Path, failure: str | None, config: dict) -> tuple[dict, Any]:
+    spec = importlib.util.spec_from_file_location("test_listen_in_check", _LISTEN_IN_CHECK)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._load_failure = MagicMock(return_value=failure)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    module.check(config_path)
+    return yaml.safe_load(config_path.read_text()), module._load_failure
+
+
+def test_the_listen_in_check_keeps_rooms_when_the_guard_loads(tmp_path: Path) -> None:
+    result, _ = _listen_in_check(tmp_path, None, _LISTENING_CONFIG)
+
+    assert result == _LISTENING_CONFIG
+
+
+def test_the_listen_in_check_falls_back_to_mentions_when_the_guard_fails(tmp_path: Path) -> None:
+    result, _ = _listen_in_check(tmp_path, "cannot import name AIAgent", _LISTENING_CONFIG)
+
+    assert result == {
+        "plugins": {"enabled": ["telemetry-push"]},
+        "slack": {"reply_in_thread": True},
+        "discord": {"require_mention": True},
+        "telegram": {},
+    }
+
+
+def test_the_listen_in_check_falls_back_to_mentions_when_it_cannot_ask_hermes(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("test_listen_in_check", _LISTEN_IN_CHECK)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._load_failure = MagicMock(side_effect=ImportError("no hermes"))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(_LISTENING_CONFIG))
+
+    module.check(config_path)
+
+    assert "free_response_chats" not in yaml.safe_load(config_path.read_text())["telegram"]
+
+
+def test_the_listen_in_check_ignores_an_agent_without_the_guard(tmp_path: Path) -> None:
+    config = {"plugins": {"enabled": ["telemetry-push"]}, "discord": {"require_mention": True}}
+
+    result, load_failure = _listen_in_check(tmp_path, None, config)
+
+    assert result == config
+    load_failure.assert_not_called()
+
+
+def test_require_mention_off_and_listen_in_work_together() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        native_discord=True,
+        discord_require_mention=False,
+        discord_listen_in=["channel-1"],
+    )
+
+    assert config["discord"]["require_mention"] is False
+    assert config["discord"]["thread_require_mention"] is False
+    assert config["discord"]["free_response_channels"] == ["channel-1"]
+    assert "agentbarn-listen-in" in config["plugins"]["enabled"]

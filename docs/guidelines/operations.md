@@ -16,6 +16,10 @@ as in the README setup; native transport dependencies belong to the runtime imag
 
 ## Database migrations
 
+Revision `921deb774e01` joins staging's file-sync and workflow re-run histories
+(`63c0e8364607` and `c7d4e2a91b58`) into one head. It has no schema or data
+operations, and preserves both parent histories on upgrade and downgrade.
+
 Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
 left behind by Zoho provider retirement. It runs automatically on upgrade and
 does nothing on installations without that lineage (including new installs).
@@ -525,6 +529,15 @@ preparation, assign new immutable runtime versions under the versioning rules be
 and deploy the connection migration, API, credential gateway and UI together.
 Existing Agents apply connection changes only on an explicit start or restart.
 
+GitLab requires both runtime images to include the `gitlab` command (aai-cli PR #35).
+Hermes 0.2.11 and OpenClaw 0.7.8 pin merged commit
+`826339ad92c874ca8fe93035ae75be8631e5a4ba`, which also carries the Custom API command.
+Rebuild and verify both images, and publish them, before deploying the GitLab
+migration, API, credential gateway and UI; an older image has the GitLab form and
+skill but cannot run either. The template seeder does not update templates that
+already exist, so on an existing environment the PR Reviewer template keeps requiring
+GitHub or Bitbucket until a new version of it is published.
+
 For a failed application, open the integration setup and Apply & Restart to retry, or select Restore previous mode and then Apply & Restart. A SharePoint reconnect-required message means the broker could not prove continuity; reconnect the sign-in before retrying. Preserve the aai-cli PVC store/key/marker until the handoff succeeds. Credential setup failures now stop startup; repair a corrupted store/key pair rather than booting with stale credentials. The gateway cache needs no separate service or replica affinity. Apply & Restart returns after provisioning; a slow image pull remains unverified and is not torn down on a readiness timeout. If an old pod stays Terminating past the termination budget, inspect its node and volume state before retrying; an operator must establish that the old process cannot run before forcing deletion. Preserve its gateway authorization until termination is established.
 
 Before rolling the application/schema back, apply direct SharePoint through the current API to hand back the latest service-side grant, then stop affected Agents. Do not downgrade while isolated SharePoint generations are live. The generation migration's downgrade requires `AGENT_TOKEN_ENCRYPTION_KEY` when SharePoint rows exist; it removes broker/cache metadata from encrypted payloads while preserving the latest refresh token so older strict schemas can decrypt them. It keeps the latest service-side refresh grant. Downgrade removes the revision marker metadata, so the older setup imports that DB grant again; it cannot capture any subsequent direct-PVC rotation. Keep the rollback interval short and reconnect if Microsoft refuses that grant. Default-source policy is discarded on schema downgrade because older applications have no such binding; restart Agents under the older application's routing after rollback. Keep a database backup and the PVC together; a mode change cannot revoke credentials already received by an Agent.
@@ -765,19 +778,34 @@ Documentation-only changes do not change a service image and do not require a se
   out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
 - **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
   its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
-  volume. They do not survive loss of that node, and they consume real node disk — the only
-  bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
+  volume. They do not survive loss of that node, and they consume real node disk — the bounds
+  are `RESTORE_POINT_MAX_PER_AGENT` and `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, which are per
+  Agent and not per Organization. With scheduled snapshots on, plan for up to
+  `scheduled max + max + 1` restore point volumes per Agent.
+- **Scheduled snapshots** come from a `<release>-restore-point-schedule` CronJob
+  (`restorePoints.schedule.*`: `cron` every 5 minutes, `intervalMinutes` 360 with 0 to turn
+  snapshots off, `maxPerAgent` 4, `maxConcurrent` 2; disable the CronJob with
+  `restorePoints.schedule.enabled=false`). It uses the API's kubeconfig and needs the same Job and
+  PVC permissions. Each run logs `Scheduled snapshot summary: in_flight started failed`. The
+  oldest snapshots past each Agent's limits are deleted by the reconciliation CronJob below.
+  `maxConcurrent` exists because each capture Job's 512Mi memory limit counts against the
+  namespace's `limits.memory` quota. A run is stopped after 280s (`activeDeadlineSeconds`), so one
+  that never finishes cannot hold its quota or, under `concurrencyPolicy: Forbid`, skip every later
+  run. Run one pass by hand with `make snapshot-restore-points`.
 - Restore point rows resolve from live Job status when they are read, and a
   `<release>-restore-point-reconciliation` CronJob resolves the ones nobody reads. It runs every
   10 minutes (`restorePoints.reconciliation.schedule`, disable with
-  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, and needs the
+  `restorePoints.reconciliation.enabled=false`) under `concurrencyPolicy: Forbid`, with each run
+  stopped after 540s (`activeDeadlineSeconds`, above its own 120s budget), and needs the
   same `batch/jobs` and PVC permissions as the API pod because it authenticates with the same
   mounted kubeconfig. Run one pass by hand with `make reconcile-restore-points`, which targets
   whatever `K8S_KUBECONFIG_PATH` and `K8S_NAMESPACE` point at — check both before invoking it
   against a shared cluster.
 - **The reconciler deletes storage**, so watch its first few runs in staging before trusting the
   schedule. Each run logs a one-line summary: `claimed`, `resolved`, `replays_attempted`,
-  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `failed`. A non-zero
+  `volumes_missing`, `orphans_deleted`, `orphans_unidentified`, `trimmed_agents`, `failed`. It
+  also applies restore point retention, deleting the oldest snapshots and automatic backups past
+  each Agent's limits, which is why it must stay enabled even with scheduled snapshots off. A non-zero
   `orphans_unidentified` means resources carrying the component label that match neither route
   below, which the sweep refuses to touch — investigate rather than ignore, because nothing will
   ever reclaim them. A climbing `failed` means rows are being claimed and not resolved, which is
@@ -841,7 +869,13 @@ runs it.
 
 ## Workflow execution (WF02)
 
-Execution has no environment feature flag and does not require object storage.
+Text execution has no environment feature flag and does not require object storage.
+File inputs and published outputs need READY Agent artifact storage. Update
+and restart existing Agents to load the current trigger and artifact CLI. Workflow
+attempt receipts are added lazily to the existing PVC SQLite journal; retain that
+journal to preserve dispatch deduplication across restarts. Failed/expired attempts
+block for inspection rather than replaying possible external effects. Parked runs
+keep file pins until cancellation; see the [file workflow contract](../features/agent-workflows.md#file-workflow-inputs-and-results).
 The Platform Admin authoring setting controls definition changes only. Before
 running saved workflows, apply the migration. The owning Agent must be running,
 and Agents started before this release must be restarted once so their trigger
