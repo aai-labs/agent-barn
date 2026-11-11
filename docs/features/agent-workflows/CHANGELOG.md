@@ -14,6 +14,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-11-10 — AF-390 — workflow approvals, PR 1 (local, uncommitted)
+
+- Added: Workflow Approval Requests for Hermes steps — live Approve/Decline within 270s on the run page, parking as Awaiting Approval, late decisions that resume the step's own session, decline guidance capped at three per step, and restart/uncertainty handling. Migration `d1a390e7b2c4`; Agent update required for the trigger server.
+- UI: approval card leads the run page (live countdown or paused explanation), "Waiting on you" status and amber step marker, per-step decision history and rail chips, a count badge on the Workflows navigation item. The Workflows page now has Runs (approvals inbox plus all of the Agent's runs) and Workflows tabs; the per-workflow Runs tab is removed. API adds `approvals` on run reads and `awaiting_decision` on the run list.
+- Scope: OpenClaw approvals split to [AF-444](https://aai-labs.atlassian.net/browse/AF-444); approval-link notifications are PR 2.
+- Verification: complete API suite 5,888 passed; 1,100 parallel-setup errors and one catalog failure passed on re-run; two Garage port-retry tests fail on staging without this change. The v1 operation inventory adds the decision route. Workflow/artifact browser cases (66) pass. Runtimes are faked over HTTP; no live Hermes session evidence yet.
+
 ### 2026-11-03 — AF-430 — review fixes
 
 - Recovery rotates active and parked runs independently; storage status exposes the configured upload limit and workflow inputs offer provisioning.

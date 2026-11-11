@@ -11,10 +11,15 @@ export const workflowPageParser = createParser({
   .withDefault(1)
   .withOptions({ history: "replace", scroll: false });
 
+// Runs are listed on the Workflows landing page, not per workflow; old `runs` links open Overview.
 export const workflowViewParser = parseAsStringLiteral([
   "overview",
-  "runs",
   "history",
 ] as const)
   .withDefault("overview")
   .withOptions({ history: "push", scroll: false, clearOnDefault: false });
+
+/** The Agent's Workflows landing: its runs (with approvals waiting) or its saved workflows. */
+export const workflowsTabParser = parseAsStringLiteral(["runs", "workflows"] as const)
+  .withDefault("runs")
+  .withOptions({ history: "push", scroll: false });

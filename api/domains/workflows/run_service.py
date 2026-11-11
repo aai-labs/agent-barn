@@ -15,6 +15,8 @@ from api.domains.workflows.models import WorkflowDraft, WorkflowVersion
 from api.domains.workflows.repository import WorkflowConflict, WorkflowRepository
 from api.domains.workflows.run_models import (
     TERMINAL_STATES,
+    ApprovalDecisionCreate,
+    ApprovalRead,
     AttemptFailure,
     AttemptRead,
     AttemptResult,
@@ -77,6 +79,8 @@ class WorkflowRunService:
         step_records: dict[int, dict[str, Any]] | None = None,
         attempt: AttemptRead | None = None,
         can_start: bool | None = None,
+        approval: ApprovalRead | None = None,
+        approvals: list[ApprovalRead] | None = None,
     ) -> WorkflowRunRead:
         if can_write is None or can_start is None:
             agent = self.authorization.require_visible(context, agent_id)
@@ -122,8 +126,10 @@ class WorkflowRunService:
             created_at=run.created_at,
             settled_at=run.settled_at,
             rerun_of_run_id=run.rerun_of_run_id,
-            allowed_actions=self._allowed_actions(run, can_write, can_start),
+            allowed_actions=self._allowed_actions(run, can_write, can_start, approval),
             attempt=attempt,
+            approval=approval,
+            approvals=approvals or [],
         )
 
     @staticmethod
@@ -131,25 +137,60 @@ class WorkflowRunService:
         return agent.status == AgentStatus.RUNNING and not archived
 
     @staticmethod
-    def _allowed_actions(run: WorkflowRun, can_write: bool, can_start: bool) -> list[Literal["cancel", "rerun"]]:
+    def _allowed_actions(
+        run: WorkflowRun, can_write: bool, can_start: bool, approval: ApprovalRead | None = None
+    ) -> list[Literal["cancel", "rerun", "decide"]]:
         if not can_write:
             return []
         if run.state in TERMINAL_STATES:
             # Retention removes the inputs a re-run would copy; starting needs a running Agent and a live workflow.
             return ["rerun"] if can_start and not run.content_expired else []
-        return [] if run.state == "CANCELLING" else ["cancel"]
+        if run.state == "CANCELLING":
+            return []
+        decidable = approval is not None and (
+            (approval.state == "LIVE" and run.state == "RUNNING")
+            or (approval.state == "PARKED" and run.state == "AWAITING_APPROVAL")
+        )
+        return ["decide", "cancel"] if decidable else ["cancel"]
 
     def get(self, agent_id: UUID, run_id: UUID, context: CurrentUserContext) -> WorkflowRunRead:
         found = self.repository.get(run_id, agent_id, self._scope(agent_id, context))
         if not found:
             raise HTTPException(404, "Workflow run not found")
         step_records, attempt = self.repository.progress(found[0])
-        return self._read(*found, agent_id, context, step_records=step_records, attempt=attempt)
+        request = self.repository.current_approval(found[0])
+        approval = ApprovalRead.model_validate(request, from_attributes=True) if request else None
+        approvals = [
+            ApprovalRead.model_validate(item, from_attributes=True) for item in self.repository.approvals([found[0].id])
+        ]
+        return self._read(
+            *found,
+            agent_id,
+            context,
+            step_records=step_records,
+            attempt=attempt,
+            approval=approval,
+            approvals=approvals,
+        )
 
     def list_runs(
-        self, agent_id: UUID, context: CurrentUserContext, page: int, size: int, workflow_id: UUID | None
+        self,
+        agent_id: UUID,
+        context: CurrentUserContext,
+        page: int,
+        size: int,
+        workflow_id: UUID | None,
+        awaiting_decision: bool = False,
     ) -> PaginatedItems[WorkflowRunRead]:
-        rows, total = self.repository.list_runs(agent_id, self._scope(agent_id, context), page, size, workflow_id)
+        rows, total = self.repository.list_runs(
+            agent_id, self._scope(agent_id, context), page, size, workflow_id, awaiting_decision
+        )
+        # Only a request still awaiting a decision is shown in lists, for the approvals inbox.
+        pending = {
+            item.run_id: ApprovalRead.model_validate(item, from_attributes=True)
+            for item in self.repository.approvals(run.id for run, _ in rows)
+            if item.state in ("LIVE", "PARKED")
+        }
         agent = self.authorization.require_visible(context, agent_id)
         can_write = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
         archived = self.repository.archived_workflow_ids({run.workflow_id for run, _ in rows})
@@ -159,7 +200,12 @@ class WorkflowRunService:
             total,
             [
                 self._read(
-                    *row, agent_id, context, can_write, can_start=self._can_start(agent, row[0].workflow_id in archived)
+                    *row,
+                    agent_id,
+                    context,
+                    can_write,
+                    can_start=self._can_start(agent, row[0].workflow_id in archived),
+                    approval=pending.get(row[0].id),
                 )
                 for row in rows
             ],
@@ -248,6 +294,31 @@ class WorkflowRunService:
         try:
             delivery_ids = self.repository.cancel(
                 run_id, agent_id, self._scope(agent_id, context, write=True), revision
+            )
+        except WorkflowConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        self.dispatcher.enqueue_immediate(delivery_ids)
+        return self.get(agent_id, run_id, context)
+
+    def decide(
+        self,
+        agent_id: UUID,
+        run_id: UUID,
+        request_id: UUID,
+        payload: ApprovalDecisionCreate,
+        context: CurrentUserContext,
+    ) -> WorkflowRunRead:
+        """A person's verdict on one exact request; authority is checked now, not when it was raised."""
+        self.get(agent_id, run_id, context)
+        try:
+            delivery_ids = self.repository.decide(
+                run_id,
+                request_id,
+                agent_id,
+                self._scope(agent_id, context, write=True),
+                context.user.id,
+                payload.decision == "approve",
+                payload.guidance,
             )
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc

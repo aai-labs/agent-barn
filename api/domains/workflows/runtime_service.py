@@ -5,8 +5,10 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.workflows import config as workflow_config
 from api.domains.workflows.repository import WorkflowConflict
+from api.domains.workflows.run_models import ApprovalRaised
 from api.domains.workflows.run_repository import WorkflowRunRepository
 
 STEP_INSTRUCTIONS = (
@@ -23,15 +25,44 @@ STEP_INSTRUCTIONS = (
 )
 
 
+def continuation_prompt(state: str, command: str, guidance: str | None) -> str:
+    """Resumes a step's own session after a person decided on the command it asked to run."""
+    if state == "APPROVED":
+        decided = (
+            f"A person approved the command you asked to run:\n{command}\n"
+            "If it is still needed, run it now; you may be asked for approval again."
+        )
+    else:
+        decided = (
+            f"A person declined the command you asked to run:\n{command}\n"
+            "Do not run it. Their guidance: " + (guidance or "none given") + "\nFollow the guidance."
+        )
+    return (
+        decided + "\nContinue this workflow step where you left off. Do not repeat actions you already "
+        "completed in this conversation. When you are done, reply with ONLY the JSON result object as instructed.\n"
+    )
+
+
 @inject
 @singleton
 @dataclass
 class WorkflowRuntimeService:
     repository: WorkflowRunRepository
     config: Config
+    dispatcher: EventDeliveryDispatcher
 
     def handoff(self, attempt_id: UUID, token: str) -> dict:
         run, _, packet = self.repository.admit(attempt_id, token)
+        continuation = packet.pop("continuation", None)
+        if continuation:
+            # The resumed session already holds the step's instructions and context.
+            return {
+                "runtime": run.runtime,
+                "session_id": continuation["session_id"],
+                "resume": True,
+                "prompt": continuation_prompt(continuation["state"], continuation["command"], continuation["guidance"]),
+                "files": packet["files"],
+            }
         if self.config.artifact_s3_endpoint_url:
             packet["file_publication"] = {
                 "command": "/usr/local/bin/agentbarn-artifacts upload <workspace-file>",
@@ -44,6 +75,30 @@ class WorkflowRuntimeService:
         return {
             "runtime": run.runtime,
             "session_id": f"workflow-{attempt_id}",
+            "resume": False,
             "prompt": STEP_INSTRUCTIONS + context,
             "files": packet["files"],
         }
+
+    def raise_approval(self, attempt_id: UUID, token: str, raised: ApprovalRaised) -> dict:
+        request, delivery_ids = self.repository.raise_approval(attempt_id, token, raised)
+        self.dispatcher.enqueue_immediate(delivery_ids)
+        return {"id": str(request.id), "live_seconds": workflow_config.APPROVAL_LIVE_SECONDS}
+
+    def approval_status(self, attempt_id: UUID, token: str, request_id: UUID) -> dict:
+        request = self.repository.approval_status(attempt_id, token, request_id)
+        status: dict = {"state": request.state}
+        if request.state == "DECLINED":
+            status["prompt"] = continuation_prompt(request.state, request.command, request.guidance)
+        return status
+
+    def park(self, attempt_id: UUID, token: str, request_id: UUID) -> dict:
+        """Close the live window; a decision that won the race is returned for the step to act on."""
+        request, delivery_ids = self.repository.park(attempt_id, token, request_id)
+        self.dispatcher.enqueue_immediate(delivery_ids)
+        if request.state == "PARKED":
+            return {"state": "PARKED"}
+        return self.approval_status(attempt_id, token, request_id)
+
+    def released(self, attempt_id: UUID, token: str, request_id: UUID) -> None:
+        self.dispatcher.enqueue_immediate(self.repository.released(attempt_id, token, request_id))

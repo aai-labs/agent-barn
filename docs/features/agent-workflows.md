@@ -338,15 +338,13 @@ accepted as the summary. Malformed result envelopes receive one correction turn 
 (`handoff`, `result`, `failure`) are outside the product API and public discovery.
 A derived capability binds one attempt/generation. Handoff and outcome admission
 check current initiator authority, Agent lifecycle, generation, attempt state and
-deadline under the run lock. An explicit non-retryable failure fails and settles the run; an approval request or retryable failure blocks it for inspection.
+deadline under the run lock. An explicit non-retryable failure fails and settles the run; a retryable failure blocks it for inspection.
 An attempt exceeding its 15-minute deadline is fenced, a stop is requested and
 the run blocks with an uncertain-outcome reason. No unfinished step is automatically
 replayed: session end, callback loss and stop acknowledgement do not prove absence
 of external effects. Inspect effects before explicitly starting another run;
-there is no generic resume/reconciliation API in this slice. When the Agent asks
-for a command approval, the session is stopped and the run becomes BLOCKED with the
-reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
-approval handling arrives with WF03. Agent stop or lost initiator authority pauses
+there is no generic resume/reconciliation API in this slice. Command approvals follow
+[Workflow approvals](#workflow-approvals-af-390). Agent stop or lost initiator authority pauses
 progression; restarting the Agent does not resume it implicitly.
 
 The result envelope accepts only `summary` and `criteria_met: true`. It does not
@@ -370,16 +368,18 @@ and metadata remain. File retention and purge are independent and follow the
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
 `workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
 `POST /workflow-runs/{id}/cancel` with `expected_revision`, and
-`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)). Collections retain the
-standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`) controls
-those actions with independent backend authorization. Artifact routes, generic
-resume and approvals are not exposed in WF02.
+`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)), and
+`POST /workflow-runs/{id}/approvals/{request_id}/decision` (see
+[Workflow approvals](#workflow-approvals-af-390)). Collections retain the
+standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`, `decide`) controls
+those actions with independent backend authorization. Artifact routes and generic
+resume are not exposed.
 
 The Workflows UI includes explicit input review, a Runs view, durable step
 progress/history and cancellation confirmation. `workflowRun` retains the run in
 the URL. Queries include Organization/Agent identity, refetch on focus, poll
 queued/running/cancelling mounted views every three seconds and stop on parked
-(paused/blocked), terminal, error or unmounted views. Focus refetch and mutations
+(paused/blocked/awaiting approval), terminal, error or unmounted views. Focus refetch and mutations
 still refresh parked views. Start retries retain their identity and inputs. Access errors replace
 protected run content. Authoring retains its existing cache behavior.
 
@@ -392,7 +392,69 @@ each completed step's `summary`, shown under “What each step did”, and a
 completion card. The last step is excluded from the per-step card on success to
 avoid repeating its text. Run and selected-step file attachments are delivered
 through the shared [Agent artifact service](agent-artifacts.md) alongside summaries.
-Dedicated preview pages, approvals and messaging remain follow-ups.
+Dedicated preview pages and approval notifications remain follow-ups.
+
+## Workflow approvals (AF-390)
+
+Terms follow [`CONTEXT.md`](../../CONTEXT.md): **Workflow Approval Request**,
+**Approval Decision** and **Awaiting Approval**. Approvals extend the Agent's own
+Hermes command approval; they never widen what its approval mode allows.
+
+- **Coverage.** Hermes only. A command Hermes's policy does not flag (approval mode
+  `off`, or `auto` judging it safe) runs unattended. OpenClaw raises no approval
+  events, so its steps stay unattended under its `auto` policy; support is
+  [AF-444](https://aai-labs.atlassian.net/browse/AF-444).
+- **Live window.** On `approval.request` the trigger server reports the verbatim
+  command to `POST /workflow-runtime/v1/attempts/{id}/approvals` and polls
+  `GET …/approvals/{request_id}`. The API persists the request (run, step, attempt,
+  session, Hermes run ID, command and its SHA-256) before review is exposed and keeps
+  it decidable for `APPROVAL_LIVE_SECONDS` (270), ending before Hermes's 300-second
+  auto-deny. The attempt deadline extends to cover that window. Approve is sent to
+  Hermes as `once` and confirmed with `…/released`; `session` and `always` are never
+  offered. Decline stops the Hermes run, which never executes the command, and the
+  same session resumes (`resume_session`) with the decline and verbatim guidance.
+- **Parking.** When the window closes the trigger server calls `…/park` before
+  stopping the session. Park and decision serialize under the run lock: a decision
+  that arrived first wins and is acted on; otherwise the request becomes `PARKED`, the
+  attempt `STOPPED` and the run `AWAITING_APPROVAL`. Parked runs keep their file pins,
+  never expire and can be cancelled.
+- **Late decisions.** Approving or declining a parked request queues a new attempt
+  that resumes the request's original session with a continuation prompt naming the
+  command and decision (and guidance). A late approval never releases the command:
+  if Hermes flags it again, a new live request is raised. Session history that cannot
+  load fails the attempt instead of continuing blind.
+- **Bounds.** The third decline in one step blocks the run (cancel only) and fences
+  the session.
+- **Authority.** Deciding requires current `agent.update` on the Agent, checked at
+  decision time; the decider is recorded. Runtime callbacks use the attempt
+  capability and cannot decide. Initiator authority loss still pauses the run and
+  lapses open requests; cancellation lapses them too. A decided, lapsed or stale
+  request returns 409.
+- **Interruption.** An attempt that expires (restart, lost session) while its request
+  is unanswered parks the run. An approval Hermes never confirmed blocks the run as
+  uncertain, like any expired attempt. A declined request that was never continued is
+  continued with its guidance.
+- **Reads.** Single-run reads carry the current step's latest request (`approval`) and
+  every request of the run (`approvals`). List reads carry `approval` only while it
+  awaits a decision; `awaiting_decision=true` lists only those runs.
+- **UI.** A request awaiting a decision leads the run page: an amber approval card
+  with the exact command, a live countdown or the paused explanation, optional
+  guidance, and Approve/Decline when `allowed_actions` includes `decide`. The card
+  states that Hermes supplies no target, parameters or rationale. The run badge reads
+  "Waiting on you" (live) or "Awaiting approval · paused" and the step's rail marker
+  turns amber. Decided commands stay on their step: rail chips count approvals and
+  declines, and step detail lists each command, its outcome, decider and guidance.
+  The Workflows navigation item shows their count, polled every 10 seconds.
+- **Workflows page.** The Agent's Workflows page has two tabs (`workflowsTab`):
+  **Runs** (default) lists runs waiting on approval, then every run of the Agent
+  newest first (`agentRunPage`); **Workflows** lists the saved workflows. A workflow's
+  own page has Overview and Version history only; runs open on their own page, whose
+  breadcrumb returns to the Runs tab. Old `workflowView=runs` links open Overview.
+
+Migration `d1a390e7b2c4` adds `workflow_approval_request` and the
+`AWAITING_APPROVAL` run state; downgrade blocks parked runs. Agents need the updated
+trigger server (Agent update/restart) for live approvals; older trigger servers keep
+the previous stop-and-block behavior.
 
 ## AF-389 acceptance dependencies
 

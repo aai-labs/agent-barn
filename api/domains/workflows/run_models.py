@@ -14,7 +14,12 @@ from api.domains.workflows.models import StrictDTO, Text
 from api.infrastructure.postgres.models import BaseModel
 
 TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
-RunState = Literal["QUEUED", "RUNNING", "PAUSED", "BLOCKED", "CANCELLING", "CANCELLED", "SUCCEEDED", "FAILED"]
+RunState = Literal[
+    "QUEUED", "RUNNING", "PAUSED", "BLOCKED", "AWAITING_APPROVAL", "CANCELLING", "CANCELLED", "SUCCEEDED", "FAILED"
+]
+# A live request is answered while the step's session holds it; a parked one after the session stopped.
+ApprovalState = Literal["LIVE", "PARKED", "APPROVED", "DECLINED", "RELEASED", "LAPSED"]
+DECIDABLE_APPROVAL_STATES = frozenset({"LIVE", "PARKED"})
 
 
 class WorkflowFileInput(StrictDTO):
@@ -47,7 +52,8 @@ class WorkflowRun(BaseModel, table=True):
         sa.UniqueConstraint("workflow_id", "client_request_id", name="uq_workflow_run_start"),
         sa.CheckConstraint("revision >= 1 AND next_step >= 0 AND generation >= 0", name="ck_workflow_run_counters"),
         sa.CheckConstraint(
-            "state IN ('QUEUED','RUNNING','PAUSED','BLOCKED','CANCELLING','CANCELLED','SUCCEEDED','FAILED')",
+            "state IN ('QUEUED','RUNNING','PAUSED','BLOCKED','AWAITING_APPROVAL','CANCELLING','CANCELLED',"
+            "'SUCCEEDED','FAILED')",
             name="ck_workflow_run_state",
         ),
     )
@@ -103,6 +109,35 @@ class WorkflowCheckpoint(BaseModel, table=True):
     result: dict[str, Any] = SqlField(sa_column=sa.Column(JSONB, nullable=False))
 
 
+class WorkflowApprovalRequest(BaseModel, table=True):
+    """One exact command a step's Agent asked a person to allow; each ask is a new request."""
+
+    __tablename__: str = "workflow_approval_request"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "state IN ('LIVE','PARKED','APPROVED','DECLINED','RELEASED','LAPSED')",
+            name="ck_workflow_approval_request_state",
+        ),
+    )
+    run_id: UUID = SqlField(foreign_key="workflow_run.id", ondelete="CASCADE", index=True)
+    attempt_id: UUID = SqlField(foreign_key="workflow_attempt.id", ondelete="CASCADE")
+    step_index: int
+    # The runtime session holding the request; a late decision continues this session.
+    session_id: str
+    runtime_run_id: str
+    command: str
+    command_sha256: str
+    state: str = "LIVE"
+    live_until: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    decided_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
+    decided_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
+    guidance: str | None = None
+    # Set when a late decision's continuation attempt picks the session back up.
+    continued_by_attempt_id: UUID | None = SqlField(
+        default=None, foreign_key="workflow_attempt.id", ondelete="SET NULL"
+    )
+
+
 class WorkflowHistory(BaseModel, table=True):
     __tablename__: str = "workflow_history"
     run_id: UUID = SqlField(foreign_key="workflow_run.id", ondelete="CASCADE", index=True)
@@ -122,6 +157,30 @@ class AttemptFailure(StrictDTO):
     needs_attention: bool = False
     # False for a definitive failure, such as unmet criteria; the run fails immediately.
     retryable: bool = True
+
+
+class ApprovalRaised(StrictDTO):
+    """The step's runtime paused a command for a person's approval."""
+
+    command: str = Field(min_length=1, max_length=100_000)
+    runtime_run_id: str = Field(min_length=1, max_length=256)
+
+
+class ApprovalDecisionCreate(StrictDTO):
+    decision: Literal["approve", "decline"]
+    guidance: str | None = Field(default=None, max_length=4000)
+
+
+class ApprovalRead(DTO):
+    id: UUID
+    step_index: int
+    command: str
+    state: ApprovalState
+    created_at: datetime
+    live_until: datetime
+    decided_by_user_id: UUID | None
+    decided_at: datetime | None
+    guidance: str | None
 
 
 class WorkflowHistoryRead(DTO):
@@ -163,6 +222,10 @@ class WorkflowRunRead(DTO):
     created_at: datetime
     settled_at: datetime | None
     rerun_of_run_id: UUID | None = None
-    allowed_actions: list[Literal["cancel", "rerun"]]
+    allowed_actions: list[Literal["cancel", "rerun", "decide"]]
     # The running step's current attempt; only present on the single-run read.
     attempt: AttemptRead | None = None
+    # The latest approval request of the current step; on list reads only while it awaits a decision.
+    approval: ApprovalRead | None = None
+    # Every approval request of the run, oldest first; only present on the single-run read.
+    approvals: list[ApprovalRead] = Field(default_factory=list)
