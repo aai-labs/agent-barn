@@ -30,6 +30,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    there_is_a_shared_credential,
     there_is_agent_access,
     there_is_an_agent,
     use_org_for_auth,
@@ -43,6 +44,7 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
 CREATE = {"name": "Sales", "template_key": "test-template"}
+FIRECRAWL_SECRET = {"provider": "firecrawl", "content": {"api_key": "fc-bot-fixture"}}
 RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
 POD_OPERATIONS = [
     ("post", "/start", None),
@@ -84,15 +86,15 @@ def _auth(context):
     return {"Authorization": f"Bearer {context.access_token}"}
 
 
-def _parent_with_bots(*slots, status=AgentStatus.STOPPED):
+def _parent_with_bots(*slots, status=AgentStatus.STOPPED, agent_type=AgentType.HERMES):
     def step(context):
-        there_is_an_agent(name="Parent", agent_type=AgentType.HERMES, status=status)(context)
+        there_is_an_agent(name="Parent", agent_type=agent_type, status=status)(context)
         context.parent = context.agent
         context.bots = []
         for slot in slots:
             there_is_an_agent(
                 name=f"Bot {slot}",
-                agent_type=AgentType.HERMES,
+                agent_type=agent_type,
                 status=status,
                 parent_agent_id=context.parent.id,
                 bot_slot=slot,
@@ -395,11 +397,76 @@ def test_a_bot_counts_toward_the_organizations_agent_limit():
         assert_that(response.json()["detail"], contains_string("2 agents"))
 
 
-def test_an_openclaw_agent_cannot_hold_bots():
-    with given([*_GIVEN, there_is_a_template(), there_is_an_agent(agent_type=AgentType.OPENCLAW)]) as context:
-        response = _create_bot(context, context.agent)
+def _openclaw_parent_with_bots(*slots):
+    return _parent_with_bots(*slots, agent_type=AgentType.OPENCLAW)
 
-        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+def test_creating_a_bot_under_an_openclaw_parent_makes_a_stopped_openclaw_bot():
+    with given([*_GIVEN, there_is_a_template(), _openclaw_parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+        body = response.json()
+        assert_that((body["parent_agent_id"], body["agent_type"]), equal_to((str(context.parent.id), "openclaw")))
+        stored = _stored(context, body["id"])
+        assert_that(
+            (stored.status, stored.bot_slot, stored.approval_mode, stored.max_turns, stored.file_sync_enabled),
+            equal_to((AgentStatus.STOPPED, 1, CommandApprovalMode.AUTO, None, False)),
+        )
+
+
+def test_a_sixth_openclaw_bot_is_refused():
+    with given([*_GIVEN, there_is_a_template(), _openclaw_parent_with_bots(1, 2, 3, 4, 5)]) as context:
+        response = _create_bot(context, context.parent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+@pytest.mark.parametrize(("field", "value"), [("approval_mode", "manual"), ("verbose_mode", True)])
+def test_an_openclaw_bot_refuses_settings_openclaw_does_not_support(field, value):
+    with given([*_GIVEN, there_is_a_template(), _openclaw_parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent, **{field: value})
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+        assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
+@pytest.mark.parametrize(("field", "value"), [("approval_mode", "manual"), ("max_turns", 7)])
+def test_an_openclaw_bots_update_refuses_settings_openclaw_does_not_support(field, value):
+    with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
+        response = _update(context, context.bot, **{field: value})
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+        assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
+def test_an_openclaw_bot_cannot_bring_its_own_firecrawl_credential():
+    with given([*_GIVEN, there_is_a_template(), _openclaw_parent_with_bots(1)]) as context:
+        created = _create_bot(context, context.parent, secrets=[FIRECRAWL_SECRET])
+        updated = _update(context, context.bot, secrets=[FIRECRAWL_SECRET])
+
+        for response in (created, updated):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+            assert_that(response.json()["detail"], contains_string("Firecrawl"))
+        assert_that(context.injector.get(AgentRepository).get_secrets_for_agent(context.bot.id), equal_to([]))
+
+
+def test_an_openclaw_bot_cannot_attach_a_shared_firecrawl_credential():
+    shared = there_is_a_shared_credential(provider="firecrawl", name="Shared Firecrawl", content={"api_key": "fc-x"})
+    with given([*_GIVEN, _openclaw_parent_with_bots(1), shared]) as context:
+        response = _update(
+            context, context.bot, shared_credentials=[{"shared_credential_id": str(context.shared_credential.id)}]
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+        assert_that(response.json()["detail"], contains_string("Firecrawl"))
+
+
+def test_an_openclaw_parent_keeps_its_own_firecrawl_credential():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
+        response = _update(context, context.parent, secrets=[FIRECRAWL_SECRET])
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
 
 
 def test_a_bot_cannot_hold_bots():
@@ -1129,6 +1196,20 @@ def test_a_bots_google_state_is_its_own_and_its_shim_is_shared():
         args = runtime_context.call_args
         assert_that(args.args[1], equal_to(f"/opt/data/profiles/{context.bot.id}"))
         assert_that(args.kwargs["gog_shim_home_dir"], equal_to("/home/hermes"))
+
+
+def test_an_openclaw_bots_integration_files_live_in_its_own_home():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
+        service = context.injector.get(AgentService)
+        with patch("api.domains.agents.service.RuntimeContext", wraps=RuntimeContext) as runtime_context:
+            service._assemble_agent(context.bot, preflight=True)
+
+        args = runtime_context.call_args
+        home = f"/home/node/.openclaw/bots/{context.bot.id}"
+        assert_that(
+            (args.args[0], args.args[1], args.kwargs["gog_shim_home_dir"], args.kwargs["store_dir"]),
+            equal_to((home, home, "/home/node", f"{home}/aai-cli")),
+        )
 
 
 def _bot_health(context, healthz):

@@ -15,9 +15,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `GET /agents/{id}/bots`;
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
-- OpenClaw (AF-445): the feature contract, terminology and ADR, and the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`). The API still refuses OpenClaw Parent Agents with 400.
-- In transition: the docs describe OpenClaw Bots ahead of the code, and the database already accepts OpenClaw Bots that the API cannot create.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, Bot creation and Bot rules for OpenClaw Parent Agents in the API.
+- OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules.
+- In transition: an OpenClaw Parent Agent can hold Bots, but starting it does not serve them yet; its pod runs the Parent Agent alone.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the multi-agent configuration builders.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,16 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-11 — AF-445 — Bots on OpenClaw Parent Agents in the API
+
+- Delivered:
+  - `POST /agents/{id}/bots` on an OpenClaw Parent Agent creates a stopped OpenClaw Bot with approval `auto`, no turn limit and File Sync off.
+  - The Hermes-only Bot rules (manual-approval mixing, read-only turn limit) skip OpenClaw Bots; OpenClaw's own 400s for approval, verbose mode and turn limit apply instead.
+  - An OpenClaw Bot's own or shared Firecrawl credential is refused with 400, on create and on update.
+  - An OpenClaw Bot's integration files live under `/home/node/.openclaw/bots/<id>`, with its aai-cli store in `aai-cli` below it and the shared gog shim in `/home/node`.
+- Changed: the 400 "Only Hermes Agents can hold Bots" is gone. No schema or contract change. Agent Memory needs no API rule; the memory tool per Bot comes with the runtime slices.
+- Follow-up: the multi-agent configuration builders.
 
 ### 2026-11-11 — AF-445 — Bots share their parent's runtime
 

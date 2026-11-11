@@ -70,6 +70,7 @@ from api.domains.agents.models import (
     AgentConfigurationVersionRead,
     AgentCreate,
     AgentCreatorRead,
+    AgentDefinition,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
@@ -286,6 +287,14 @@ def _manual_mixing_refused() -> HTTPException:
         status_code=status.HTTP_409_CONFLICT,
         detail="Manual approval must be on for a Parent Agent and all its Bots, or none of them",
     )
+
+
+def _refuse_openclaw_bot_firecrawl(agent_type: AgentType, providers: Collection[str]) -> None:
+    if agent_type == AgentType.OPENCLAW and SecretProvider.FIRECRAWL in providers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A Bot on OpenClaw uses its Parent Agent's Firecrawl setup and cannot have its own Firecrawl credential",
+        )
 
 
 def _refuse_during_managed_update(agent: Agent) -> None:
@@ -983,17 +992,16 @@ class AgentService:
             parent = self.authorization.require_action(context, parent_id, PermissionKey.AGENT_UPDATE)
             if parent.parent_agent_id is not None:
                 raise HTTPException(status.HTTP_409_CONFLICT, "A Bot cannot hold Bots")
-            if parent.agent_type != AgentType.HERMES:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only Hermes Agents can hold Bots")
             _refuse_during_managed_update(parent)
             if self.restore_points.has_blocking_operation(parent.id):
                 raise HTTPException(status.HTTP_409_CONFLICT, "An Agent restore operation is in progress")
             if parent.status == AgentStatus.RUNNING:
                 raise HTTPException(status.HTTP_409_CONFLICT, f"Agent {parent.id} must be stopped before adding a Bot")
-            if (data.approval_mode == CommandApprovalMode.MANUAL) != (
+            if parent.agent_type == AgentType.HERMES and (data.approval_mode == CommandApprovalMode.MANUAL) != (
                 parent.approval_mode == CommandApprovalMode.MANUAL
             ):
                 raise _manual_mixing_refused()
+            _refuse_openclaw_bot_firecrawl(parent.agent_type, self._requested_providers(data, parent.organization_id))
             taken = {bot.bot_slot for bot in self.repository.find_live_bots(parent.id)}
             slot = next((slot for slot in range(1, MAX_BOTS_PER_PARENT + 1) if slot not in taken), None)
             if slot is None:
@@ -1002,11 +1010,21 @@ class AgentService:
                 )
             definition = AgentCreate(
                 **dict(data),
-                agent_type=AgentType.HERMES,
+                agent_type=parent.agent_type,
                 max_turns=parent.max_turns,
                 file_sync_enabled=False,
             )
             return self._create_agent(definition, context, parent_agent_id=parent.id, bot_slot=slot)
+
+    def _requested_providers(self, data: AgentDefinition, organization_id: UUID) -> set[str]:
+        providers = {item.provider.value for item in data.secrets}
+        for attach in data.shared_credentials:
+            credential = self.shared_credential_repository.get_by_id_and_org(
+                attach.shared_credential_id, organization_id
+            )
+            if credential is not None:
+                providers.add(credential.provider)
+        return providers
 
     def _create_agent(
         self,
@@ -1997,6 +2015,8 @@ class AgentService:
                 raise HTTPException(
                     status_code=400, detail=f"Duplicate shared credential provider: {credential.provider}"
                 )
+            if agent.parent_agent_id is not None:
+                _refuse_openclaw_bot_firecrawl(agent.agent_type, {credential.provider})
             providers.add(credential.provider)
             credentials.append(credential)
         return credentials
@@ -2021,7 +2041,7 @@ class AgentService:
             return read
 
     def _refuse_bot_setting_changes(self, agent: Agent, updated: Mapping[str, Any]) -> None:
-        if agent.parent_agent_id is None:
+        if agent.parent_agent_id is None or agent.agent_type != AgentType.HERMES:
             return
         if "max_turns" in updated and updated["max_turns"] != agent.max_turns:
             raise HTTPException(status.HTTP_409_CONFLICT, "A Bot's turn limit is set on its Parent Agent")
@@ -2052,6 +2072,8 @@ class AgentService:
             )
 
         self._refuse_bot_setting_changes(agent, updated)
+        if agent.parent_agent_id is not None:
+            _refuse_openclaw_bot_firecrawl(agent.agent_type, {item.provider.value for item in data.secrets or []})
 
         if data.restart or data.policies or data.custom_api is not None:
             _refuse_during_managed_update(agent)
@@ -2897,9 +2919,12 @@ class AgentService:
             for provider, content in decrypted.items()
         ]
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
-        if agent.parent_agent_id is not None:
-            aai_home = f"/opt/data/profiles/{agent.id}"
         aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
+        if agent.parent_agent_id is not None and agent.agent_type == AgentType.HERMES:
+            aai_home = f"/opt/data/profiles/{agent.id}"
+        elif agent.parent_agent_id is not None:
+            aai_home = f"/home/node/.openclaw/bots/{agent.id}"
+            aai_store_dir = f"{aai_home}/aai-cli"
         gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
         gog_shim_home_dir = None
         if agent.parent_agent_id is not None:
