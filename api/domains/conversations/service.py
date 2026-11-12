@@ -26,6 +26,10 @@ class ConversationService:
     repository: ConversationRepository
     agent_authorization: AgentAuthorization
 
+    def latest_inbound_times_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, datetime]:
+        """When a person last wrote to each Agent, platform-wide. For `require_platform_admin` routes only."""
+        return self.repository.latest_inbound_times_for_platform(agent_ids)
+
     def list_channels(self, agent_id: UUID, context: CurrentUserContext) -> list[ConversationChannelRead]:
         agent = self.agent_authorization.require_visible(context, agent_id)
         activity_scope = self.agent_authorization.require_action_for_visible(

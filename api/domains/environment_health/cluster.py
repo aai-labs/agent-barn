@@ -51,6 +51,7 @@ from api.domains.environment_health.models import (
     FailedAgentRead,
     FiringAlertRead,
     HealthLevel,
+    IdleAgentRead,
     OverdueBackupRead,
     PodIssueRead,
     RolloutState,
@@ -713,6 +714,64 @@ def scheduled_backups(
             for row in health.overdue
         ],
     )
+
+
+# --- idle agents ----------------------------------------------------------
+
+IDLE_STATUSES = frozenset({AgentStatus.RUNNING, AgentStatus.STOPPED})
+
+
+def idle_agents(
+    identities: Mapping[UUID, PlatformAgentIdentity],
+    *,
+    last_user_message: Mapping[UUID, datetime],
+    last_call: Mapping[UUID, datetime],
+    pods: Sequence[V1Pod] | None,
+    claims: Sequence[V1PersistentVolumeClaim] | None,
+    restore_points: Mapping[UUID, tuple[int, int]],
+    now: datetime,
+    idle_after: timedelta,
+) -> list[IdleAgentRead]:
+    """Running or stopped Agents no person has written to within `idle_after`, never-used first.
+
+    Only a person's message counts as use. A model call can be the platform waking the Agent
+    (a heartbeat, a schedule, a platform-wide restart), so it is shown but never decides. An
+    Agent younger than `idle_after` has not had the chance to be used, and an Agent in ERROR is
+    shown with its failure instead. Claims are linked by the Agent id in their labels, the
+    Agent's own and its restore points'.
+    """
+    with_pod = agent_pod_readiness(pods) if pods is not None else None
+    held: dict[UUID, list[float]] = {}
+    for claim in claims or []:
+        agent_id = _agent_id_from_labels(claim.metadata.labels or {})
+        if agent_id is not None:
+            held.setdefault(agent_id, []).append(requested_storage(claim) or 0.0)
+
+    rows: list[IdleAgentRead] = []
+    for agent_id, identity in identities.items():
+        if identity.status not in IDLE_STATUSES:
+            continue
+        if identity.created_at is not None and now - identity.created_at < idle_after:
+            continue
+        last_message = last_user_message.get(agent_id)
+        if last_message is not None and now - last_message < idle_after:
+            continue
+        sizes = held.get(agent_id, [])
+        count, archive_bytes = restore_points.get(agent_id, (0, 0))
+        rows.append(
+            IdleAgentRead(
+                agent=agent_ref(agent_id, identities),
+                last_user_message_at=last_message,
+                last_call_at=last_call.get(agent_id),
+                holds_pod=None if with_pod is None else agent_id in with_pod,
+                volume_claims=None if claims is None else len(sizes),
+                requested_bytes=None if claims is None else int(sum(sizes)),
+                restore_points=count,
+                restore_point_bytes=archive_bytes,
+            )
+        )
+    rows.sort(key=lambda row: (row.last_user_message_at or _NEVER, row.agent.agent_name or ""))
+    return rows
 
 
 # --- capacity -------------------------------------------------------------

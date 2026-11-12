@@ -221,6 +221,57 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(backups.getByTestId("backup-overdue").nth(1)).toContainText("never backed up");
   });
 
+  test("lists agents no one has written to as cleanup candidates, with what they hold", async () => {
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000 - 60_000).toISOString();
+    const ada = {
+      agent_id: ENV_ADA_ID,
+      agent_name: "Ada",
+      organization_id: ENV_ACME_ID,
+      organization_name: "Acme",
+      status: "RUNNING",
+    };
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        idle_after_days: 14,
+        idle_agents: [
+          {
+            agent: { ...ada, agent_id: ENV_ORPHAN_ID, agent_name: "Cy", status: "STOPPED" },
+            last_user_message_at: null,
+            last_call_at: null,
+            holds_pod: false,
+            volume_claims: 1,
+            requested_bytes: GIB,
+            restore_points: 0,
+            restore_point_bytes: 0,
+          },
+          {
+            agent: ada,
+            last_user_message_at: daysAgo(21),
+            last_call_at: new Date(Date.now() - 3_600_000).toISOString(),
+            holds_pod: true,
+            volume_claims: 2,
+            requested_bytes: 3 * GIB,
+            restore_points: 4,
+            restore_point_bytes: 512 * 1024 ** 2,
+          },
+        ],
+      }),
+    });
+
+    await healthPage.goto();
+
+    await expect(healthPage.section("idle")).toContainText("no message from anyone in 14 days");
+    const [cy, adaRow] = await healthPage.idleAgents().all();
+    await expect(cy).toContainText("Cy");
+    await expect(cy).toContainText("Never written to");
+    await expect(cy).toContainText("1 volume · 1 GiB");
+    await expect(adaRow).toContainText("Last message from a person 21 days ago");
+    await expect(adaRow).toContainText("Running pod");
+    await expect(adaRow).toContainText("2 volumes · 3 GiB");
+    await expect(adaRow).toContainText("4 restore points · 512 MiB");
+    await expect(adaRow).toContainText("last model call 1 h ago");
+  });
+
   test("says when scheduled backups are switched off", async () => {
     await data.environmentHealth.interceptEnvironmentHealth({
       body: mockEnvironmentHealth({ backups: { enabled: false, interval_minutes: 0, failed: [], overdue: [] } }),

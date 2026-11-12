@@ -1963,6 +1963,7 @@ class AgentRepository:
                 col(Agent.status),
                 col(Agent.organization_id),
                 col(Organization.name),
+                col(Agent.created_at),
             )
             .join(Organization, col(Organization.id) == col(Agent.organization_id))
             .where(col(Agent.deleted_at).is_(None))

@@ -11,6 +11,7 @@ import { formatTime, healthTone, SOURCE_LABELS, SOURCE_STATE_TEXT, TONE_COLOR } 
 import { AgentProblemsPanel } from "./agent-problems-panel";
 import { CapacityPanel } from "./capacity-panel";
 import { EventsPanel } from "./events-panel";
+import { IdleAgentsPanel } from "./idle-agents-panel";
 import { ScheduledPanel } from "./scheduled-panel";
 import { ServicesPanel } from "./services-panel";
 import { VolumesPanel } from "./volumes-panel";
@@ -131,6 +132,7 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
         podsState={states.pods}
         restartWindowDays={health.restartWindowDays}
       />
+      <IdleAgentsPanel idle={health.idleAgents} idleAfterDays={health.idleAfterDays} />
       <div className="grid gap-x-6" style={TWO_COLUMNS}>
         <VolumesPanel volumes={health.volumes} state={states.volume_claims} />
         <EventsPanel events={health.events} state={states.events} />

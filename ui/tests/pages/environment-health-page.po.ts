@@ -20,7 +20,9 @@ export class EnvironmentHealthPage {
     return this.page.getByTestId("environment-sources");
   }
 
-  section(name: "capacity" | "services" | "agents" | "workloads" | "volumes" | "events" | "scheduled"): Locator {
+  section(
+    name: "capacity" | "services" | "agents" | "workloads" | "volumes" | "events" | "scheduled" | "idle",
+  ): Locator {
     return this.page.getByTestId(`environment-${name}`);
   }
 
@@ -46,6 +48,10 @@ export class EnvironmentHealthPage {
 
   unhealthyRuntimes(): Locator {
     return this.page.getByTestId("unhealthy-runtime");
+  }
+
+  idleAgents(): Locator {
+    return this.page.getByTestId("idle-agent");
   }
 
   backups(): Locator {

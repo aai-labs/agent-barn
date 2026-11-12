@@ -209,6 +209,10 @@ class RestorePointService:
             overdue=self.repository.find_overdue_scheduled_backups(last_ready_before=overdue_before),
         )
 
+    def ready_totals_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, tuple[int, int]]:
+        """(count, archive bytes) of each Agent's READY restore points. For `require_platform_admin` routes only."""
+        return self.repository.ready_totals_for_agents(agent_ids)
+
     def _event_payload(
         self,
         agent: Agent,

@@ -1014,3 +1014,69 @@ def test_a_cron_schedule_outside_the_cron_grammar_is_not_carried():
         [_cron("a-odd", schedule="* * * * * ; curl evil"), _cron("b-macro", schedule="@hourly")], [], _NOW
     )
     assert (odd.schedule, macro.schedule) == (None, "@hourly")
+
+
+# --- idle agents ----------------------------------------------------------
+
+
+def _aged(name: str, status: AgentStatus, age: timedelta) -> PlatformAgentIdentity:
+    return PlatformAgentIdentity(uuid4(), name, status, _ACME, "Acme", _NOW - age)
+
+
+def test_agents_no_one_has_written_to_in_two_weeks_are_cleanup_candidates_with_what_they_hold():
+    ada = _aged("Ada", AgentStatus.RUNNING, timedelta(days=60))
+    bo = _aged("Bo", AgentStatus.STOPPED, timedelta(days=40))
+    cy = _aged("Cy", AgentStatus.RUNNING, timedelta(days=60))
+    dee = _aged("Dee", AgentStatus.RUNNING, timedelta(days=5))
+    eve = _aged("Eve", AgentStatus.ERROR, timedelta(days=60))
+    identities = _identities(ada, bo, cy, dee, eve)
+
+    idle = cluster.idle_agents(
+        identities,
+        last_user_message={ada.id: _NOW - timedelta(days=20), cy.id: _NOW - timedelta(days=2)},
+        last_call={ada.id: _NOW - timedelta(hours=3)},
+        pods=[_pod(f"agent-{ada.id}-7d9f-abcde", labels=_agent_labels(ada.id))],
+        claims=[
+            _claim(f"agent-{ada.id}", "2Gi", _agent_labels(ada.id)),
+            _claim(f"agent-{bo.id}", "1Gi", _agent_labels(bo.id)),
+            _claim("data-postgres-app-0", "10Gi"),
+        ],
+        restore_points={bo.id: (3, 600_000_000)},
+        now=_NOW,
+        idle_after=timedelta(days=14),
+    )
+
+    # Never written to first, then the longest silence. Cy was written to this week, Dee
+    # is too new to judge, and Eve's failure is shown elsewhere.
+    assert [row.agent.agent_name for row in idle] == ["Bo", "Ada"]
+    bo_row, ada_row = idle
+    assert (bo_row.last_user_message_at, bo_row.holds_pod, bo_row.volume_claims, bo_row.requested_bytes) == (
+        None,
+        False,
+        1,
+        _GiB,
+    )
+    assert (bo_row.restore_points, bo_row.restore_point_bytes) == (3, 600_000_000)
+    # A model call three hours ago, with no user message, is the platform waking it, not use.
+    assert (ada_row.last_call_at, ada_row.holds_pod, ada_row.requested_bytes) == (
+        _NOW - timedelta(hours=3),
+        True,
+        2 * _GiB,
+    )
+
+
+def test_what_an_idle_agent_holds_is_unknown_when_the_cluster_could_not_be_read():
+    ada = _aged("Ada", AgentStatus.RUNNING, timedelta(days=60))
+
+    [row] = cluster.idle_agents(
+        _identities(ada),
+        last_user_message={},
+        last_call={},
+        pods=None,
+        claims=None,
+        restore_points={},
+        now=_NOW,
+        idle_after=timedelta(days=14),
+    )
+
+    assert (row.holds_pod, row.volume_claims, row.requested_bytes, row.restore_points) == (None, None, None, 0)
