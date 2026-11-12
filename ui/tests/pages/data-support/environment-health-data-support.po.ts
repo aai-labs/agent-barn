@@ -27,6 +27,7 @@ export function mockEnvironmentHealth(overrides: Record<string, unknown> = {}): 
     namespace: "agent-farm-staging",
     level: "critical",
     peak_window_hours: 24,
+    restart_window_days: 7,
     sources: [
       { source: "pods", state: "available" },
       { source: "deployments", state: "available" },

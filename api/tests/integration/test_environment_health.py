@@ -442,6 +442,55 @@ def test_peaks_that_cannot_be_read_leave_the_current_figures():
         assert_that(lines["limits.cpu"], has_entries(used=10.0, peak=none(), level="ok"))
 
 
+def test_a_pod_oom_killed_through_the_week_is_listed_from_its_restart_history():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-restarts@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_pods.return_value = [_pod("rabbitmq-0"), _pod("agentbarn-api-1")]
+
+        def answer(promql: str, at):
+            if "kube_pod_container_status_restarts_total" in promql:
+                return [
+                    PrometheusSample({"pod": "rabbitmq-0", "signal": "restarts"}, 15.0),
+                    PrometheusSample({"pod": "rabbitmq-0", "signal": "oom_killed"}, 1.0),
+                    PrometheusSample({"pod": "agentbarn-api-1", "signal": "restarts"}, 1.0),
+                ]
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        assert_that(body["restart_window_days"], equal_to(7))
+        assert_that(
+            body["workloads"]["issues"],
+            contains_exactly(
+                has_entries(pod_name="rabbitmq-0", restarts_in_window=15, oom_killed=True, repeatedly_restarting=True)
+            ),
+        )
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_without_restart_history_the_pods_are_still_judged_by_themselves():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-restarts-down@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_pods.return_value = [_pod("worker-1", ready=False, waiting="CrashLoopBackOff")]
+
+        def answer(promql: str, at):
+            if "kube_pod_container_status_restarts_total" in promql:
+                raise PrometheusError("Prometheus request failed: ReadTimeout")
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
+        assert_that(
+            body["workloads"]["issues"],
+            contains_exactly(has_entries(pod_name="worker-1", restarts_in_window=none(), oom_killed=False)),
+        )
+
+
 def test_refused_services_leave_their_line_unknown():
     with given([*_BASE_GIVEN, *_platform_admin("env-admin-services-refused@example.com")]) as context:
         _quiet_cluster(context)

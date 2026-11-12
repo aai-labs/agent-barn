@@ -123,7 +123,11 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
           monitoringState={states.prometheus}
         />
       </div>
-      <WorkloadsPanel workloads={health.workloads} podsState={states.pods} />
+      <WorkloadsPanel
+        workloads={health.workloads}
+        podsState={states.pods}
+        restartWindowDays={health.restartWindowDays}
+      />
       <div className="grid gap-x-6" style={TWO_COLUMNS}>
         <VolumesPanel volumes={health.volumes} state={states.volume_claims} />
         <EventsPanel events={health.events} state={states.events} />
