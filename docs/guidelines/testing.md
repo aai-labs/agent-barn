@@ -149,7 +149,11 @@ every Bot key reference resolves, with a missing key unresolved for that Bot onl
 also runs the real `init-openclaw.js` and `bot-setup.py` through a first Bot, a Bot whose
 Secret is missing, and the last Bot's removal. It must pass on every OpenClaw upgrade.
 `../../api/tests/unit/test_openclaw_bot_setup.py` covers the same scripts on temp
-directories; its two tests that start Bot helpers skip on Windows.
+directories; its two tests that start Bot helpers skip on Windows. The image contract also
+loads the `agentbarn-bot-env` plugin through the pinned loader and hook runner beside a
+second plugin that rewrites `exec`, and proves each agent gets its own values and an
+unknown agent's command is refused. `../../api/tests/unit/test_openclaw_bot_env_plugin.py`
+covers the plugin's rules under Node.
 
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:

@@ -28,7 +28,17 @@ _ORG_ID = uuid4()
 _NS = "agent-farm"
 
 # Supplied only for some Agents; start.sh guards each with `[ -f ... ]`.
-_OPTIONAL = {"aai-cli-setup.sh", "aai-cli-config.toml", "gog-setup.sh", "skills.json", "bots.json", "bot-setup.py"}
+_OPTIONAL = {
+    "aai-cli-setup.sh",
+    "aai-cli-config.toml",
+    "gog-setup.sh",
+    "skills.json",
+    "bots.json",
+    "bot-setup.py",
+    "agentbarn-bot-env-index.js",
+    "agentbarn-bot-env-package.json",
+    "agentbarn-bot-env-plugin.json",
+}
 
 
 def _referenced_files(start_script: Path) -> set[str]:

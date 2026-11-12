@@ -17,7 +17,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules.
 - In transition: an OpenClaw Parent Agent can hold Bots, but starting it does not serve them yet; its pod runs the Parent Agent alone.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the `agentbarn-bot-env` exec plugin.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, start and stop wiring in the service.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,16 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-12 — AF-445 — OpenClaw command environment plugin
+
+- Delivered: plugin `scripts/openclaw/plugins/agentbarn-bot-env`, on `before_tool_call` for `exec` at priority -1000.
+  - A Bot's commands get every value in `/run/agentbarn/bots/<id>`, `AAI_CONFIG` under `bots/<id>` and `ARTIFACT_UPLOAD_ROOTS` set to `workspace-<id>`. Every name in the Parent Agent's Secret that the Bot does not define is blanked, except `FIRECRAWL_API_KEY`, `FIRECRAWL_API_URL`, `LITELLM_BASE_URL`, `LITELLM_PROXY_TARGET` and `LLM_PROXY_PORT`.
+  - The Parent Agent's commands get its own values for its Secret's names. The model's `env` is kept but never wins over either.
+  - An agent with no matching Secret, or no agent id, is refused; the pinned hook runner treats `before_tool_call` as fail-closed and refuses the command. A Bot's code-mode command is refused.
+  - `multi_agent_gateway_config(..., parent_env_names=...)` loads the plugin with the parent's Secret names; the ConfigMap ships it with `bots.json` and `start.sh` installs it.
+- Changed: observed in the pinned runner, `before_tool_call` gives each handler its own copy of the event and keeps the last handler's `params`, so this plugin wins over any earlier one and also replaces that plugin's own parameter changes. None of today's plugins rewrite `exec`.
+- Follow-up: start and stop wiring, which passes the parent's Secret names.
 
 ### 2026-11-11 — AF-445 — OpenClaw in-pod boot
 

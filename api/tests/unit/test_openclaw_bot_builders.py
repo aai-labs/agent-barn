@@ -22,6 +22,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.builders.openclaw import (
     LISTEN_IN_SYSTEM_PROMPT,
     OPENCLAW_WORKSPACE_DIR,
+    START_SH,
     OpenClawBot,
     multi_agent_gateway_config,
     multi_agent_runtime_env,
@@ -306,6 +307,10 @@ def test_the_parents_config_map_carries_the_bot_manifest():
     assert config_map.data["bots.json"] == manifest
     assert config_map.data["bot-setup.py"] == (SCRIPTS / "bot-setup.py").read_text()
     assert config_map.data["bot-run.py"] == (SCRIPTS / "bot-run.py").read_text()
+    plugin = SCRIPTS / "plugins/agentbarn-bot-env"
+    assert config_map.data["agentbarn-bot-env-index.js"] == (plugin / "index.js").read_text()
+    assert config_map.data["agentbarn-bot-env-package.json"] == (plugin / "package.json").read_text()
+    assert config_map.data["agentbarn-bot-env-plugin.json"] == (plugin / "openclaw.plugin.json").read_text()
 
 
 def test_a_parent_without_bots_ships_no_bot_manifest():
@@ -324,4 +329,29 @@ def test_a_parent_without_bots_ships_no_bot_manifest():
         openclaw_config_overlay=_parent(),
     )
 
-    assert not {"bots.json", "bot-setup.py", "bot-run.py"} & set(config_map.data)
+    assert not [name for name in config_map.data if name.startswith(("bots.json", "bot-", "agentbarn-bot-env"))]
+
+
+def test_every_agents_commands_go_through_the_bot_env_plugin_with_the_parents_secret_names():
+    config = multi_agent_gateway_config(_parent(), _bots(), parent_env_names=["MEMORY_API_KEY", "AGENT_ID"])
+    plugins = config["plugins"]
+
+    assert "agentbarn-bot-env" in plugins["allow"]
+    assert plugins["load"]["paths"].count(f"{STATE}/local-plugins/agentbarn-bot-env") == 1
+    assert plugins["entries"]["agentbarn-bot-env"] == {
+        "enabled": True,
+        "config": {"parentNames": ["AGENT_ID", "MEMORY_API_KEY"]},
+    }
+
+
+def test_a_parent_without_bots_does_not_load_the_bot_env_plugin():
+    config = multi_agent_gateway_config(_parent(), [], parent_env_names=["AGENT_ID"])
+
+    assert "agentbarn-bot-env" not in json.dumps(config)
+
+
+def test_startup_installs_the_bot_env_plugin_only_for_a_parent_with_bots():
+    guard = START_SH.index('if [ -f /app/config/bots.json ]; then\n  BOT_ENV_DIR="')
+    install = START_SH.index('cp /app/config/agentbarn-bot-env-index.js "$BOT_ENV_DIR/index.js"')
+
+    assert guard < install < START_SH.index("exec openclaw gateway")

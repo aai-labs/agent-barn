@@ -19,6 +19,13 @@ mkdir -p "$OBSERVER_DIR"
 cp /app/config/agentbarn-observer-index.js "$OBSERVER_DIR/index.js"
 cp /app/config/agentbarn-observer-package.json "$OBSERVER_DIR/package.json"
 cp /app/config/agentbarn-observer-plugin.json "$OBSERVER_DIR/openclaw.plugin.json"
+if [ -f /app/config/bots.json ]; then
+  BOT_ENV_DIR="/home/node/.openclaw/local-plugins/agentbarn-bot-env"
+  mkdir -p "$BOT_ENV_DIR"
+  cp /app/config/agentbarn-bot-env-index.js "$BOT_ENV_DIR/index.js"
+  cp /app/config/agentbarn-bot-env-package.json "$BOT_ENV_DIR/package.json"
+  cp /app/config/agentbarn-bot-env-plugin.json "$BOT_ENV_DIR/openclaw.plugin.json"
+fi
 sh /app/config/legacy-workspace-migration.sh || echo "[start] legacy workspace migration failed; continuing"
 
 OPENCLAW_VERSION="$(openclaw --version | cut -d' ' -f2)"

@@ -38,6 +38,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_BOT_ENV = _SCRIPTS / "plugins" / "agentbarn-bot-env"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -90,6 +91,9 @@ AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").rea
 FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 BOT_SETUP_PY: str = (_SCRIPTS / "bot-setup.py").read_text()
 BOT_RUN_PY: str = (_SCRIPTS / "bot-run.py").read_text()
+BOT_ENV_INDEX_JS: str = (_BOT_ENV / "index.js").read_text()
+BOT_ENV_PACKAGE_JSON: str = (_BOT_ENV / "package.json").read_text()
+BOT_ENV_PLUGIN_JSON: str = (_BOT_ENV / "openclaw.plugin.json").read_text()
 
 
 def _openclaw_config_core(
@@ -167,6 +171,7 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_BOT_ENV_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-bot-env"
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
@@ -301,7 +306,7 @@ def _multi_agent_channels(parent_channels: dict, bots: Sequence[OpenClawBot]) ->
     return channels, bindings
 
 
-def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot]) -> dict:
+def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot], parent_env_names: Sequence[str] = ()) -> dict:
     if not bots:
         return parent
     config = copy.deepcopy(parent)
@@ -333,6 +338,9 @@ def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot]) -> dic
         )
         if _OBSERVER_PLUGIN_PATH not in plugins["load"]["paths"]:
             plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
+    plugins["allow"].append("agentbarn-bot-env")
+    plugins["load"]["paths"].append(_BOT_ENV_PLUGIN_PATH)
+    plugins["entries"]["agentbarn-bot-env"] = {"enabled": True, "config": {"parentNames": sorted(parent_env_names)}}
     plugins["entries"]["active-memory"]["config"]["agents"] = [MAIN_AGENT_ID, *(str(bot.id) for bot in bots)]
     hindsight = plugins["entries"]["hindsight-openclaw"]
     if hindsight["enabled"]:
@@ -618,6 +626,9 @@ def build_config_map(
         data["bots.json"] = bots_manifest
         data["bot-setup.py"] = BOT_SETUP_PY
         data["bot-run.py"] = BOT_RUN_PY
+        data["agentbarn-bot-env-index.js"] = BOT_ENV_INDEX_JS
+        data["agentbarn-bot-env-package.json"] = BOT_ENV_PACKAGE_JSON
+        data["agentbarn-bot-env-plugin.json"] = BOT_ENV_PLUGIN_JSON
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

@@ -1,10 +1,11 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from uuid import UUID
 
 import pytest
-from hamcrest import assert_that, contains_inanyorder, equal_to, has_entries
+from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_entries
 
 from api.domains.agents.builders import build_openclaw_gateway_config, native_telegram_channel
 from api.domains.agents.builders.openclaw import OpenClawBot, multi_agent_gateway_config
@@ -13,12 +14,22 @@ from api.runtime_tests.memory_helpers import selected_image
 REPO = Path(__file__).resolve().parents[2]
 CHECK_SCRIPT = Path(__file__).parent / "fixtures" / "openclaw_bots_check.sh"
 BOOT_SCRIPT = Path(__file__).parent / "fixtures" / "openclaw_bots_boot_check.sh"
+HOOK_DRIVER = Path(__file__).parent / "fixtures" / "openclaw_bot_env_hook_driver.mjs"
 SCRIPTS = REPO / "api" / "domains" / "agents" / "scripts" / "openclaw"
 PLUGINS = SCRIPTS / "plugins"
 PROXY = "http://localhost:8090"
 BOT_A = UUID("0000000a-0000-4000-8000-00000000000a")
 BOT_B = UUID("0000000b-0000-4000-8000-00000000000b")
 STATE = "/home/node/.openclaw"
+REWRITER = """export default {
+  id: "exec-rewriter",
+  register(api) {
+    api.on("before_tool_call", (event) => ({
+      params: { ...event.params, env: { ...(event.params.env || {}), AGENT_ID: "rewriter", REWRITER: "1" } },
+    }), { priority: 10, matcher: ["exec"] });
+  },
+};
+"""
 
 
 @pytest.fixture
@@ -201,3 +212,74 @@ def test_bots_come_and_go_through_the_boot_scripts_on_the_saved_config(openclaw_
     assert_that("ownership" in saved["agents"] or "entries" in saved["agents"], equal_to(False))
     assert_that([name for name in saved["models"]["providers"] if name.startswith("litellm-bot-")], equal_to([]))
     assert_that("secrets" in saved, equal_to(False))
+
+
+def _hooks(image: str, root: Path) -> dict:
+    plugins, secret = root / "plugins", root / "secrets" / str(BOT_A)
+    shutil.copytree(PLUGINS / "agentbarn-bot-env", plugins / "agentbarn-bot-env")
+    rewriter = plugins / "exec-rewriter"
+    rewriter.mkdir(parents=True)
+    (rewriter / "index.js").write_text(REWRITER)
+    (rewriter / "package.json").write_text(
+        json.dumps(
+            {"name": "exec-rewriter", "version": "1.0.0", "type": "module", "openclaw": {"extensions": ["./index.js"]}}
+        )
+    )
+    (rewriter / "openclaw.plugin.json").write_text(
+        json.dumps({"id": "exec-rewriter", "configSchema": {"type": "object", "additionalProperties": False}})
+    )
+    secret.mkdir(parents=True)
+    for name, value in {"AGENT_ID": str(BOT_A), "ARTIFACT_API_KEY": "artifact-a"}.items():
+        (secret / name).write_text(value)
+    completed = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "-e",
+            f"BOT_A={BOT_A}",
+            "-e",
+            "PARENT_NAMES=" + json.dumps(["AGENT_ID", "ARTIFACT_API_KEY", "MEMORY_API_KEY"]),
+            "-e",
+            "AGENT_ID=parent-id",
+            "-e",
+            "ARTIFACT_API_KEY=artifact-parent",
+            "-e",
+            "MEMORY_API_KEY=memory-parent",
+            "-v",
+            f"{plugins}:/plugins:ro",
+            "-v",
+            f"{root / 'secrets'}:/run/agentbarn/bots:ro",
+            "-v",
+            f"{HOOK_DRIVER}:/driver.mjs:ro",
+            "--entrypoint",
+            "sh",
+            image,
+            "-c",
+            "cp -r /plugins /tmp/plugins && chmod -R go-w /tmp/plugins && node /driver.mjs",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=110,
+    )
+    assert_that(completed.returncode, equal_to(0), completed.stdout + completed.stderr)
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_the_real_hook_runner_gives_each_agents_commands_their_own_values(openclaw_image: str, tmp_path: Path):
+    result = _hooks(openclaw_image, tmp_path)
+
+    assert_that(result["diagnostics"], equal_to([]))
+    bot = result["bot"]["result"]["params"]["env"]
+    assert_that(
+        bot,
+        has_entries(AGENT_ID=str(BOT_A), ARTIFACT_API_KEY="artifact-a", MEMORY_API_KEY="", EXTRA="kept"),
+    )
+    assert_that("REWRITER" in bot, equal_to(False))
+    parent = result["parent"]["result"]["params"]["env"]
+    assert_that(parent, has_entries(AGENT_ID="parent-id", MEMORY_API_KEY="memory-parent", EXTRA="kept"))
+    assert_that(result["unknown"], has_entries(error=contains_string("agentbarn-bot-env failed")))
+    assert_that(result["read"], equal_to({"result": None}))
