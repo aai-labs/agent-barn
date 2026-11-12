@@ -33,7 +33,7 @@ changes the default Agent without saving a version.
 `POST /workflows/{id}/archive` also requires `expected_revision` and retains
 saved versions. Every Member of the Organization can read and create workflows;
 saving a version, changing the default Agent and archiving are limited to the
-workflow's creator and Organization Owners and Admins (403 otherwise), and need a
+workflow's creator and holders of the Organization Permission `workflow.manage`, which Owners and Admins hold (403 otherwise), and need a
 full-access key. Describe what a step should produce in its `goal`; the separate
 `artifact_description` field is legacy and is folded into the goal on save.
 Consult [OpenAPI](/api/v1/openapi.json)

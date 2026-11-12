@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi_injector import Injected
 
 from api.domains.workflows.routes import Context
@@ -16,8 +16,15 @@ from api.domains.workflows.run_models import (
 from api.domains.workflows.run_service import WorkflowRunService
 from api.infrastructure.shared.models import PaginatedItems
 
+
+def _organization(organization_id: UUID) -> None:
+    """Declares the path's Organization, which the request context authorizes, in the API description."""
+
+
 # Runs are addressed by their own id; the Agent that runs one is data on the run, not part of its address.
-router = APIRouter(prefix="/organizations/{organization_id}/workflow-runs", tags=["workflows"])
+router = APIRouter(
+    prefix="/organizations/{organization_id}/workflow-runs", tags=["workflows"], dependencies=[Depends(_organization)]
+)
 Service = Annotated[WorkflowRunService, Injected(WorkflowRunService)]
 Page = Annotated[int, Query(ge=1)]
 Size = Annotated[int, Query(ge=1, le=100)]

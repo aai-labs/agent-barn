@@ -22,7 +22,7 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Added: an optional default Agent per workflow (preselects only, grants nothing, hidden from Members who cannot read that Agent) and an optional run title. Runs of a deleted Agent stay readable and read-only, shown against an archived Agent.
 - Changed: a step's expected output is part of its goal. `artifact_description` is legacy: new saves fold it into the goal, and versions saved earlier still honour it.
 - UI: an Organization Workflows page with Runs and Workflows tabs owns creating, editing, duplicating, archiving and starting; the Agent's Workflows tab shows only that Agent's runs and approvals.
-- Migration: `e4b439a1c7d2` after `d1a390e7b2c4`; existing workflows keep their Agent as the default, and their creator becomes the Organization's Owner, else its earliest Admin. Snapshots, attempts, approvals, the runtime routes and the trigger server are unchanged. The downgrade is lossy; see the [specification](../agent-workflows.md#organization-ownership-migration-af-439).
+- Migration: `e4b439a1c7d2` after `d1a390e7b2c4`; existing workflows keep their Agent as the default, and their creator becomes the Organization's Owner, else its earliest Admin, else nobody. Snapshots, attempts, approvals, the runtime routes and the trigger server are unchanged. The downgrade is lossy; see the [specification](../agent-workflows.md#organization-ownership-migration-af-439).
 - Deferred: workflow categories, semantic versions and further step types.
 
 ### 2026-11-10 — AF-390 — [PR #365](https://github.com/aai-labs/agent-barn/pull/365) — workflow approvals
