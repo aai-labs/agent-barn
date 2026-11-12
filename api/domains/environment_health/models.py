@@ -306,6 +306,25 @@ class WarningEventRead(PydanticBaseModel):
     detail: str | None = None
 
 
+class IdleAgentRead(PydanticBaseModel):
+    """A running or stopped Agent no one has written to for `idle_after_days`: a cleanup candidate.
+
+    What it holds is what deleting it would free. A figure that could not be read is None.
+    """
+
+    agent: AgentRefRead
+    # The newest message a person sent it. None when no one ever has.
+    last_user_message_at: datetime | None = None
+    # Its newest model call, for context. The platform wakes Agents on its own, so a recent
+    # call with no user message does not make an Agent in use.
+    last_call_at: datetime | None = None
+    holds_pod: bool | None = None
+    volume_claims: int | None = None
+    requested_bytes: int | None = None
+    restore_points: int = 0
+    restore_point_bytes: int = 0
+
+
 class EnvironmentHealthRead(PydanticBaseModel):
     observed_at: datetime
     namespace: str
@@ -328,4 +347,7 @@ class EnvironmentHealthRead(PydanticBaseModel):
     workloads: WorkloadsRead = Field(default_factory=WorkloadsRead)
     unhealthy_runtimes: list[UnhealthyRuntimeRead] = Field(default_factory=list)
     failed_agents: list[FailedAgentRead] = Field(default_factory=list)
+    idle_agents: list[IdleAgentRead] = Field(default_factory=list)
+    # How long without a user message before an Agent is listed in `idle_agents`.
+    idle_after_days: int = 14
     events: list[WarningEventRead] = Field(default_factory=list)

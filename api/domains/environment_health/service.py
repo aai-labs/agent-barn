@@ -3,13 +3,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypeVar
+from uuid import UUID
 
 from injector import inject, singleton
 from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Service
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config import ConfigException
 
+from api.domains.activity.service import ActivityService
+from api.domains.agents.models import PlatformAgentIdentity
 from api.domains.agents.repository import AgentRepository
+from api.domains.conversations.service import ConversationService
 from api.domains.environment_health import cluster
 from api.domains.environment_health.models import (
     CapacityLevel,
@@ -24,6 +28,7 @@ from api.domains.environment_health.models import (
     FailedAgentRead,
     FiringAlertRead,
     HealthLevel,
+    IdleAgentRead,
     RolloutState,
     ScheduledBackupsRead,
     SourceState,
@@ -46,6 +51,8 @@ PEAK_WINDOW_HOURS = 24
 RESTART_WINDOW_DAYS = cluster.RESTART_HISTORY_WINDOW.days
 # How far back a failed scheduled backup is news.
 BACKUP_FAILURE_WINDOW_HOURS = 24
+# How long with no message from a person before a running or stopped Agent is a cleanup candidate.
+IDLE_AFTER_DAYS = 14
 
 T = TypeVar("T")
 
@@ -139,6 +146,8 @@ class EnvironmentHealthService:
     resource_limits_service: ResourceLimitsService
     platform_usage_service: PlatformResourceUsageService
     restore_point_service: RestorePointService
+    conversation_service: ConversationService
+    activity_service: ActivityService
 
     def get_health(self) -> EnvironmentHealthRead:
         now = datetime.now(UTC)
@@ -206,6 +215,7 @@ class EnvironmentHealthService:
             runtime_samples or [], identities, cluster.agent_pod_readiness(pods or [])
         )
         failed = cluster.failed_agents(self.agent_repository.find_failed_for_platform())
+        idle = self._idle_agents(now, identities, pods, claims)
         ceilings = self.resource_limits_service.get_limits()
         capacity = self._capacity(now, ceilings, quotas, claims, pods, kube_services)
         volumes = cluster.volume_allocation(claims or [], identities)
@@ -242,7 +252,29 @@ class EnvironmentHealthService:
             workloads=workloads,
             unhealthy_runtimes=unhealthy,
             failed_agents=failed,
+            idle_agents=idle,
+            idle_after_days=IDLE_AFTER_DAYS,
             events=warnings,
+        )
+
+    def _idle_agents(
+        self,
+        now: datetime,
+        identities: dict[UUID, PlatformAgentIdentity],
+        pods: list[V1Pod] | None,
+        claims: list[V1PersistentVolumeClaim] | None,
+    ) -> list[IdleAgentRead]:
+        """Cleanup candidates. Every read is of the database except what each one holds in the cluster."""
+        candidates = [agent_id for agent_id, identity in identities.items() if identity.status in cluster.IDLE_STATUSES]
+        return cluster.idle_agents(
+            identities,
+            last_user_message=self.conversation_service.latest_inbound_times_for_platform(candidates),
+            last_call=self.activity_service.latest_call_times_for_platform(candidates),
+            pods=pods,
+            claims=claims,
+            restore_points=self.restore_point_service.ready_totals_for_platform(candidates),
+            now=now,
+            idle_after=timedelta(days=IDLE_AFTER_DAYS),
         )
 
     def _capacity(

@@ -115,6 +115,29 @@ class ActivityRepository:
             ).all()
         return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
 
+    def latest_call_times_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, datetime]:
+        """Latest successful Agent model call per Agent, platform-wide, memory calls excluded.
+
+        For Platform oversight behind `require_platform_admin` only: there is no Organization scope.
+        """
+        if not agent_ids:
+            return {}
+        latest_call = (
+            select(CostRecord.occurred_at)
+            .where(
+                col(CostRecord.agent_id) == col(Agent.id),
+                col(CostRecord.is_memory).is_(False),
+                col(CostRecord.status) == COST_RECORD_STATUS_SUCCESS,
+            )
+            .order_by(col(CostRecord.occurred_at).desc())
+            .limit(1)
+            .correlate(Agent)
+            .scalar_subquery()
+        )
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(select(Agent.id, latest_call).where(col(Agent.id).in_(agent_ids))).all()
+        return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
+
     # --- Shared shape ------------------------------------------------------
 
     def _predicates(self, agent_id: UUID, organization_id: UUID, window: StatsWindow) -> list:

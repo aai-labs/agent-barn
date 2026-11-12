@@ -82,6 +82,19 @@ export const ScheduledBackupsSchema = z.object({
 });
 export type ScheduledBackups = z.infer<typeof ScheduledBackupsSchema>;
 
+/** A running or stopped agent no one has written to in `idleAfterDays`: a cleanup candidate. */
+export const IdleAgentSchema = z.object({
+  agent: AgentRefSchema,
+  lastUserMessageAt: z.string().nullable().default(null),
+  lastCallAt: z.string().nullable().default(null),
+  holdsPod: z.boolean().nullable().default(null),
+  volumeClaims: z.number().int().nullable().default(null),
+  requestedBytes: z.number().nullable().default(null),
+  restorePoints: z.number().int().default(0),
+  restorePointBytes: z.number().default(0),
+});
+export type IdleAgent = z.infer<typeof IdleAgentSchema>;
+
 export const FiringAlertSchema = z.object({
   name: z.string(),
   severity: z.string().nullable().default(null),
@@ -213,6 +226,8 @@ export const EnvironmentHealthSchema = z.object({
   }),
   unhealthyRuntimes: z.array(UnhealthyRuntimeSchema).default([]),
   failedAgents: z.array(FailedAgentSchema).default([]),
+  idleAgents: z.array(IdleAgentSchema).default([]),
+  idleAfterDays: z.number().int().default(14),
   events: z.array(WarningEventSchema).default([]),
 });
 export type EnvironmentHealth = z.infer<typeof EnvironmentHealthSchema>;

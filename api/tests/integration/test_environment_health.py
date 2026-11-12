@@ -58,6 +58,8 @@ from api.infrastructure.prometheus.client import PrometheusClient, PrometheusErr
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
+from api.tests.steps.conversation import there_is_a_recorded_message
+from api.tests.steps.cost import cost_records_are_clean, there_are_cost_records
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.resource_usage import MockPrometheusModule, prometheus_is_not_configured
@@ -702,6 +704,57 @@ def test_with_scheduled_backups_switched_off_none_are_overdue():
         body = _get(context).json()
 
         assert_that(body["backups"], has_entries(enabled=False, failed=[], overdue=[]))
+        assert_that(body["level"], equal_to("ok"))
+
+
+def test_agents_no_one_wrote_to_for_two_weeks_are_listed_with_what_they_hold():
+    with given(
+        [
+            # Off, so the overdue backups of these month-old Agents do not decide the level.
+            set_env_variable({"RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES": "0"}),
+            *_BASE_GIVEN,
+            cost_records_are_clean(),
+            _two_organizations("env-idle-1@example.com", "env-idle-2@example.com"),
+            *_platform_admin("env-admin-idle@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        ada, cy = context.ada, context.cy
+        there_is_an_agent(name="Bo", status=AgentStatus.RUNNING)(context)
+        bo = context.agent
+        for agent in (ada, bo, cy):
+            _backdate(context, agent, timedelta(days=30))
+        now = datetime.now(UTC)
+        # Ada was last written to three weeks ago, but the platform woke it an hour ago.
+        context.agent = ada
+        there_is_a_recorded_message(occurred_at=now - timedelta(days=21))(context)
+        there_are_cost_records(agent_id=ada.id, occurred_at=now - timedelta(hours=1))(context)
+        _scheduled(context, ada, RestorePointStatus.READY, timedelta(hours=2))
+        # Bo was written to yesterday; Cy, stopped, never.
+        context.agent = bo
+        there_is_a_recorded_message(occurred_at=now - timedelta(days=1))(context)
+        _cluster(context).list_pvcs.return_value = [_claim(f"agent-{ada.id}", "2Gi", _agent_labels(ada.id))]
+        _cluster(context).list_pods.return_value = [_pod(f"agent-{ada.id}-1-a", _agent_labels(ada.id))]
+
+        body = _get(context).json()
+
+        assert_that(body["idle_after_days"], equal_to(14))
+        assert_that(
+            body["idle_agents"],
+            contains_exactly(
+                has_entries(agent=has_entries(agent_name="Cy"), last_user_message_at=none(), holds_pod=False),
+                has_entries(
+                    agent=has_entries(agent_name="Ada", organization_name=context.acme.name),
+                    last_user_message_at=not_none(),
+                    last_call_at=not_none(),
+                    holds_pod=True,
+                    volume_claims=1,
+                    requested_bytes=2 * _GiB,
+                    restore_points=1,
+                ),
+            ),
+        )
+        # A cleanup candidate is not a fault.
         assert_that(body["level"], equal_to("ok"))
 
 

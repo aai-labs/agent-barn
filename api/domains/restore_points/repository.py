@@ -236,6 +236,25 @@ class RestorePointRepository:
                 for agent_id, taken_at in session.exec(query).all()
             ]
 
+    def ready_totals_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, tuple[int, int]]:
+        """Per Agent, how many READY restore points it keeps and their archive bytes. Platform-wide."""
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(
+                    col(AgentRestorePoint.agent_id),
+                    func.count(),
+                    func.coalesce(func.sum(AgentRestorePoint.archive_bytes), 0),
+                )
+                .where(
+                    col(AgentRestorePoint.agent_id).in_(agent_ids),
+                    col(AgentRestorePoint.status) == RestorePointStatus.READY,
+                )
+                .group_by(col(AgentRestorePoint.agent_id))
+            )
+            return {agent_id: (count, int(total or 0)) for agent_id, count, total in session.exec(query).all()}
+
     def find_agent_ids_over_retention(self, *, scheduled_cap: int, manual_cap: int) -> list[UUID]:
         """Agents retention would remove a restore point from, by the rules of `enforce_retention`.
 
