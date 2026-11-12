@@ -67,3 +67,23 @@ export function changedByOthers(
     );
   return lines;
 }
+
+/**
+ * A step's expected output is part of its instructions. Versions saved before that kept
+ * it in a separate field; opening one for editing folds the text into the goal, the same
+ * way the API folds it on save.
+ */
+export function foldStepOutputs(draft: WorkflowDraft): WorkflowDraft {
+  return {
+    ...draft,
+    steps: draft.steps.map((step) =>
+      step.artifactDescription
+        ? {
+            ...step,
+            goal: `${step.goal}\n\nOutput: ${step.artifactDescription}`,
+            artifactDescription: null,
+          }
+        : { ...step, artifactDescription: null },
+    ),
+  };
+}

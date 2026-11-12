@@ -22,44 +22,92 @@ import { workflowsKey } from "./use-workflows";
 
 const HISTORY_PAGE = 100;
 
-function useRunScope(agentId: string) {
+/** Runs are addressed by their own id; the Agent that runs one is a filter or a field, never the path. */
+function useRunScope() {
   const organizationId =
     useOrganizationContext().selectedOrganization?.id ?? "";
   return {
     // Not useOrganizationApiBase, which throws: the navigation badge also runs with no Organization.
-    base: `/api/v1/organizations/${organizationId}/agents/${agentId}`,
-    key: [...workflowsKey.all, "runs", { organizationId, agentId }] as const,
-    enabled: Boolean(organizationId && agentId),
+    base: `/api/v1/organizations/${organizationId}/workflow-runs`,
+    key: [...workflowsKey.all, "runs", { organizationId }] as const,
+    enabled: Boolean(organizationId),
   };
 }
 
-/** Every run of this Agent across its workflows, newest first. */
-export function useAgentRuns(agentId: string, page: number) {
-  const scope = useRunScope(agentId);
+export type WorkflowRunFilters = {
+  /** Only this Agent's runs. */
+  agentId?: string;
+  /** Only runs of this workflow. */
+  workflowId?: string;
+  /** `active` runs are still in flight; `settled` ones have ended. */
+  status?: "active" | "settled";
+  pageSize?: number;
+};
+
+const runQuery = (filters: WorkflowRunFilters, extra: Record<string, string>) => {
+  const params = new URLSearchParams(extra);
+  if (filters.agentId) params.set("agent_id", filters.agentId);
+  if (filters.workflowId) params.set("workflow_id", filters.workflowId);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.pageSize) params.set("page_size", String(filters.pageSize));
+  return params.toString();
+};
+
+/** Runs on every Agent the viewer can read, newest first, narrowed by the filters. */
+export function useWorkflowRuns(
+  filters: WorkflowRunFilters,
+  page: number,
+  enabled = true,
+) {
+  const scope = useRunScope();
   return useQuery({
-    queryKey: [...scope.key, "list", "all", page],
-    enabled: scope.enabled,
+    queryKey: [...scope.key, "list", filters, page],
+    enabled: scope.enabled && enabled,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       !query.state.error &&
-      query.state.data?.items.some((run) => isRunProgressing(run.state))
+      (filters.status === "active" ||
+        query.state.data?.items.some((run) => isRunProgressing(run.state)))
         ? 3000
         : false,
     queryFn: async () =>
       (
         await api.get<WorkflowRunList>(
-          `${scope.base}/workflow-runs?page=${page}`,
+          `${scope.base}?${runQuery(filters, { page: String(page) })}`,
           { schema: WorkflowRunListSchema },
         )
       ).data,
   });
 }
 
-/** Runs of this Agent with a request awaiting a decision: the approvals inbox and its badge. */
-export function useAwaitingApprovals(agentId: string, enabled = true) {
-  const scope = useRunScope(agentId);
+/** Reads the newest run of a workflow the viewer can see, on demand. */
+export function useLatestWorkflowRun() {
+  const scope = useRunScope();
+  const client = useQueryClient();
+  return async (workflowId: string) =>
+    (
+      await client.fetchQuery({
+        queryKey: [...scope.key, "latest", workflowId],
+        staleTime: 0,
+        queryFn: async () =>
+          (
+            await api.get<WorkflowRunList>(
+              `${scope.base}?${runQuery({ workflowId, pageSize: 1 }, {})}`,
+              { schema: WorkflowRunListSchema },
+            )
+          ).data,
+      })
+    ).items[0] ?? null;
+}
+
+/**
+ * Runs with a request awaiting a decision: the approvals inbox and its badge. With an
+ * Agent, only that Agent's runs; without one, every Agent the viewer can read.
+ */
+export function useAwaitingApprovals(agentId?: string, enabled = true) {
+  const scope = useRunScope();
   return useQuery({
-    queryKey: [...scope.key, "awaiting-decision"],
+    queryKey: [...scope.key, "awaiting-decision", agentId ?? "all"],
     enabled: scope.enabled && enabled,
     refetchOnWindowFocus: true,
     // A live request closes within minutes, so the inbox checks often.
@@ -67,15 +115,15 @@ export function useAwaitingApprovals(agentId: string, enabled = true) {
     queryFn: async () =>
       (
         await api.get<WorkflowRunList>(
-          `${scope.base}/workflow-runs?awaiting_decision=true&page_size=20`,
+          `${scope.base}?${runQuery({ agentId, pageSize: 20 }, { awaiting_decision: "true" })}`,
           { schema: WorkflowRunListSchema },
         )
       ).data,
   });
 }
 
-export function useWorkflowRun(agentId: string, runId: string) {
-  const scope = useRunScope(agentId);
+export function useWorkflowRun(runId: string) {
+  const scope = useRunScope();
   return useQuery({
     queryKey: [...scope.key, runId],
     enabled: scope.enabled && Boolean(runId),
@@ -88,19 +136,15 @@ export function useWorkflowRun(agentId: string, runId: string) {
         : false,
     queryFn: async () =>
       (
-        await api.get<WorkflowRun>(`${scope.base}/workflow-runs/${runId}`, {
+        await api.get<WorkflowRun>(`${scope.base}/${runId}`, {
           schema: WorkflowRunSchema,
         })
       ).data,
   });
 }
 
-export function useWorkflowRunHistory(
-  agentId: string,
-  runId: string,
-  revision: number,
-) {
-  const scope = useRunScope(agentId);
+export function useWorkflowRunHistory(runId: string, revision: number) {
+  const scope = useRunScope();
   return useQuery({
     // Every history event bumps the run revision, so the key refetches exactly when it changes.
     queryKey: [...scope.key, runId, "history", revision],
@@ -109,29 +153,35 @@ export function useWorkflowRunHistory(
     queryFn: async () =>
       (
         await api.get<WorkflowRunHistory>(
-          `${scope.base}/workflow-runs/${runId}/history?page_size=${HISTORY_PAGE}&newest_first=true`,
+          `${scope.base}/${runId}/history?page_size=${HISTORY_PAGE}&newest_first=true`,
           { schema: WorkflowRunHistorySchema },
         )
       ).data,
   });
 }
 
-export function useWorkflowRunActions(agentId: string) {
-  const scope = useRunScope(agentId);
+export function useWorkflowRunActions() {
+  const scope = useRunScope();
   const client = useQueryClient();
   const invalidate = () => client.invalidateQueries({ queryKey: scope.key });
   const start = useMutation({
     mutationFn: async (payload: {
       workflowId: string;
+      /** The Agent chosen to run every step of this run. */
+      agentId: string;
       versionId: string;
+      title?: string;
       clientRequestId: string;
       inputs: Record<string, WorkflowInputValue>;
     }) =>
       (
         await api.post<WorkflowRun>(
-          `${scope.base}/workflows/${payload.workflowId}/runs`,
+          scope.base,
           {
+            workflowId: payload.workflowId,
+            agentId: payload.agentId,
             versionId: payload.versionId,
+            ...(payload.title?.trim() ? { title: payload.title.trim() } : {}),
             clientRequestId: payload.clientRequestId,
             inputs: payload.inputs,
           },
@@ -147,7 +197,7 @@ export function useWorkflowRunActions(agentId: string) {
     mutationFn: async (run: WorkflowRun) =>
       (
         await api.post<WorkflowRun>(
-          `${scope.base}/workflow-runs/${run.id}/cancel`,
+          `${scope.base}/${run.id}/cancel`,
           { expectedRevision: run.revision },
           { schema: WorkflowRunSchema },
         )
@@ -165,7 +215,7 @@ export function useWorkflowRunActions(agentId: string) {
     }) =>
       (
         await api.post<WorkflowRun>(
-          `${scope.base}/workflow-runs/${run.id}/re-run`,
+          `${scope.base}/${run.id}/re-run`,
           { clientRequestId },
           { schema: WorkflowRunSchema },
         )
@@ -187,7 +237,7 @@ export function useWorkflowRunActions(agentId: string) {
     }) =>
       (
         await api.post<WorkflowRun>(
-          `${scope.base}/workflow-runs/${run.id}/approvals/${run.approval!.id}/decision`,
+          `${scope.base}/${run.id}/approvals/${run.approval!.id}/decision`,
           { decision, ...(guidance?.trim() ? { guidance: guidance.trim() } : {}) },
           { schema: WorkflowRunSchema },
         )
