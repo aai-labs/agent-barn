@@ -83,6 +83,20 @@ OPENCLAW_EXCLUDED = (
     "workspace/TOOLS.md",
 )
 
+OPENCLAW_BOT_WORKSPACE = re.compile(r"^workspace-[^/]+/(.+)$")
+OPENCLAW_BOT_WORKSPACE_EXCLUDED = (
+    "skills",
+    "AGENTS.md",
+    "BOOT.md",
+    "BOOTSTRAP.md",
+    "HEARTBEAT.md",
+    "IDENTITY.md",
+    "SOUL.md",
+    "TOOLS.md",
+)
+OPENCLAW_BOT_HOME = re.compile(r"^bots/[^/]+/(.+)$")
+OPENCLAW_BOT_HOME_EXCLUDED = (".config", ".local", "aai-cli")
+
 
 class ArchiveValidationError(Exception):
     pass
@@ -98,6 +112,12 @@ def _matches_prefix(rel_path: str, prefixes: tuple[str, ...]) -> bool:
 
 def is_excluded(rel_path: str, runtime: str) -> bool:
     if runtime != RUNTIME_HERMES:
+        for pattern, excluded in (
+            (OPENCLAW_BOT_WORKSPACE, OPENCLAW_BOT_WORKSPACE_EXCLUDED),
+            (OPENCLAW_BOT_HOME, OPENCLAW_BOT_HOME_EXCLUDED),
+        ):
+            if bot_file := pattern.match(rel_path):
+                return _matches_prefix(bot_file.group(1), excluded)
         return _matches_prefix(rel_path, OPENCLAW_EXCLUDED)
     bot_file = HERMES_BOT_PROFILE.match(rel_path)
     path, excluded = (bot_file.group(1), HERMES_BOT_EXCLUDED) if bot_file else (rel_path, HERMES_EXCLUDED)

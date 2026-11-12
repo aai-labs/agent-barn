@@ -17,7 +17,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing for OpenClaw beyond the slices still to come.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, Restore Point exclusions for Bot files.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the UI for Bots on OpenClaw Parent Agents.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,12 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-12 — AF-445 — OpenClaw Bot Restore Point exclusions
+
+- Delivered: `restore_point_job.py` leaves out, for each top-level `workspace-<id>/`, the Markdown `bot-setup.py` rewrites and `skills/`, and for each `bots/<id>/`, `.config` (aai-cli config, direct-mode gog keyring), `.local` and `aai-cli` (encrypted store and key). A Bot's `agents/<id>` sessions, `USER.md`, own work and trigger receipts are kept. Tests tie each rule to the code that writes the path.
+- Changed: none outside the exclusion sets. Capture tests need `os.O_NOFOLLOW`, so they run on Linux only; all 104 passed there.
+- Follow-up: the UI.
 
 ### 2026-11-12 — AF-445 — OpenClaw account guard
 
