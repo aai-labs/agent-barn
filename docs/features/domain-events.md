@@ -351,7 +351,7 @@ Changes to the Platform Event Delivery Monitor's summary/explorer response contr
 Workflow run transitions stage `workflow.run.changed` v1 with the run identity,
 revision and state only, alongside their ledger/history transaction. The
 `workflow.controller` handler advances durable intent and dispatches steps to the
-owning Agent through the Kubernetes client. It tolerates duplicate events and
+Agent running the run through the Kubernetes client. It tolerates duplicate events and
 uses the same cluster access as the API. Services and the controller enqueue
 staged delivery IDs immediately after each successful ledger commit, including
 starts, cancellation, step results, failures and recovery transitions. Broker

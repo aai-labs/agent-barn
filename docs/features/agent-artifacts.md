@@ -78,7 +78,7 @@ undeleted Agent. It rotates on restart and stops resolving when the Agent stops.
 The API derives Organization/Agent identity; callers cannot supply another bucket
 or object key. Agents receive no S3 credentials. Ordinary chat publication needs
 no workflow. Workflow publication additionally requires the current attempt ID,
-run generation/state/deadline, authenticated owning Agent and current initiating
+run generation/state/deadline, the authenticated Agent running that run and current initiating
 Membership authority. Those fences are checked before storage and again before
 READY. Only the artifact lock crosses S3 I/O; finalization releases that lock before
 acquiring run then artifact locks and repeating the fence. Cancellation and completion
@@ -87,7 +87,7 @@ Agent-scoped tools remain available in ordinary sessions. The completion bearer 
 held by the trigger server and never enters the model prompt or file-tool arguments.
 Human publication cannot attach bytes to a workflow-staged artifact.
 
-The owning Agent is the runtime trust boundary. Ordinary chat, workflow and
+The Agent is the runtime trust boundary. Ordinary chat, workflow and
 integration-driven sessions share that Agent's runtime identity and tool authority;
 any of those sessions can publish files to a current attempt of that same Agent
 when it knows the attempt ID. Attempt IDs are provenance identifiers, not secrets
@@ -329,7 +329,7 @@ progressing runs and stops when settled or parked. Download URLs must use HTTP(S
 CLI publication returns actual identity/checksum and a signed URL. The Agent may
 share it using existing native messaging tools under its configured policy.
 Publication/link creation does not authorize or perform an external send. Workflow
-steps remain sessions inside the existing owning Agent with its current tools,
+steps remain sessions inside the Agent chosen for the run with its current tools,
 Integrations, approval policy and spend limits.
 
 ## Retention, deletion and recovery

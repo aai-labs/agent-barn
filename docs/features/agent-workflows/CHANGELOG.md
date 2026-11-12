@@ -15,6 +15,16 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-11-12 — AF-439 — PR pending — Organization-owned workflows run by Agents
+
+- Changed: a workflow belongs to the Organization instead of one Agent, and each run names the Agent that runs it. Any Member reads and creates workflows; the creator and Organization Owners/Admins save versions, change the default Agent and archive. Runs need `agent.update` on their Agent to start, cancel, decide or re-run and `agent.read` to be seen. Decision record: [`2026-11-12-organization-owned-workflows-run-by-agents.md`](../../adr/2026-11-12-organization-owned-workflows-run-by-agents.md).
+- API: every workflow route moves to `/organizations/{organization_id}/workflows…` and `/workflow-runs…`; the `/agents/{agent_id}/…` workflow routes are removed. A run is started with `POST /workflow-runs` carrying `workflow_id`, `agent_id` and an optional `title`. New: `PATCH /workflows/{id}` for the default Agent, `created_by_me`/`archived` on the workflow list, `agent_id`/`status` on the run list, and `created_by`, `default_agent_id`, `agent_id`, `agent_name`, `agent_archived` and `title` on reads. Reusing a start identity with a different Agent returns 409. The removal is made without a new major API version because workflows are experimental and not in use (maintainer decision, 2026-11-12).
+- Added: an optional default Agent per workflow (preselects only, grants nothing, hidden from Members who cannot read that Agent) and an optional run title. Runs of a deleted Agent stay readable and read-only, shown against an archived Agent.
+- Changed: a step's expected output is part of its goal. `artifact_description` is legacy: new saves fold it into the goal, and versions saved earlier still honour it.
+- UI: an Organization Workflows page with Runs and Workflows tabs owns creating, editing, duplicating, archiving and starting; the Agent's Workflows tab shows only that Agent's runs and approvals.
+- Migration: `e4b439a1c7d2` after `d1a390e7b2c4`; existing workflows keep their Agent as the default, and their creator becomes the Organization's Owner, else its earliest Admin. Snapshots, attempts, approvals, the runtime routes and the trigger server are unchanged. The downgrade is lossy; see the [specification](../agent-workflows.md#organization-ownership-migration-af-439).
+- Deferred: workflow categories, semantic versions and further step types.
+
 ### 2026-11-10 — AF-390 — [PR #365](https://github.com/aai-labs/agent-barn/pull/365) — workflow approvals
 
 - Added: Workflow Approval Requests for Hermes steps — live Approve/Decline within 270s on the run page, parking as Awaiting Approval, late decisions that resume the step's own session, decline guidance capped at three per step, and restart/uncertainty handling. Migration `d1a390e7b2c4`; Agent update required for the trigger server.
