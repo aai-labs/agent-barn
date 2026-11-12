@@ -39,6 +39,7 @@ from api.domains.agents.provisioning_errors import (
 )
 from api.domains.environment_health.models import (
     AgentRefRead,
+    BackupFailureRead,
     CapacityLevel,
     CapacityLineRead,
     CapacitySource,
@@ -50,8 +51,10 @@ from api.domains.environment_health.models import (
     FailedAgentRead,
     FiringAlertRead,
     HealthLevel,
+    OverdueBackupRead,
     PodIssueRead,
     RolloutState,
+    ScheduledBackupsRead,
     UnhealthyRuntimeRead,
     VolumeAllocationRead,
     VolumeClaimRead,
@@ -62,6 +65,7 @@ from api.domains.environment_health.models import (
     WorkloadsRead,
 )
 from api.domains.resource_usage.models import PlatformCapacityRead
+from api.domains.restore_points.models import ScheduledBackupHealth
 from api.infrastructure.prometheus.client import PrometheusSample
 
 AGENT_COMPONENT = "agent"
@@ -688,6 +692,27 @@ def cron_jobs(cron_jobs: Sequence[V1CronJob], jobs: Sequence[V1Job], now: dateti
         )
     rows.sort(key=lambda row: (_CRON_ORDER[row.state], row.name))
     return rows
+
+
+def scheduled_backups(
+    health: ScheduledBackupHealth, identities: Mapping[UUID, PlatformAgentIdentity], *, failure_window_hours: int
+) -> ScheduledBackupsRead:
+    """Failing and overdue scheduled backups, each Agent named from the database."""
+    return ScheduledBackupsRead(
+        enabled=health.interval_minutes > 0,
+        interval_minutes=health.interval_minutes,
+        failure_window_hours=failure_window_hours,
+        failed=[
+            BackupFailureRead(
+                agent=agent_ref(row.agent_id, identities), failures=row.failures, last_failed_at=row.last_failed_at
+            )
+            for row in health.failures
+        ],
+        overdue=[
+            OverdueBackupRead(agent=agent_ref(row.agent_id, identities), last_backup_at=row.last_backup_at)
+            for row in health.overdue
+        ],
+    )
 
 
 # --- capacity -------------------------------------------------------------

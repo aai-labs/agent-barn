@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   ENV_ACME_ID,
+  ENV_ADA_ID,
   ENV_ORPHAN_ID,
   mockEnvironmentHealth,
 } from "../pages/data-support/environment-health-data-support.po";
@@ -184,6 +185,50 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(failing).toContainText("last succeeded 6 days ago");
     await expect(healthPage.cronJob("agentbarn-cost-sync")).toContainText("No successful run in over a day");
     await expect(healthPage.cronJob("agentbarn-event-reconciler")).toContainText("Running now");
+  });
+
+  test("names the agents whose scheduled backups fail or are overdue", async () => {
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+    const ada = {
+      agent_id: ENV_ADA_ID,
+      agent_name: "Ada",
+      organization_id: ENV_ACME_ID,
+      organization_name: "Acme",
+      status: "RUNNING",
+    };
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        backups: {
+          enabled: true,
+          interval_minutes: 360,
+          failure_window_hours: 24,
+          failed: [{ agent: ada, failures: 2, last_failed_at: hoursAgo(1) }],
+          overdue: [
+            { agent: ada, last_backup_at: hoursAgo(50) },
+            { agent: { ...ada, agent_id: ENV_ORPHAN_ID, agent_name: "Bo" }, last_backup_at: null },
+          ],
+        },
+      }),
+    });
+
+    await healthPage.goto();
+
+    const backups = healthPage.backups();
+    await expect(backups).toContainText("Every 6 hours");
+    await expect(backups.getByTestId("backup-failed").first()).toContainText("Ada");
+    await expect(backups.getByTestId("backup-failed").first()).toContainText("2 failed in the last 24 hours");
+    await expect(backups.getByTestId("backup-overdue").first()).toContainText("last backed up 2 days ago");
+    await expect(backups.getByTestId("backup-overdue").nth(1)).toContainText("never backed up");
+  });
+
+  test("says when scheduled backups are switched off", async () => {
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({ backups: { enabled: false, interval_minutes: 0, failed: [], overdue: [] } }),
+    });
+
+    await healthPage.goto();
+
+    await expect(healthPage.backups()).toContainText("Scheduled backups are switched off");
   });
 
   test("says when scheduled jobs may not be read", async () => {

@@ -48,6 +48,10 @@ export class EnvironmentHealthPage {
     return this.page.getByTestId("unhealthy-runtime");
   }
 
+  backups(): Locator {
+    return this.page.getByTestId("environment-backups");
+  }
+
   cronJob(name: string): Locator {
     return this.page.getByTestId(`cron-job-${name}`);
   }

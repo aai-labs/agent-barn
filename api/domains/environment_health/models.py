@@ -130,6 +130,33 @@ class CronJobRead(PydanticBaseModel):
     last_failed_at: datetime | None = None
 
 
+class BackupFailureRead(PydanticBaseModel):
+    """An Agent whose scheduled backups failed in the failure window. The failure text is not carried."""
+
+    agent: AgentRefRead
+    failures: int
+    last_failed_at: datetime
+
+
+class OverdueBackupRead(PydanticBaseModel):
+    """A running Agent with no successful scheduled backup for two intervals or more."""
+
+    agent: AgentRefRead
+    # None when it never had one.
+    last_backup_at: datetime | None = None
+
+
+class ScheduledBackupsRead(PydanticBaseModel):
+    """Whether the scheduled backups of running Agents are happening, from the database."""
+
+    enabled: bool = False
+    interval_minutes: int = 0
+    # The window `failed` covers.
+    failure_window_hours: int = 24
+    failed: list[BackupFailureRead] = Field(default_factory=list)
+    overdue: list[OverdueBackupRead] = Field(default_factory=list)
+
+
 class FiringAlertRead(PydanticBaseModel):
     """A firing alert from the monitoring chart's own rules: its name and severity only."""
 
@@ -294,6 +321,7 @@ class EnvironmentHealthRead(PydanticBaseModel):
     ceilings: ResourceLimitsRead = Field(default_factory=ResourceLimitsRead)
     services: list[CoreServiceRead] = Field(default_factory=list)
     cron_jobs: list[CronJobRead] = Field(default_factory=list)
+    backups: ScheduledBackupsRead = Field(default_factory=ScheduledBackupsRead)
     alerts: list[FiringAlertRead] = Field(default_factory=list)
     capacity: list[CapacityLineRead] = Field(default_factory=list)
     volumes: VolumeAllocationRead = Field(default_factory=VolumeAllocationRead)

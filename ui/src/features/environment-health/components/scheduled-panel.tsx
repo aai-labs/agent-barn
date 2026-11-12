@@ -1,6 +1,6 @@
-import type { CronJob, SourceState } from "../schemas";
+import type { CronJob, ScheduledBackups, SourceState } from "../schemas";
 import { formatAge, type Tone } from "../utils";
-import { EmptyRow, Section, StatusDot } from "./section";
+import { AgentLabel, EmptyRow, Section, StatusDot } from "./section";
 
 const STATE_TONE: Record<CronJob["state"], Tone> = { failing: "err", stalled: "warn", ok: "ok", suspended: "muted" };
 
@@ -16,8 +16,67 @@ function lastWorked(cron: CronJob): string {
   return "has never succeeded";
 }
 
-/** The platform's scheduled jobs, the ones that stopped working first. */
-export function ScheduledPanel({ cronJobs, state }: { cronJobs: CronJob[]; state: SourceState | undefined }) {
+function every(minutes: number): string {
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `Every ${hours === 1 ? "hour" : `${hours} hours`}`;
+  }
+  return `Every ${minutes} minutes`;
+}
+
+/** Running agents whose scheduled backups fail or have stopped. From the platform's own records. */
+function BackupsList({ backups }: { backups: ScheduledBackups }) {
+  if (!backups.enabled) {
+    return <EmptyRow>Scheduled backups are switched off.</EmptyRow>;
+  }
+  const { failed, overdue, failureWindowHours } = backups;
+  return (
+    <>
+      <p className="m-0 mb-2 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
+        {every(backups.intervalMinutes)} for each running agent.
+      </p>
+      {failed.length === 0 && overdue.length === 0 ? (
+        <EmptyRow>Every running agent has a recent backup.</EmptyRow>
+      ) : (
+        <ul className="af-card m-0 list-none divide-y p-0">
+          {failed.map((row) => (
+            <li key={`failed-${row.agent.agentId}`} className="px-4 py-2.5 text-[13px]" data-testid="backup-failed">
+              <span className="flex items-center gap-2">
+                <StatusDot tone="err" label="failing" />
+                <AgentLabel agent={row.agent} />
+              </span>
+              <p className="m-0 mt-1" style={{ color: "var(--ink-3)" }}>
+                {row.failures} failed in the last {failureWindowHours} hours · latest {formatAge(row.lastFailedAt)}
+              </p>
+            </li>
+          ))}
+          {overdue.map((row) => (
+            <li key={`overdue-${row.agent.agentId}`} className="px-4 py-2.5 text-[13px]" data-testid="backup-overdue">
+              <span className="flex items-center gap-2">
+                <StatusDot tone="warn" label="overdue" />
+                <AgentLabel agent={row.agent} />
+              </span>
+              <p className="m-0 mt-1" style={{ color: "var(--ink-3)" }}>
+                Overdue · {row.lastBackupAt ? `last backed up ${formatAge(row.lastBackupAt)}` : "never backed up"}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/** The platform's scheduled jobs, the ones that stopped working first, then the agents' scheduled backups. */
+export function ScheduledPanel({
+  cronJobs,
+  backups,
+  state,
+}: {
+  cronJobs: CronJob[];
+  backups: ScheduledBackups;
+  state: SourceState | undefined;
+}) {
   return (
     <Section
       title="Scheduled jobs"
@@ -61,6 +120,13 @@ export function ScheduledPanel({ cronJobs, state }: { cronJobs: CronJob[]; state
           ))}
         </ul>
       )}
+
+      <div data-testid="environment-backups">
+        <h3 className="mb-2 mt-4 text-[13px] font-semibold" style={{ color: "var(--ink-2)" }}>
+          Agent backups
+        </h3>
+        <BackupsList backups={backups} />
+      </div>
     </Section>
   );
 }
