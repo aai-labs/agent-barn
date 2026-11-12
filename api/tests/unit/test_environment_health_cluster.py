@@ -1080,3 +1080,23 @@ def test_what_an_idle_agent_holds_is_unknown_when_the_cluster_could_not_be_read(
     )
 
     assert (row.holds_pod, row.volume_claims, row.requested_bytes, row.restore_points) == (None, None, None, 0)
+
+
+def test_only_finished_runs_of_platform_cron_jobs_are_judged():
+    ada = _agent("Ada")
+    running = _job("agentbarn-cost-sync", failed=True, ago=timedelta(minutes=1))
+    running.status = V1JobStatus(conditions=[V1JobCondition(type="Failed", status="False", last_transition_time=_NOW)])
+    restore_job = _job("agentbarn-cost-sync", failed=True, ago=timedelta(minutes=1))
+    restore_job.metadata.owner_references = [V1OwnerReference(api_version="v1", kind="Pod", name="rp-cap-abc", uid="2")]
+    agents_cron = _cron(f"agent-{ada.id}-nightly")
+    agents_cron.metadata.labels = _agent_labels(ada.id)
+
+    rows = cluster.cron_jobs(
+        [_cron("agentbarn-cost-sync"), agents_cron, _cron("Not_A_Name")],
+        [running, restore_job, V1Job(metadata=V1ObjectMeta(name="no-status"), status=None)],
+        _NOW,
+    )
+
+    # A run still going, or a Job no CronJob owns, says nothing about the CronJob; an Agent's
+    # CronJob is not the platform's, and a name outside the object grammar is not carried.
+    assert [(row.name, row.state) for row in rows] == [("agentbarn-cost-sync", cluster.CronJobState.OK)]
