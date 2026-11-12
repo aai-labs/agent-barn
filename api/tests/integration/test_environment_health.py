@@ -6,12 +6,13 @@ what each scenario says; the rules for reading their objects are covered field b
 `tests/unit/test_environment_health_cluster.py`.
 """
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_item, none
+from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_item, none, not_none
 from kubernetes.client import (
     CoreV1Event,
     V1ContainerState,
@@ -46,10 +47,13 @@ from kubernetes.client import (
 )
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config import ConfigException
+from sqlmodel import Session
 
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.prometheus.client import PrometheusClient, PrometheusError, PrometheusSample
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -186,6 +190,10 @@ def _deployment(name: str, ready: int) -> V1Deployment:
 
 def _forbidden() -> ApiException:
     return ApiException(status=403, reason="Forbidden")
+
+
+def response_text(body) -> str:
+    return json.dumps(body)
 
 
 def _get(context):
@@ -609,6 +617,91 @@ def test_refused_cron_jobs_say_so_and_leave_the_rest():
 
         assert_that(_sources(body)["cron_jobs"], equal_to("forbidden"))
         assert_that(body["cron_jobs"], equal_to([]))
+        assert_that(body["level"], equal_to("ok"))
+
+
+def _backdate(context, agent, age: timedelta) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        row = session.get(Agent, agent.id)
+        assert row is not None
+        row.created_at = datetime.now(UTC) - age
+        session.add(row)
+        session.commit()
+
+
+def _scheduled(context, agent, status: RestorePointStatus, age: timedelta, origin=RestorePointOrigin.SCHEDULED):
+    context.injector.get(RestorePointRepository).save(
+        AgentRestorePoint(
+            agent_id=agent.id,
+            status=status,
+            origin=origin,
+            agent_type=agent.agent_type,
+            pvc_name=f"restore-point-{uuid4()}",
+            config_manifest={},
+            failure_reason="Job failed: token=abc" if status == RestorePointStatus.FAILED else None,
+            created_at=datetime.now(UTC) - age,
+        )
+    )
+
+
+def test_failing_and_overdue_scheduled_backups_are_named_by_agent():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("env-backups-1@example.com", "env-backups-2@example.com"),
+            *_platform_admin("env-admin-backups@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        ada, cy = context.ada, context.cy
+        there_is_an_agent(name="Bo", status=AgentStatus.RUNNING)(context)
+        bo = context.agent
+        there_is_an_agent(name="Dee", status=AgentStatus.RUNNING)(context)
+        for agent in (ada, bo, cy):
+            _backdate(context, agent, timedelta(days=3))
+        # Ada's last good backup is two days old and the two tries since failed.
+        _scheduled(context, ada, RestorePointStatus.READY, timedelta(days=2))
+        _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(hours=7))
+        _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(hours=1))
+        # A failure from last week, and a manual capture, are not scheduled backups failing now.
+        _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(days=6))
+        _scheduled(context, bo, RestorePointStatus.FAILED, timedelta(hours=2), origin=RestorePointOrigin.MANUAL)
+        _scheduled(context, bo, RestorePointStatus.READY, timedelta(hours=1))
+        # Cy is stopped, so it is not backed up on a schedule; Dee is new and has not had its turn.
+
+        body = _get(context).json()
+
+        backups = body["backups"]
+        assert_that(backups, has_entries(enabled=True, interval_minutes=360))
+        assert_that(
+            backups["failed"],
+            contains_exactly(
+                has_entries(agent=has_entries(agent_name="Ada", organization_name=context.acme.name), failures=2)
+            ),
+        )
+        assert_that(
+            backups["overdue"],
+            contains_exactly(has_entries(agent=has_entries(agent_name="Ada"), last_backup_at=not_none())),
+        )
+        assert_that("token=abc" not in response_text(body), equal_to(True))
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_with_scheduled_backups_switched_off_none_are_overdue():
+    with given(
+        [
+            set_env_variable({"RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES": "0"}),
+            *_BASE_GIVEN,
+            _two_organizations("env-backups-off-1@example.com", "env-backups-off-2@example.com"),
+            *_platform_admin("env-admin-backups-off@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        _backdate(context, context.ada, timedelta(days=3))
+
+        body = _get(context).json()
+
+        assert_that(body["backups"], has_entries(enabled=False, failed=[], overdue=[]))
         assert_that(body["level"], equal_to("ok"))
 
 

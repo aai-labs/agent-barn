@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 
 from injector import inject, singleton
@@ -25,6 +25,7 @@ from api.domains.environment_health.models import (
     FiringAlertRead,
     HealthLevel,
     RolloutState,
+    ScheduledBackupsRead,
     SourceState,
     UnhealthyRuntimeRead,
     VolumeAllocationRead,
@@ -35,6 +36,7 @@ from api.domains.environment_health.repository import EnvironmentHealthRepositor
 from api.domains.resource_limits.models import ResourceLimitsRead
 from api.domains.resource_limits.service import ResourceLimitsService
 from api.domains.resource_usage.platform_service import PlatformResourceUsageService
+from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.prometheus.client import PrometheusError
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,8 @@ logger = logging.getLogger(__name__)
 # How far back each capacity line's peak looks: long enough to hold a day of cron schedules.
 PEAK_WINDOW_HOURS = 24
 RESTART_WINDOW_DAYS = cluster.RESTART_HISTORY_WINDOW.days
+# How far back a failed scheduled backup is news.
+BACKUP_FAILURE_WINDOW_HOURS = 24
 
 T = TypeVar("T")
 
@@ -71,6 +75,7 @@ def overall_level(
     events: Sequence[WarningEventRead],
     deployed: DeployedVersionRead | None,
     cron_jobs: Sequence[CronJobRead],
+    backups: ScheduledBackupsRead,
 ) -> HealthLevel:
     """The worst of what the page shows.
 
@@ -101,6 +106,8 @@ def overall_level(
         or alerts
         or volumes.attention
         or events
+        or backups.failed
+        or backups.overdue
         or any(cron.state in {CronJobState.FAILING, CronJobState.STALLED} for cron in cron_jobs)
         or (
             deployed is not None and deployed.mixed and not any(s.rollout == RolloutState.IN_PROGRESS for s in services)
@@ -131,6 +138,7 @@ class EnvironmentHealthService:
     # Composed as services, never through their repositories, as the stats service does.
     resource_limits_service: ResourceLimitsService
     platform_usage_service: PlatformResourceUsageService
+    restore_point_service: RestorePointService
 
     def get_health(self) -> EnvironmentHealthRead:
         now = datetime.now(UTC)
@@ -184,6 +192,13 @@ class EnvironmentHealthService:
         services = cluster.core_services(deployments or [], stateful_sets or [])
         deployed = cluster.deployed_version(services)
         cron_jobs = cluster.cron_jobs(crons, jobs or [], now) if crons is not None else []
+        backups = cluster.scheduled_backups(
+            self.restore_point_service.scheduled_backup_health(
+                now, failure_window=timedelta(hours=BACKUP_FAILURE_WINDOW_HOURS)
+            ),
+            identities,
+            failure_window_hours=BACKUP_FAILURE_WINDOW_HOURS,
+        )
         restarts = cluster.pod_restarts(restart_samples) if restart_samples is not None else None
         workloads = cluster.workloads(pods, identities, now, restarts) if pods is not None else WorkloadsRead()
         alerts = cluster.firing_alerts(alert_samples or [], identities)
@@ -213,12 +228,14 @@ class EnvironmentHealthService:
                 events=warnings,
                 deployed=deployed,
                 cron_jobs=cron_jobs,
+                backups=backups,
             ),
             sources=[EnvironmentSourceRead(source=source, state=state) for source, state in sources.items()],
             deployed=deployed,
             ceilings=ceilings,
             services=services,
             cron_jobs=cron_jobs,
+            backups=backups,
             alerts=alerts,
             capacity=capacity,
             volumes=volumes,

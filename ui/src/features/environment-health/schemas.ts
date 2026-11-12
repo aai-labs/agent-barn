@@ -70,6 +70,18 @@ export const CronJobSchema = z.object({
 });
 export type CronJob = z.infer<typeof CronJobSchema>;
 
+export const ScheduledBackupsSchema = z.object({
+  enabled: z.boolean().default(false),
+  intervalMinutes: z.number().int().default(0),
+  failureWindowHours: z.number().int().default(24),
+  failed: z
+    .array(z.object({ agent: AgentRefSchema, failures: z.number().int(), lastFailedAt: z.string() }))
+    .default([]),
+  /** Running agents with no successful scheduled backup for two intervals or more. */
+  overdue: z.array(z.object({ agent: AgentRefSchema, lastBackupAt: z.string().nullable().default(null) })).default([]),
+});
+export type ScheduledBackups = z.infer<typeof ScheduledBackupsSchema>;
+
 export const FiringAlertSchema = z.object({
   name: z.string(),
   severity: z.string().nullable().default(null),
@@ -190,6 +202,7 @@ export const EnvironmentHealthSchema = z.object({
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),
   cronJobs: z.array(CronJobSchema).default([]),
+  backups: ScheduledBackupsSchema.default({ enabled: false, intervalMinutes: 0, failureWindowHours: 24, failed: [], overdue: [] }),
   alerts: z.array(FiringAlertSchema).default([]),
   capacity: z.array(CapacityLineSchema).default([]),
   volumes: VolumeAllocationSchema,

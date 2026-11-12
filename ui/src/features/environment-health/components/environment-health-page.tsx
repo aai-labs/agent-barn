@@ -125,7 +125,7 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
           monitoringState={states.prometheus}
         />
       </div>
-      <ScheduledPanel cronJobs={health.cronJobs} state={states.cron_jobs} />
+      <ScheduledPanel cronJobs={health.cronJobs} backups={health.backups} state={states.cron_jobs} />
       <WorkloadsPanel
         workloads={health.workloads}
         podsState={states.pods}

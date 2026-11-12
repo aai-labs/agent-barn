@@ -55,6 +55,7 @@ from api.domains.environment_health.models import (
     EnvironmentSource,
     HealthLevel,
     RolloutState,
+    ScheduledBackupsRead,
     SourceState,
     VolumeAllocationRead,
     VolumeGroup,
@@ -852,6 +853,7 @@ def _level(**overrides) -> HealthLevel:
         "events": [],
         "deployed": None,
         "cron_jobs": [],
+        "backups": ScheduledBackupsRead(),
         **overrides,
     }
     return overall_level(**arguments)
