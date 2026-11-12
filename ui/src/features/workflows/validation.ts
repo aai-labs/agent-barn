@@ -13,11 +13,9 @@ export type WorkflowProblem = {
 
 const fieldLabels: Record<string, string> = {
   name: "Name",
-  goal: "What should the Agent do?",
+  goal: "What should the agent do?",
   completionCriteria: "When is this step complete?",
   completion_criteria: "When is this step complete?",
-  artifactDescription: "Output from this step (optional)",
-  artifact_description: "Output from this step (optional)",
   requiredCapabilities: "Required capabilities",
   required_capabilities: "Required capabilities",
   label: "Label",
@@ -57,14 +55,14 @@ function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
           message,
           field: field ? inputField(index, field) : undefined,
         }
-      : { section: "inputs", label: "Required inputs", message };
+      : { section: "inputs", label: "Inputs", message };
   }
   if (scope === "reviewDestination" || scope === "review_destination")
     return { section: "outputs", label: "Review destination", message };
   if (scope === "name" || scope === "description")
     return {
       section: "details",
-      label: scope === "name" ? "Workflow name" : "Description (optional)",
+      label: scope === "name" ? "Name" : "What does it do?",
       message,
       field: scope,
     };

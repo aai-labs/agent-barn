@@ -11,11 +11,14 @@ import {
   Settings2,
   Target,
   Users,
+  Workflow,
 } from "lucide-react";
 
 import { useOrganizationBilling } from "@/features/billing/hooks/use-organization-billing";
 import { usePlatformView } from "@/features/organizations/hooks/use-platform-view";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { useAwaitingApprovals } from "@/features/workflows/hooks/use-workflow-runs";
+import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 
 import { PLATFORM_AREAS, isPlatformPageActive, type NavItem } from "../nav-model";
 
@@ -45,6 +48,11 @@ export function useRailModel(): RailModel {
     enabled: role === "OWNER" && !isPlatformView,
   });
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
+  // Workflows belong to the Organization and are open to every Member, where the
+  // installation offers them. The badge counts runs waiting on the viewer's approval.
+  const inOrganization = Boolean(selectedOrganization) && !isPlatformView;
+  const workflows = useWorkflowCapabilities(inOrganization).data?.authoring === true;
+  const awaiting = useAwaitingApprovals(undefined, inOrganization && workflows);
 
   if (isPlatformView) {
     return {
@@ -82,6 +90,18 @@ export function useRailModel(): RailModel {
       icon: ChartColumn,
       active: pathname === `${orgBase}/agents`,
     },
+    ...(workflows
+      ? [
+          {
+            key: "workflows",
+            label: "Workflows",
+            href: `${orgBase}/workflows`,
+            icon: Workflow,
+            active: pathname.startsWith(`${orgBase}/workflows`),
+            badge: awaiting.data?.total || undefined,
+          },
+        ]
+      : []),
     // Costs and KPIs are owner/admin-only (their endpoints are gated too); hide them from members.
     ...(canManage
       ? [

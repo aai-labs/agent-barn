@@ -2,19 +2,23 @@
 
 import { Hourglass } from "lucide-react";
 import { useAwaitingApprovals } from "../hooks/use-workflow-runs";
-import { pendingApproval } from "../run-schemas";
+import { pendingApproval, runTitle } from "../run-schemas";
+import { RunAgent } from "./workflow-run-list";
 
 function waited(since: string): string {
   const minutes = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 60_000));
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** Runs of this Agent waiting on a person's approval, above everything else on the Workflows page. */
+/**
+ * Runs waiting on a person's approval, above everything else on a Workflows page: one
+ * Agent's on its own page, or every Agent the viewer can read on the Organization's.
+ */
 export function WorkflowApprovalInbox({
   agentId,
   onOpen,
 }: {
-  agentId: string;
+  agentId?: string;
   onOpen: (run: { id: string; workflowId: string }) => void;
 }) {
   const runs = useAwaitingApprovals(agentId);
@@ -52,7 +56,7 @@ export function WorkflowApprovalInbox({
           >
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">
-                {run.name}
+                {runTitle(run)}
                 <span className="font-normal text-[var(--ink-3)]">
                   {" "}
                   · Step {approval.stepIndex + 1}
@@ -62,6 +66,11 @@ export function WorkflowApprovalInbox({
               <p className="mt-1 truncate font-mono text-xs text-[var(--ink-2)]">
                 {approval.command}
               </p>
+              {!agentId && (
+                <p className="mt-1 text-xs text-[var(--ink-3)]">
+                  <RunAgent run={run} />
+                </p>
+              )}
             </div>
             {approval.state === "LIVE" ? (
               <span

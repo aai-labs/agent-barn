@@ -84,6 +84,7 @@ export function RunPageHeader({
   agent,
   detail,
   agentHref,
+  agentArchived = false,
   actions,
 }: {
   eyebrow: string;
@@ -91,7 +92,9 @@ export function RunPageHeader({
   badge: ReactNode;
   agent: { id: string; name: string };
   detail?: string;
+  /** Absent for a deleted Agent, which has no page to open. */
   agentHref?: string;
+  agentArchived?: boolean;
   actions?: ReactNode;
 }) {
   return (
@@ -104,6 +107,11 @@ export function RunPageHeader({
           <AgentAvatar agent={agent} size="xs" />
           <span>
             {agent.name}
+            {agentArchived && (
+              <span className="ml-2 rounded-full bg-[var(--bg-soft)] px-2 py-0.5 text-xs font-medium">
+                Archived
+              </span>
+            )}
             {detail ? ` · ${detail}` : ""}
           </span>
         </div>

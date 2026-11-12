@@ -13,6 +13,12 @@ import { DataSupport } from "./data-support.po";
 export class WorkflowDataSupport {
   saveRequests: Record<string, unknown>[] = [];
   savePaths: string[] = [];
+  /** Bodies of default-Agent changes, which save no new version. */
+  updateRequests: Record<string, unknown>[] = [];
+  /** Query strings of list reads, to assert the filter sent. */
+  listQueries: string[] = [];
+  /** The Agent runs start with by default. */
+  defaultAgentId: string | null = null;
   conflictSave = false;
   /** Description another user saved before the conflicting save. */
   conflictDescription: string | null = null;
@@ -77,7 +83,7 @@ export class WorkflowDataSupport {
     await data.agents.interceptGetAgentHealthRequest();
     await data.agents.interceptGetConversationChannelsRequest();
     await data.communicationConnections.interceptChannelsRequests({ agentId });
-    let workflow = workflowFixture(agentId, viewer);
+    let workflow = workflowFixture(this.defaultAgentId, viewer);
     if (emptyCriteria) workflow.version.draft.steps[0].completion_criteria = "";
     if (stepId) workflow.version.draft.steps[0].id = stepId;
     if (description) workflow.version.draft.description = description;
@@ -86,10 +92,10 @@ export class WorkflowDataSupport {
       workflow.revision = 3;
       workflow.version.number = 3;
     }
-    const siblings = paginated ? workflowPaginationFixtures(agentId) : [];
+    const siblings = paginated ? workflowPaginationFixtures() : [];
     const versions = workflowHistoryFixtures(workflow);
     const pageSize = paginated ? 2 : 20;
-    const base = `**/api/v1/organizations/${organizationId}/agents/${agentId}`;
+    const base = `**/api/v1/organizations/${organizationId}`;
     await this.page.route(`${base}/workflow-capabilities`, (route) =>
       this.failCapabilities
         ? route.abort()
@@ -111,6 +117,17 @@ export class WorkflowDataSupport {
           status: 404,
           json: { detail: "Workflow not found" },
         });
+        return;
+      }
+      if (route.request().method() === "PATCH") {
+        const body = route.request().postDataJSON();
+        this.updateRequests.push(body);
+        workflow = {
+          ...workflow,
+          revision: workflow.revision + 1,
+          default_agent_id: body.default_agent_id,
+        };
+        await route.fulfill({ json: workflow });
         return;
       }
       if (route.request().method() === "POST") {
@@ -152,12 +169,15 @@ export class WorkflowDataSupport {
         }
         workflow = {
           ...workflow,
+          default_agent_id: path.endsWith("/workflows")
+            ? (body.default_agent_id ?? null)
+            : workflow.default_agent_id,
           revision: present ? workflow.revision + 1 : 1,
           version: {
             ...workflow.version,
             id: crypto.randomUUID(),
             number: present ? workflow.version.number + 1 : 1,
-            draft: body.draft ?? body,
+            draft: body.draft,
           },
         };
         versions.unshift(structuredClone(workflow.version));
@@ -181,9 +201,13 @@ export class WorkflowDataSupport {
       if (path.endsWith("/workflows")) {
         this.reads.list++;
         this.readPages.list.push(page);
-        const items = present
-          ? [...siblings, workflow].map(workflowSummary)
-          : [];
+        this.listQueries.push(url.search);
+        const archived = url.searchParams.get("archived");
+        const items = (present ? [...siblings, workflow] : [])
+          .filter(
+            (item) => archived === null || String(Boolean(item.archived_at)) === archived,
+          )
+          .map(workflowSummary);
         await route.fulfill({
           json: {
             items: items.slice(offset, offset + pageSize),

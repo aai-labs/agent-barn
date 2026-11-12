@@ -24,6 +24,7 @@ function draftSchema(authoring: boolean) {
     completionCriteria: z.string().nullable().transform((value) =>
       value?.trim() ? value : undefined,
     ).optional(),
+    // Only on versions saved before a step's output became part of its goal.
     artifactDescription: text.nullable().default(null),
     requiredCapabilities: z
       .array(z.enum(["reasoning", "business_action", "native_command"]))
@@ -84,7 +85,16 @@ export const WorkflowVersionSchema = z.object({
 });
 export const WorkflowSchema = z.object({
   id: z.uuid(),
-  agentId: z.uuid(),
+  /** The Member who created it; absent once that Membership is removed. */
+  createdBy: z
+    .object({
+      membershipId: z.uuid(),
+      userId: z.uuid().nullable(),
+      name: z.string().nullable(),
+    })
+    .nullable(),
+  /** Preselected when a run starts; null when unset or not readable by the viewer. */
+  defaultAgentId: z.uuid().nullable(),
   revision: z.number().int().positive(),
   archivedAt: z.string().nullable(),
   version: WorkflowVersionSchema,
