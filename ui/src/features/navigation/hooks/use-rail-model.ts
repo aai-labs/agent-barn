@@ -49,7 +49,7 @@ export function useRailModel(): RailModel {
   });
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
   // Workflows belong to the Organization and are open to every Member, where the
-  // installation offers them. The badge counts runs waiting on the viewer's approval.
+  // installation offers them. The badge counts the approval requests the viewer may decide.
   const inOrganization = Boolean(selectedOrganization) && !isPlatformView;
   const workflows = useWorkflowCapabilities(inOrganization).data?.authoring === true;
   const awaiting = useAwaitingApprovals(undefined, inOrganization && workflows);
@@ -98,7 +98,9 @@ export function useRailModel(): RailModel {
             href: `${orgBase}/workflows`,
             icon: Workflow,
             active: pathname.startsWith(`${orgBase}/workflows`),
-            badge: awaiting.data?.total || undefined,
+            // Only requests this viewer may decide are waiting on them.
+            badge:
+              awaiting.data?.items.filter((run) => run.allowedActions.includes("decide")).length || undefined,
           },
         ]
       : []),
