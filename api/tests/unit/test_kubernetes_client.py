@@ -65,7 +65,7 @@ class _FakeCoreApi:
         if key in self._raises_on:
             raise self._raises_on[key]
 
-    def list_namespaced_service(self, *_, label_selector=""):
+    def list_namespaced_service(self, *_, label_selector="", _request_timeout=None):
         return SimpleNamespace(items=[self._resource] if self._resource else [])
 
     def create_namespaced_service(self, _, body):

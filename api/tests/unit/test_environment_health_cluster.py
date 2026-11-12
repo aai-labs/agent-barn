@@ -30,6 +30,7 @@ from kubernetes.client import (
     V1PodTemplateSpec,
     V1ResourceQuota,
     V1ResourceQuotaStatus,
+    V1Service,
     V1StatefulSet,
     V1StatefulSetSpec,
     V1StatefulSetStatus,
@@ -418,13 +419,44 @@ def test_entered_lines_compare_ceilings_with_what_the_api_counts():
     )
 
     by_resource = {line.resource: line for line in lines}
-    assert [line.resource for line in lines][:3] == ["requests.storage", "pods", "limits.memory"]
+    assert [line.resource for line in lines][:5] == [
+        "requests.storage",
+        "persistentvolumeclaims",
+        "pods",
+        "services",
+        "limits.memory",
+    ]
     assert by_resource["requests.storage"].level == CapacityLevel.CRITICAL
     assert by_resource["pods"].level == CapacityLevel.UNKNOWN and by_resource["pods"].used == 10
     assert by_resource["limits.memory"].level == CapacityLevel.CEILING_OUT_OF_DATE
     assert by_resource["requests.cpu"].level == CapacityLevel.OK
     assert by_resource["limits.cpu"].level == CapacityLevel.UNKNOWN
     assert all(line.source == CapacitySource.ENTERED for line in lines)
+
+
+def test_entered_lines_count_volume_claims_and_services_against_their_ceilings():
+    lines = cluster.entered_lines(
+        PlatformCapacityRead(),
+        storage_requested=None,
+        pods_counted=None,
+        storage_ceiling=None,
+        pods_ceiling=None,
+        claims_counted=60,
+        claims_ceiling=60,
+        services_counted=12,
+        services_ceiling=None,
+    )
+
+    by_resource = {line.resource: line for line in lines}
+    assert [line.resource for line in lines][:4] == ["requests.storage", "persistentvolumeclaims", "pods", "services"]
+    claims = by_resource["persistentvolumeclaims"]
+    assert (claims.unit, claims.used, claims.hard, claims.level) == ("count", 60, 60, CapacityLevel.CRITICAL)
+    assert (by_resource["services"].used, by_resource["services"].level) == (12, CapacityLevel.UNKNOWN)
+
+
+def test_services_committed_counts_every_service_in_the_namespace():
+    services = [V1Service(metadata=V1ObjectMeta(name=name)) for name in ("agentbarn-api", f"agent-{uuid4()}", "redis")]
+    assert cluster.services_committed(services) == 3
 
 
 def test_an_unknown_figure_is_unknown_not_zero():

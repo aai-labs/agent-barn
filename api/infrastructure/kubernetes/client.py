@@ -260,7 +260,9 @@ class KubernetesClient:
         return self._get_or_none(self._core_v1.read_namespaced_service, name, namespace)
 
     def list_services(self, namespace: str, label_selector: str = "") -> list[client.V1Service]:
-        return self._core_v1.list_namespaced_service(namespace, label_selector=label_selector).items
+        return self._core_v1.list_namespaced_service(
+            namespace, label_selector=label_selector, _request_timeout=10
+        ).items
 
     def create_pvc(self, namespace: str, manifest: client.V1PersistentVolumeClaim) -> client.V1PersistentVolumeClaim:
         return self._create_or_get(

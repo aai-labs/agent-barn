@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import TypeVar
 
 from injector import inject, singleton
-from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1ResourceQuota
+from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Service
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config import ConfigException
 
@@ -134,6 +134,7 @@ class EnvironmentHealthService:
         deployments = read(EnvironmentSource.DEPLOYMENTS, self.repository.deployments)
         stateful_sets = read(EnvironmentSource.STATEFUL_SETS, self.repository.stateful_sets)
         claims = read(EnvironmentSource.VOLUME_CLAIMS, self.repository.volume_claims)
+        kube_services = read(EnvironmentSource.SERVICES, self.repository.services)
         quotas = read(EnvironmentSource.RESOURCE_QUOTAS, self.repository.resource_quotas)
         events = read(EnvironmentSource.EVENTS, self.repository.warning_events)
 
@@ -162,7 +163,7 @@ class EnvironmentHealthService:
         )
         failed = cluster.failed_agents(self.agent_repository.find_failed_for_platform())
         ceilings = self.resource_limits_service.get_limits()
-        capacity = self._capacity(now, ceilings, quotas, claims, pods)
+        capacity = self._capacity(now, ceilings, quotas, claims, pods, kube_services)
         volumes = cluster.volume_allocation(claims or [], identities)
         warnings = cluster.warning_events(events or [], identities, now)
 
@@ -199,6 +200,7 @@ class EnvironmentHealthService:
         quotas: list[V1ResourceQuota] | None,
         claims: list[V1PersistentVolumeClaim] | None,
         pods: list[V1Pod] | None,
+        kube_services: list[V1Service] | None,
     ) -> list[CapacityLineRead]:
         """The namespace's quota when it can be read, otherwise the ceilings entered by hand.
 
@@ -214,4 +216,8 @@ class EnvironmentHealthService:
             pods_counted=cluster.pods_committed(pods) if pods is not None else None,
             storage_ceiling=ceilings.requests_storage_bytes,
             pods_ceiling=ceilings.pods,
+            claims_counted=len(claims) if claims is not None else None,
+            claims_ceiling=ceilings.persistentvolumeclaims,
+            services_counted=cluster.services_committed(kube_services) if kube_services is not None else None,
+            services_ceiling=ceilings.services,
         )

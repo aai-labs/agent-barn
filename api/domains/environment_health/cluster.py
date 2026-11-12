@@ -18,6 +18,7 @@ from kubernetes.client import (
     V1PersistentVolumeClaim,
     V1Pod,
     V1ResourceQuota,
+    V1Service,
     V1StatefulSet,
 )
 from kubernetes.utils import parse_quantity
@@ -119,6 +120,7 @@ _QUOTA_ORDER = (
     "requests.storage",
     "persistentvolumeclaims",
     "pods",
+    "services",
     "limits.memory",
     "requests.memory",
     "limits.cpu",
@@ -331,6 +333,11 @@ def volume_allocation(
 # --- pods -----------------------------------------------------------------
 
 
+def services_committed(services: Sequence[V1Service]) -> int:
+    """What the `services` quota counts: every Service in the namespace, the Agents' included."""
+    return len(services)
+
+
 def pods_committed(pods: Sequence[V1Pod]) -> int:
     """The pods the `pods` quota line counts: every one not yet Succeeded or Failed."""
     return sum(1 for pod in pods if (pod.status.phase if pod.status else None) not in {"Succeeded", "Failed"})
@@ -540,18 +547,24 @@ def entered_lines(
     pods_counted: int | None,
     storage_ceiling: int | None,
     pods_ceiling: int | None,
+    claims_counted: int | None = None,
+    claims_ceiling: int | None = None,
+    services_counted: int | None = None,
+    services_ceiling: int | None = None,
 ) -> list[CapacityLineRead]:
     """The ceilings a Platform Administrator entered, beside what the API counts.
 
     CPU and memory are what kube-state-metrics says the pods commit, as on the Platform
-    resource usage page; storage and pods are counted from the claims and pods the API
-    lists. A figure that could not be read is None, never zero.
+    resource usage page; storage, pods, volume claims and Services are counted from what the
+    API lists. A figure that could not be read is None, never zero.
     """
     entered = CapacitySource.ENTERED
     return _ordered(
         [
             _line("requests.storage", storage_requested, _number(storage_ceiling), entered),
-            _line("pods", None if pods_counted is None else float(pods_counted), _number(pods_ceiling), entered),
+            _line("persistentvolumeclaims", _number(claims_counted), _number(claims_ceiling), entered),
+            _line("pods", _number(pods_counted), _number(pods_ceiling), entered),
+            _line("services", _number(services_counted), _number(services_ceiling), entered),
             _line(
                 "limits.memory",
                 _number(capacity.committed_limits_memory_bytes),

@@ -32,6 +32,7 @@ from kubernetes.client import (
     V1PodTemplateSpec,
     V1ResourceQuota,
     V1ResourceQuotaStatus,
+    V1Service,
     V1VolumeResourceRequirements,
 )
 from kubernetes.client.exceptions import ApiException
@@ -124,6 +125,7 @@ def _quiet_cluster(context) -> None:
         "list_deployments",
         "list_stateful_sets",
         "list_pvcs",
+        "list_services",
         "list_resource_quotas",
         "list_warning_events",
     ):
@@ -358,6 +360,45 @@ def test_without_the_quota_the_entered_ceilings_are_compared_with_the_claims_and
         assert_that(body["level"], equal_to("critical"))
 
 
+def test_volume_claims_and_services_are_counted_against_their_entered_ceilings():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-counts@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        k8s.list_resource_quotas.side_effect = _forbidden()
+        k8s.list_pvcs.return_value = [_claim(f"agent-{uuid4()}", "1Gi") for _ in range(60)]
+        k8s.list_services.return_value = [V1Service(metadata=V1ObjectMeta(name=f"svc-{n}")) for n in range(8)]
+        context.client.put(
+            "/api/v1/platform/resource-limits",
+            json={"persistentvolumeclaims": 60, "services": 40},
+            headers=_auth(context.access_token),
+        )
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["services"], equal_to("available"))
+        lines = {line["resource"]: line for line in body["capacity"]}
+        assert_that(
+            lines["persistentvolumeclaims"],
+            has_entries(source="entered", unit="count", used=60, hard=60, level="critical"),
+        )
+        assert_that(lines["services"], has_entries(used=8, hard=40, level="ok"))
+        assert_that(body["ceilings"], has_entries(persistentvolumeclaims=60, services=40))
+
+
+def test_refused_services_leave_their_line_unknown():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-services-refused@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        k8s.list_resource_quotas.side_effect = _forbidden()
+        k8s.list_services.side_effect = _forbidden()
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["services"], equal_to("forbidden"))
+        lines = {line["resource"]: line for line in body["capacity"]}
+        assert_that(lines["services"], has_entries(used=none(), level="unknown"))
+
+
 def test_a_readable_quota_takes_over_from_the_entered_ceilings():
     with given([*_BASE_GIVEN, *_platform_admin("env-admin-quota@example.com")]) as context:
         _quiet_cluster(context)
@@ -415,6 +456,7 @@ def test_with_no_cluster_to_read_the_page_says_so_instead_of_failing():
             "list_deployments",
             "list_stateful_sets",
             "list_pvcs",
+            "list_services",
             "list_resource_quotas",
             "list_warning_events",
         ):
