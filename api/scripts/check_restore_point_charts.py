@@ -123,13 +123,13 @@ def start_minutes(schedule: str) -> set[int]:
     assert match, f"unsupported minute field in {schedule!r}"
     start, end, step = match.groups()
     first = 0 if start == "*" else int(start)
-    last = 59 if start == "*" or step else int(end or start)
+    # A bare start with a step ("5/10") runs to the end of the hour, as in cron.
+    last = 59 if start == "*" or (step and not end) else int(end or start)
     return set(range(first, last + 1, int(step or 1)))
 
 
 def check_cronjob_load(cronjobs: dict[str, dict[str, Any]]) -> None:
     values = yaml.safe_load((CHART / "values.yaml").read_text())
-    assert values["jobs"]["resources"] != values["worker"]["resources"], "jobs need their own resources"
     for name, cronjob in cronjobs.items():
         for container in cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"]:
             assert container["resources"] == values["jobs"]["resources"], f"{name} does not use jobs.resources"

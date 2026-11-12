@@ -773,6 +773,12 @@ Documentation-only changes do not change a service image and do not require a se
   are `RESTORE_POINT_MAX_PER_AGENT` and `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, which are per
   Agent and not per Organization. With scheduled snapshots on, plan for up to
   `scheduled max + max + 1` restore point volumes per Agent.
+- **Per-environment sizing and retention.** `RESTORE_POINT_SIZE`, `RESTORE_POINT_MAX_PER_AGENT`,
+  `RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES`, `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT` and
+  `RESTORE_POINT_SCHEDULE_MAX_CONCURRENT` are optional GitHub Variables: `STAGING_`-prefixed for
+  staging, unprefixed for production (`deploy.yml`), and `PUBLIC_`-prefixed for the public
+  deploy (`deploy-public.yml`). Unset leaves the Helmfile default from `.env.deploy.spec`.
+  `make check-restore-points` fails if a deploy workflow stops passing one through.
 - **Scheduled snapshots** come from a `<release>-restore-point-schedule` CronJob
   (`restorePoints.schedule.*`: `cron` every 5 minutes, `intervalMinutes` 360 with 0 to turn
   snapshots off, `maxPerAgent` 4, `maxConcurrent` 2; disable the CronJob with

@@ -179,7 +179,9 @@ FIRECRAWL_API_KEY=
 # Not needed for production since Firecrawl is on ClusterIP (internal only).
 # FIRECRAWL_BULL_AUTH_KEY=
 # Optional: memory limits for the Firecrawl API and its RabbitMQ queue. Empty keeps
-# the chart defaults (2Gi and 512Mi). Raise them if either container is OOMKilled.
+# the chart defaults (3Gi and 1Gi). Raise them if either container is OOMKilled.
+# Never set them below the chart's memory requests (2Gi and 256Mi): Kubernetes
+# rejects a pod whose request exceeds its limit.
 FIRECRAWL_API_MEMORY_LIMIT=
 FIRECRAWL_RABBITMQ_MEMORY_LIMIT=
 
