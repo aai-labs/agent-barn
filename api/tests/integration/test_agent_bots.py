@@ -1255,3 +1255,177 @@ def test_a_parents_health_ignores_the_served_list():
         body = _call(context, "get", f"{BASE}/{context.parent.id}/healthz").json()
 
         assert_that(body["status"], equal_to("ok"))
+
+
+def _overlay(context, agent):
+    data = _created(_k8s(context).create_config_map)[f"agent-{agent.id}"].data
+    return json.loads(data["openclaw-config-overlay.json"])
+
+
+def _discord(agent, token):
+    return CommunicationConnection(
+        organization_id=agent.organization_id,
+        agent_id=agent.id,
+        platform_key="discord",
+        display_name="Discord",
+        enabled=True,
+        schema_version=1,
+        settings={"allowed_user_ids": ["user-1"]},
+        credentials_encrypted=encrypt_token(json.dumps({"bot_token": token}), TEST_ENCRYPTION_KEY),
+    )
+
+
+def test_starting_an_openclaw_parent_serves_its_bots_from_one_pod():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        k8s = _k8s(context)
+        names = [f"agent-{context.parent.id}", *[f"agent-{bot.id}" for bot in context.bots]]
+        assert_that(list(_created(k8s.create_deployment)), equal_to(names[:1]))
+        assert_that(list(_created(k8s.create_pvc)), equal_to(names[:1]))
+        assert_that(list(_created(k8s.create_secret)), contains_inanyorder(*names))
+        assert_that(list(_created(k8s.create_config_map)), contains_inanyorder(*names))
+        pod = _created(k8s.create_deployment)[names[0]].spec.template.spec
+        volumes = {volume.name for volume in pod.volumes}
+        for bot in context.bots:
+            assert_that({f"bot-{bot.id}-secret", f"bot-{bot.id}-config"} <= volumes, equal_to(True))
+        ports = [port.name for port in _created(k8s.create_service)[names[0]].spec.ports]
+        assert_that("trg-1" in ports and "trg-2" in ports, equal_to(True))
+        for bot in context.bots:
+            assert_that(_stored(context, bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_an_openclaw_parent_with_bots_runs_them_as_agents_of_its_gateway():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        _start(context)
+
+        overlay = _overlay(context, context.parent)
+        assert_that(list(overlay["agents"]["entries"]), equal_to(["main", *[str(bot.id) for bot in context.bots]]))
+        secret = _created(_k8s(context).create_secret)[f"agent-{context.parent.id}"].string_data
+        assert_that(
+            (secret["RUNTIME_MODEL"], secret["RUNTIME_SESSION_PREFIX"]), equal_to(("openclaw/main", "agent:main:"))
+        )
+        names = overlay["plugins"]["entries"]["agentbarn-bot-env"]["config"]["parentNames"]
+        assert_that(names, equal_to(sorted(secret)))
+
+
+def test_an_openclaw_parent_ships_the_bot_manifest_and_boot_scripts():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        _start(context)
+
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+        expected = {"bots": [{"id": str(bot.id), "slot": bot.bot_slot} for bot in context.bots], "deleted_ids": []}
+        assert_that(json.loads(data["bots.json"]), equal_to(expected))
+        for name in ("bot-setup.py", "bot-run.py", "agentbarn-bot-env-index.js"):
+            assert_that(name in data, equal_to(True))
+        secret = _created(_k8s(context).create_secret)[f"agent-{context.parent.id}"].string_data
+        assert_that("AAI_CONFIG" in secret, equal_to(False))
+
+
+def test_each_openclaw_bot_gets_its_own_secret_and_config_map():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        _start(context)
+
+        secrets = _created(_k8s(context).create_secret)
+        config_maps = _created(_k8s(context).create_config_map)
+        assert_that(len({secret.string_data["INGEST_API_KEY"] for secret in secrets.values()}), equal_to(3))
+        for bot in context.bots:
+            bot_secret = secrets[f"agent-{bot.id}"].string_data
+            assert_that(bot_secret["AGENT_ID"], equal_to(str(bot.id)))
+            assert_that(bot_secret["LITELLM_API_KEY"] != "", equal_to(True))
+            assert_that("AGENTS.md" in config_maps[f"agent-{bot.id}"].data, equal_to(True))
+
+
+def test_an_openclaw_bots_platform_becomes_its_own_account_on_the_parents_gateway():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
+        context.postgres_delegate.save(_discord(context.bot, "bot-discord"))
+
+        _start(context)
+
+        discord = _overlay(context, context.parent)["channels"]["discord"]
+        assert_that(list(discord["accounts"]), equal_to([str(context.bot.id)]))
+        assert_that(
+            discord["accounts"][str(context.bot.id)]["token"],
+            equal_to({"source": "file", "provider": "bot1", "id": "/DISCORD_BOT_TOKEN"}),
+        )
+        secrets = _created(_k8s(context).create_secret)
+        assert_that(secrets[f"agent-{context.bot.id}"].string_data["DISCORD_BOT_TOKEN"], equal_to("bot-discord"))
+        parent_secret = secrets[f"agent-{context.parent.id}"].string_data
+        assert_that(parent_secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("discord"))
+        assert_that("DISCORD_BOT_TOKEN" in parent_secret, equal_to(False))
+
+
+def test_one_bad_openclaw_bot_fails_alone_and_is_left_out_of_the_gateway():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        original = AgentService._assemble_agent
+        bad = context.bots[0]
+
+        def failing(self, agent, **fields):
+            if agent.id == bad.id:
+                raise RuntimeError("broken bot")
+            return original(self, agent, **fields)
+
+        with patch.object(AgentService, "_assemble_agent", failing):
+            response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        entries = _overlay(context, context.parent)["agents"]["entries"]
+        assert_that(list(entries), equal_to(["main", str(context.bots[1].id)]))
+        pod = _created(_k8s(context).create_deployment)[f"agent-{context.parent.id}"].spec.template.spec
+        assert_that(f"bot-{bad.id}-secret" in {volume.name for volume in pod.volumes}, equal_to(False))
+
+
+def test_an_openclaw_parent_with_bots_accepts_a_multi_line_value():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
+        config = context.injector.get(AppConfig)
+        config.agent_firecrawl_api_key = "line1\nline2"
+        config.agent_firecrawl_base_url = "https://configured.firecrawl.example/v1"
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+
+
+def test_an_openclaw_parent_without_bots_keeps_its_single_agent_pod():
+    with given([*_GIVEN, _openclaw_parent_with_bots()]) as context:
+        _start(context)
+
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+        assert_that("bots.json" in data, equal_to(False))
+        assert_that("ownership" in json.loads(data["openclaw-config-overlay.json"])["agents"], equal_to(False))
+        secret = _created(_k8s(context).create_secret)[f"agent-{context.parent.id}"].string_data
+        assert_that(secret["RUNTIME_MODEL"], equal_to("openclaw/default"))
+        assert_that("RUNTIME_SESSION_PREFIX" in secret, equal_to(False))
+
+
+def test_an_openclaw_parent_whose_last_bot_was_deleted_returns_to_one_agent():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
+        _call(context, "delete", f"{BASE}/{context.bot.id}")
+
+        _start(context)
+
+        data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+        assert_that(json.loads(data["bots.json"]), equal_to({"bots": [], "deleted_ids": [str(context.bot.id)]}))
+        assert_that("entries" in json.loads(data["openclaw-config-overlay.json"])["agents"], equal_to(False))
+        secret = _created(_k8s(context).create_secret)[f"agent-{context.parent.id}"].string_data
+        assert_that(secret["RUNTIME_MODEL"], equal_to("openclaw/default"))
+
+
+def test_stopping_an_openclaw_parent_stops_its_bots_and_removes_their_runtime_material():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        _start(context)
+        k8s = _k8s(context)
+        k8s.delete_secret.reset_mock()
+        k8s.delete_config_map.reset_mock()
+
+        response = _call(context, "post", f"{BASE}/{context.parent.id}/stop")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        for bot in context.bots:
+            assert_that(_stored(context, bot.id).status, equal_to(AgentStatus.STOPPED))
+        names = [f"agent-{context.parent.id}", *[f"agent-{bot.id}" for bot in context.bots]]
+        assert_that(_deleted_names(k8s.delete_secret), contains_inanyorder(*names))
+        assert_that(_deleted_names(k8s.delete_config_map), contains_inanyorder(*names))

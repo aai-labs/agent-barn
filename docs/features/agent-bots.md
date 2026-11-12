@@ -43,6 +43,7 @@ On OpenClaw, Bots also share:
 
 - Firecrawl and web tool settings. Bots use the Parent Agent's Firecrawl setup and key; a Bot's own Firecrawl credential is refused.
 - Automatic memory. Hindsight recall and retain run for the Parent Agent only, and Bot conversations are kept out of the Parent Agent's memory bank.
+- The pod's memory limit, which is the Parent Agent's Agent Size and does not grow with Bots. A Parent Agent with two Bots used 890 MiB idle in local testing against the default 1 GiB limit, so a Parent Agent with several Bots may need a larger Agent Size.
 
 Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, scheduled jobs, plugin identity, and Agent Barn keys, and its terminal sees its own integration credentials. On Hermes it keeps its own built-in memory. On OpenClaw it keeps its own workspace, and it saves and recalls Agent Memory through the memory tool under its own key.
 

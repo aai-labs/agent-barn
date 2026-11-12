@@ -58,6 +58,11 @@ from api.domains.agents.builders import (
     runtime_teams_env,
     with_passthrough_placeholders,
 )
+from api.domains.agents.builders.openclaw import (
+    OpenClawBot,
+    multi_agent_gateway_config,
+    multi_agent_runtime_env,
+)
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition, refuse_on_bot
 from api.domains.agents.llm_budget import AgentLlmBudgetService
@@ -342,6 +347,7 @@ class _AssembledAgent:
     memory_key: str | None
     env_names: frozenset[str]
     tool_env_names: frozenset[str]
+    overlay: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -2556,7 +2562,7 @@ class AgentService:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         assembled_bots: list[tuple[Agent, _AssembledAgent]] = []
         deleted_bots: list[Agent] = []
-        if not preflight and agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
+        if not preflight and agent.parent_agent_id is None:
             deleted_bots = self.repository.find_deleted_bots(agent.id)
             for bot in self.repository.find_live_bots(agent.id):
                 try:
@@ -2829,6 +2835,7 @@ class AgentService:
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
                 resources=resources,
+                bot_ids=[bot.id for bot, _ in bots],
             )
 
         # aai-cli integration secrets — all agent types.
@@ -3127,7 +3134,10 @@ class AgentService:
         )
 
         tool_env_names = frozenset(artifacts.env) | frozenset(custom_artifacts.env)
-        if agent.parent_agent_id is not None or self.repository.find_live_bots(agent.id):
+        hermes_pod_with_bots = agent.agent_type == AgentType.HERMES and (
+            agent.parent_agent_id is not None or bool(self.repository.find_live_bots(agent.id))
+        )
+        if hermes_pod_with_bots:
             for env_name, value in secret.string_data.items():
                 if "\n" in value or "\r" in value:
                     raise AgentProvisioningPrecondition(
@@ -3135,7 +3145,14 @@ class AgentService:
                         detail=f"{env_name} has a line break, which a Bot's environment file cannot hold",
                     )
         bots_manifest = None
-        if bots or deleted_bot_ids:
+        if agent.agent_type == AgentType.OPENCLAW and (bots or deleted_bot_ids):
+            bots_manifest = json.dumps(
+                {
+                    "bots": [{"id": str(bot.id), "slot": bot.bot_slot} for bot, _ in bots],
+                    "deleted_ids": [str(bot_id) for bot_id in deleted_bot_ids],
+                }
+            )
+        elif bots or deleted_bot_ids:
             passthrough = bot_passthrough_names(
                 [*secret.string_data, *[name for _, assembled in bots for name in assembled.env_names]],
                 [*tool_env_names, *[name for _, assembled in bots for name in assembled.tool_env_names]],
@@ -3174,6 +3191,14 @@ class AgentService:
                 bots_manifest=bots_manifest,
             )
         else:
+            assert overlay is not None
+            openclaw_bots = [
+                OpenClawBot(id=bot.id, slot=bot.bot_slot, overlay=assembled.overlay)
+                for bot, assembled in bots
+                if bot.bot_slot is not None and assembled.overlay is not None
+            ]
+            secret.string_data.update(multi_agent_runtime_env(secret.string_data, openclaw_bots))
+            overlay = multi_agent_gateway_config(overlay, openclaw_bots, parent_env_names=list(secret.string_data))
             config_map = build_config_map(
                 agent_id=agent.id,
                 org_id=org_id,
@@ -3194,6 +3219,7 @@ class AgentService:
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
+                bots_manifest=bots_manifest,
             )
 
         config_map.data["AGENTS.md"] += custom_artifacts.policy_md
@@ -3212,6 +3238,7 @@ class AgentService:
             memory_key=memory_key,
             env_names=frozenset(secret.string_data),
             tool_env_names=tool_env_names,
+            overlay=overlay,
         )
 
     def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
