@@ -215,9 +215,9 @@ function BotSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string;
   const current = useCachedAgent(agentId);
   const parentId = current?.parentAgentId ?? agentId;
   const { agent: parent } = useAgent(parentId);
-  const { bots } = useBots(parentId, { enabled: current?.agentType === "hermes" });
+  const { bots } = useBots(parentId, { enabled: current !== undefined });
   const [adding, setAdding] = useState(false);
-  if (!current || !parent || current.agentType !== "hermes") return null;
+  if (!current || !parent) return null;
   const atLimit = bots.length >= MAX_BOTS_PER_PARENT;
   const label = current.parentAgentId ? current.name : "Main";
 

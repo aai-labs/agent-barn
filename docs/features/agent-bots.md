@@ -87,10 +87,10 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 
 - Opening an Agent shows the Parent Agent. A switcher in the path bar (`Organization / Parent Agent / Bot`) lists the Parent Agent, its Bots with their status, and New bot. Switching keeps the current tab.
 - Bot pages show the Bot's own Overview, Chat, Conversations, Memory, Tool calls, Artifacts, Playbooks, Activity, Costs and settings.
-- An "Agent" menu group holds Logs, Resource usage, File sync, Restore points and Size, and always acts on the Parent Agent.
+- An "Agent" menu group holds Logs, Resource usage, File sync, Restore points and Size, and always acts on the Parent Agent. Every Agent on either runtime shows it, with or without Bots.
 - Home shows the Parent Agent with its Bot count.
 - The UI states that Bots share one trust boundary wherever Bots are created or shared.
-- The UI is the same on both runtimes, except that OpenClaw Bots have no command-approval field.
+- The UI is the same on both runtimes, except that the New bot dialog and a Bot's settings offer no command approval on OpenClaw.
 
 ## Runtime upgrades
 

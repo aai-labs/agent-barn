@@ -189,7 +189,8 @@ export function useHireAgentForm({ onHired, templatePagination, parent }: {
       const added: Agent[] = [];
       try {
         await applyAndRestart(async () => {
-          added.push(await createBot.mutateAsync({ ...definition, approvalMode }));
+          const approval = parent.agentType === "hermes" ? { approvalMode } : {};
+          added.push(await createBot.mutateAsync({ ...definition, ...approval }));
         });
         onHired({ id: added[0].id, name: added[0].name, role: template.templateName });
       } catch (cause) {

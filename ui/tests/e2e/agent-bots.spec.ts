@@ -18,6 +18,8 @@ const parent = { ...mockAgent, name: "Front Desk", agent_type: "hermes", status:
 const bot = (id: string, name: string) => ({ ...parent, id, name, parent_agent_id: MOCK_AGENT_ID });
 const sales = bot(SALES_ID, "Sales");
 const lawyer = bot(LAWYER_ID, "Lawyer");
+const openclawParent = { ...parent, agent_type: "openclaw", approval_mode: "auto" };
+const openclawBots = [sales, lawyer].map((entry) => ({ ...entry, agent_type: "openclaw", approval_mode: "auto" }));
 
 async function setUp(page: Page, agent: typeof parent = parent, bots: unknown[] = [sales, lawyer]) {
   const data = new DataSupport(page);
@@ -96,12 +98,17 @@ test.describe("Agent Bots switcher", () => {
     await expect(switcher(page)).toContainText("Sales");
   });
 
-  test("an OpenClaw agent has no bot switcher", async ({ page }) => {
-    await setUp(page, { ...parent, agent_type: "openclaw" }, []);
+  test("an OpenClaw parent lists itself as main, then its bots", async ({ page }) => {
+    await setUp(page, openclawParent, openclawBots);
     await goto(page);
 
-    await expect(page.getByRole("button", { name: /^Switch agent/ })).toBeVisible();
-    await expect(switcher(page)).toHaveCount(0);
+    await expect(switcher(page)).toContainText("Main");
+    await switcher(page).click();
+
+    const items = page.getByRole("menuitem");
+    await expect(items.filter({ hasText: "Front Desk" })).toContainText("main");
+    await expect(items.filter({ hasText: "Sales" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "New bot" })).toBeVisible();
   });
 
   test("someone who cannot edit the parent is not offered a new bot", async ({ page }) => {
@@ -169,6 +176,20 @@ test.describe("New bot dialog", () => {
     await expect(page.getByText("You need permission to restart Front Desk.")).toBeVisible();
   });
 
+  test("a bot on an OpenClaw parent is added without a command approval choice", async ({ page }) => {
+    const { created } = await setUp(page, openclawParent, openclawBots);
+    await goto(page);
+
+    await openNewBot(page);
+    await expect(page.getByRole("combobox", { name: "Command approval" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Add bot" }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/agents/${NEW_BOT_ID}`));
+    expect(created[0]).toMatchObject({ name: "Researcher", template_key: expect.any(String) });
+    expect(created[0]).not.toHaveProperty("approval_mode");
+    expect(created[0]).not.toHaveProperty("agent_type");
+  });
+
   test("a manual parent makes the new bot manual", async ({ page }) => {
     const { created } = await setUp(page, { ...parent, approval_mode: "manual" });
     await goto(page);
@@ -228,14 +249,18 @@ test.describe("Bot pages", () => {
     );
   });
 
-  test("an OpenClaw agent has no pod-wide group", async ({ page }) => {
-    await setUp(page, { ...parent, agent_type: "openclaw" }, []);
+  test("an OpenClaw parent keeps the same pod-wide group, on itself", async ({ page }) => {
+    await setUp(page, openclawParent, openclawBots);
     await goto(page);
 
     const nav = panel(page, "Front Desk");
-    await expect(nav.getByRole("link", { name: "Logs", exact: true })).toBeVisible();
-    await expect(nav.getByText("Shared by every bot")).toHaveCount(0);
-    await expect(nav.getByRole("link", { name: "Restore points" })).toHaveCount(0);
+    await expect(nav.getByText("Shared by every bot")).toBeVisible();
+    for (const [name, suffix] of POD_LINKS) {
+      await expect(nav.getByRole("link", { name, exact: true })).toHaveAttribute(
+        "href",
+        agentHref(MOCK_AGENT_ID, suffix),
+      );
+    }
   });
 
   test("a pod-wide tab opened on a bot falls back to its Overview", async ({ page }) => {
@@ -412,6 +437,14 @@ test.describe("Home with bots", () => {
 
     await expect(card).toContainText("1 bot");
     await expect(card).not.toContainText("needs attention");
+  });
+
+  test("an OpenClaw parent's card counts its bots", async ({ page }) => {
+    const { data } = await setUp(page, openclawParent, openclawBots);
+    await data.organizations.interceptGetOrganizationLlmBudget();
+    await page.goto(`/dashboard/${TEST_ORG_ID}`);
+
+    await expect(page.getByRole("link", { name: "View Front Desk" })).toContainText("2 bots");
   });
 
   test("a parent with no bots shows no count", async ({ page }) => {

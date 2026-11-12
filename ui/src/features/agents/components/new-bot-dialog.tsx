@@ -115,32 +115,34 @@ export function NewBotDialog({
         <FormField label="Model">
           <ModelChoice value={model} effectiveDefaultModel={defaultModel} onChange={setModel} disabled={pending} />
         </FormField>
-        <FormField
-          label="Command approval"
-          hint={`Manual must be on for ${parent.name} and every bot in it, or none of them.`}
-        >
-          <Select
-            value={approvalMode}
-            onValueChange={(value) => setApprovalMode(value as "auto" | "off")}
-            disabled={pending || parentIsManual}
+        {parent.agentType === "hermes" && (
+          <FormField
+            label="Command approval"
+            hint={`Manual must be on for ${parent.name} and every bot in it, or none of them.`}
           >
-            <SelectTrigger aria-label="Command approval" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {parentIsManual ? (
-                  <SelectItem value="manual">Manual</SelectItem>
-                ) : (
-                  <>
-                    <SelectItem value="auto">Automatic</SelectItem>
-                    <SelectItem value="off">Off</SelectItem>
-                  </>
-                )}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </FormField>
+            <Select
+              value={approvalMode}
+              onValueChange={(value) => setApprovalMode(value as "auto" | "off")}
+              disabled={pending || parentIsManual}
+            >
+              <SelectTrigger aria-label="Command approval" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {parentIsManual ? (
+                    <SelectItem value="manual">Manual</SelectItem>
+                  ) : (
+                    <>
+                      <SelectItem value="auto">Automatic</SelectItem>
+                      <SelectItem value="off">Off</SelectItem>
+                    </>
+                  )}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </FormField>
+        )}
 
         {template && template.requiredSkills.length > 0 && (
           <section className="flex flex-col gap-3 border-t pt-5 sm:col-span-2" style={{ borderColor: "var(--line)" }}>
