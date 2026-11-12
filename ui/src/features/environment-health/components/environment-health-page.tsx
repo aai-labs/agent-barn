@@ -113,6 +113,7 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
       <div className="grid gap-x-6" style={TWO_COLUMNS}>
         <ServicesPanel
           services={health.services}
+          deployed={health.deployed}
           alerts={health.alerts}
           workloadsState={workloadsState}
           monitoringState={states.prometheus}

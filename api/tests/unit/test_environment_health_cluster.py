@@ -15,6 +15,7 @@ from kubernetes.client import (
     V1ContainerStateWaiting,
     V1ContainerStatus,
     V1Deployment,
+    V1DeploymentCondition,
     V1DeploymentSpec,
     V1DeploymentStatus,
     V1LabelSelector,
@@ -42,8 +43,11 @@ from api.domains.environment_health import cluster
 from api.domains.environment_health.models import (
     CapacityLevel,
     CapacitySource,
+    CoreServiceRead,
+    DeployedVersionRead,
     EnvironmentSource,
     HealthLevel,
+    RolloutState,
     SourceState,
     VolumeAllocationRead,
     VolumeGroup,
@@ -441,6 +445,85 @@ def test_core_services_leave_out_agents_and_report_replicas():
     assert services[2].kind == "StatefulSet"
 
 
+_SHA = "7f306e1b4c2d9a8e5f60718293a4b5c6d7e8f901"
+_OLD_SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _released(
+    name: str, sha: str | None, *, reason: str = "NewReplicaSetAvailable", rolled_out_ago=timedelta(days=6)
+) -> V1Deployment:
+    return V1Deployment(
+        metadata=V1ObjectMeta(name=name),
+        spec=V1DeploymentSpec(
+            replicas=1,
+            selector=V1LabelSelector(),
+            template=V1PodTemplateSpec(
+                metadata=V1ObjectMeta(annotations={"build-sha": sha, "note": "secret"} if sha else None)
+            ),
+        ),
+        status=V1DeploymentStatus(
+            ready_replicas=1,
+            conditions=[
+                V1DeploymentCondition(type="Available", status="True", reason="MinimumReplicasAvailable"),
+                V1DeploymentCondition(
+                    type="Progressing",
+                    status="False" if reason == "ProgressDeadlineExceeded" else "True",
+                    reason=reason,
+                    message="ReplicaSet has timed out progressing: token=abc",
+                    last_update_time=_NOW - rolled_out_ago,
+                ),
+            ],
+        ),
+    )
+
+
+def test_a_service_carries_its_build_and_when_its_last_rollout_finished():
+    [service] = cluster.core_services([_released("agentbarn-api", _SHA)], [])
+
+    assert (service.build_sha, service.rollout, service.rolled_out_at) == (
+        _SHA,
+        cluster.RolloutState.COMPLETE,
+        _NOW - timedelta(days=6),
+    )
+    assert "token" not in service.model_dump_json() and "secret" not in service.model_dump_json()
+
+
+def test_a_stuck_rollout_is_a_warning_and_an_unrecognised_build_is_dropped():
+    services = cluster.core_services(
+        [
+            _released("agentbarn-ui", "not-a-sha; rm -rf"),
+            _released("agentbarn-api", _SHA, reason="ProgressDeadlineExceeded", rolled_out_ago=timedelta(hours=2)),
+            _released("agentbarn-worker", _SHA, reason="ReplicaSetUpdated", rolled_out_ago=timedelta(minutes=1)),
+        ],
+        [],
+    )
+
+    by_name = {service.name: service for service in services}
+    api = by_name["agentbarn-api"]
+    assert (api.rollout, api.rolled_out_at, api.level) == (cluster.RolloutState.STUCK, None, HealthLevel.WARNING)
+    assert by_name["agentbarn-worker"].rollout == cluster.RolloutState.IN_PROGRESS
+    assert by_name["agentbarn-ui"].build_sha is None
+
+
+def test_the_deployed_version_is_the_newest_build_and_says_when_services_disagree():
+    services = cluster.core_services(
+        [
+            _released("agentbarn-api", _SHA, rolled_out_ago=timedelta(days=6)),
+            _released("agentbarn-ui", _SHA, rolled_out_ago=timedelta(days=6, minutes=2)),
+            _released("agentbarn-gateway", _OLD_SHA, rolled_out_ago=timedelta(days=20)),
+            _released("redis", None),
+        ],
+        [],
+    )
+
+    deployed = cluster.deployed_version(services)
+
+    assert deployed is not None
+    assert (deployed.build_sha, deployed.rolled_out_at, deployed.mixed) == (_SHA, _NOW - timedelta(days=6), True)
+    assert deployed.behind == ["agentbarn-gateway"]
+    assert cluster.deployed_version(cluster.core_services([_released("redis", None)], [])) is None
+
+
 # --- capacity -------------------------------------------------------------
 
 
@@ -760,6 +843,7 @@ def _level(**overrides) -> HealthLevel:
         "alerts": [],
         "volumes": VolumeAllocationRead(),
         "events": [],
+        "deployed": None,
         **overrides,
     }
     return overall_level(**arguments)
@@ -810,3 +894,19 @@ def test_duplicate_alerts_keep_the_highest_severity(severities):
 
     assert alert.severity == "critical"
     assert _level(alerts=[alert]) == HealthLevel.CRITICAL
+
+
+def test_services_on_another_build_are_a_warning_unless_a_rollout_is_under_way():
+    mixed = DeployedVersionRead(build_sha=_SHA, mixed=True, behind=["agentbarn-gateway"])
+    rolling = CoreServiceRead(
+        name="agentbarn-gateway",
+        kind="Deployment",
+        desired_replicas=1,
+        ready_replicas=1,
+        level=HealthLevel.OK,
+        rollout=RolloutState.IN_PROGRESS,
+    )
+
+    assert _level(deployed=mixed) == HealthLevel.WARNING
+    assert _level(deployed=mixed, services=[rolling]) == HealthLevel.OK
+    assert _level(deployed=DeployedVersionRead(build_sha=_SHA)) == HealthLevel.OK

@@ -15,12 +15,14 @@ from api.domains.environment_health.models import (
     CapacityLevel,
     CapacityLineRead,
     CoreServiceRead,
+    DeployedVersionRead,
     EnvironmentHealthRead,
     EnvironmentSource,
     EnvironmentSourceRead,
     FailedAgentRead,
     FiringAlertRead,
     HealthLevel,
+    RolloutState,
     SourceState,
     UnhealthyRuntimeRead,
     VolumeAllocationRead,
@@ -65,12 +67,14 @@ def overall_level(
     alerts: Sequence[FiringAlertRead],
     volumes: VolumeAllocationRead,
     events: Sequence[WarningEventRead],
+    deployed: DeployedVersionRead | None = None,
 ) -> HealthLevel:
     """The worst of what the page shows.
 
     Critical when a platform service has no ready replica, a quota line is at or past 90%,
     or a critical alert is firing. A warning for anything else that needs a look, and when
-    Prometheus could not answer, since a critical alert may be firing unseen. Unknown when
+    Prometheus could not answer, since a critical alert may be firing unseen, and when some
+    services are left on an older build with no rollout under way. Unknown when
     neither pods nor Deployments could be read, since nothing else says whether the platform runs.
     """
     if (
@@ -94,6 +98,9 @@ def overall_level(
         or alerts
         or volumes.attention
         or events
+        or (
+            deployed is not None and deployed.mixed and not any(s.rollout == RolloutState.IN_PROGRESS for s in services)
+        )
     ):
         return HealthLevel.WARNING
     return HealthLevel.OK
@@ -169,6 +176,7 @@ class EnvironmentHealthService:
                 sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
 
         services = cluster.core_services(deployments or [], stateful_sets or [])
+        deployed = cluster.deployed_version(services)
         restarts = cluster.pod_restarts(restart_samples) if restart_samples is not None else None
         workloads = cluster.workloads(pods, identities, now, restarts) if pods is not None else WorkloadsRead()
         alerts = cluster.firing_alerts(alert_samples or [], identities)
@@ -196,8 +204,10 @@ class EnvironmentHealthService:
                 alerts=alerts,
                 volumes=volumes,
                 events=warnings,
+                deployed=deployed,
             ),
             sources=[EnvironmentSourceRead(source=source, state=state) for source, state in sources.items()],
+            deployed=deployed,
             ceilings=ceilings,
             services=services,
             alerts=alerts,

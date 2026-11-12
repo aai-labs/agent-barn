@@ -8,7 +8,7 @@ database; the `org-id`, `agent_name` and `org_name` labels are never trusted.
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import NamedTuple
 from uuid import UUID
@@ -42,10 +42,12 @@ from api.domains.environment_health.models import (
     CapacitySource,
     CapacityUnit,
     CoreServiceRead,
+    DeployedVersionRead,
     FailedAgentRead,
     FiringAlertRead,
     HealthLevel,
     PodIssueRead,
+    RolloutState,
     UnhealthyRuntimeRead,
     VolumeAllocationRead,
     VolumeClaimRead,
@@ -69,6 +71,10 @@ CRITICAL_RATIO = 0.9
 # A pod that has restarted this often since it was created, the last time within the window,
 # is restarting repeatedly. Restart counts never reset, so a pod that restarted many times when
 # its node rebooted last week and has run cleanly since is not flagged.
+# The pod-template annotation the charts set to the commit each image was built from.
+BUILD_SHA_ANNOTATION = "build-sha"
+_BUILD_SHA = re.compile(r"[0-9a-f]{7,40}")
+
 REPEATED_RESTARTS = 3
 RECENT_RESTART_WINDOW = timedelta(hours=1)
 # How far back the restart history (kube-state-metrics, via Prometheus) is read. A container
@@ -240,17 +246,70 @@ def core_services(deployments: Sequence[V1Deployment], stateful_sets: Sequence[V
                 continue
             desired = workload.spec.replicas if workload.spec and workload.spec.replicas is not None else 1
             ready = (workload.status.ready_replicas if workload.status else None) or 0
+            level = _replica_level(desired, ready)
+            build_sha = rollout = rolled_out_at = None
+            if isinstance(workload, V1Deployment):
+                build_sha = _build_sha(workload)
+                rollout, rolled_out_at = _rollout(workload)
+                if rollout == RolloutState.STUCK and level == HealthLevel.OK:
+                    level = HealthLevel.WARNING
             services.append(
                 CoreServiceRead(
                     name=name,
                     kind=kind,
                     desired_replicas=desired,
                     ready_replicas=ready,
-                    level=_replica_level(desired, ready),
+                    level=level,
+                    build_sha=build_sha,
+                    rollout=rollout,
+                    rolled_out_at=rolled_out_at,
                 )
             )
     services.sort(key=lambda service: (_LEVEL_ORDER[service.level], service.name))
     return services
+
+
+def _build_sha(deployment: V1Deployment) -> str | None:
+    template = deployment.spec.template if deployment.spec else None
+    annotations = (template.metadata.annotations if template and template.metadata else None) or {}
+    sha = annotations.get(BUILD_SHA_ANNOTATION)
+    return sha if isinstance(sha, str) and _BUILD_SHA.fullmatch(sha) else None
+
+
+def _rollout(deployment: V1Deployment) -> tuple[RolloutState | None, datetime | None]:
+    """Where the Deployment's latest rollout stands, and when it finished if it has.
+
+    Read from the `Progressing` condition's reason only; its message is never read.
+    """
+    conditions = (deployment.status.conditions if deployment.status else None) or []
+    progressing = next((condition for condition in conditions if condition.type == "Progressing"), None)
+    if progressing is None:
+        return None, None
+    if progressing.reason == "NewReplicaSetAvailable":
+        return RolloutState.COMPLETE, progressing.last_update_time
+    if progressing.reason == "ProgressDeadlineExceeded":
+        return RolloutState.STUCK, None
+    return RolloutState.IN_PROGRESS, None
+
+
+_NEVER = datetime.min.replace(tzinfo=UTC)
+
+
+def deployed_version(services: Sequence[CoreServiceRead]) -> DeployedVersionRead | None:
+    """The build rolled out most recently, and the services that run another one.
+
+    None when no Deployment carries a build. A service still rolling out has no finish time,
+    so it never decides the build; it is listed as behind until it finishes.
+    """
+    built = [service for service in services if service.build_sha]
+    if not built:
+        return None
+    newest = max(built, key=lambda service: (service.rolled_out_at is not None, service.rolled_out_at or _NEVER))
+    behind = sorted(service.name for service in built if service.build_sha != newest.build_sha)
+    assert newest.build_sha is not None
+    return DeployedVersionRead(
+        build_sha=newest.build_sha, rolled_out_at=newest.rolled_out_at, mixed=bool(behind), behind=behind
+    )
 
 
 def _replica_level(desired: int, ready: int) -> HealthLevel:

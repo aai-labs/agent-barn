@@ -83,6 +83,18 @@ export function formatAgo(iso: string | null, now: Date = new Date()): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** The short form of a commit, as Git prints it. */
+export function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
+
+/** How long ago, in days once it is a day or more, so a stale deploy reads as stale. */
+export function formatAge(iso: string, now: Date = new Date()): string {
+  const days = Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
+  if (days < 1) return formatAgo(iso, now);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
+}
+
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }

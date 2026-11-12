@@ -18,6 +18,7 @@ from kubernetes.client import (
     V1ContainerStateWaiting,
     V1ContainerStatus,
     V1Deployment,
+    V1DeploymentCondition,
     V1DeploymentSpec,
     V1DeploymentStatus,
     V1LabelSelector,
@@ -489,6 +490,60 @@ def test_without_restart_history_the_pods_are_still_judged_by_themselves():
             body["workloads"]["issues"],
             contains_exactly(has_entries(pod_name="worker-1", restarts_in_window=none(), oom_killed=False)),
         )
+
+
+def _released(name: str, sha: str, rolled_out_at: datetime) -> V1Deployment:
+    return V1Deployment(
+        metadata=V1ObjectMeta(name=name),
+        spec=V1DeploymentSpec(
+            replicas=1,
+            selector=V1LabelSelector(),
+            template=V1PodTemplateSpec(metadata=V1ObjectMeta(annotations={"build-sha": sha})),
+        ),
+        status=V1DeploymentStatus(
+            ready_replicas=1,
+            conditions=[
+                V1DeploymentCondition(
+                    type="Progressing", status="True", reason="NewReplicaSetAvailable", last_update_time=rolled_out_at
+                )
+            ],
+        ),
+    )
+
+
+def test_the_deployed_build_and_when_it_rolled_out_are_shown():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-deployed@example.com")]) as context:
+        _quiet_cluster(context)
+        six_days_ago = datetime(2026, 11, 6, 9, 30, tzinfo=UTC)
+        sha = "7f306e1b4c2d9a8e5f60718293a4b5c6d7e8f901"
+        _cluster(context).list_deployments.return_value = [
+            _released("agentbarn-api", sha, six_days_ago),
+            _released("agentbarn-ui", sha, six_days_ago),
+        ]
+
+        body = _get(context).json()
+
+        assert_that(
+            body["deployed"],
+            has_entries(build_sha=sha, rolled_out_at="2026-11-06T09:30:00Z", mixed=False, behind=[]),
+        )
+        assert_that(body["services"], has_item(has_entries(name="agentbarn-ui", build_sha=sha, rollout="complete")))
+        assert_that(body["level"], equal_to("ok"))
+
+
+def test_services_left_on_an_older_build_are_a_warning():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-mixed@example.com")]) as context:
+        _quiet_cluster(context)
+        now = datetime.now(UTC)
+        _cluster(context).list_deployments.return_value = [
+            _released("agentbarn-api", "7f306e1b", now - timedelta(hours=1)),
+            _released("agentbarn-gateway", "0123abcd", now - timedelta(days=20)),
+        ]
+
+        body = _get(context).json()
+
+        assert_that(body["deployed"], has_entries(build_sha="7f306e1b", mixed=True, behind=["agentbarn-gateway"]))
+        assert_that(body["level"], equal_to("warning"))
 
 
 def test_refused_services_leave_their_line_unknown():

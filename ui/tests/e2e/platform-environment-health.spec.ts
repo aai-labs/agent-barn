@@ -99,6 +99,47 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(healthPage.section("workloads")).toContainText("ran out of memory in the last 7 days");
   });
 
+  test("shows the deployed build, how long ago it rolled out, and services left behind", async ({ page }) => {
+    const sixDaysAgo = new Date(Date.now() - 6 * 86_400_000 - 60_000).toISOString();
+    const sha = "7f306e1b4c2d9a8e5f60718293a4b5c6d7e8f901";
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        deployed: { build_sha: sha, rolled_out_at: sixDaysAgo, mixed: true, behind: ["agentbarn-gateway"] },
+        services: [
+          {
+            name: "agentbarn-gateway",
+            kind: "Deployment",
+            desired_replicas: 1,
+            ready_replicas: 1,
+            level: "warning",
+            build_sha: "0123456789abcdef",
+            rollout: "stuck",
+            rolled_out_at: null,
+          },
+          {
+            name: "agentbarn-api",
+            kind: "Deployment",
+            desired_replicas: 1,
+            ready_replicas: 1,
+            level: "ok",
+            build_sha: sha,
+            rollout: "complete",
+            rolled_out_at: sixDaysAgo,
+          },
+        ],
+      }),
+    });
+
+    await healthPage.goto();
+
+    const deployed = page.getByTestId("environment-deployed");
+    await expect(deployed).toContainText("Build 7f306e1");
+    await expect(deployed).toContainText("rolled out 6 days ago");
+    await expect(deployed).toContainText("agentbarn-gateway is on another build");
+    await expect(page.getByTestId("service-agentbarn-gateway")).toContainText("Rollout stuck");
+    await expect(page.getByTestId("service-agentbarn-gateway")).toContainText("0123456");
+  });
+
   test("breaks storage down by owner and lists the orphaned claim", async () => {
     await data.environmentHealth.interceptEnvironmentHealth();
 
