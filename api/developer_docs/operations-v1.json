@@ -886,6 +886,16 @@
   ],
   [
     "GET",
+    "/platform/settings/decisions",
+    "read_settings_platform_settings_decisions_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/decisions/models",
+    "list_models_platform_settings_decisions_models_get"
+  ],
+  [
+    "GET",
     "/platform/settings/organizations",
     "read_organization_settings_platform_settings_organizations_get"
   ],
@@ -1593,6 +1603,11 @@
     "PUT",
     "/platform/settings/billing",
     "update_billing_settings_platform_settings_billing_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/decisions",
+    "update_settings_platform_settings_decisions_put"
   ],
   [
     "PUT",

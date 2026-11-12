@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from sqlmodel import Session
@@ -276,6 +277,17 @@ class AgentLlmBudgetService:
         return AgentLlmBudgetState.OK
 
     # --- every Agent in an Organization, after its limits moved -------------------
+
+    def agent_key(self, agent_id: UUID) -> str | None:
+        """The live Agent's own LiteLLM key, for platform features that bill their model
+        calls to it; None when the Agent is gone or has no usable key."""
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or not agent.litellm_key_encrypted:
+            return None
+        try:
+            return decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
+        except InvalidToken, ValueError:
+            return None
 
     def llm_credentials(self, organization_id: UUID) -> list[tuple[UUID, str, str]]:
         """(agent id, name, encrypted key) for the Organization's live Agents — for

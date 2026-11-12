@@ -344,6 +344,10 @@ _Avoid_: training job, sync, import
 Rules every Agent in an Organization should follow whatever its role, such as time zones, approval before changes, and message format. A Playbook Extraction proposes them; people review them and add them to a marked section of Organization Templates' AGENTS.md. They are not a Skill.
 _Avoid_: playbook, org prompt, global instructions
 
+**Decision**:
+One call in which a platform feature asks a decision model typed questions (yes/no, choice, score) about state derived from an Agent's data and gets calibrated answers back. It is billed to that Agent's model key. Which model answers is a Platform setting.
+_Avoid_: classification job, LLM judgement, noul, predicate
+
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
