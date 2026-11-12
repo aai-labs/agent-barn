@@ -1,11 +1,15 @@
 """Workflows belong to the Organization; each run names the Agent that runs it.
 
+Adds the `workflow.manage` Permission, held by Organization Owners and Admins.
+
 The downgrade is lossy: a workflow keeps only one Agent (its default, else the Agent of
 its latest run), and workflows with neither are deleted.
 
 Revision ID: e4b439a1c7d2
 Revises: d1a390e7b2c4
 """
+
+from uuid import UUID
 
 import sqlalchemy as sa
 from alembic import op
@@ -14,6 +18,20 @@ revision: str = "e4b439a1c7d2"
 down_revision: str | None = "d1a390e7b2c4"
 branch_labels: str | None = None
 depends_on: str | None = None
+
+# Frozen here rather than imported: a migration must keep meaning what it meant when it
+# shipped, whatever the catalogue in code says later.
+WORKFLOW_MANAGE_ID = UUID("c3f7a1d2-6b48-5e90-8a2c-7d4e1f9b0a56")
+WORKFLOW_MANAGE_KEY = "workflow.manage"
+
+
+def _with_catalogue_unlocked(statement: sa.TextClause, **params: object) -> None:
+    """The Permission catalogue is immutable by trigger; a migration is the one place
+    allowed to change it, and it locks it again in the same transaction."""
+    op.execute("ALTER TABLE permissions DISABLE TRIGGER trg_permission_catalogue_immutability")
+    op.get_bind().execute(statement, params)
+    op.execute("ALTER TABLE permissions ENABLE TRIGGER trg_permission_catalogue_immutability")
+
 
 _RUN_GUARD_HEAD = """CREATE OR REPLACE FUNCTION workflow_execution_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
@@ -104,9 +122,18 @@ def upgrade() -> None:
 
     op.execute(_ORGANIZATION_GUARD)
     op.drop_column("workflow", "agent_id")
+    _with_catalogue_unlocked(
+        sa.text(
+            "INSERT INTO permissions (id, created_at, updated_at, key) "
+            "VALUES (:id, now(), now(), :key) ON CONFLICT DO NOTHING"
+        ),
+        id=WORKFLOW_MANAGE_ID,
+        key=WORKFLOW_MANAGE_KEY,
+    )
 
 
 def downgrade() -> None:
+    _with_catalogue_unlocked(sa.text("DELETE FROM permissions WHERE id = :id"), id=WORKFLOW_MANAGE_ID)
     op.add_column("workflow", sa.Column("agent_id", sa.Uuid(), nullable=True))
     op.execute(
         """UPDATE workflow w SET agent_id = COALESCE(

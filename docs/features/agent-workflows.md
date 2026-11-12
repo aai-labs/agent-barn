@@ -15,8 +15,9 @@ Agent is the runner of the run, not the owner of the workflow. Terms follow
 **Definitions.** Every accepted Member of the Organization (`organization.read`)
 reads definitions, their immutable versions and the capabilities, and creates
 workflows. The creating Membership is recorded on the workflow. Saving a version,
-changing the default Agent and archiving are limited to that creator and the
-Organization's Owners and Admins; any other Member receives 403. A workflow of
+changing the default Agent and archiving are limited to that creator and to
+Members holding the Organization Permission `workflow.manage`, which Owners and
+Admins hold; any other Member receives 403. A workflow of
 another Organization, or one that does not exist, returns 404. Duplicating is
 creating: any Member may save a copy, which they then own.
 
@@ -130,7 +131,7 @@ under an Agent; the Agent that runs a run is a field of the run. The earlier
 | `GET /workflows` | Paginated card summaries, including archives; no full snapshots. Filters: `created_by_me=true`, `archived=true\|false` |
 | `POST /workflows` | `{draft, default_agent_id?}`; 201 immutable v1 |
 | `GET /workflows/{id}` | Latest saved snapshot, revision, archive status, creator, default Agent and current allowed actions |
-| `PATCH /workflows/{id}` | `{expected_revision, default_agent_id}` (null clears it); new revision, no new version, or 409 |
+| `PATCH /workflows/{id}` | `{expected_revision, default_agent_id}` (null clears it); new revision, no new version, or 409. Sending the default it already has changes nothing and keeps the revision |
 | `GET /workflows/{id}/versions` | Paginated immutable snapshots, newest first |
 | `POST /workflows/{id}/versions` | Full draft plus `expected_revision`; 201 new version or 409 |
 | `POST /workflows/{id}/archive` | `expected_revision`; 204, versions retained |
@@ -194,8 +195,10 @@ current default still persists that explicit choice.
 
 Workflows are managed on the Organization's Workflows page,
 `/dashboard/{orgId}/workflows`, reached from the Organization navigation. It has
-two tabs. **Runs** lists runs waiting on the viewer's approval, then active and
-recent runs, across every Agent the viewer can read; each row names the Agent
+two tabs. **Runs** lists runs waiting on an approval, then active and
+recent runs, across every Agent the viewer can read. A viewer who can read an
+Agent but not update it sees its pending approvals without being able to decide
+them; each row names the Agent
 that runs it. **Workflows** lists the saved workflows and is where workflows are
 created, edited, duplicated and archived, and where a run is started. Edit and
 Archive appear only for the creator and Organization Owners/Admins; Duplicate
@@ -224,7 +227,7 @@ created or edited from an Agent. The tab requires `agent.read`, independently of
 conversation/activity access. An Agent that has been deleted is shown by name
 with an Archived marker and no link.
 
-A count of runs waiting on the viewer's approval is shown on the Workflows item
+A count of runs waiting on an approval, whether or not the viewer may decide it, is shown on the Workflows item
 of the Organization navigation, across every Agent the viewer can read, and on
 the Workflows item of an Agent's navigation panel, for that Agent.
 
@@ -598,6 +601,7 @@ requests are unchanged. No Agent update or restart is needed.
 | `workflow` | Adds `default_agent_id` (nullable, set to null when the Agent row is removed), filled with the workflow's Agent unless that Agent was already deleted. |
 | `workflow` | Drops `agent_id`. |
 | `workflow_run` | Adds `agent_id` (required, cascades with the Agent), filled from the workflow's Agent, and the nullable `title`. |
+| `permissions` | Adds `workflow.manage`, granted in code to Organization Owners and Admins. |
 
 `workflow_execution_scope_guard()` is replaced: on insert a run's Agent and its
 initiating Membership must both belong to the workflow's Organization, and

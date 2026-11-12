@@ -9,7 +9,7 @@ from injector import inject, singleton
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
-from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES, PermissionKey
+from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.workflows.models import (
     Workflow,
@@ -73,12 +73,15 @@ class WorkflowService:
     def _member(self, organization_id: UUID, context: CurrentUserContext) -> None:
         self.policy.require_organization(context, organization_id, PermissionKey.ORGANIZATION_READ)
 
-    def _can_manage(self, created_by_membership_id: UUID | None, context: CurrentUserContext) -> bool:
-        """The creator and the Organization's Owners and Admins may change or archive a workflow."""
+    def _can_manage(
+        self, organization_id: UUID, created_by_membership_id: UUID | None, context: CurrentUserContext
+    ) -> bool:
+        """A workflow is changed or archived by its creator or with ``workflow.manage``."""
         if context.api_key_access_mode == ApiKeyAccessMode.READ_ONLY:
             return False
-        membership = context.require_current_user_organization()
-        return membership.role in IMPLICIT_AGENT_OWNER_ROLES or membership.id == created_by_membership_id
+        if context.require_current_user_organization().id == created_by_membership_id:
+            return True
+        return self.policy.resolve(context, organization_id, PermissionKey.WORKFLOW_MANAGE) is not None
 
     def _require_authoring(self) -> None:
         if not self._authoring_enabled():
@@ -87,7 +90,7 @@ class WorkflowService:
     def _require_manage(self, organization_id: UUID, workflow_id: UUID, context: CurrentUserContext) -> Workflow:
         self._member(organization_id, context)
         workflow = self._found(organization_id, workflow_id)
-        if not self._can_manage(workflow.created_by_membership_id, context):
+        if not self._can_manage(organization_id, workflow.created_by_membership_id, context):
             raise HTTPException(403, "Only the workflow's creator or an Organization Owner or Admin can change it")
         self._require_authoring()
         return workflow
@@ -132,7 +135,10 @@ class WorkflowService:
             raise HTTPException(404, "Workflow is unavailable")
         creators = self.repository.creators([workflow.created_by_membership_id])
         readable = self._readable_agents({workflow.default_agent_id}, context)
-        can_author = self._can_manage(workflow.created_by_membership_id, context) and self._authoring_enabled()
+        can_author = (
+            self._can_manage(workflow.organization_id, workflow.created_by_membership_id, context)
+            and self._authoring_enabled()
+        )
         return WorkflowRead(
             id=workflow.id,
             created_by=self._creator(creators, workflow.created_by_membership_id),
@@ -177,18 +183,22 @@ class WorkflowService:
         readable = self._readable_agents({row.default_agent_id for row in rows}, context)
         authoring = self._authoring_enabled()
         return PaginatedItems(
-            page, size, total, [self._summary_read(row, creators, readable, authoring, context) for row in rows]
+            page,
+            size,
+            total,
+            [self._summary_read(organization_id, row, creators, readable, authoring, context) for row in rows],
         )
 
     def _summary_read(
         self,
+        organization_id: UUID,
         row: WorkflowSummaryRow,
         creators: dict[UUID, WorkflowCreator],
         readable: set[UUID],
         authoring: bool,
         context: CurrentUserContext,
     ) -> WorkflowSummaryRead:
-        can_author = authoring and self._can_manage(row.created_by_membership_id, context)
+        can_author = authoring and self._can_manage(organization_id, row.created_by_membership_id, context)
         return WorkflowSummaryRead(
             id=row.id,
             created_by=self._creator(creators, row.created_by_membership_id),

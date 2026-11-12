@@ -340,6 +340,42 @@ def test_list_filters_by_creator_and_archived() -> None:
         assert_that(ids("?archived=false", member), equal_to({owners["id"], mine["id"]}))
 
 
+def test_admin_without_workflow_manage_changes_only_their_own_workflows() -> None:
+    from sqlmodel import Session
+
+    from api.domains.rbac.catalog import PermissionKey
+    from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
+    from api.tests.steps.rbac import role_lacks_permission
+
+    with given([*_GIVEN, role_lacks_permission(OrganizationRole.ADMIN, PermissionKey.WORKFLOW_MANAGE)]) as context:
+        saved = create(context)
+        admin = member_headers(context)
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            membership = session.get_one(OrganizationUser, context.member_membership.id)
+            membership.role = OrganizationRole.ADMIN
+            session.add(membership)
+            session.commit()
+        url = base(context) + f"/workflows/{saved['id']}"
+
+        with then("the Admin role alone does not change another Member's workflow"):
+            assert_that(context.client.get(url, headers=admin).json()["allowed_actions"], equal_to([]))
+            for method, path, body in [
+                ("POST", "/versions", {"expected_revision": 1, "draft": draft("Admin edit")}),
+                ("PATCH", "", {"expected_revision": 1, "default_agent_id": None}),
+                ("POST", "/archive", {"expected_revision": 1}),
+            ]:
+                response = context.client.request(method, url + path, headers=admin, json=body)
+                assert_that(response.status_code, equal_to(403), f"{method} {path}")
+
+        with then("they still change the workflow they created"):
+            own = post_draft(context, draft("Admin report"), headers=admin).json()
+            assert_that(own["allowed_actions"], equal_to(["save_version", "archive"]))
+            response = context.client.post(
+                base(context) + f"/workflows/{own['id']}/archive", headers=admin, json={"expected_revision": 1}
+            )
+            assert_that(response.status_code, equal_to(204), response.text)
+
+
 def test_default_agent_is_set_changed_and_hidden_from_members_who_cannot_read_it() -> None:
     from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 
@@ -383,6 +419,16 @@ def test_default_agent_is_set_changed_and_hidden_from_members_who_cannot_read_it
                 url, headers=auth(context), json={"expected_revision": 3, "default_agent_id": str(uuid4())}
             )
             assert_that(unknown.status_code, equal_to(404))
+
+        with then("setting the default it already has leaves the revision alone"):
+            same = context.client.patch(
+                url, headers=auth(context), json={"expected_revision": 3, "default_agent_id": str(context.agent.id)}
+            )
+            assert_that((same.status_code, same.json()["revision"]), equal_to((200, 3)))
+            stale = context.client.patch(
+                url, headers=auth(context), json={"expected_revision": 2, "default_agent_id": str(context.agent.id)}
+            )
+            assert_that(stale.status_code, equal_to(409))
 
 
 def test_step_output_description_is_folded_into_the_goal_on_save() -> None:
@@ -603,6 +649,15 @@ def test_personal_api_keys_preserve_read_only_and_full_authoring_contracts() -> 
             post_draft(context, draft(), headers=read_auth).status_code,
             equal_to(403),
         )
+        url = base(context) + f"/workflows/{saved['id']}"
+        for method, path, body in [
+            ("PATCH", "", {"expected_revision": 1, "default_agent_id": None}),
+            ("POST", "/versions", {"expected_revision": 1, "draft": draft("Read-only edit")}),
+            ("POST", "/archive", {"expected_revision": 1}),
+        ]:
+            refused = context.client.request(method, url + path, headers=read_auth, json=body)
+            assert_that(refused.status_code, equal_to(403), f"{method} {path}")
+        assert_that(context.client.get(url, headers=auth(context)).json()["revision"], equal_to(1))
         full_key = context.client.post(
             "/api/v1/auth/me/api-keys",
             headers=auth(context),

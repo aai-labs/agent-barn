@@ -360,8 +360,8 @@ def _insert_previous_schema_workflow(connection, agent_id) -> UUID:
     return workflow_id
 
 
-@pytest.mark.parametrize("has_owner", [True, False])
-def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_owner: bool) -> None:
+@pytest.mark.parametrize(("has_owner", "has_admin"), [(True, True), (False, True), (False, False)])
+def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_owner: bool, has_admin: bool) -> None:
     from alembic import command
 
     from api.tests.conftest import config
@@ -392,10 +392,14 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
                     connection.execute(
                         text("UPDATE user_organization SET role = 'MEMBER' WHERE id = :id"), {"id": owner_membership}
                     )
-                for membership_id, created_at in [
+                with then("the workflow.manage Permission is gone with the schema that introduced it"):
+                    permission = text("SELECT count(*) FROM permissions WHERE key = 'workflow.manage'")
+                    assert_that(connection.execute(permission).scalar_one(), equal_to(0))
+                admins = [
                     (later_admin, datetime.now(UTC)),
                     (earliest_admin, datetime.now(UTC) - timedelta(days=1)),
-                ]:
+                ]
+                for membership_id, created_at in admins if has_admin else []:
                     connection.execute(
                         text(
                             "INSERT INTO user_organization (id, created_at, updated_at, organization_id, role) "
@@ -417,9 +421,12 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
             run_agent = connection.execute(
                 text("SELECT agent_id FROM workflow_run WHERE id = :id"), {"id": run_id}
             ).scalar_one()
-        creator = owner_membership if has_owner else earliest_admin
+            permissions = connection.execute(permission).scalar_one()
+        creator = owner_membership if has_owner else earliest_admin if has_admin else None
 
-        with then("each workflow belongs to its Agent's Organization, created by the Owner or else the earliest Admin"):
+        with then("the workflow.manage Permission is in the catalogue again"):
+            assert_that(permissions, equal_to(1))
+        with then("each workflow belongs to its Agent's Organization, created by the Owner, else the earliest Admin"):
             assert_that(
                 {(row.organization_id, row.created_by_membership_id) for row in rows.values()},
                 equal_to({(context.organization.id, creator)}),
@@ -480,3 +487,35 @@ def test_another_organization_reaches_neither_the_runs_the_workflow_nor_the_agen
             )
             assert_that(patched.status_code, equal_to(404), patched.text)
             assert_that(listed(context), equal_to([]))
+
+
+def test_read_only_key_sees_runs_but_changes_none() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, saved, _ = start(context)
+        run = response.json()
+        token = context.client.post(
+            "/api/v1/auth/me/api-keys",
+            headers=auth(context),
+            json={"name": "Read-only run fixture", "access_mode": "READ_ONLY"},
+        ).json()["token"]
+        key = {"Authorization": f"Bearer {token}"}
+        url = runs_url(context) + f"/{run['id']}"
+
+        with then("the key reads the run and is offered no action on it"):
+            seen = context.client.get(url, headers=key)
+            assert_that((seen.status_code, seen.json()["allowed_actions"]), equal_to((200, [])))
+            assert_that([item["id"] for item in listed(context, headers=key)], equal_to([run["id"]]))
+
+        with then("it starts, cancels, re-runs and decides nothing"):
+            requests = [
+                (runs_url(context), run_payload(context, saved)),
+                (url + "/cancel", {"expected_revision": run["revision"]}),
+                (url + "/re-run", {"client_request_id": str(uuid4())}),
+                (url + f"/approvals/{uuid4()}/decision", {"decision": "approve"}),
+            ]
+            for path, body in requests:
+                refused = context.client.post(path, headers=key, json=body)
+                assert_that(refused.status_code, equal_to(403), f"{path}: {refused.text}")
+            unchanged = context.client.get(url, headers=auth(context)).json()
+            assert_that((unchanged["state"], unchanged["revision"]), equal_to((run["state"], run["revision"])))
+            assert_that(len(listed(context)), equal_to(1))

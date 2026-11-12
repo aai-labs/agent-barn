@@ -235,6 +235,9 @@ class WorkflowRepository:
                 raise WorkflowConflict(
                     "Workflow changed or was archived; reload its current revision before saving. Your draft can be kept."
                 )
+            if draft is None and not archive and default_agent_id == workflow.default_agent_id:
+                # Nothing changes, so nobody else's open editor is invalidated.
+                return workflow
             if archive:
                 workflow.archived_at = datetime.now(UTC)
             if not isinstance(default_agent_id, Unchanged):
