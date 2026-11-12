@@ -77,6 +77,9 @@ def test_a_missing_or_malformed_cost_is_unknown_rather_than_zero():
     "status,body,failure",
     [
         (400, {"error": {"type": "budget_exceeded", "message": "Budget has been exceeded"}}, "budget_exceeded"),
+        # LiteLLM's default budget status from v1.104 on.
+        (422, {"error": {"type": "budget_exceeded", "message": "Budget has been exceeded"}}, "budget_exceeded"),
+        (422, {"error": {"type": "invalid_request", "message": "Unprocessable"}}, "key_or_model_rejected"),
         (429, {"error": {"type": "rate_limit", "message": "ExceededBudget: team budget"}}, "budget_exceeded"),
         (401, {"error": {"type": "auth_error", "message": "Invalid key"}}, "key_or_model_rejected"),
         (400, {"error": {"type": "invalid_request", "message": "Unknown model"}}, "key_or_model_rejected"),

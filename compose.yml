@@ -517,7 +517,7 @@ services:
       retries: 20
 
   litellm:
-    image: ghcr.io/berriai/litellm:v1.96.2
+    image: ghcr.io/berriai/litellm:v1.108.6
     container_name: ${LITELLM_CONTAINER_NAME:-aai_litellm}
     profiles: ["k3d"]
     restart: unless-stopped
