@@ -14,7 +14,7 @@ from api.tests.core.givenpy import given, then, when
 from api.tests.integration.test_workflow_runs import _RUN_GIVEN, start
 
 REVISION = "d1a390e7b2c4"
-PREVIOUS = "c8e41f7a2d96"
+PREVIOUS = "a9d2e7c4b1f8"
 TABLE = "workflow_approval_request"
 
 

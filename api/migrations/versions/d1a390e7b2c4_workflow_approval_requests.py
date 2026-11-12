@@ -1,14 +1,14 @@
 """Workflow approval requests and the Awaiting Approval run state.
 
 Revision ID: d1a390e7b2c4
-Revises: c8e41f7a2d96
+Revises: a9d2e7c4b1f8
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d1a390e7b2c4"
-down_revision: str | None = "c8e41f7a2d96"
+down_revision: str | None = "a9d2e7c4b1f8"
 branch_labels: str | None = None
 depends_on: str | None = None
 
