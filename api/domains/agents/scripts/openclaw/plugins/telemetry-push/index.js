@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 
 const AGENT_ID = process.env.AGENT_ID || "";
 const INGEST_URL = process.env.INGEST_URL || "";
@@ -12,7 +14,39 @@ const MAX_PENDING_TOOL_CALLS = 200;
 let buffer = [];
 let flushTimer = null;
 
-function bufferPush(event) {
+const SECRET_ROOT = process.env.BOT_SECRET_ROOT || "/run/agentbarn/bots";
+const MAIN_AGENT = "main";
+const identities = new Map();
+
+function agentOf(ctx, event) {
+  if (ctx && ctx.agentId) return ctx.agentId;
+  const sessionKey = (ctx && ctx.sessionKey) || (event && event.sessionKey) || "";
+  const scoped = /^agent:([^:]+):/.exec(sessionKey);
+  if (scoped) return scoped[1];
+  const accountId = (ctx && ctx.accountId) || (event && event.accountId);
+  if (accountId && accountId !== "default") return accountId;
+  return MAIN_AGENT;
+}
+
+function identityFor(agent) {
+  if (agent === MAIN_AGENT) {
+    return { agentId: process.env.AGENT_ID || "", key: process.env.INGEST_API_KEY || "" };
+  }
+  if (identities.has(agent)) return identities.get(agent);
+  try {
+    const agentId = fs.readFileSync(path.join(SECRET_ROOT, agent, "AGENT_ID"), "utf8");
+    const key = fs.readFileSync(path.join(SECRET_ROOT, agent, "INGEST_API_KEY"), "utf8");
+    if (agentId !== agent || !key) return null;
+    const identity = { agentId, key };
+    identities.set(agent, identity);
+    return identity;
+  } catch {
+    return null;
+  }
+}
+
+function bufferPush(agent, event) {
+  event.agent = agent;
   if (buffer.length >= MAX_BUFFER_SIZE) {
     const dropped = buffer.shift();
     console.error(`[telemetry-push] buffer full, dropping oldest event: ${dropped.type}`);
@@ -22,8 +56,20 @@ function bufferPush(event) {
 
 function flush() {
   if (buffer.length === 0) return;
+  const groups = new Map();
+  for (const event of buffer.splice(0)) {
+    if (!groups.has(event.agent)) groups.set(event.agent, []);
+    groups.get(event.agent).push(event);
+  }
+  for (const [agent, events] of groups) send(agent, events);
+}
 
-  const events = buffer.splice(0);
+function send(agent, events) {
+  const identity = identityFor(agent);
+  if (!identity) {
+    console.error(`[telemetry-push] dropped ${events.length} events for an agent without an identity`);
+    return;
+  }
   const messages = [];
   const toolCalls = [];
   const toolResults = [];
@@ -40,7 +86,7 @@ function flush() {
     tool_results: toolResults,
   });
 
-  const url = new URL(`${INGEST_URL}/agents/${AGENT_ID}/events`);
+  const url = new URL(`${INGEST_URL}/agents/${identity.agentId}/events`);
   const options = {
     hostname: url.hostname,
     port: url.port,
@@ -48,7 +94,7 @@ function flush() {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${INGEST_API_KEY}`,
+      Authorization: `Bearer ${identity.key}`,
       "Content-Length": Buffer.byteLength(body),
     },
   };
@@ -85,7 +131,7 @@ function nowISO() {
 
 function convType(conversationId, sessionKey) {
   if (conversationId && conversationId.startsWith("USER:")) return "DM";
-  if (sessionKey && sessionKey.startsWith("agent:main:main")) return "DM";
+  if (sessionKey && /^agent:[^:]+:main(?::|$)/.test(sessionKey)) return "DM";
   return "CHANNEL";
 }
 
@@ -168,7 +214,7 @@ export default {
       }
       const msgId =
         event.messageId || `oc:in:${conversationId}:${Date.now()}:${++counter}`;
-      bufferPush({
+      bufferPush(agentOf(ctx, event), {
         type: "message",
         data: {
           msg_id: msgId,
@@ -204,7 +250,7 @@ export default {
         const content = extractText(msgs[i]);
         if (!content) continue;
         const msgId = `oc:out:${conversationId}:${Date.now()}:${++counter}`;
-        bufferPush({
+        bufferPush(agentOf(ctx, event), {
           type: "message",
           data: {
             msg_id: msgId,
@@ -232,7 +278,7 @@ export default {
       if (!event.toolCallId) {
         rememberPendingToolCall(toolKey(event, ctx), externalId);
       }
-      bufferPush({
+      bufferPush(agentOf(ctx, event), {
         type: "tool_call",
         data: {
           external_id: externalId,
@@ -247,7 +293,7 @@ export default {
     api.on("after_tool_call", (event, ctx) => {
       let externalId = event.toolCallId || takePendingToolCall(toolKey(event, ctx));
       if (!externalId) externalId = `oc:tr:${Date.now()}:${++counter}`;
-      bufferPush({
+      bufferPush(agentOf(ctx, event), {
         type: "tool_result",
         data: {
           external_id: externalId,

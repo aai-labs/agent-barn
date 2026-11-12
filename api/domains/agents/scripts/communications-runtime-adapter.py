@@ -200,6 +200,8 @@ def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict 
 _LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
 if os.environ.get("GATEWAY_MULTIPLEX_PROFILES") == "1":
     _LLM_ERROR_MARKER += "." + hashlib.sha256(os.environ.get("OPENAI_API_KEY", "").encode()).hexdigest()[:16]
+elif os.environ.get("RUNTIME_SESSION_PREFIX"):
+    _LLM_ERROR_MARKER += "." + hashlib.sha256(os.environ.get("LITELLM_API_KEY", "").encode()).hexdigest()[:16]
 _TURN_STARTED: dict[str, float] = {}
 
 

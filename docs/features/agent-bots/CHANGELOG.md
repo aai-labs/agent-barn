@@ -16,8 +16,8 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
-- In transition: until per-Bot identity lands, an OpenClaw Bot's tool calls and activity are filed under its Parent Agent and its health reads as initializing, because the pod reports no served list yet.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, per-Bot identity in telemetry, the observer and health.
+- In transition: nothing for OpenClaw beyond the slices still to come.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, scheduled jobs created by the trigger server for the right Bot and account.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,14 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-12 — AF-445 — OpenClaw per-Bot identity
+
+- Delivered:
+  - `telemetry-push` and `agentbarn-observer` resolve each event's agent from `ctx.agentId`, else `agent:<id>:` in the session key, else a non-default `accountId`, and post it to `/agents/<id>/…` with that agent's `INGEST_API_KEY` from `/run/agentbarn/bots/<id>`. The parent keeps its own environment identity; an agent with no matching Secret is dropped. `agent:<id>:main` counts as a DM for every agent, not only `main`.
+  - `healthz-server.js` reports each account in `openclaw health --json` (`channels.<platform>.accounts`) under its agent, `default` being the parent, so a platform only a Bot uses is no longer reported as the parent's. `/healthz` lists `served_bots` from `/tmp/agentbarn-active-bots.json`. When the pod has Bots, the spent-limit marker is keyed by a hash of the caller's key, and the adapter reads the one for its own `LITELLM_API_KEY`.
+- Changed: `HEALTHZ_HEALTH_COMMAND` overrides the health command for tests only.
+- Follow-up: the trigger server per Bot.
 
 ### 2026-11-12 — AF-445 — Start and stop OpenClaw Bots
 
