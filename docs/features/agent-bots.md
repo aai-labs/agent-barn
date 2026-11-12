@@ -52,7 +52,7 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 - Each Bot has its own bot installs: its own Slack app, Telegram bot and Discord bot.
 - A Parent Agent and its Bots can connect the same platform, each with its own app or bot. The one refused pair is Agent Barn Telegram on the Parent Agent with a Bot's own Telegram. On Hermes, Agent Barn Telegram sets `TELEGRAM_WEBHOOK_URL` for the whole process; on OpenClaw the pair has not been verified.
 - Bots support Slack, Telegram, Discord and Web Chat. Microsoft Teams and Agent Barn Telegram are refused on Bots.
-- A Bot's scheduled jobs and webhook results are delivered from the Bot's own account on its own platform.
+- A Bot's scheduled jobs and webhook results are delivered from the Bot's own account on its own platform. On OpenClaw, the trigger server creates each job owned by its agent and pinned to that agent's account, `default` for the Parent Agent.
 - On OpenClaw, an agent's message or scheduled job on a platform where it has no account of its own is refused, so it can never post through another agent's account.
 
 ## How a pod serves Bots

@@ -175,11 +175,19 @@ def _openclaw_find(name: str) -> str | None:
     return None if existing is None else _job_id(existing, "OpenClaw")
 
 
+def _openclaw_owner() -> list[str]:
+    runtime, _, agent = RUNTIME_MODEL.partition("/")
+    if runtime != "openclaw" or agent in ("", "default"):
+        return []
+    return ["--agent", agent, "--account", "default" if agent == "main" else agent]
+
+
 def _openclaw_create(name: str, prompt: str, platform: str) -> str:
     channel = "msteams" if platform == "teams" else platform
     created = _openclaw_json(
         [
             "create",
+            *_openclaw_owner(),
             "--at",
             _run_at(),
             "--message",

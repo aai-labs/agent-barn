@@ -17,7 +17,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing for OpenClaw beyond the slices still to come.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, scheduled jobs created by the trigger server for the right Bot and account.
+- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the account guard for the message and scheduling tools.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,12 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-12 — AF-445 — OpenClaw trigger server per Bot
+
+- Delivered: on OpenClaw, `agent-trigger-server.py` reads its agent from `RUNTIME_MODEL` and creates webhook jobs with `--agent <id> --account <id>`, or `--agent main --account default` for a Parent Agent with Bots. A pod without Bots (`openclaw/default`) creates jobs as before. Each Bot's receipts already live in its own file (`bot-run.py`).
+- Changed: nothing else; workflow steps already run as the agent through `RUNTIME_MODEL` and the session prefix.
+- Follow-up: the account guard.
 
 ### 2026-11-12 — AF-445 — OpenClaw per-Bot identity
 
