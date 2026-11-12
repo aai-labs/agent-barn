@@ -10,6 +10,7 @@ export const EnvironmentSourceSchema = z.enum([
   "deployments",
   "stateful_sets",
   "volume_claims",
+  "services",
   "resource_quotas",
   "events",
   "prometheus",

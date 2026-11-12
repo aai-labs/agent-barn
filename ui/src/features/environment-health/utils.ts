@@ -22,6 +22,7 @@ export const SOURCE_LABELS: Record<EnvironmentSource, string> = {
   deployments: "Deployments",
   stateful_sets: "StatefulSets",
   volume_claims: "Volume claims",
+  services: "Services",
   resource_quotas: "Resource quota",
   events: "Events",
   prometheus: "Monitoring",

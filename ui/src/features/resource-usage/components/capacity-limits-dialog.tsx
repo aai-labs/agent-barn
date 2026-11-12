@@ -47,6 +47,13 @@ const FIELDS: Record<CeilingKey, Field> = {
     unit: "gib",
   },
   pods: { key: "pods", label: "pods", placeholder: "e.g. 50", unit: "count" },
+  persistentvolumeclaims: {
+    key: "persistentvolumeclaims",
+    label: "persistentvolumeclaims",
+    placeholder: "e.g. 60",
+    unit: "count",
+  },
+  services: { key: "services", label: "services", placeholder: "e.g. 40", unit: "count" },
 };
 
 /** The four lines the Platform Resource Usage page compares with what pods commit. */
@@ -57,8 +64,14 @@ export const CPU_AND_MEMORY_CEILINGS: CeilingKey[] = [
   "requestsCpuCores",
 ];
 
-/** Every line, storage and pods first, since those are what stop a new agent first. */
-export const ALL_CEILINGS: CeilingKey[] = ["requestsStorageBytes", "pods", ...CPU_AND_MEMORY_CEILINGS];
+/** Every line, storage, claims and pods first, since those are what stop a new agent first. */
+export const ALL_CEILINGS: CeilingKey[] = [
+  "requestsStorageBytes",
+  "persistentvolumeclaims",
+  "pods",
+  "services",
+  ...CPU_AND_MEMORY_CEILINGS,
+];
 
 /** A ceiling as the text box shows it: whole when it is whole, else up to three decimals. */
 function toText(value: number | null | undefined, unit: Field["unit"]): string {

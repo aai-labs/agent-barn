@@ -18,6 +18,8 @@ def _read(limits: PlatformResourceLimits | None) -> ResourceLimitsRead:
         requests_cpu_cores=limits.requests_cpu_cores,
         requests_storage_bytes=limits.requests_storage_bytes,
         pods=limits.pods,
+        persistentvolumeclaims=limits.persistentvolumeclaims,
+        services=limits.services,
         updated_at=limits.updated_at,
     )
 

@@ -8,6 +8,7 @@ from kubernetes.client import (
     V1PersistentVolumeClaim,
     V1Pod,
     V1ResourceQuota,
+    V1Service,
     V1StatefulSet,
 )
 
@@ -55,6 +56,9 @@ class EnvironmentHealthRepository:
 
     def volume_claims(self) -> list[V1PersistentVolumeClaim]:
         return self.k8s.list_pvcs(self.namespace)
+
+    def services(self) -> list[V1Service]:
+        return self.k8s.list_services(self.namespace)
 
     def resource_quotas(self) -> list[V1ResourceQuota]:
         return self.k8s.list_resource_quotas(self.namespace)

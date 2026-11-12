@@ -17,6 +17,7 @@ const BLOCKS: Record<string, string> = {
   "requests.storage": "New agents can't get a volume",
   persistentvolumeclaims: "New agents can't get a volume",
   pods: "New pods are refused",
+  services: "New agents can't start",
 };
 
 function lineText(line: CapacityLine): string {
@@ -71,7 +72,7 @@ export function CapacityPanel({
     ? "Read from the namespace's ResourceQuota."
     : quotaState === "forbidden"
       ? "The service account can't read the namespace's ResourceQuota, so these compare the quota you entered with what the platform counts itself."
-      : "Compared with the quota you entered. Storage is every volume claim's request, and pods are every pod still running or starting.";
+      : "Compared with the quota you entered. Storage is every volume claim's request, pods are every pod still running or starting, and volume claims and services are every one in the namespace.";
 
   return (
     <Section

@@ -170,6 +170,8 @@ export const ResourceLimitsSchema = z.object({
   requestsCpuCores: z.number().nullable().default(null),
   requestsStorageBytes: z.number().nullable().default(null),
   pods: z.number().nullable().default(null),
+  persistentvolumeclaims: z.number().nullable().default(null),
+  services: z.number().nullable().default(null),
   updatedAt: z.string().nullable().default(null),
 });
 export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;

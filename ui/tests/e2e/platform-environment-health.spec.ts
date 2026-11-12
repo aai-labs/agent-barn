@@ -36,6 +36,9 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(healthPage.capacityLine("requests.storage")).toContainText("30 GiB");
     await expect(healthPage.capacityWarning()).toContainText("New agents can't get a volume");
     await expect(healthPage.capacityLine("pods")).toContainText("No quota entered");
+    await expect(healthPage.capacityLine("persistentvolumeclaims")).toHaveAttribute("data-level", "critical");
+    await expect(healthPage.capacityLine("persistentvolumeclaims")).toContainText("100% of 60");
+    await expect(healthPage.capacityLine("services")).toContainText("No quota entered");
 
     const [failed] = await healthPage.failedAgents().all();
     await expect(failed).toContainText("Cy");
@@ -123,6 +126,8 @@ test.describe("Platform environment health (platform_admin)", () => {
 
     await expect(healthPage.quotaInput("requests.storage (GiB)")).toHaveValue("30");
     await expect(healthPage.quotaInput("pods")).toHaveValue("");
+    await expect(healthPage.quotaInput("persistentvolumeclaims")).toHaveValue("60");
+    await expect(healthPage.quotaInput("services")).toHaveValue("");
     await expect(healthPage.quotaInput("limits.memory (GiB)")).toHaveValue("52");
 
     await healthPage.quotaInput("pods").fill("2.5");
@@ -132,13 +137,16 @@ test.describe("Platform environment health (platform_admin)", () => {
 
     await healthPage.quotaInput("pods").fill("60");
     await healthPage.quotaInput("requests.storage (GiB)").fill("50");
+    await healthPage.quotaInput("services").fill("40");
     await healthPage.saveButton().click();
 
     await expect(healthPage.dialog()).toBeHidden();
     expect(sent).toEqual([
       {
         requests_storage_bytes: 50 * GIB,
+        persistentvolumeclaims: 60,
         pods: 60,
+        services: 40,
         limits_memory_bytes: 52 * GIB,
         limits_cpu_cores: 30,
         requests_memory_bytes: 20 * GIB,
