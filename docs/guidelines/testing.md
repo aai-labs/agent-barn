@@ -151,8 +151,9 @@ Secret is missing, and the last Bot's removal. It must pass on every OpenClaw up
 `../../api/tests/unit/test_openclaw_bot_setup.py` covers the same scripts on temp
 directories; its two tests that start Bot helpers skip on Windows. The image contract also
 loads the `agentbarn-bot-env` plugin through the pinned loader and hook runner beside a
-second plugin that rewrites `exec`, and proves each agent gets its own values and an
-unknown agent's command is refused. `../../api/tests/unit/test_openclaw_bot_env_plugin.py`
+second plugin that rewrites `exec`, and proves each agent gets its own values, an
+unknown agent's command is refused, and a message is pinned to the agent's own account
+and refused on another platform or account. `../../api/tests/unit/test_openclaw_bot_env_plugin.py`
 covers the plugin's rules under Node.
 
 `../../.github/workflows/ci.yml` runs once per pull request, on the

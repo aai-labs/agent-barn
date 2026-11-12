@@ -7,7 +7,7 @@ const config = {
     allow: ["agentbarn-bot-env", "exec-rewriter"],
     load: { paths: ["/tmp/plugins/agentbarn-bot-env", "/tmp/plugins/exec-rewriter"] },
     entries: {
-      "agentbarn-bot-env": { enabled: true, config: { parentNames } },
+      "agentbarn-bot-env": { enabled: true, config: { parentNames, platforms: { main: ["telegram"], [botA]: ["telegram"] } } },
       "exec-rewriter": { enabled: true },
     },
   },
@@ -33,5 +33,8 @@ console.log(
     parent: await call("main", exec),
     unknown: await call("0000000c-0000-4000-8000-00000000000c", exec),
     read: await call(botA, { toolName: "read", params: { path: "x" } }),
+    ownAccount: await call(botA, { toolName: "message", params: { action: "send", channel: "telegram", target: "1", message: "hi" } }),
+    otherPlatform: await call(botA, { toolName: "message", params: { action: "send", channel: "discord", target: "1", message: "hi" } }),
+    otherAccount: await call(botA, { toolName: "message", params: { action: "send", channel: "telegram", accountId: "default", message: "hi" } }),
   }),
 );

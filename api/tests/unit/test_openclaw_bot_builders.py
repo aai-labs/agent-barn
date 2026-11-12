@@ -340,7 +340,10 @@ def test_every_agents_commands_go_through_the_bot_env_plugin_with_the_parents_se
     assert plugins["load"]["paths"].count(f"{STATE}/local-plugins/agentbarn-bot-env") == 1
     assert plugins["entries"]["agentbarn-bot-env"] == {
         "enabled": True,
-        "config": {"parentNames": ["AGENT_ID", "MEMORY_API_KEY"]},
+        "config": {
+            "parentNames": ["AGENT_ID", "MEMORY_API_KEY"],
+            "platforms": {"main": ["slack", "telegram"], str(BOT_A): ["slack", "telegram"], str(BOT_B): ["discord"]},
+        },
     }
 
 

@@ -340,7 +340,14 @@ def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot], parent
             plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
     plugins["allow"].append("agentbarn-bot-env")
     plugins["load"]["paths"].append(_BOT_ENV_PLUGIN_PATH)
-    plugins["entries"]["agentbarn-bot-env"] = {"enabled": True, "config": {"parentNames": sorted(parent_env_names)}}
+    platforms = {
+        MAIN_AGENT_ID: list(parent["channels"]),
+        **{str(bot.id): list(bot.overlay["channels"]) for bot in bots},
+    }
+    plugins["entries"]["agentbarn-bot-env"] = {
+        "enabled": True,
+        "config": {"parentNames": sorted(parent_env_names), "platforms": platforms},
+    }
     plugins["entries"]["active-memory"]["config"]["agents"] = [MAIN_AGENT_ID, *(str(bot.id) for bot in bots)]
     hindsight = plugins["entries"]["hindsight-openclaw"]
     if hindsight["enabled"]:

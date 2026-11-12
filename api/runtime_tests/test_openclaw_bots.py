@@ -283,3 +283,6 @@ def test_the_real_hook_runner_gives_each_agents_commands_their_own_values(opencl
     assert_that(parent, has_entries(AGENT_ID="parent-id", MEMORY_API_KEY="memory-parent", EXTRA="kept"))
     assert_that(result["unknown"], has_entries(error=contains_string("agentbarn-bot-env failed")))
     assert_that(result["read"], equal_to({"result": None}))
+    assert_that(result["ownAccount"]["result"]["params"], has_entries(channel="telegram", accountId=str(BOT_A)))
+    for refused in ("otherPlatform", "otherAccount"):
+        assert_that(result[refused]["result"], has_entries(block=True, blockReason=contains_string("own account")))

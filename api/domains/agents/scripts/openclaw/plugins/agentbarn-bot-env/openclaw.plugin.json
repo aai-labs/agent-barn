@@ -1,13 +1,17 @@
 {
   "id": "agentbarn-bot-env",
   "name": "Agent Barn Bot env",
-  "description": "Give each agent's commands its own Agent Barn and integration values",
+  "description": "Give each agent's commands its own values and keep its posts on its own accounts",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "parentNames": { "type": "array", "items": { "type": "string" } }
+      "parentNames": { "type": "array", "items": { "type": "string" } },
+      "platforms": {
+        "type": "object",
+        "additionalProperties": { "type": "array", "items": { "type": "string" } }
+      }
     }
   }
 }

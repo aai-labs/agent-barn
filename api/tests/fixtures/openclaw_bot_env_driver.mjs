@@ -13,7 +13,13 @@ plugin.register({
 });
 const results = [];
 for (const call of steps.calls) {
-  const registration = registrations.find((entry) => entry.name === "before_tool_call");
+  const registration = registrations.find(
+    (entry) => entry.name === "before_tool_call" && entry.options.matcher.includes(call.event.toolName),
+  );
+  if (!registration) {
+    results.push({ result: null });
+    continue;
+  }
   try {
     results.push({ result: (await registration.handler(call.event, call.ctx)) ?? null });
   } catch (error) {
