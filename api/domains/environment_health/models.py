@@ -68,6 +68,15 @@ class AgentRefRead(PydanticBaseModel):
     status: AgentStatus | None = None
 
 
+class RolloutState(str, enum.Enum):
+    """A Deployment's `Progressing` condition, reduced to what an administrator acts on."""
+
+    COMPLETE = "complete"
+    IN_PROGRESS = "in_progress"
+    # The rollout passed its progress deadline: the new pods never became ready.
+    STUCK = "stuck"
+
+
 class CoreServiceRead(PydanticBaseModel):
     """A Deployment or StatefulSet of the platform itself, not an Agent's."""
 
@@ -76,6 +85,23 @@ class CoreServiceRead(PydanticBaseModel):
     desired_replicas: int
     ready_replicas: int
     level: HealthLevel
+    # The commit the Deployment's pods were built from, from the `build-sha` annotation the
+    # charts set. Only a 7 to 40 character hex string is kept.
+    build_sha: str | None = None
+    rollout: RolloutState | None = None
+    # When the last rollout finished. None while one is under way or stuck.
+    rolled_out_at: datetime | None = None
+
+
+class DeployedVersionRead(PydanticBaseModel):
+    """The build the platform runs: the one rolled out most recently."""
+
+    build_sha: str
+    rolled_out_at: datetime | None = None
+    # Some services carry another build, as when one failed to roll out.
+    mixed: bool = False
+    # The services on another build than `build_sha`.
+    behind: list[str] = Field(default_factory=list)
 
 
 class FiringAlertRead(PydanticBaseModel):
@@ -236,6 +262,8 @@ class EnvironmentHealthRead(PydanticBaseModel):
     # The window a pod's `restarts_in_window` and `oom_killed` cover.
     restart_window_days: int
     sources: list[EnvironmentSourceRead] = Field(default_factory=list)
+    # The build the platform's services run, when their Deployments carry one.
+    deployed: DeployedVersionRead | None = None
     # The quota ceilings as entered, so the page can edit them whichever source `capacity` used.
     ceilings: ResourceLimitsRead = Field(default_factory=ResourceLimitsRead)
     services: list[CoreServiceRead] = Field(default_factory=list)

@@ -39,8 +39,23 @@ export const CoreServiceSchema = z.object({
   desiredReplicas: z.number().int(),
   readyReplicas: z.number().int(),
   level: HealthLevelSchema,
+  /** The commit the service's image was built from. Deployments only. */
+  buildSha: z.string().nullable().default(null),
+  rollout: z.enum(["complete", "in_progress", "stuck"]).nullable().default(null),
+  /** When the last rollout finished. Null while one is under way or stuck. */
+  rolledOutAt: z.string().nullable().default(null),
 });
 export type CoreService = z.infer<typeof CoreServiceSchema>;
+
+/** The build the platform runs: the one rolled out most recently. */
+export const DeployedVersionSchema = z.object({
+  buildSha: z.string(),
+  rolledOutAt: z.string().nullable().default(null),
+  mixed: z.boolean().default(false),
+  /** The services on another build. */
+  behind: z.array(z.string()).default([]),
+});
+export type DeployedVersion = z.infer<typeof DeployedVersionSchema>;
 
 export const FiringAlertSchema = z.object({
   name: z.string(),
@@ -158,6 +173,7 @@ export const EnvironmentHealthSchema = z.object({
   peakWindowHours: z.number().int().default(24),
   restartWindowDays: z.number().int().default(7),
   sources: z.array(z.object({ source: EnvironmentSourceSchema, state: SourceStateSchema })).default([]),
+  deployed: DeployedVersionSchema.nullable().default(null),
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),
   alerts: z.array(FiringAlertSchema).default([]),
