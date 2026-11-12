@@ -158,6 +158,9 @@ class AgentTaskFilter(PydanticBaseModel):
 
     agent_id: UUID | None = None
     status: AgentTaskStatus | None = None
+    # Only Tasks last changed within these bounds, both inclusive; boards default to recent work.
+    updated_since: datetime | None = None
+    updated_before: datetime | None = None
 
 
 class AgentTaskRead(PydanticBaseModel):
@@ -171,6 +174,15 @@ class AgentTaskRead(PydanticBaseModel):
     origin: AgentTaskOrigin
     created_at: datetime
     updated_at: datetime
+
+
+class AgentTaskSummary(AgentTaskRead):
+    """A Task as people see it in a list: enough to tell what it produced without opening it."""
+
+    file_count: int
+    note_count: int
+    # The start of the latest Note, as a preview.
+    latest_note: str | None
 
 
 class AgentTaskNoteRead(PydanticBaseModel):

@@ -14,6 +14,7 @@ from api.domains.agent_tasks.models import (
     AgentTaskNoteRead,
     AgentTaskRead,
     AgentTaskStatus,
+    AgentTaskSummary,
 )
 from api.domains.agent_tasks.repository import AgentTaskRepository
 from api.domains.agents.authorization import AgentAuthorization
@@ -150,10 +151,12 @@ class AgentTaskService:
         context: CurrentUserContext,
         task_filter: AgentTaskFilter,
         pagination: Pagination,
-    ) -> PaginatedItems[AgentTaskRead]:
+    ) -> PaginatedItems[AgentTaskSummary]:
         scope = self._agent_read_scope(agent_id, context)
-        return self.repository.find_in_organization(
-            task_filter.model_copy(update={"agent_id": agent_id}), pagination, scope
+        return self._summarized(
+            self.repository.find_in_organization(
+                task_filter.model_copy(update={"agent_id": agent_id}), pagination, scope, recently_changed_first=True
+            )
         )
 
     def list_organization_tasks(
@@ -161,13 +164,22 @@ class AgentTaskService:
         context: CurrentUserContext,
         task_filter: AgentTaskFilter,
         pagination: Pagination,
-    ) -> PaginatedItems[AgentTaskRead]:
+    ) -> PaginatedItems[AgentTaskSummary]:
         """Tasks on every Agent the person may both see and read Tasks on, as the per-Agent reads require."""
-        return self.repository.find_in_organization(
-            task_filter,
-            pagination,
-            self.agent_authorization.authorization_scope(context, PermissionKey.TASK_READ),
-            self.agent_authorization.authorization_scope(context, PermissionKey.AGENT_READ),
+        return self._summarized(
+            self.repository.find_in_organization(
+                task_filter,
+                pagination,
+                self.agent_authorization.authorization_scope(context, PermissionKey.TASK_READ),
+                self.agent_authorization.authorization_scope(context, PermissionKey.AGENT_READ),
+                recently_changed_first=True,
+            )
+        )
+
+    def _summarized(self, page: PaginatedItems[AgentTaskRead]) -> PaginatedItems[AgentTaskSummary]:
+        """People's lists put the most recently changed Task first, matching the time they show."""
+        return PaginatedItems[AgentTaskSummary](
+            page=page.page, page_size=page.page_size, total=page.total, items=self.repository.summarize(page.items)
         )
 
     def get_task(self, agent_id: UUID, task_id: UUID, context: CurrentUserContext) -> AgentTaskDetail:
