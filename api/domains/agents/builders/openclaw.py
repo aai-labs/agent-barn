@@ -37,6 +37,7 @@ _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 _TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
+_LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -55,7 +56,8 @@ LISTEN_IN_SYSTEM_PROMPT = (
     "a factual error or outdated claim worth correcting, missing context or a relevant fact you know, "
     "a risk or blocker, or an open question nobody has answered that you can answer. "
     "When you speak, send one short message with no greeting and get straight to the point. "
-    "Messages that @mention you are normal requests; answer those as usual."
+    "Messages that @mention you are normal requests; answer those as usual. "
+    "Never answer an @mention with silence: if it asks for something you cannot do here, say so briefly."
 )
 _LISTEN_IN_ROOM = {"requireMention": False, "systemPrompt": LISTEN_IN_SYSTEM_PROMPT}
 
@@ -76,6 +78,9 @@ OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 TASKS_PLUGIN_INDEX_JS: str = (_TASKS_PLUGIN / "index.js").read_text()
 TASKS_PLUGIN_PACKAGE_JSON: str = (_TASKS_PLUGIN / "package.json").read_text()
 TASKS_PLUGIN_JSON: str = (_TASKS_PLUGIN / "openclaw.plugin.json").read_text()
+LISTEN_IN_INDEX_JS: str = (_LISTEN_IN / "index.js").read_text()
+LISTEN_IN_PACKAGE_JSON: str = (_LISTEN_IN / "package.json").read_text()
+LISTEN_IN_PLUGIN_JSON: str = (_LISTEN_IN / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -163,6 +168,7 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_LISTEN_IN_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-listen-in"
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
 
@@ -182,6 +188,28 @@ def _listen_in_rooms(channels: dict[str, dict]) -> dict[str, list[str]]:
     }
 
 
+def _no_memory_saving_patterns(rooms: dict[str, list[str]]) -> list[str]:
+    sessions = {"slack": "slack:channel", "discord": "discord:channel", "telegram": "telegram:group"}
+    return [
+        pattern
+        for platform, room_ids in rooms.items()
+        for room_id in room_ids
+        for pattern in (
+            f"agent:*:{sessions[platform]}:{room_id.lower()}",
+            f"agent:*:{sessions[platform]}:{room_id.lower()}:**",
+        )
+    ]
+
+
+def _stop_auto_threads_outside_listen_in(discord: dict) -> None:
+    # OpenClaw skips requireMention in threads it auto-created, so with room events on
+    # an untagged follow-up there would become a room event outside any listen-in room.
+    for guild in (discord.get("guilds") or {}).values():
+        for room in (guild.get("channels") or {}).values():
+            if room.get("systemPrompt") != LISTEN_IN_SYSTEM_PROMPT:
+                room["autoThread"] = False
+
+
 def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -192,6 +220,8 @@ def build_openclaw_gateway_config(
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
     unmentioned = "room_event" if any(_listen_in_rooms(channels).values()) else "user_request"
+    if unmentioned == "room_event":
+        _stop_auto_threads_outside_listen_in(channels.get("discord") or {})
     config["messages"] = {"groupChat": {"unmentionedInbound": unmentioned}}
     config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
     if memory_enabled:
@@ -200,6 +230,12 @@ def build_openclaw_gateway_config(
         config["plugins"]["entries"]["hindsight-openclaw"].update(
             {"config": openclaw_memory_settings(), "hooks": {"allowConversationAccess": True}}
         )
+        # Hindsight would save every unmentioned message. It decides per session, so
+        # mentions in these rooms aren't auto-saved either; recall stays on.
+        if patterns := _no_memory_saving_patterns(_listen_in_rooms(channels)):
+            config["plugins"]["entries"]["hindsight-openclaw"]["config"].update(
+                statelessSessionPatterns=patterns, skipStatelessSessions=False
+            )
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
@@ -209,6 +245,15 @@ def build_openclaw_gateway_config(
         for key in channels:
             plugins["entries"][key] = {"enabled": True}
         plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
+    if unmentioned == "room_event":
+        plugins = config["plugins"]
+        plugins["allow"].append("agentbarn-listen-in")
+        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
+        plugins["entries"]["agentbarn-listen-in"] = {
+            "enabled": True,
+            "hooks": {"allowConversationAccess": True},
+            "config": {"slackRooms": _listen_in_rooms(channels)["slack"]},
+        }
     return config
 
 
@@ -279,7 +324,8 @@ def native_discord_channel(settings: dict) -> dict:
     # Reply in a thread per message, as Hermes does. Threads inherit their parent
     # channel's entry, and "*" keeps an empty channel allowlist unrestricted.
     # ponytail: OpenClaw skips requireMention inside threads the bot created, and
-    # has no switch to keep it; Hermes still requires the mention there.
+    # has no switch to keep it; Hermes still requires the mention there. With
+    # listen-in rooms the gateway config stops auto-threading the other channels.
     rooms: dict[str, dict] = {channel_id: {"enabled": True, "autoThread": True} for channel_id in channel_ids or ["*"]}
     for channel_id in _setting_ids(settings, "listen_in_channel_ids"):
         if not channel_ids or channel_id in channel_ids:
@@ -463,6 +509,9 @@ def build_config_map(
         data["agentbarn-tasks-index.js"] = TASKS_PLUGIN_INDEX_JS
         data["agentbarn-tasks-package.json"] = TASKS_PLUGIN_PACKAGE_JSON
         data["agentbarn-tasks-plugin.json"] = TASKS_PLUGIN_JSON
+        data["agentbarn-listen-in-index.js"] = LISTEN_IN_INDEX_JS
+        data["agentbarn-listen-in-package.json"] = LISTEN_IN_PACKAGE_JSON
+        data["agentbarn-listen-in-plugin.json"] = LISTEN_IN_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["retire-messaging.py"] = RETIRE_MESSAGING_PY

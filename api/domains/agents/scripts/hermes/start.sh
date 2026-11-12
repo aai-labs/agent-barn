@@ -38,9 +38,14 @@ cp /app/config/agentbarn-observer-init.py /opt/data/plugins/agentbarn-observer/_
 mkdir -p /opt/data/plugins/agentbarn-tasks
 cp /app/config/agentbarn-tasks-plugin.yaml /opt/data/plugins/agentbarn-tasks/plugin.yaml
 cp /app/config/agentbarn-tasks-init.py /opt/data/plugins/agentbarn-tasks/__init__.py
+# Enabled only for Agents with listen-in rooms via plugins.enabled.
+mkdir -p /opt/data/plugins/agentbarn-listen-in
+cp /app/config/agentbarn-listen-in-plugin.yaml /opt/data/plugins/agentbarn-listen-in/plugin.yaml
+cp /app/config/agentbarn-listen-in-init.py /opt/data/plugins/agentbarn-listen-in/__init__.py
 mkdir -p /opt/data/plugins/agentbarn-slack-access
 cp /app/config/slack-access-plugin.yaml /opt/data/plugins/agentbarn-slack-access/plugin.yaml
 cp /app/config/slack-access-init.py /opt/data/plugins/agentbarn-slack-access/__init__.py
+python3 /app/config/listen-in-check.py /opt/data/config.yaml
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f

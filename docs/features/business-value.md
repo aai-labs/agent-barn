@@ -221,7 +221,7 @@ Each metric is named for what the data proves.
 
 | Metric | Definition | Time column |
 |---|---|---|
-| **Requests** | Inbound Conversation Messages (`agent_chat_message`, direction INBOUND), which include native-runtime transcripts and Web Chat, plus every `webhook_invocation` row of any status. A Webhook Invocation writes no Conversation Message, so nothing is counted twice. | message `occurred_at`; invocation `created_at` |
+| **Requests** | Inbound Conversation Messages (`agent_chat_message`, direction INBOUND), which include native-runtime transcripts and Web Chat, plus every `webhook_invocation` row of any status. A Webhook Invocation writes no Conversation Message, so nothing is counted twice. Hermes messages that arrived while the Agent was busy count from MDP-118 H3b onward; earlier ones have no row. | message `occurred_at`; invocation `created_at` |
 | **Handled without failure** | SUCCEEDED ÷ (SUCCEEDED + DEAD_LETTERED + UNAVAILABLE) over INBOUND Communication Deliveries. CANCELLED, PENDING, and PROCESSING are left out. Returned with `handled_coverage`, the denominator. | `completed_at` |
 | **Median response time** | `percentile_cont(0.5)` of `completed_at − created_at`, in seconds, over SUCCEEDED INBOUND deliveries with `attempt_count = 1`. Returned with `response_time_coverage`, the number of such deliveries. | `completed_at` |
 | **Cost per Request** | Organization LLM spend (`CostRepository`, Organization-only `CostFilter`, as in [Spend](#spend)) ÷ Requests. | cost `occurred_at` |

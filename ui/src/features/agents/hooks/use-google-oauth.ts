@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { z } from "zod";
 
 import { api } from "@/shared/api";
@@ -18,6 +18,9 @@ const TokenSchema = z.object({
 
 // Must match the message contract the backend callback posts (google_oauth/routes.py).
 const MESSAGE_TYPE = "google-oauth";
+// Matches the lifetime of the signed state (_STATE_TTL_SECONDS in google_oauth/routes.py).
+const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
+const SIGN_IN_TIMEOUT_MESSAGE = "Google sign-in timed out. Please try again.";
 
 // Optional user-supplied Google client. When omitted, the app-owned client configured
 // on the backend is used.
@@ -54,6 +57,10 @@ export type GoogleOAuthResult = {
  */
 export function useGoogleOAuth() {
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isPopupUnreachable, setIsPopupUnreachable] = useState(false);
+  const signInAbort = useRef<AbortController | null>(null);
+
+  const cancelGoogle = useCallback(() => signInAbort.current?.abort(), []);
 
   const connectGoogle = useCallback(
     async (
@@ -68,6 +75,7 @@ export function useGoogleOAuth() {
       const popup = openOAuthPopup("google-oauth");
       setIsConnecting(true);
 
+      let state: string | null;
       try {
         const { data } = await api.get<{ authorizeUrl: string }>(
           "/api/v1/integrations/google/authorize-url",
@@ -81,6 +89,7 @@ export function useGoogleOAuth() {
             },
           },
         );
+        state = new URL(data.authorizeUrl).searchParams.get("state");
         popup.location.href = data.authorizeUrl;
       } catch (err) {
         popup.close();
@@ -90,7 +99,25 @@ export function useGoogleOAuth() {
 
       try {
         // Wait for the callback popup to postMessage the authorization code back.
-        const { code } = await waitForOAuthPopupMessage(popup, MESSAGE_TYPE, "Google");
+        const abort = new AbortController();
+        signInAbort.current = abort;
+        const { code } = await waitForOAuthPopupMessage(
+          popup,
+          MESSAGE_TYPE,
+          "Google",
+          undefined,
+          state
+            ? {
+                channelName: MESSAGE_TYPE,
+                state,
+                timeoutMs: SIGN_IN_TIMEOUT_MS,
+                timeoutMessage: SIGN_IN_TIMEOUT_MESSAGE,
+                signal: abort.signal,
+                onPopupUnreachable: () => setIsPopupUnreachable(true),
+              }
+            : undefined,
+        );
+        setIsPopupUnreachable(false);
 
         // Exchange the code for a refresh token server-side. The client secret (if the
         // user supplied their own client) rides only in this authenticated request body.
@@ -114,11 +141,13 @@ export function useGoogleOAuth() {
           scopes: data.grantedScopes ?? [],
         };
       } finally {
+        signInAbort.current = null;
+        setIsPopupUnreachable(false);
         setIsConnecting(false);
       }
     },
     [],
   );
 
-  return { connectGoogle, isConnecting };
+  return { connectGoogle, cancelGoogle, isConnecting, isPopupUnreachable };
 }

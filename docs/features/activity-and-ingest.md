@@ -56,6 +56,8 @@ Agent runtime ─────→ Ingest API → Tool Call repository → Busines
                               Agent Activity UI
 ```
 
+The Hermes observer records a message when the adapter receives it, so a message held in the busy queue still has its row, and it records the reply Hermes sends just before running a queued message, which skips the delivery ledger. Hermes doesn't report that send's result, so a send that fails without raising still has an OUTBOUND row. A queued message has no Connection Journal timeline of its own, because recording it as the latest inbound would attribute the running turn's stages to it.
+
 Conversation reads list channels and return cursor-paginated messages or grouped threads. Tool-call reads support tool, status, and date filters with pagination.
 
 ## Boundaries

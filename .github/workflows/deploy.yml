@@ -424,6 +424,13 @@ jobs:
           AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ github.ref_name == 'staging' && vars.STAGING_AGENTBARN_TELEGRAM_BOT_USERNAME || vars.AGENTBARN_TELEGRAM_BOT_USERNAME }}
           STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
           ARTIFACT_PURGE_ENABLED: ${{ vars[format('{0}ARTIFACT_PURGE_ENABLED', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          # Restore point sizing and retention, optional per environment; unset means the
+          # Helmfile default.
+          RESTORE_POINT_SIZE: ${{ vars[format('{0}RESTORE_POINT_SIZE', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          RESTORE_POINT_MAX_PER_AGENT: ${{ vars[format('{0}RESTORE_POINT_MAX_PER_AGENT', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES: ${{ vars[format('{0}RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          RESTORE_POINT_SCHEDULED_MAX_PER_AGENT: ${{ vars[format('{0}RESTORE_POINT_SCHEDULED_MAX_PER_AGENT', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          RESTORE_POINT_SCHEDULE_MAX_CONCURRENT: ${{ vars[format('{0}RESTORE_POINT_SCHEDULE_MAX_CONCURRENT', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENT_TOKEN_ENCRYPTION_KEY || secrets.AGENT_TOKEN_ENCRYPTION_KEY }}
