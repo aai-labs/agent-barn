@@ -28,7 +28,7 @@ from api.tests.integration.test_workflow_runs import (
     settle,
     start,
 )
-from api.tests.integration.test_workflows import auth, base, create, member_headers
+from api.tests.integration.test_workflows import auth, base, create, member_headers, post_draft
 from api.tests.steps.agent import there_is_agent_access, there_is_an_agent
 
 
@@ -436,3 +436,47 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
                 assert_that({item["id"] for item in items}, equal_to({saved["id"], str(orphan)}))
                 detail = context.client.get(runs_url(context) + f"/{run_id}", headers=auth(context))
                 assert_that(detail.json()["agent_id"], equal_to(str(context.agent.id)))
+
+
+def test_another_organization_reaches_neither_the_runs_the_workflow_nor_the_agent() -> None:
+    from api.tests.steps.organization import there_is_an_organization
+
+    with given(_RUN_GIVEN) as context:
+        response, saved, _ = start(context)
+        run_id, foreign_agent = response.json()["id"], context.agent
+        # The same person also owns a second Organization with its own Agent and workflow.
+        there_is_an_organization(name="Other Organization")(context)
+        there_is_an_agent(name="Other Agent", status=AgentStatus.RUNNING)(context)
+        own = create(context)
+
+        with then("the first Organization's run is not found under the second"):
+            url = runs_url(context) + f"/{run_id}"
+            requests = [
+                ("GET", "", None),
+                ("GET", "/history", None),
+                ("POST", "/cancel", {"expected_revision": 1}),
+                ("POST", "/re-run", {"client_request_id": str(uuid4())}),
+                ("POST", f"/approvals/{uuid4()}/decision", {"decision": "approve"}),
+            ]
+            for method, path, body in requests:
+                answer = context.client.request(method, url + path, headers=auth(context), json=body)
+                assert_that(answer.status_code, equal_to(404), f"{method} {path}: {answer.text}")
+            assert_that(listed(context), equal_to([]))
+
+        with then("its workflow cannot be started on this Organization's Agent"):
+            answer = context.client.post(runs_url(context), headers=auth(context), json=run_payload(context, saved))
+            assert_that(answer.status_code, equal_to(404), answer.text)
+
+        with then("its Agent can neither run nor be the default of a workflow here"):
+            answer = context.client.post(
+                runs_url(context), headers=auth(context), json=run_payload(context, own, foreign_agent)
+            )
+            assert_that(answer.status_code, equal_to(404), answer.text)
+            assert_that(post_draft(context, draft(), foreign_agent.id).status_code, equal_to(404))
+            patched = context.client.patch(
+                base(context) + f"/workflows/{own['id']}",
+                headers=auth(context),
+                json={"expected_revision": own["revision"], "default_agent_id": str(foreign_agent.id)},
+            )
+            assert_that(patched.status_code, equal_to(404), patched.text)
+            assert_that(listed(context), equal_to([]))

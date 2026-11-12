@@ -352,7 +352,7 @@ applies. Historical saved versions are addressable directly. Start identities ar
 unique per definition; identical retries return the original run, including after
 archive, while a changed Agent, actor, version, title or inputs return 409. Reusing
 an identity against a different Agent is therefore a conflict, never a second run
-and never a view of a run on an Agent the caller may not read. Starts serialize per Agent for transactional consistency.
+and never a view of a run on an Agent the caller may not read. Starts serialize per Agent and per workflow for transactional consistency, so concurrent starts of one workflow on different Agents queue behind each other.
 Workflow admission does not impose an active-run concurrency cap; multiple runs
 can execute as separate sessions in the same Agent.
 Declared step capabilities do not gate admission. All run reads use current visibility of the run's Agent before
