@@ -28,6 +28,10 @@ export class EnvironmentHealthPage {
     return this.page.getByTestId(`capacity-line-${resource}`);
   }
 
+  capacityPeak(resource: string): Locator {
+    return this.page.getByTestId(`capacity-peak-${resource}`);
+  }
+
   capacityWarning(): Locator {
     return this.page.getByTestId("environment-capacity-warning");
   }

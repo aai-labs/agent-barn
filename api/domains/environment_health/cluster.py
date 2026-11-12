@@ -583,6 +583,27 @@ def entered_lines(
     )
 
 
+def with_peaks(lines: Iterable[CapacityLineRead], peaks: Mapping[str, float | None]) -> list[CapacityLineRead]:
+    """Each line with the highest figure it reached over the peak window beside it.
+
+    A line that is quiet now but touched its critical threshold in the window is a warning: a
+    pod starting at that moment, such as a scheduled job, would have been refused. A peak never
+    lowers a level, and a line with no ceiling keeps its peak without a ratio.
+    """
+    result = []
+    for line in lines:
+        peak = peaks.get(line.resource)
+        if peak is None:
+            result.append(line)
+            continue
+        peak_ratio = peak / line.hard if line.hard else None
+        level = line.level
+        if level == CapacityLevel.OK and peak_ratio is not None and peak_ratio >= CRITICAL_RATIO:
+            level = CapacityLevel.WARNING
+        result.append(line.model_copy(update={"peak": peak, "peak_ratio": peak_ratio, "level": level}))
+    return result
+
+
 def _number(value: int | None) -> float | None:
     return None if value is None else float(value)
 

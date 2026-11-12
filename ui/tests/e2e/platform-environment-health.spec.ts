@@ -117,6 +117,49 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(healthPage.section("workloads")).toContainText("Every pod is running normally");
   });
 
+  test("a line that is quiet now but spiked in the last day says so", async () => {
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        level: "warning",
+        capacity: [
+          {
+            resource: "limits.cpu",
+            unit: "cores",
+            source: "entered",
+            used: 10,
+            hard: 40,
+            ratio: 0.25,
+            peak: 39.6,
+            peak_ratio: 0.99,
+            level: "warning",
+          },
+          {
+            resource: "pods",
+            unit: "count",
+            source: "entered",
+            used: 24,
+            hard: null,
+            ratio: null,
+            peak: 31,
+            peak_ratio: null,
+            level: "unknown",
+          },
+          { resource: "requests.storage", unit: "bytes", source: "entered", used: GIB, hard: 30 * GIB, ratio: 1 / 30, level: "ok" },
+        ],
+      }),
+    });
+
+    await healthPage.goto();
+
+    await expect(healthPage.capacityLine("limits.cpu")).toContainText("25% of 40 cores");
+    await expect(healthPage.capacityPeak("limits.cpu")).toHaveText("24h peak: 39.6 cores (99%)");
+    await expect(healthPage.capacityPeak("pods")).toHaveText("24h peak: 31");
+    await expect(healthPage.capacityPeak("requests.storage")).toHaveCount(0);
+    await expect(healthPage.capacityWarning()).toContainText(
+      "limits.cpu reached 99% of its quota in the last 24 hours. Pods starting then may have been refused.",
+    );
+  });
+
   test("the quota dialog offers every line and sends only what it shows", async ({ page }) => {
     await data.environmentHealth.interceptEnvironmentHealth();
     const sent = await data.resourceUsage.interceptUpdateResourceLimits();

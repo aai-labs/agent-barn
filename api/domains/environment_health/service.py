@@ -35,6 +35,9 @@ from api.infrastructure.prometheus.client import PrometheusError
 
 logger = logging.getLogger(__name__)
 
+# How far back each capacity line's peak looks: long enough to hold a day of cron schedules.
+PEAK_WINDOW_HOURS = 24
+
 T = TypeVar("T")
 
 
@@ -44,6 +47,10 @@ def _state_of(error: Exception) -> SourceState:
     if isinstance(error, ConfigException):
         return SourceState.NOT_CONFIGURED
     return SourceState.UNAVAILABLE
+
+
+def _number(value: int | None) -> float | None:
+    return None if value is None else float(value)
 
 
 def overall_level(
@@ -170,6 +177,7 @@ class EnvironmentHealthService:
         return EnvironmentHealthRead(
             observed_at=now,
             namespace=self.repository.namespace,
+            peak_window_hours=PEAK_WINDOW_HOURS,
             level=overall_level(
                 sources=sources,
                 services=services,
@@ -208,9 +216,17 @@ class EnvironmentHealthService:
         usual answer (see `docs/adr/2026-10-01-capacity-limits-entered-by-hand.md`). Once the
         cluster's owners grant the read, the quota's own figures take over with no change here.
         """
+        peaks = self.platform_usage_service.namespace_peaks(now, window_hours=PEAK_WINDOW_HOURS)
+        by_resource = {
+            "limits.memory": _number(peaks.limits_memory_bytes),
+            "requests.memory": _number(peaks.requests_memory_bytes),
+            "limits.cpu": peaks.limits_cpu_cores,
+            "requests.cpu": peaks.requests_cpu_cores,
+            "pods": _number(peaks.pods),
+        }
         if quotas:
-            return cluster.quota_lines(quotas)
-        return cluster.entered_lines(
+            return cluster.with_peaks(cluster.quota_lines(quotas), by_resource)
+        lines = cluster.entered_lines(
             self.platform_usage_service.namespace_capacity(now),
             storage_requested=cluster.storage_committed(claims) if claims is not None else None,
             pods_counted=cluster.pods_committed(pods) if pods is not None else None,
@@ -221,3 +237,4 @@ class EnvironmentHealthService:
             services_counted=cluster.services_committed(kube_services) if kube_services is not None else None,
             services_ceiling=ceilings.services,
         )
+        return cluster.with_peaks(lines, by_resource)

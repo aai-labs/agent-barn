@@ -447,6 +447,23 @@ def test_the_namespace_commitment_charges_each_live_pod_as_a_quota_does(scraped:
     assert figures["requests"] == pytest.approx(_COMMITTED["requests"])
 
 
+def test_the_namespace_peaks_parse_and_hold_the_highest_commitment_and_pod_count(scraped: Scraped):
+    def peaks() -> tuple[dict[str, dict[str, float]], float] | None:
+        committed = scraped.repository.peak_committed(at=_now(), window_seconds=600, step_seconds=5)
+        pods = scraped.repository.peak_pods(at=_now(), window_seconds=600, step_seconds=5)
+        return (committed, pods) if committed and pods is not None else None
+
+    committed, pods = _wait_until(peaks, "kube-state-metrics to be scraped")
+
+    # The scrape never changes here, so the highest point is the steady figure, and the
+    # subquery the page relies on is one Prometheus accepts.
+    assert committed["limits"] == pytest.approx(_COMMITTED["limits"])
+    assert committed["requests"] == pytest.approx(_COMMITTED["requests"])
+    # Running and Pending pods, never Succeeded ones: agent-a, two, waiting, both of agent
+    # one's, agent two's and the restore job's.
+    assert pods == 7
+
+
 def test_each_agents_requests_are_found_by_its_pod_name_and_counted_once(scraped: Scraped):
     def requests() -> dict[UUID, dict[str, float]] | None:
         return scraped.repository.agent_requests(at=_now()) or None

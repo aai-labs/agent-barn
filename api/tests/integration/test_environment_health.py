@@ -385,6 +385,63 @@ def test_volume_claims_and_services_are_counted_against_their_entered_ceilings()
         assert_that(body["ceilings"], has_entries(persistentvolumeclaims=60, services=40))
 
 
+def test_a_spike_in_the_last_day_shows_beside_the_current_figure():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-peaks@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        k8s.list_resource_quotas.side_effect = _forbidden()
+        k8s.list_pods.return_value = [_pod(f"p-{n}") for n in range(5)]
+        context.client.put(
+            "/api/v1/platform/resource-limits",
+            json={"limits_cpu_cores": 40, "pods": 50},
+            headers=_auth(context.access_token),
+        )
+
+        def answer(promql: str, at):
+            if promql.startswith("max_over_time(count("):
+                return [PrometheusSample({}, 21.0)]
+            if promql.startswith("max_over_time("):
+                return [PrometheusSample({"kind": "limits", "resource": "cpu"}, 39.6)]
+            if "kube_pod_container_resource" in promql:
+                return [PrometheusSample({"kind": "limits", "resource": "cpu"}, 10.0)]
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        lines = {line["resource"]: line for line in body["capacity"]}
+        assert_that(lines["limits.cpu"], has_entries(used=10.0, peak=39.6, peak_ratio=0.99, level="warning"))
+        assert_that(lines["pods"], has_entries(used=5, peak=21, level="ok"))
+        assert_that(lines["requests.storage"], has_entries(peak=none()))
+        assert_that(body["peak_window_hours"], equal_to(24))
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_peaks_that_cannot_be_read_leave_the_current_figures():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-peaks-down@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_resource_quotas.side_effect = _forbidden()
+        context.client.put(
+            "/api/v1/platform/resource-limits", json={"limits_cpu_cores": 40}, headers=_auth(context.access_token)
+        )
+
+        def answer(promql: str, at):
+            if promql.startswith("max_over_time("):
+                raise PrometheusError("Prometheus request failed: ReadTimeout")
+            if "kube_pod_container_resource" in promql:
+                return [PrometheusSample({"kind": "limits", "resource": "cpu"}, 10.0)]
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        response = _get(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        lines = {line["resource"]: line for line in response.json()["capacity"]}
+        assert_that(lines["limits.cpu"], has_entries(used=10.0, peak=none(), level="ok"))
+
+
 def test_refused_services_leave_their_line_unknown():
     with given([*_BASE_GIVEN, *_platform_admin("env-admin-services-refused@example.com")]) as context:
         _quiet_cluster(context)
