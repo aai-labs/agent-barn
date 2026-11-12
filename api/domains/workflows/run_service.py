@@ -12,6 +12,7 @@ from api.domains.agents.models import Agent, AgentStatus, AgentType
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.workflows.models import WorkflowDraft, WorkflowVersion
 from api.domains.workflows.repository import WorkflowConflict, WorkflowRepository
 from api.domains.workflows.run_models import (
@@ -58,42 +59,62 @@ def validate_inputs(draft: WorkflowDraft, values: dict) -> None:
 @singleton
 @dataclass
 class WorkflowRunService:
+    """Runs are reached through the Agent that runs them: agent.read to see one, agent.update to act on it."""
+
     repository: WorkflowRunRepository
     definitions: WorkflowRepository
     authorization: AgentAuthorization
     dispatcher: EventDeliveryDispatcher
 
-    def _scope(self, agent_id: UUID, context: CurrentUserContext, *, write: bool = False):
-        self.authorization.require_action(
-            context, agent_id, PermissionKey.AGENT_UPDATE
-        ) if write else self.authorization.require_visible(context, agent_id)
-        return self.authorization.authorization_scope(
-            context, PermissionKey.AGENT_UPDATE if write else PermissionKey.AGENT_READ
-        )
+    def _read_scope(self, context: CurrentUserContext) -> AuthorizationScope:
+        return self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+
+    def _write_scope(self, context: CurrentUserContext) -> AuthorizationScope:
+        return self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
+
+    def _found(self, run_id: UUID, context: CurrentUserContext) -> tuple[WorkflowRun, WorkflowVersion]:
+        found = self.repository.get(run_id, self._read_scope(context))
+        if not found:
+            raise HTTPException(404, "Workflow run not found")
+        return found
+
+    def _writable(self, run_id: UUID, context: CurrentUserContext) -> tuple[WorkflowRun, WorkflowVersion]:
+        """A readable run the caller may also act on; its Agent must still exist."""
+        found = self._found(run_id, context)
+        agent = self.repository.agents([found[0].agent_id])[found[0].agent_id]
+        if agent.deleted_at is not None:
+            raise HTTPException(409, "This run's Agent was deleted; the run can only be read")
+        self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_UPDATE)
+        return found
+
+    def _can_write(self, agents: list[Agent], context: CurrentUserContext) -> set[UUID]:
+        """The active Agents among these whose runs the caller may act on."""
+        active = [agent for agent in agents if agent.deleted_at is None]
+        permitted = self.authorization.allowed_actions(context, active)
+        return {agent.id for agent in active if PermissionKey.AGENT_UPDATE in permitted[agent.id]}
 
     def _read(
         self,
         run: WorkflowRun,
         version: WorkflowVersion,
-        agent_id: UUID,
-        context: CurrentUserContext,
-        can_write: bool | None = None,
+        agent: Agent,
+        can_write: bool,
+        archived: bool,
         step_records: dict[int, dict[str, Any]] | None = None,
         attempt: AttemptRead | None = None,
-        can_start: bool | None = None,
         approval: ApprovalRead | None = None,
         approvals: list[ApprovalRead] | None = None,
     ) -> WorkflowRunRead:
-        if can_write is None or can_start is None:
-            agent = self.authorization.require_visible(context, agent_id)
-            can_write = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
-            can_start = self._can_start(agent, bool(self.repository.archived_workflow_ids([run.workflow_id])))
         return WorkflowRunRead(
             id=run.id,
             workflow_id=run.workflow_id,
             version_id=run.version_id,
             version_number=version.number,
             name=version.snapshot["name"],
+            title=run.title,
+            agent_id=agent.id,
+            agent_name=agent.name,
+            agent_archived=agent.deleted_at is not None,
             initiating_user_id=run.initiating_user_id,
             inputs=run.inputs,
             state=cast(RunState, run.state),
@@ -128,7 +149,7 @@ class WorkflowRunService:
             created_at=run.created_at,
             settled_at=run.settled_at,
             rerun_of_run_id=run.rerun_of_run_id,
-            allowed_actions=self._allowed_actions(run, can_write, can_start, approval),
+            allowed_actions=self._allowed_actions(run, can_write, self._can_start(agent, archived), approval),
             attempt=attempt,
             approval=approval,
             approvals=approvals or [],
@@ -136,7 +157,7 @@ class WorkflowRunService:
 
     @staticmethod
     def _can_start(agent: Agent, archived: bool) -> bool:
-        return agent.status == AgentStatus.RUNNING and not archived
+        return agent.deleted_at is None and agent.status == AgentStatus.RUNNING and not archived
 
     @staticmethod
     def _allowed_actions(
@@ -156,20 +177,21 @@ class WorkflowRunService:
         )
         return ["decide", "cancel"] if decidable else ["cancel"]
 
-    def get(self, agent_id: UUID, run_id: UUID, context: CurrentUserContext) -> WorkflowRunRead:
-        found = self.repository.get(run_id, agent_id, self._scope(agent_id, context))
-        if not found:
-            raise HTTPException(404, "Workflow run not found")
-        step_records, attempt = self.repository.progress(found[0])
-        request = self.repository.current_approval(found[0])
+    def get(self, run_id: UUID, context: CurrentUserContext) -> WorkflowRunRead:
+        run, version = self._found(run_id, context)
+        agent = self.repository.agents([run.agent_id])[run.agent_id]
+        step_records, attempt = self.repository.progress(run)
+        request = self.repository.current_approval(run)
         approval = ApprovalRead.model_validate(request, from_attributes=True) if request else None
         approvals = [
-            ApprovalRead.model_validate(item, from_attributes=True) for item in self.repository.approvals([found[0].id])
+            ApprovalRead.model_validate(item, from_attributes=True) for item in self.repository.approvals([run.id])
         ]
         return self._read(
-            *found,
-            agent_id,
-            context,
+            run,
+            version,
+            agent,
+            agent.id in self._can_write([agent], context),
+            bool(self.repository.archived_workflow_ids([run.workflow_id])),
             step_records=step_records,
             attempt=attempt,
             approval=approval,
@@ -178,23 +200,32 @@ class WorkflowRunService:
 
     def list_runs(
         self,
-        agent_id: UUID,
         context: CurrentUserContext,
         page: int,
         size: int,
-        workflow_id: UUID | None,
+        workflow_id: UUID | None = None,
+        agent_id: UUID | None = None,
         awaiting_decision: bool = False,
+        status: Literal["active", "settled"] | None = None,
     ) -> PaginatedItems[WorkflowRunRead]:
+        """Runs across every Agent the caller can read, including Agents since deleted."""
+        context.require_current_user_organization()
         rows, total = self.repository.list_runs(
-            agent_id, self._scope(agent_id, context), page, size, workflow_id, awaiting_decision
+            self._read_scope(context),
+            page,
+            size,
+            workflow_id,
+            agent_id,
+            awaiting_decision,
+            None if status is None else status == "settled",
         )
         # Only a request still awaiting a decision is shown in lists, for the approvals inbox.
         pending = {
             item.run_id: ApprovalRead.model_validate(item, from_attributes=True)
             for item in self.repository.approvals((run.id for run, _ in rows), DECIDABLE_APPROVAL_STATES)
         }
-        agent = self.authorization.require_visible(context, agent_id)
-        can_write = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
+        agents = self.repository.agents(run.agent_id for run, _ in rows)
+        writable = self._can_write(list(agents.values()), context)
         archived = self.repository.archived_workflow_ids({run.workflow_id for run, _ in rows})
         return PaginatedItems(
             page,
@@ -202,31 +233,23 @@ class WorkflowRunService:
             total,
             [
                 self._read(
-                    *row,
-                    agent_id,
-                    context,
-                    can_write,
-                    can_start=self._can_start(agent, row[0].workflow_id in archived),
-                    approval=pending.get(row[0].id),
+                    run,
+                    version,
+                    agents[run.agent_id],
+                    run.agent_id in writable,
+                    run.workflow_id in archived,
+                    approval=pending.get(run.id),
                 )
-                for row in rows
+                for run, version in rows
             ],
         )
 
-    def start(
-        self, agent_id: UUID, workflow_id: UUID, payload: WorkflowRunCreate, context: CurrentUserContext
-    ) -> WorkflowRunRead:
-        return self._start(agent_id, workflow_id, payload, context)
+    def start(self, payload: WorkflowRunCreate, context: CurrentUserContext) -> WorkflowRunRead:
+        return self._start(payload, context)
 
-    def rerun(
-        self, agent_id: UUID, run_id: UUID, payload: WorkflowRunRerun, context: CurrentUserContext
-    ) -> WorkflowRunRead:
-        """Start a new run of a settled run's own version and inputs, recording where it came from."""
-        scope = self._scope(agent_id, context, write=True)
-        found = self.repository.get(run_id, agent_id, scope)
-        if not found:
-            raise HTTPException(404, "Workflow run not found")
-        source = found[0]
+    def rerun(self, run_id: UUID, payload: WorkflowRunRerun, context: CurrentUserContext) -> WorkflowRunRead:
+        """Start a new run of a settled run's own version and inputs on the same Agent."""
+        source, _ = self._writable(run_id, context)
         if source.state not in TERMINAL_STATES:
             raise HTTPException(409, "Only a settled run can be run again")
         # Stored file inputs include display metadata; admission accepts only the pinned identity.
@@ -237,87 +260,83 @@ class WorkflowRunService:
             for key, value in source.inputs.items()
         }
         create = WorkflowRunCreate(
-            version_id=source.version_id, client_request_id=payload.client_request_id, inputs=inputs
+            workflow_id=source.workflow_id,
+            agent_id=source.agent_id,
+            version_id=source.version_id,
+            title=source.title,
+            client_request_id=payload.client_request_id,
+            inputs=inputs,
         )
-        return self._start(agent_id, source.workflow_id, create, context, source)
+        return self._start(create, context, source)
 
     def _start(
         self,
-        agent_id: UUID,
-        workflow_id: UUID,
         payload: WorkflowRunCreate,
         context: CurrentUserContext,
         rerun_of: WorkflowRun | None = None,
     ) -> WorkflowRunRead:
-        scope = self._scope(agent_id, context, write=True)
-        workflow = self.definitions.get_in_scope(workflow_id, agent_id, scope)
-        if workflow is None:
+        membership = context.require_current_user_organization()
+        # Starting needs agent.update on the chosen Agent; the workflow itself is open to every Member.
+        agent = self.authorization.require_action(context, payload.agent_id, PermissionKey.AGENT_UPDATE)
+        scope = self._write_scope(context)
+        if self.definitions.get(payload.workflow_id, membership.organization_id) is None:
             raise HTTPException(404, "Workflow not found")
         rerun_of_run_id = rerun_of.id if rerun_of else None
         try:
-            existing = self.repository.existing_start(
-                workflow_id, agent_id, scope, payload, context.user.id, rerun_of_run_id
-            )
+            existing = self.repository.existing_start(scope, payload, context.user.id, rerun_of_run_id)
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         # A retry of a re-run that already started returns it, even after retention removed the inputs.
         if existing:
-            return self.get(agent_id, existing, context)
+            return self.get(existing, context)
         if rerun_of and rerun_of.content_expired:
             raise HTTPException(409, "This run's inputs were removed by retention; start a new run instead")
-        version = self.definitions.version_in_scope(payload.version_id, workflow_id, agent_id, scope)
+        version = self.definitions.version(payload.version_id, payload.workflow_id, membership.organization_id)
         if version is None:
             raise HTTPException(404, "Saved workflow version not found")
         draft = WorkflowDraft.model_validate(version.snapshot)
         validate_inputs(draft, payload.inputs)
-        agent = self.authorization.require_visible(context, agent_id)
         if agent.status != AgentStatus.RUNNING:
             raise HTTPException(409, "Start the Agent before running a workflow")
         # Steps run as sessions in this Agent, under its own tools, integrations, approvals and spend limits.
         runtime = AgentType(agent.agent_type).value
         try:
             run, delivery_ids = self.repository.start(
-                workflow_id,
-                agent_id,
                 scope,
                 payload,
                 context.user.id,
-                context.require_current_user_organization().id,
+                membership.id,
                 runtime,
                 rerun_of_run_id,
             )
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         self.dispatcher.enqueue_immediate(delivery_ids)
-        return self.get(agent_id, run.id, context)
+        return self.get(run.id, context)
 
-    def cancel(self, agent_id: UUID, run_id: UUID, revision: int, context: CurrentUserContext) -> WorkflowRunRead:
-        self.get(agent_id, run_id, context)
+    def cancel(self, run_id: UUID, revision: int, context: CurrentUserContext) -> WorkflowRunRead:
+        self._writable(run_id, context)
         try:
-            delivery_ids = self.repository.cancel(
-                run_id, agent_id, self._scope(agent_id, context, write=True), revision
-            )
+            delivery_ids = self.repository.cancel(run_id, self._write_scope(context), revision)
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         self.dispatcher.enqueue_immediate(delivery_ids)
-        return self.get(agent_id, run_id, context)
+        return self.get(run_id, context)
 
     def decide(
         self,
-        agent_id: UUID,
         run_id: UUID,
         request_id: UUID,
         payload: ApprovalDecisionCreate,
         context: CurrentUserContext,
     ) -> WorkflowRunRead:
         """A person's verdict on one exact request; authority is checked now, not when it was raised."""
-        self.get(agent_id, run_id, context)
+        self._writable(run_id, context)
         try:
             delivery_ids = self.repository.decide(
                 run_id,
                 request_id,
-                agent_id,
-                self._scope(agent_id, context, write=True),
+                self._write_scope(context),
                 context.user.id,
                 payload.decision == "approve",
                 payload.guidance,
@@ -325,21 +344,18 @@ class WorkflowRunService:
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         self.dispatcher.enqueue_immediate(delivery_ids)
-        return self.get(agent_id, run_id, context)
+        return self.get(run_id, context)
 
     def history(
         self,
-        agent_id: UUID,
         run_id: UUID,
         context: CurrentUserContext,
         page: int,
         size: int,
         newest_first: bool = False,
     ) -> PaginatedItems[WorkflowHistoryRead]:
-        self.get(agent_id, run_id, context)
-        rows, total = self.repository.history(
-            run_id, agent_id, self._scope(agent_id, context), page, size, newest_first
-        )
+        self._found(run_id, context)
+        rows, total = self.repository.history(run_id, self._read_scope(context), page, size, newest_first)
         return PaginatedItems(
             page, size, total, [WorkflowHistoryRead.model_validate(row, from_attributes=True) for row in rows]
         )

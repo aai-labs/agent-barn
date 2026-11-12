@@ -40,6 +40,7 @@ class WorkflowStep(StrictDTO):
     goal: Text
     # Retain criteria on historical snapshots; new steps need only a goal.
     completion_criteria: Text | None = None
+    # Only on versions saved before a step's output became part of its goal; saving folds it in.
     artifact_description: Text | None = None
     required_capabilities: list[Literal["reasoning", "business_action", "native_command"]] = Field(
         default_factory=default_capabilities, min_length=1, max_length=3
@@ -83,6 +84,17 @@ def _require_unique(values: list[str], noun: str, attribute: str) -> None:
         first[value] = index
 
 
+class WorkflowCreate(StrictDTO):
+    draft: WorkflowDraft
+    # Preselected when a run starts; the person starting it may choose another Agent.
+    default_agent_id: UUID | None = None
+
+
+class WorkflowUpdate(StrictDTO):
+    expected_revision: int = Field(ge=1)
+    default_agent_id: UUID | None
+
+
 class WorkflowVersionCreate(StrictDTO):
     expected_revision: int = Field(ge=1)
     draft: WorkflowDraft
@@ -95,7 +107,11 @@ class WorkflowArchive(StrictDTO):
 class Workflow(BaseModel, table=True):
     __tablename__: str = "workflow"
     __table_args__ = (sa.CheckConstraint("revision >= 1", name="ck_workflow_revision"),)
-    agent_id: UUID = SqlField(foreign_key="agent.id", ondelete="CASCADE", index=True)
+    organization_id: UUID = SqlField(foreign_key="organization.id", ondelete="CASCADE", index=True)
+    created_by_membership_id: UUID | None = SqlField(
+        default=None, foreign_key="user_organization.id", ondelete="SET NULL"
+    )
+    default_agent_id: UUID | None = SqlField(default=None, foreign_key="agent.id", ondelete="SET NULL")
     revision: int = SqlField(default=1, nullable=False)
     archived_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
 
@@ -133,9 +149,17 @@ class WorkflowVersionSummaryRead(DTO):
     input_count: int
 
 
+class WorkflowCreatorRead(DTO):
+    membership_id: UUID
+    user_id: UUID | None
+    name: str | None
+
+
 class WorkflowSummaryRead(DTO):
     id: UUID
-    agent_id: UUID
+    created_by: WorkflowCreatorRead | None
+    # Null when unset, archived, or not readable by the caller.
+    default_agent_id: UUID | None
     revision: int
     archived_at: datetime | None
     version: WorkflowVersionSummaryRead
@@ -145,7 +169,9 @@ class WorkflowSummaryRead(DTO):
 
 class WorkflowRead(DTO):
     id: UUID
-    agent_id: UUID
+    created_by: WorkflowCreatorRead | None
+    # Null when unset, archived, or not readable by the caller.
+    default_agent_id: UUID | None
     revision: int
     archived_at: datetime | None
     version: WorkflowVersionRead

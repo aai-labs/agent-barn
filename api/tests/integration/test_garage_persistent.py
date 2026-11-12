@@ -24,7 +24,7 @@ from api.tests.core.givenpy import given
 from api.tests.core.modules import set_env_variable
 from api.tests.helpers.artifacts import ComposeGarageProvisioner, registered_compose_storage
 from api.tests.integration.test_artifacts import CONTENT, publish, staged
-from api.tests.integration.test_workflows import _GIVEN, auth, base
+from api.tests.integration.test_workflows import _GIVEN, agent_base, auth
 
 
 @pytest.mark.xdist_group("heavy_containers")
@@ -100,7 +100,7 @@ def test_persistent_compose_api_download_restart_and_purge(tmp_path):
             artifact = publish(context)
             with Session(context.postgres_delegate.engine) as session:
                 key_before = session.exec(select(ArtifactBucket.access_key)).one()
-            path = base(context) + f"/artifacts/{artifact['id']}"
+            path = agent_base(context) + f"/artifacts/{artifact['id']}"
             before = context.client.get(path + "/download-link", headers=auth(context)).json()
             assert_that(context.client.get(before["url"]).content, equal_to(CONTENT))
             # Recreate the container and network, preserving only the named volumes and keys.
@@ -155,7 +155,8 @@ def test_persistent_compose_api_download_restart_and_purge(tmp_path):
             after = context.client.get(path + "/download-link", headers=auth(context)).json()
             assert_that(context.client.get(after["url"]).content, equal_to(CONTENT))
             assert_that(
-                context.client.get(base(context) + "/artifacts", headers=auth(context)).json()["total"], equal_to(1)
+                context.client.get(agent_base(context) + "/artifacts", headers=auth(context)).json()["total"],
+                equal_to(1),
             )
             assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(204))
             assert_that(context.injector.get(ArtifactService).purge(), equal_to(1))

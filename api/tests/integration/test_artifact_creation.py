@@ -18,7 +18,7 @@ from api.tests.core.modules import set_env_variable
 from api.tests.helpers.artifacts import ADMIN_TOKEN, garage_storage
 from api.tests.integration.test_agents import _BASE, _GIVEN, _VALID_CREATE, _auth
 from api.tests.integration.test_workflows import _GIVEN as existing_agent
-from api.tests.integration.test_workflows import auth, base
+from api.tests.integration.test_workflows import agent_base, auth
 
 
 @pytest.fixture(scope="module")
@@ -109,7 +109,7 @@ def test_failed_agent_commit_leaves_no_storage_request_or_provider_side_effect(s
 
 def test_old_agent_can_explicitly_provision_idempotently(storage):
     with given([set_env_variable(storage), *existing_agent]) as context:
-        path = base(context) + "/artifacts/storage"
+        path = agent_base(context) + "/artifacts/storage"
         assert_that(
             context.client.get(path, headers=auth(context)).json(),
             equal_to({"state": "NOT_PROVISIONED", "max_bytes": 25 * 1024 * 1024}),
@@ -139,7 +139,7 @@ def test_explicit_retry_recovers_and_clears_safe_failure(storage, monkeypatch):
             raise OSError("private provider failure")
 
         monkeypatch.setattr(provider, "create_bucket", fail)
-        path = base(context) + "/artifacts/storage"
+        path = agent_base(context) + "/artifacts/storage"
         assert_that(context.client.post(path, headers=auth(context)).status_code, equal_to(202))
         response = context.client.get(path, headers=auth(context))
         assert_that(response.json(), equal_to({"state": "FAILED", "max_bytes": 25 * 1024 * 1024}))
@@ -156,7 +156,7 @@ def test_explicit_retry_recovers_and_clears_safe_failure(storage, monkeypatch):
 
 def test_storage_status_and_mutation_enforce_current_scope_and_read_only_key(storage):
     with given([set_env_variable(storage), *existing_agent]) as context:
-        path = base(context) + "/artifacts/storage"
+        path = agent_base(context) + "/artifacts/storage"
         key = context.client.post(
             "/api/v1/auth/me/api-keys", headers=auth(context), json={"name": "Files", "access_mode": "READ_ONLY"}
         ).json()["token"]
@@ -175,7 +175,7 @@ def test_storage_status_and_mutation_enforce_current_scope_and_read_only_key(sto
 
 def test_storage_disabled_is_visible_but_cannot_be_requested():
     with given([set_env_variable({"ARTIFACT_S3_ENDPOINT_URL": ""}), *existing_agent]) as context:
-        path = base(context) + "/artifacts/storage"
+        path = agent_base(context) + "/artifacts/storage"
         assert_that(
             context.client.get(path, headers=auth(context)).json(),
             equal_to({"state": "NOT_CONFIGURED", "max_bytes": 25 * 1024 * 1024}),
@@ -266,6 +266,6 @@ def test_storage_status_exposes_configured_upload_limit():
     with given(
         [set_env_variable({"ARTIFACT_S3_ENDPOINT_URL": "", "ARTIFACT_MAX_BYTES": "12345"}), *existing_agent]
     ) as context:
-        response = context.client.get(base(context) + "/artifacts/storage", headers=auth(context))
+        response = context.client.get(agent_base(context) + "/artifacts/storage", headers=auth(context))
         assert_that(response.status_code, equal_to(200))
         assert_that(response.json(), equal_to({"state": "NOT_CONFIGURED", "max_bytes": 12345}))

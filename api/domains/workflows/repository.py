@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -10,6 +11,8 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.users.models import User
+from api.domains.users.organization_users.models import OrganizationUser
 from api.domains.workflows.models import (
     Workflow,
     WorkflowDraft,
@@ -18,14 +21,29 @@ from api.domains.workflows.models import (
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
+class Unchanged:
+    """Distinguishes "leave the default Agent as it is" from "clear it"."""
+
+
+UNCHANGED = Unchanged()
+
+
 class WorkflowConflict(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
+class WorkflowCreator:
+    membership_id: UUID
+    user_id: UUID | None
+    name: str | None
+
+
+@dataclass(frozen=True)
 class WorkflowSummaryRow:
     id: UUID
-    agent_id: UUID
+    created_by_membership_id: UUID | None
+    default_agent_id: UUID | None
     revision: int
     archived_at: datetime | None
     version_id: UUID
@@ -42,33 +60,42 @@ class WorkflowSummaryRow:
 @singleton
 @dataclass
 class WorkflowRepository:
+    """Definitions are scoped by Organization; callers authorize the Member before reading."""
+
     delegate: PostgresRepositoryDelegate
 
-    def version_in_scope(
-        self, version_id: UUID, workflow_id: UUID, agent_id: UUID, scope: AuthorizationScope
-    ) -> WorkflowVersion | None:
+    def version(self, version_id: UUID, workflow_id: UUID, organization_id: UUID) -> WorkflowVersion | None:
         with Session(self.delegate.engine) as session:
             return session.exec(
                 select(WorkflowVersion)
                 .join(Workflow, col(Workflow.id) == col(WorkflowVersion.workflow_id))
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
                 .where(
                     col(WorkflowVersion.id) == version_id,
                     col(Workflow.id) == workflow_id,
-                    col(Workflow.agent_id) == agent_id,
-                    *agent_scope_predicates(scope),
+                    col(Workflow.organization_id) == organization_id,
                 )
             ).one_or_none()
 
-    def list_in_scope(
-        self, agent_id: UUID, scope: AuthorizationScope, page: int, size: int
+    def list_workflows(
+        self,
+        organization_id: UUID,
+        page: int,
+        size: int,
+        *,
+        created_by_membership_id: UUID | None = None,
+        archived: bool | None = None,
     ) -> tuple[list[WorkflowSummaryRow], int]:
-        """Latest version of each visible definition, projected in SQL so lists never load full snapshots."""
-        predicates = (col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope))
+        """Latest version of each definition, projected in SQL so lists never load full snapshots."""
+        predicates = [col(Workflow.organization_id) == organization_id]
+        if created_by_membership_id is not None:
+            predicates.append(col(Workflow.created_by_membership_id) == created_by_membership_id)
+        if archived is not None:
+            archived_at = col(Workflow.archived_at)
+            predicates.append(archived_at.is_not(None) if archived else archived_at.is_(None))
         latest = (
             select(WorkflowVersion.workflow_id, func.max(WorkflowVersion.number).label("number"))
             .join(Workflow, col(Workflow.id) == col(WorkflowVersion.workflow_id))
-            .where(col(Workflow.agent_id) == agent_id)
+            .where(col(Workflow.organization_id) == organization_id)
             .group_by(col(WorkflowVersion.workflow_id))
             .subquery()
         )
@@ -77,7 +104,8 @@ class WorkflowRepository:
             query = (
                 sa.select(
                     col(Workflow.id),
-                    col(Workflow.agent_id),
+                    col(Workflow.created_by_membership_id),
+                    col(Workflow.default_agent_id),
                     col(Workflow.revision),
                     col(Workflow.archived_at),
                     col(WorkflowVersion.id),
@@ -90,7 +118,6 @@ class WorkflowRepository:
                     func.coalesce(func.jsonb_array_length(snapshot["inputs"]), 0),
                 )
                 .select_from(Workflow)
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
                 .join(latest, latest.c.workflow_id == col(Workflow.id))
                 .join(
                     WorkflowVersion,
@@ -101,32 +128,24 @@ class WorkflowRepository:
                 )
                 .where(*predicates)
             )
-            total = session.exec(
-                select(func.count())
-                .select_from(Workflow)
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-                .where(*predicates)
-            ).one()
+            total = session.exec(select(func.count()).select_from(Workflow).where(*predicates)).one()
             rows = session.connection().execute(
                 query.order_by(col(Workflow.created_at).desc(), col(Workflow.id)).offset((page - 1) * size).limit(size)
             )
             return [WorkflowSummaryRow(*row) for row in rows], total
 
-    def get_in_scope(self, workflow_id: UUID, agent_id: UUID, scope: AuthorizationScope) -> Workflow | None:
+    def get(self, workflow_id: UUID, organization_id: UUID) -> Workflow | None:
         with Session(self.delegate.engine) as session:
             return session.exec(
-                select(Workflow)
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-                .where(
-                    col(Workflow.id) == workflow_id, col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope)
+                select(Workflow).where(
+                    col(Workflow.id) == workflow_id, col(Workflow.organization_id) == organization_id
                 )
             ).one_or_none()
 
-    def versions_in_scope(
+    def versions(
         self,
         workflow_id: UUID,
-        agent_id: UUID,
-        scope: AuthorizationScope,
+        organization_id: UUID,
         page: int = 1,
         size: int = 20,
         max_number: int | None = None,
@@ -135,10 +154,7 @@ class WorkflowRepository:
             query = (
                 select(WorkflowVersion)
                 .join(Workflow, col(Workflow.id) == col(WorkflowVersion.workflow_id))
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-                .where(
-                    col(Workflow.id) == workflow_id, col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope)
-                )
+                .where(col(Workflow.id) == workflow_id, col(Workflow.organization_id) == organization_id)
             )
             if max_number is not None:
                 query = query.where(col(WorkflowVersion.number) <= max_number)
@@ -148,16 +164,42 @@ class WorkflowRepository:
             ).all()
             return list(rows), total
 
-    def create(self, agent_id: UUID, draft: WorkflowDraft, user_id: UUID, scope: AuthorizationScope) -> Workflow:
+    def creators(self, membership_ids: Iterable[UUID | None]) -> dict[UUID, WorkflowCreator]:
+        membership_ids = {item for item in membership_ids if item is not None}
+        if not membership_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(OrganizationUser.id, OrganizationUser.user_id, User.full_name)
+                .outerjoin(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(col(OrganizationUser.id).in_(membership_ids))
+            ).all()
+            return {row[0]: WorkflowCreator(*row) for row in rows}
+
+    def readable_agent_ids(self, agent_ids: Iterable[UUID | None], scope: AuthorizationScope) -> set[UUID]:
+        """The active Agents among these that the scope may read."""
+        agent_ids = {item for item in agent_ids if item is not None}
+        if not agent_ids:
+            return set()
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(select(Agent.id).where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(scope)))
+            )
+
+    def create(
+        self,
+        organization_id: UUID,
+        membership_id: UUID,
+        draft: WorkflowDraft,
+        user_id: UUID,
+        default_agent_id: UUID | None,
+    ) -> Workflow:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            if (
-                session.exec(
-                    select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope))
-                ).one_or_none()
-                is None
-            ):
-                raise WorkflowConflict("Agent access changed; refresh before saving")
-            workflow = Workflow(agent_id=agent_id)
+            workflow = Workflow(
+                organization_id=organization_id,
+                created_by_membership_id=membership_id,
+                default_agent_id=default_agent_id,
+            )
             session.add(workflow)
             session.flush()
             session.add(
@@ -171,31 +213,33 @@ class WorkflowRepository:
             session.commit()
             return workflow
 
-    def save_version(
+    def change(
         self,
         workflow_id: UUID,
-        agent_id: UUID,
-        scope: AuthorizationScope,
+        organization_id: UUID,
         expected_revision: int,
-        draft: WorkflowDraft | None,
         user_id: UUID,
+        *,
+        draft: WorkflowDraft | None = None,
+        archive: bool = False,
+        default_agent_id: UUID | None | Unchanged = UNCHANGED,
     ) -> Workflow:
+        """Save a version, archive, or change the default Agent, under the workflow's revision."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             workflow = session.exec(
                 select(Workflow)
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-                .where(
-                    col(Workflow.id) == workflow_id, col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope)
-                )
+                .where(col(Workflow.id) == workflow_id, col(Workflow.organization_id) == organization_id)
                 .with_for_update(of=Workflow)
             ).one_or_none()
             if workflow is None or workflow.revision != expected_revision or workflow.archived_at is not None:
                 raise WorkflowConflict(
                     "Workflow changed or was archived; reload its current revision before saving. Your draft can be kept."
                 )
-            if draft is None:
+            if archive:
                 workflow.archived_at = datetime.now(UTC)
-            else:
+            if not isinstance(default_agent_id, Unchanged):
+                workflow.default_agent_id = default_agent_id
+            if draft is not None:
                 number = (
                     session.exec(
                         select(func.max(WorkflowVersion.number)).where(col(WorkflowVersion.workflow_id) == workflow_id)
