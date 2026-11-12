@@ -68,6 +68,7 @@ from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
+from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -2638,7 +2639,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-tasks"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):
@@ -2678,6 +2679,86 @@ def _native_discord_connection(context) -> None:
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
         )
     )
+
+
+def test_start_hermes_agent_listens_in_chosen_rooms() -> None:
+    import yaml as _yaml
+
+    def _connections(context) -> None:
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        for platform_key, settings, credentials in (
+            (
+                "discord",
+                {"allowed_channel_ids": ["channel-1"], "listen_in_channel_ids": ["channel-1"]},
+                {"bot_token": "discord-token"},
+            ),
+            (
+                "slack",
+                {"group_policy": "allowlist", "channel_ids": ["C1"], "listen_in_channel_ids": ["C1"]},
+                {"bot_token": "xoxb-token", "app_token": "xapp-token"},
+            ),
+            (
+                "telegram",
+                {"allowed_chat_ids": ["-1001"], "listen_in_chat_ids": ["-1001"]},
+                {"bot_token": "123:telegram-token"},
+            ),
+        ):
+            delegate.save(
+                CommunicationConnection(
+                    organization_id=context.agent.organization_id,
+                    agent_id=context.agent.id,
+                    platform_key=platform_key,
+                    display_name=f"Native {platform_key}",
+                    settings=settings,
+                    credentials_encrypted=encrypt_token(json.dumps(credentials), TEST_ENCRYPTION_KEY),
+                )
+            )
+
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES), _connections]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent whose Connections list listen-in rooms"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("each platform listens in its rooms and the guard is enabled"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            cfg = _yaml.safe_load(k8s.create_config_map.call_args.args[1].data["hermes-config.yaml"])
+            assert_that(cfg["discord"]["free_response_channels"], equal_to(["channel-1"]))
+            assert_that(cfg["slack"]["free_response_channels"], equal_to(["C1"]))
+            assert_that(cfg["telegram"]["free_response_chats"], equal_to(["-1001"]))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-listen-in"))
+
+
+def test_start_hermes_agent_with_require_mention_off_still_listens_in() -> None:
+    import yaml as _yaml
+
+    def _connection(context) -> None:
+        context.injector.get(PostgresRepositoryDelegate).save(
+            CommunicationConnection(
+                organization_id=context.agent.organization_id,
+                agent_id=context.agent.id,
+                platform_key="discord",
+                display_name="Native Discord",
+                settings={"allow_all_users": True, "require_mention": False, "listen_in_channel_ids": ["channel-1"]},
+                credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
+            )
+        )
+
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES), _connection]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with Require @mention off and a listen-in channel"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("other channels answer without a mention and the listen-in channel stays guarded"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            cfg = _yaml.safe_load(k8s.create_config_map.call_args.args[1].data["hermes-config.yaml"])
+            assert_that(cfg["discord"]["require_mention"], equal_to(False))
+            assert_that(cfg["discord"]["thread_require_mention"], equal_to(False))
+            assert_that(cfg["discord"]["free_response_channels"], equal_to(["channel-1"]))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-listen-in"))
 
 
 def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
@@ -5983,6 +6064,29 @@ def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
         with then("the aai-cli integrations block and profiles are absent"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
+            assert_that(config_map.data["aai-cli-config.toml"], is_not(contains_string("[profiles.")))
+
+
+def test_start_agent_mounts_the_google_workspace_skill_without_the_aai_cli_policy():
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        seed_aai_cli_skills(context.injector.get(SkillRepository))
+
+        with when("Google Workspace is the agent's only integration"):
+            saved = _configure_gws(client, context)
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the bundled skill is mounted and TOOLS.md points at gog"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            paths = [entry["path"] for entry in json.loads(config_map.data["skills.json"])]
+            assert_that(paths, has_item("aai-google-workspace/SKILL.md"))
+            assert_that(config_map.data["TOOLS.md"], contains_string("use the gog tool"))
+
+        with then("the aai-cli integrations block and profiles stay absent"):
             assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
             assert_that(config_map.data["aai-cli-config.toml"], is_not(contains_string("[profiles.")))
 

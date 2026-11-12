@@ -404,7 +404,7 @@ purge. The bucket-journal downgrade additionally refuses every non-DELETED bucke
 finish artifact purge, bucket reclamation and key revocation before discarding it.
 Retain additive tables and compatible API/purge processes during rollback. Never change endpoint or bucket while retained rows still
 target the old store; migrate and verify explicitly or preserve old access for purge.
-Monitor Garage health/capacity and failed purge jobs, DELETING age and `purge_attempts`. Alert on failed or overdue artifact-purge Jobs and Pending Jobs; check pod scheduling events and available memory (the Job requests the worker resources). A stuck Job stops retention and provisioning recovery.
+Monitor Garage health/capacity and failed purge jobs, DELETING age and `purge_attempts`. Alert on failed or overdue artifact-purge Jobs and Pending Jobs; check pod scheduling events and available memory (the Job requests `jobs.resources`). A stuck Job stops retention and provisioning recovery.
 Unsafe-target refusals retain evidence and retry backoff; investigate rather than
 discarding the journal. Operator recovery uses bounded `make purge-artifacts` passes.
 

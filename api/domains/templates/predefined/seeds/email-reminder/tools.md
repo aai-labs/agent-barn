@@ -6,10 +6,12 @@ Email is accessed exclusively through the `gog` CLI — do not attempt himalaya,
 
 `gog` is already authenticated as the user's Google account and takes no `--profile` flag.
 
+This template needs the Google Workspace integration with **Gmail** selected. If `gog gmail` is unavailable or Google refuses Gmail access, tell the owner to reconnect Google Workspace with Gmail selected, then stop. Do not try another tool.
+
 List new emails, then read one:
 ```
-gog gmail search 'newer_than:1d'
-gog gmail messages get <MESSAGE_ID>
+gog gmail messages search 'newer_than:1d'
+gog gmail get <MESSAGE_ID>
 ```
 
 ## Slack

@@ -7,6 +7,12 @@ never leaves the pod.
 Correlation is the inbound provider message (``<platform>:<message_id>``).
 Runs and sends only carry a session, so each is attributed to the latest
 inbound message observed on that session key.
+
+Hermes' busy queue holds a message back from the dispatch hook, and a reply sent
+just before a queued message runs skips the delivery ledger. The transcript sees
+both directly: messages at the adapter, and that reply where it is delivered. A
+queued message has no Journal timeline of its own, because recording it as the
+latest inbound would attribute the running turn's stages to it.
 """
 
 import json
@@ -16,6 +22,7 @@ import sqlite3
 import threading
 import time
 import urllib.request
+import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,7 +56,9 @@ _messages: list[dict] = []
 _lock = threading.Lock()
 _latest_inbound: OrderedDict[str, str] = OrderedDict()  # session_key -> correlation_id
 _session_keys: OrderedDict[str, str] = OrderedDict()  # session_id -> session_key
+_seen_inbound: OrderedDict[str, str] = OrderedDict()  # correlation_id -> correlation_id
 _session_store = None
+_first_response_patched = False
 
 
 def _now() -> str:
@@ -91,6 +100,31 @@ def obligation_stage(state: str | None) -> str | None:
     return _OBLIGATION_STAGES.get(state or "")
 
 
+def _record_inbound(event, source, platform: str, message_id: str, session_key: str) -> None:
+    text = getattr(event, "text", None)
+    if not text:
+        return
+    correlation_id = f"{platform}:{message_id}"
+    with _lock:
+        if correlation_id in _seen_inbound:
+            return
+        _remember(_seen_inbound, correlation_id, correlation_id)
+    _emit_message(
+        platform=platform,
+        provider_message_id=str(message_id),
+        session_key=session_key,
+        channel_id=str(getattr(source, "chat_id", "")),
+        thread_id=getattr(source, "thread_id", None) or getattr(source, "parent_chat_id", None),
+        direction="INBOUND",
+        conversation_type=_conversation_type(getattr(source, "chat_type", None)),
+        sender_id=getattr(source, "user_id", None),
+        sender_name=getattr(source, "user_name", None) or getattr(source, "username", None),
+        channel_name=getattr(source, "chat_name", None),
+        content=str(text),
+        occurred_at=_now(),
+    )
+
+
 def _on_pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_):
     global _session_store
     if session_store is not None:
@@ -109,22 +143,88 @@ def _on_pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_):
     if session_key:
         with _lock:
             _remember(_latest_inbound, session_key, correlation_id)
-        text = getattr(event, "text", None)
-        if text:
-            _emit_message(
-                platform=platform,
-                provider_message_id=str(message_id),
-                session_key=session_key,
-                channel_id=str(getattr(source, "chat_id", "")),
-                thread_id=getattr(source, "thread_id", None) or getattr(source, "parent_chat_id", None),
-                direction="INBOUND",
-                conversation_type=_conversation_type(getattr(source, "chat_type", None)),
-                sender_id=getattr(source, "user_id", None),
-                sender_name=getattr(source, "user_name", None) or getattr(source, "username", None),
-                channel_name=getattr(source, "chat_name", None),
-                content=str(text),
-                occurred_at=_now(),
-            )
+        _record_inbound(event, source, platform, message_id, session_key)
+
+
+def _runner():
+    from gateway.run import _gateway_runner_ref  # ty: ignore[unresolved-import]
+
+    return _gateway_runner_ref()
+
+
+def _visible_text(response: str, adapter) -> str:
+    from gateway.run import _strip_response_attachments_for_direct_send  # ty: ignore[unresolved-import]
+
+    return _strip_response_attachments_for_direct_send(response, adapter)
+
+
+def _record_first_response(runner, response: str, source, adapter) -> None:
+    content = _visible_text(response, adapter)
+    if not content:
+        return
+    _emit_message(
+        platform=getattr(source.platform, "value", source.platform),
+        provider_message_id=f"outbound:{uuid.uuid4().hex}",
+        session_key=runner._session_key_for_source(source),
+        channel_id=str(source.chat_id),
+        thread_id=getattr(source, "thread_id", None),
+        direction="OUTBOUND",
+        conversation_type=_conversation_type(getattr(source, "chat_type", None)),
+        content=content,
+        occurred_at=_now(),
+    )
+
+
+def _patch_first_response(runner_class) -> None:
+    original = runner_class._deliver_queued_first_response
+
+    async def deliver(self, response, source, adapter, *args, **kwargs):
+        await original(self, response, source, adapter, *args, **kwargs)
+        try:
+            _record_first_response(self, response, source, adapter)
+        except Exception as exc:
+            logger.warning("agentbarn-observer could not record a first response: %s", exc)
+
+    runner_class._deliver_queued_first_response = deliver
+
+
+def _observe_arrival(event) -> None:
+    global _first_response_patched
+    if getattr(event, "internal", False):
+        return
+    runner = _runner()
+    if runner is None:
+        return
+    if not _first_response_patched:
+        _first_response_patched = True
+        try:
+            _patch_first_response(type(runner))
+        except Exception as exc:
+            logger.warning("agentbarn-observer could not observe first responses: %s", exc)
+    source = getattr(event, "source", None)
+    platform = getattr(getattr(source, "platform", None), "value", "")
+    message_id = getattr(event, "message_id", None) or getattr(source, "message_id", None)
+    if platform and message_id:
+        _record_inbound(event, source, platform, message_id, runner._session_key_for_source(source))
+
+
+def _patch_ingress(adapter_class) -> None:
+    original = adapter_class.handle_message
+
+    async def handle_message(self, event):
+        try:
+            _observe_arrival(event)
+        except Exception as exc:
+            logger.warning("agentbarn-observer could not record an arrival: %s", exc)
+        return await original(self, event)
+
+    adapter_class.handle_message = handle_message
+
+
+def _install_ingress() -> None:
+    from gateway.platforms.base import BasePlatformAdapter  # ty: ignore[unresolved-import]
+
+    _patch_ingress(BasePlatformAdapter)
 
 
 def _session_key_for(session_id: str | None) -> str | None:
@@ -266,6 +366,7 @@ def register(ctx):
     if not agent_id or not ingest_url or not api_key:
         return
 
+    _install_ingress()
     ctx.register_hook("pre_gateway_dispatch", _on_pre_gateway_dispatch)
     ctx.register_hook("pre_llm_call", _on_run_hook("agent_claimed"))
     ctx.register_hook("post_llm_call", _on_run_hook("model_completed"))
