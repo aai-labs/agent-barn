@@ -30,11 +30,13 @@ from .memory import (
     memory_command_volume,
     openclaw_memory_settings,
 )
+from .tasks import TASK_COMMAND, TASK_TOOL, TASK_TOOL_INSTRUCTIONS, task_command_mount, task_command_volume
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
 _LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
@@ -73,6 +75,9 @@ TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").rea
 OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
+TASKS_PLUGIN_INDEX_JS: str = (_TASKS_PLUGIN / "index.js").read_text()
+TASKS_PLUGIN_PACKAGE_JSON: str = (_TASKS_PLUGIN / "package.json").read_text()
+TASKS_PLUGIN_JSON: str = (_TASKS_PLUGIN / "openclaw.plugin.json").read_text()
 LISTEN_IN_INDEX_JS: str = (_LISTEN_IN / "index.js").read_text()
 LISTEN_IN_PACKAGE_JSON: str = (_LISTEN_IN / "package.json").read_text()
 LISTEN_IN_PLUGIN_JSON: str = (_LISTEN_IN / "openclaw.plugin.json").read_text()
@@ -120,10 +125,11 @@ def _openclaw_config_core(
         # multi-user Agent would carry one person's private conversation into the next.
         "session": {"dmScope": "per-channel-peer"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-tasks"],
             "load": {
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
+                    "/home/node/.openclaw/local-plugins/agentbarn-tasks",
                 ]
             },
             "slots": {"memory": "memory-core"},
@@ -144,6 +150,11 @@ def _openclaw_config_core(
                     },
                 },
                 "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
+                # Its turn hooks read the run and add context, so they need conversation access.
+                "agentbarn-tasks": {
                     "enabled": True,
                     "hooks": {"allowConversationAccess": True},
                 },
@@ -470,8 +481,11 @@ def build_config_map(
         "agentbarn_artifacts.py": ARTIFACT_TOOL,
         "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
+        "agentbarn_task.py": TASK_TOOL,
+        "agentbarn-task": TASK_COMMAND,
         "TOOLS.md": tools_md,
         "AGENTS.md": agents_md
+        + TASK_TOOL_INSTRUCTIONS
         + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
         + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
@@ -492,6 +506,9 @@ def build_config_map(
         data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
         data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
+        data["agentbarn-tasks-index.js"] = TASKS_PLUGIN_INDEX_JS
+        data["agentbarn-tasks-package.json"] = TASKS_PLUGIN_PACKAGE_JSON
+        data["agentbarn-tasks-plugin.json"] = TASKS_PLUGIN_JSON
         data["agentbarn-listen-in-index.js"] = LISTEN_IN_INDEX_JS
         data["agentbarn-listen-in-package.json"] = LISTEN_IN_PACKAGE_JSON
         data["agentbarn-listen-in-plugin.json"] = LISTEN_IN_PLUGIN_JSON
@@ -623,6 +640,7 @@ def build_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                task_command_mount(),
                                 artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
@@ -637,6 +655,7 @@ def build_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        task_command_volume(name),
                         artifact_command_volume(name),
                         client.V1Volume(
                             name="config",

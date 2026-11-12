@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from injector import inject, singleton
@@ -27,6 +28,12 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 # A finished Task's Files are released: they expire a full Artifact retention later.
 _FINISHED = frozenset({AgentTaskStatus.DONE, AgentTaskStatus.FAILED})
+
+
+def _touch(session: Session, task: AgentTask) -> None:
+    """A Note or File is a change to its Task, so the Task's lists order it by it."""
+    task.updated_at = datetime.now(UTC)
+    session.add(task)
 
 
 def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) -> bool:
@@ -100,10 +107,12 @@ class AgentTaskRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
                 return None
             note = AgentTaskNote(task_id=task_id, body=body)
             session.add(note)
+            _touch(session, task)
             session.commit()
             return note
 
@@ -149,12 +158,43 @@ class AgentTaskRepository:
                 size_bytes=artifact.size,
             )
             session.add(stored)
+            _touch(session, task)
             if task.status in _FINISHED:
                 release(session, file_id)
             else:
                 keep_newest(session)
             session.commit()
             return stored
+
+    def remove_file(
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        task_id: UUID,
+        file_id: UUID,
+        release: Callable[[Session, UUID], None],
+    ) -> bool:
+        """Delete one of the Agent's own Files, releasing its Artifact pin in the same transaction."""
+        with Session(self.delegate.engine) as session:
+            if not _lock_live_agent(session, organization_id, agent_id):
+                return False
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
+            if task is None:
+                return False
+            stored = session.exec(
+                select(AgentTaskFile).where(
+                    col(AgentTaskFile.id) == file_id,
+                    col(AgentTaskFile.task_id) == task_id,
+                    col(AgentTaskFile.organization_id) == organization_id,
+                )
+            ).first()
+            if stored is None:
+                return False
+            release(session, stored.id)
+            session.delete(stored)
+            _touch(session, task)
+            session.commit()
+            return True
 
     def get_file(
         self,
@@ -218,8 +258,10 @@ class AgentTaskRepository:
         pagination: Pagination,
         authorization_scope: AuthorizationScope,
         visible_scope: AuthorizationScope | None = None,
+        recently_changed_first: bool = False,
     ) -> PaginatedItems[AgentTaskRead]:
-        """Tasks newest first; with `visible_scope`, only on Agents that scope may also see."""
+        """Tasks newest or most recently changed first; with `visible_scope`, only on Agents it also sees."""
+        order = col(AgentTask.updated_at) if recently_changed_first else col(AgentTask.created_at)
         where = [
             col(AgentTask.organization_id) == authorization_scope.organization_id,
             *agent_scope_predicates(authorization_scope),
@@ -244,7 +286,7 @@ class AgentTaskRepository:
                 select(AgentTask)
                 .join(Agent, col(Agent.id) == col(AgentTask.agent_id))
                 .where(*where)
-                .order_by(col(AgentTask.created_at).desc(), col(AgentTask.id).desc())
+                .order_by(order.desc(), col(AgentTask.id).desc())
                 .offset((pagination.page - 1) * pagination.size)
                 .limit(pagination.size)
             ).all()
