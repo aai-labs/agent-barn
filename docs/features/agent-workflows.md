@@ -227,7 +227,7 @@ created or edited from an Agent. The tab requires `agent.read`, independently of
 conversation/activity access. An Agent that has been deleted is shown by name
 with an Archived marker and no link.
 
-A count of runs waiting on an approval, whether or not the viewer may decide it, is shown on the Workflows item
+A count of the approval requests the viewer may decide is shown on the Workflows item
 of the Organization navigation, across every Agent the viewer can read, and on
 the Workflows item of an Agent's navigation panel, for that Agent.
 
