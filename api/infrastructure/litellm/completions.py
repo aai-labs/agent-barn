@@ -66,7 +66,7 @@ class LiteLLMCompletionClient:
         except httpx.HTTPError:
             raise CompletionError(CompletionFailure.UNAVAILABLE) from None
         if response.status_code != 200:
-            raise CompletionError(_failure_for(response))
+            raise CompletionError(failure_for(response))
         try:
             payload = response.json()
             choice = payload["choices"][0]
@@ -78,14 +78,14 @@ class LiteLLMCompletionClient:
                 content=content,
                 prompt_tokens=int(usage.get("prompt_tokens") or 0),
                 completion_tokens=int(usage.get("completion_tokens") or 0),
-                cost_usd=_cost(response.headers.get("x-litellm-response-cost")),
+                cost_usd=response_cost(response.headers.get("x-litellm-response-cost")),
                 truncated=choice.get("finish_reason") == "length",
             )
         except ValueError, KeyError, IndexError, TypeError:
             raise CompletionError(CompletionFailure.BAD_RESPONSE) from None
 
 
-def _failure_for(response: httpx.Response) -> CompletionFailure:
+def failure_for(response: httpx.Response) -> CompletionFailure:
     # An exhausted key or team budget has a budget error type and arrives as 400, 429, or
     # 422 (LiteLLM's default from v1.104 on), depending on the release and which budget was hit.
     if response.status_code in (400, 422, 429) and "budget" in _error_type(response):
@@ -103,7 +103,7 @@ def _error_type(response: httpx.Response) -> str:
         return ""
 
 
-def _cost(header: str | None) -> Decimal | None:
+def response_cost(header: str | None) -> Decimal | None:
     if not header:
         return None
     try:
