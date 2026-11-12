@@ -30,6 +30,7 @@ The result also carries input and output tokens and `cost_usd` from LiteLLM (`No
 - `DECISION_MODELS` maps a name to a LiteLLM model slug; the default is `{"jev": "openrouter/typesafe/jev-1.14", "openai": "openrouter/openai/gpt-6-luna-decisions"}`. A model version bump is a change to this map, not code.
 - Platform Administrators choose the default name at `GET/PUT /api/v1/platform/settings/decisions`; `GET .../models` lists the configured names. Until they do, `DECISION_DEFAULT_MODEL` (default `jev`) applies, and the API refuses to start if it names no entry. A change and its Platform-scoped `platform.decision_model.changed` audit event commit together in `platform_decision_settings`; saving the current choice records nothing. Only configured names can be saved (`422` otherwise).
 - A caller may pass `model=<name>` for one call; an unknown name is a `ValueError`. A saved choice later removed from `DECISION_MODELS` falls back to the default.
+- Platform Settings → **Decisions** (`/dashboard/platform/settings?section=decisions`) holds the setting, in the model picker card shared with Agent Memory and Playbooks; `ui/src/features/decisions/` holds it.
 
 ## Calls, billing and failures
 
