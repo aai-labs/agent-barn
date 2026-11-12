@@ -11,6 +11,8 @@ export const EnvironmentSourceSchema = z.enum([
   "stateful_sets",
   "volume_claims",
   "services",
+  "cron_jobs",
+  "jobs",
   "resource_quotas",
   "events",
   "prometheus",
@@ -56,6 +58,17 @@ export const DeployedVersionSchema = z.object({
   behind: z.array(z.string()).default([]),
 });
 export type DeployedVersion = z.infer<typeof DeployedVersionSchema>;
+
+export const CronJobSchema = z.object({
+  name: z.string(),
+  schedule: z.string().nullable().default(null),
+  state: z.enum(["ok", "failing", "stalled", "suspended"]),
+  running: z.boolean().default(false),
+  lastScheduledAt: z.string().nullable().default(null),
+  lastSuccessfulAt: z.string().nullable().default(null),
+  lastFailedAt: z.string().nullable().default(null),
+});
+export type CronJob = z.infer<typeof CronJobSchema>;
 
 export const FiringAlertSchema = z.object({
   name: z.string(),
@@ -176,6 +189,7 @@ export const EnvironmentHealthSchema = z.object({
   deployed: DeployedVersionSchema.nullable().default(null),
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),
+  cronJobs: z.array(CronJobSchema).default([]),
   alerts: z.array(FiringAlertSchema).default([]),
   capacity: z.array(CapacityLineSchema).default([]),
   volumes: VolumeAllocationSchema,

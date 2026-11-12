@@ -17,13 +17,21 @@ from kubernetes.client import (
     V1ContainerState,
     V1ContainerStateWaiting,
     V1ContainerStatus,
+    V1CronJob,
+    V1CronJobSpec,
+    V1CronJobStatus,
     V1Deployment,
     V1DeploymentCondition,
     V1DeploymentSpec,
     V1DeploymentStatus,
+    V1Job,
+    V1JobCondition,
+    V1JobStatus,
+    V1JobTemplateSpec,
     V1LabelSelector,
     V1ObjectMeta,
     V1ObjectReference,
+    V1OwnerReference,
     V1PersistentVolumeClaim,
     V1PersistentVolumeClaimSpec,
     V1PersistentVolumeClaimStatus,
@@ -127,6 +135,8 @@ def _quiet_cluster(context) -> None:
         "list_stateful_sets",
         "list_pvcs",
         "list_services",
+        "list_cron_jobs",
+        "list_namespace_jobs",
         "list_resource_quotas",
         "list_warning_events",
     ):
@@ -546,6 +556,62 @@ def test_services_left_on_an_older_build_are_a_warning():
         assert_that(body["level"], equal_to("warning"))
 
 
+def test_a_cron_job_whose_last_run_failed_is_listed_first_and_warns():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-cron@example.com")]) as context:
+        _quiet_cluster(context)
+        now = datetime.now(UTC)
+        k8s = _cluster(context)
+        k8s.list_cron_jobs.return_value = [
+            V1CronJob(
+                metadata=V1ObjectMeta(name=name, creation_timestamp=now - timedelta(days=30)),
+                spec=V1CronJobSpec(schedule="2-59/5 * * * *", job_template=V1JobTemplateSpec()),
+                status=V1CronJobStatus(
+                    last_schedule_time=now - timedelta(minutes=1),
+                    last_successful_time=now - timedelta(minutes=6),
+                ),
+            )
+            for name in ("agentbarn-event-reconciler", "agentbarn-restore-point-schedule")
+        ]
+        k8s.list_namespace_jobs.return_value = [
+            V1Job(
+                metadata=V1ObjectMeta(
+                    name="agentbarn-restore-point-schedule-29001",
+                    creation_timestamp=now - timedelta(minutes=1),
+                    owner_references=[
+                        V1OwnerReference(
+                            api_version="batch/v1", kind="CronJob", name="agentbarn-restore-point-schedule", uid="1"
+                        )
+                    ],
+                ),
+                status=V1JobStatus(conditions=[V1JobCondition(type="Failed", status="True", last_transition_time=now)]),
+            )
+        ]
+
+        body = _get(context).json()
+
+        assert_that(_sources(body), has_entries(cron_jobs="available", jobs="available"))
+        assert_that(
+            body["cron_jobs"],
+            contains_exactly(
+                has_entries(name="agentbarn-restore-point-schedule", state="failing", schedule="2-59/5 * * * *"),
+                has_entries(name="agentbarn-event-reconciler", state="ok"),
+            ),
+        )
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_refused_cron_jobs_say_so_and_leave_the_rest():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-cron-refused@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_cron_jobs.side_effect = _forbidden()
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["cron_jobs"], equal_to("forbidden"))
+        assert_that(body["cron_jobs"], equal_to([]))
+        assert_that(body["level"], equal_to("ok"))
+
+
 def test_refused_services_leave_their_line_unknown():
     with given([*_BASE_GIVEN, *_platform_admin("env-admin-services-refused@example.com")]) as context:
         _quiet_cluster(context)
@@ -618,6 +684,8 @@ def test_with_no_cluster_to_read_the_page_says_so_instead_of_failing():
             "list_stateful_sets",
             "list_pvcs",
             "list_services",
+            "list_cron_jobs",
+            "list_namespace_jobs",
             "list_resource_quotas",
             "list_warning_events",
         ):

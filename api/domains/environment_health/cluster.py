@@ -15,7 +15,9 @@ from uuid import UUID
 
 from kubernetes.client import (
     CoreV1Event,
+    V1CronJob,
     V1Deployment,
+    V1Job,
     V1PersistentVolumeClaim,
     V1Pod,
     V1ResourceQuota,
@@ -42,6 +44,8 @@ from api.domains.environment_health.models import (
     CapacitySource,
     CapacityUnit,
     CoreServiceRead,
+    CronJobRead,
+    CronJobState,
     DeployedVersionRead,
     FailedAgentRead,
     FiringAlertRead,
@@ -74,6 +78,14 @@ CRITICAL_RATIO = 0.9
 # The pod-template annotation the charts set to the commit each image was built from.
 BUILD_SHA_ANNOTATION = "build-sha"
 _BUILD_SHA = re.compile(r"[0-9a-f]{7,40}")
+
+# Every platform CronJob runs at least hourly, so a day with no successful run is a stall
+# whatever its schedule. A CronJob younger than this has not had its chance yet.
+CRON_STALL_AFTER = timedelta(hours=24)
+_CRON_FIELD = r"[0-9A-Za-z*/,?\-]{1,32}"
+_CRON_SCHEDULE = re.compile(
+    rf"{_CRON_FIELD}(?: {_CRON_FIELD}){{4}}|@(?:yearly|annually|monthly|weekly|daily|midnight|hourly)"
+)
 
 REPEATED_RESTARTS = 3
 RECENT_RESTART_WINDOW = timedelta(hours=1)
@@ -596,6 +608,86 @@ def _last_termination(statuses: Sequence) -> tuple[str | None, datetime | None]:
                 reason = terminated.reason if terminated.reason in _TERMINATION else None
                 latest = (reason, finished)
     return latest
+
+
+# --- cron jobs ------------------------------------------------------------
+
+
+def _job_outcome(job: V1Job) -> tuple[bool, datetime | None] | None:
+    """(failed, when) for a finished Job, from its condition types only; None while it runs."""
+    for condition in (job.status.conditions if job.status else None) or []:
+        if condition.status != "True":
+            continue
+        if condition.type == "Failed":
+            return True, condition.last_transition_time
+        if condition.type == "Complete":
+            return False, condition.last_transition_time
+    return None
+
+
+def _cron_owner(job: V1Job) -> str | None:
+    for owner in job.metadata.owner_references or []:
+        if owner.kind == "CronJob":
+            return owner.name
+    return None
+
+
+_CRON_ORDER = {CronJobState.FAILING: 0, CronJobState.STALLED: 1, CronJobState.OK: 2, CronJobState.SUSPENDED: 3}
+
+
+def cron_jobs(cron_jobs: Sequence[V1CronJob], jobs: Sequence[V1Job], now: datetime) -> list[CronJobRead]:
+    """The platform's CronJobs, failing and stalled ones first.
+
+    Failing when the newest finished run Kubernetes still keeps failed. Stalled when, not
+    suspended, nothing succeeded within `CRON_STALL_AFTER`. A Job's reason and message are
+    never read, only whether it completed or failed, and when.
+    """
+    runs: dict[str, list[tuple[datetime | None, bool, datetime | None]]] = {}
+    for job in jobs:
+        owner = _cron_owner(job)
+        outcome = _job_outcome(job)
+        if owner is None or outcome is None:
+            continue
+        failed, finished = outcome
+        runs.setdefault(owner, []).append((job.metadata.creation_timestamp, failed, finished))
+
+    rows: list[CronJobRead] = []
+    for cron in cron_jobs:
+        metadata = cron.metadata
+        if _kind(metadata.labels or {}) != WorkloadKind.INFRASTRUCTURE:
+            continue
+        name = _name(metadata.name)
+        if name is None:
+            continue
+        status = cron.status
+        last_success = status.last_successful_time if status else None
+        finished = sorted(runs.get(metadata.name, []), key=lambda run: run[0] or _NEVER)
+        newest_failed = bool(finished) and finished[-1][1]
+        last_failed_at = max((run[2] for run in finished if run[1] and run[2] is not None), default=None)
+        created = metadata.creation_timestamp
+        old_enough = created is None or now - created > CRON_STALL_AFTER
+        if cron.spec and cron.spec.suspend:
+            state = CronJobState.SUSPENDED
+        elif newest_failed:
+            state = CronJobState.FAILING
+        elif old_enough and (last_success is None or now - last_success > CRON_STALL_AFTER):
+            state = CronJobState.STALLED
+        else:
+            state = CronJobState.OK
+        schedule = cron.spec.schedule if cron.spec else None
+        rows.append(
+            CronJobRead(
+                name=name,
+                schedule=schedule if isinstance(schedule, str) and _CRON_SCHEDULE.fullmatch(schedule) else None,
+                state=state,
+                running=bool(status and status.active),
+                last_scheduled_at=status.last_schedule_time if status else None,
+                last_successful_at=last_success,
+                last_failed_at=last_failed_at,
+            )
+        )
+    rows.sort(key=lambda row: (_CRON_ORDER[row.state], row.name))
+    return rows
 
 
 # --- capacity -------------------------------------------------------------

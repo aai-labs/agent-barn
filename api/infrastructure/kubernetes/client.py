@@ -346,6 +346,12 @@ class KubernetesClient:
     def list_resource_quotas(self, namespace: str) -> list[client.V1ResourceQuota]:
         return self._core_v1.list_namespaced_resource_quota(namespace, _request_timeout=10).items
 
+    def list_cron_jobs(self, namespace: str) -> list[client.V1CronJob]:
+        return self._batch_v1.list_namespaced_cron_job(namespace, _request_timeout=10).items
+
+    def list_namespace_jobs(self, namespace: str) -> list[client.V1Job]:
+        return self._batch_v1.list_namespaced_job(namespace, _request_timeout=10).items
+
     def list_warning_events(self, namespace: str) -> list[client.CoreV1Event]:
         return self._core_v1.list_namespaced_event(namespace, field_selector="type=Warning", _request_timeout=10).items
 

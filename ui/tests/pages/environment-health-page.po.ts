@@ -20,7 +20,7 @@ export class EnvironmentHealthPage {
     return this.page.getByTestId("environment-sources");
   }
 
-  section(name: "capacity" | "services" | "agents" | "workloads" | "volumes" | "events"): Locator {
+  section(name: "capacity" | "services" | "agents" | "workloads" | "volumes" | "events" | "scheduled"): Locator {
     return this.page.getByTestId(`environment-${name}`);
   }
 
@@ -46,6 +46,10 @@ export class EnvironmentHealthPage {
 
   unhealthyRuntimes(): Locator {
     return this.page.getByTestId("unhealthy-runtime");
+  }
+
+  cronJob(name: string): Locator {
+    return this.page.getByTestId(`cron-job-${name}`);
   }
 
   podIssues(): Locator {
