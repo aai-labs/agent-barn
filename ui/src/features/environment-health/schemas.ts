@@ -108,8 +108,13 @@ export const PodIssueSchema = z.object({
   phase: z.string().nullable().default(null),
   ready: z.boolean(),
   unschedulable: z.boolean().default(false),
+  /** Since the pod was created. Never reset, so a high count may be old news. */
   restartCount: z.number().int().default(0),
+  /** Within the last `restartWindowDays`. Null when the restart history could not be read. */
+  restartsInWindow: z.number().int().nullable().default(null),
   repeatedlyRestarting: z.boolean().default(false),
+  /** A container ran out of memory within the last `restartWindowDays`. */
+  oomKilled: z.boolean().default(false),
   waitingReason: z.string().nullable().default(null),
   terminationReason: z.string().nullable().default(null),
   lastRestartAt: z.string().nullable().default(null),
@@ -151,6 +156,7 @@ export const EnvironmentHealthSchema = z.object({
   namespace: z.string(),
   level: HealthLevelSchema,
   peakWindowHours: z.number().int().default(24),
+  restartWindowDays: z.number().int().default(7),
   sources: z.array(z.object({ source: EnvironmentSourceSchema, state: SourceStateSchema })).default([]),
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),

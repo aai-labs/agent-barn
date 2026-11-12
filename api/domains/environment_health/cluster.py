@@ -10,6 +10,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import NamedTuple
 from uuid import UUID
 
 from kubernetes.client import (
@@ -70,6 +71,10 @@ CRITICAL_RATIO = 0.9
 # its node rebooted last week and has run cleanly since is not flagged.
 REPEATED_RESTARTS = 3
 RECENT_RESTART_WINDOW = timedelta(hours=1)
+# How far back the restart history (kube-state-metrics, via Prometheus) is read. A container
+# OOM-killed once a day never restarts three times in an hour, or even in a day, but over a
+# week it plainly keeps failing. Prometheus keeps 15 days.
+RESTART_HISTORY_WINDOW = timedelta(days=7)
 # A pod younger than this that is not ready yet is starting, not failing.
 STARTUP_GRACE = timedelta(minutes=2)
 # Warning Events older than this are history, not news. Kubernetes keeps them about an hour
@@ -369,6 +374,37 @@ def _workload_name(pod: V1Pod) -> str | None:
     return _name(name)
 
 
+class PodRestarts(NamedTuple):
+    """A pod's restart history over `RESTART_HISTORY_WINDOW`: how often, and whether memory ran out."""
+
+    restarts: int
+    oom_killed: bool
+
+
+def pod_restarts(samples: Iterable[PrometheusSample]) -> dict[str, PodRestarts]:
+    """Restart history by pod name, from the two tagged halves of the restart query.
+
+    Only a pod name and two numbers are kept. A sample whose pod is not a valid object name,
+    or whose tag is neither half, is dropped.
+    """
+    restarts: dict[str, int] = {}
+    oom_killed: set[str] = set()
+    for sample in samples:
+        name = _name(sample.labels.get("pod"))
+        signal = sample.labels.get("signal")
+        if name is None:
+            continue
+        if signal == "restarts":
+            # `increase()` extrapolates, so a count of 15 can come back as 14.97.
+            restarts[name] = round(sample.value)
+        elif signal == "oom_killed" and sample.value > 0:
+            oom_killed.add(name)
+    return {
+        name: PodRestarts(restarts=restarts.get(name, 0), oom_killed=name in oom_killed)
+        for name in restarts.keys() | oom_killed
+    }
+
+
 def agent_pod_readiness(pods: Sequence[V1Pod]) -> dict[UUID, bool]:
     """Whether each Agent has a ready pod. Two pods of one Agent in a rollout read as ready if either is."""
     ready: dict[UUID, bool] = {}
@@ -382,12 +418,23 @@ def agent_pod_readiness(pods: Sequence[V1Pod]) -> dict[UUID, bool]:
     return ready
 
 
-def workloads(pods: Sequence[V1Pod], identities: Mapping[UUID, PlatformAgentIdentity], now: datetime) -> WorkloadsRead:
+def workloads(
+    pods: Sequence[V1Pod],
+    identities: Mapping[UUID, PlatformAgentIdentity],
+    now: datetime,
+    restarts: Mapping[str, PodRestarts] | None = None,
+) -> WorkloadsRead:
     """Counts of the namespace's pods, and the ones that need a look.
 
     A pod needs a look when it has failed, cannot be scheduled, is waiting on a failure
-    (a crash loop, an image that will not pull), has restarted repeatedly with the last restart
-    in the past hour, or is still not ready after its startup grace. A finished Job's pod is not counted.
+    (a crash loop, an image that will not pull), keeps restarting, was OOM-killed within
+    `RESTART_HISTORY_WINDOW`, or is still not ready after its startup grace. A finished Job's
+    pod is not counted.
+
+    With `restarts` (the restart history), a pod keeps restarting when it restarted
+    `REPEATED_RESTARTS` times within the window, however long ago the last one was. A pod
+    the history does not cover, or every pod when it could not be read, is judged by the pod
+    alone: that many restarts in its life, the last within `RECENT_RESTART_WINDOW`.
     """
     total = ready_count = 0
     issues: list[PodIssueRead] = []
@@ -404,7 +451,7 @@ def workloads(pods: Sequence[V1Pod], identities: Mapping[UUID, PlatformAgentIden
             *((status.init_container_statuses if status else None) or []),
             *((status.container_statuses if status else None) or []),
         ]
-        restarts = sum(container.restart_count or 0 for container in statuses)
+        restart_total = sum(container.restart_count or 0 for container in statuses)
         waiting_reasons = [
             container.state.waiting.reason
             for container in statuses
@@ -421,13 +468,23 @@ def workloads(pods: Sequence[V1Pod], identities: Mapping[UUID, PlatformAgentIden
         starting = created is not None and now - created < STARTUP_GRACE
         # A restart with no recorded time is treated as recent: unknown is not "long ago".
         recently_restarted = last_restart_at is None or now - last_restart_at <= RECENT_RESTART_WINDOW
-        repeatedly_restarting = restarts >= REPEATED_RESTARTS and recently_restarted
+        history = restarts.get(pod.metadata.name) if restarts is not None else None
+        if history is not None:
+            repeatedly_restarting = history.restarts >= REPEATED_RESTARTS
+        else:
+            repeatedly_restarting = restart_total >= REPEATED_RESTARTS and recently_restarted
+        oom_killed = (history is not None and history.oom_killed) or (
+            termination == "OOMKilled"
+            and last_restart_at is not None
+            and now - last_restart_at <= RESTART_HISTORY_WINDOW
+        )
 
         needs_look = (
             phase == "Failed"
             or unschedulable
             or waiting in _TERMINAL_WAITING
             or repeatedly_restarting
+            or oom_killed
             or (not ready and not starting)
         )
         name = _name(pod.metadata.name)
@@ -445,8 +502,10 @@ def workloads(pods: Sequence[V1Pod], identities: Mapping[UUID, PlatformAgentIden
                 phase=phase if phase in _POD_PHASES else None,
                 ready=ready,
                 unschedulable=unschedulable,
-                restart_count=restarts,
+                restart_count=restart_total,
+                restarts_in_window=history.restarts if history is not None else None,
                 repeatedly_restarting=repeatedly_restarting,
+                oom_killed=oom_killed,
                 waiting_reason=waiting,
                 termination_reason=termination,
                 last_restart_at=last_restart_at,
@@ -455,7 +514,13 @@ def workloads(pods: Sequence[V1Pod], identities: Mapping[UUID, PlatformAgentIden
         )
 
     # Infrastructure first, since everything else depends on it; then the most restarts.
-    issues.sort(key=lambda issue: (issue.kind != WorkloadKind.INFRASTRUCTURE, -issue.restart_count, issue.pod_name))
+    issues.sort(
+        key=lambda issue: (
+            issue.kind != WorkloadKind.INFRASTRUCTURE,
+            -(issue.restarts_in_window if issue.restarts_in_window is not None else issue.restart_count),
+            issue.pod_name,
+        )
+    )
     return WorkloadsRead(pods_total=total, pods_ready=ready_count, issues=issues)
 
 

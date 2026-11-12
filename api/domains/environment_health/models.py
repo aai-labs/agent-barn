@@ -175,8 +175,13 @@ class PodIssueRead(PydanticBaseModel):
     ready: bool
     # Unschedulable: no node has room for it, or none matches it.
     unschedulable: bool = False
+    # Restarts since the pod was created. Never reset, so a high count may be old news.
     restart_count: int = 0
+    # Restarts within the restart window, from kube-state-metrics. None when not known.
+    restarts_in_window: int | None = None
     repeatedly_restarting: bool = False
+    # A container ran out of memory within the restart window.
+    oom_killed: bool = False
     waiting_reason: str | None = None
     termination_reason: str | None = None
     last_restart_at: datetime | None = None
@@ -228,6 +233,8 @@ class EnvironmentHealthRead(PydanticBaseModel):
     level: HealthLevel
     # The window each capacity line's `peak` covers.
     peak_window_hours: int
+    # The window a pod's `restarts_in_window` and `oom_killed` cover.
+    restart_window_days: int
     sources: list[EnvironmentSourceRead] = Field(default_factory=list)
     # The quota ceilings as entered, so the page can edit them whichever source `capacity` used.
     ceilings: ResourceLimitsRead = Field(default_factory=ResourceLimitsRead)

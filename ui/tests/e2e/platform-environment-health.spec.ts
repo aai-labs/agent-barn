@@ -63,6 +63,42 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(page.locator('a[href*="/agents/"]')).toHaveCount(0);
   });
 
+  test("a service OOM-killed through the week is listed with its restarts in the window", async () => {
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        workloads: {
+          pods_total: 10,
+          pods_ready: 10,
+          issues: [
+            {
+              pod_name: "rabbitmq-0",
+              workload_name: "rabbitmq",
+              kind: "infrastructure",
+              agent: null,
+              phase: "Running",
+              ready: true,
+              restart_count: 15,
+              restarts_in_window: 15,
+              repeatedly_restarting: true,
+              oom_killed: true,
+              termination_reason: "OOMKilled",
+              last_restart_at: "2026-10-18T12:00:00Z",
+              created_at: "2026-10-01T12:00:00Z",
+            },
+          ],
+        },
+      }),
+    });
+
+    await healthPage.goto();
+
+    await expect(healthPage.podIssues().first()).toContainText(
+      "Running · restarted 15 times in the last 7 days · ran out of memory",
+    );
+    await expect(healthPage.podIssues().first()).not.toContainText("last stopped: OOMKilled");
+    await expect(healthPage.section("workloads")).toContainText("ran out of memory in the last 7 days");
+  });
+
   test("breaks storage down by owner and lists the orphaned claim", async () => {
     await data.environmentHealth.interceptEnvironmentHealth();
 

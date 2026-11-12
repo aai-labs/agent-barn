@@ -20,6 +20,26 @@ from api.infrastructure.prometheus.client import PrometheusClient, PrometheusSam
 _FIRING_ALERTS = 'ALERTS{alertstate="firing"}'
 # Each Agent's healthz gauges: whether its runtime works now, and whether it ever did.
 _RUNTIME_HEALTH = '{job="agent", __name__=~"agent_healthz_ok|agent_healthz_ever_connected"}'
+_KSM = 'job="kube-state-metrics"'
+
+
+def restart_history_query(window_days: int) -> str:
+    """Each pod's restarts over the window, and whether any container in it was OOM-killed.
+
+    Two halves tagged by `signal` so `or` keeps both for the same pod. The restart counter
+    survives a container's restarts but not the pod, so a pod replaced in the window starts
+    again from zero; that is the pod the page lists, so its own count is the right one.
+    """
+    window = f"{window_days}d"
+    restarts = f"sum by (pod) (increase(kube_pod_container_status_restarts_total{{{_KSM}}}[{window}])) > 0"
+    oom = (
+        "max by (pod) (max_over_time("
+        f'kube_pod_container_status_last_terminated_reason{{{_KSM}, reason="OOMKilled"}}[{window}])) > 0'
+    )
+    return (
+        f'label_replace({restarts}, "signal", "restarts", "", "")'
+        f' or label_replace({oom}, "signal", "oom_killed", "", "")'
+    )
 
 
 @inject
@@ -71,3 +91,6 @@ class EnvironmentHealthRepository:
 
     def runtime_health(self, *, at: datetime) -> list[PrometheusSample]:
         return self.prometheus.query(_RUNTIME_HEALTH, at)
+
+    def restart_history(self, *, at: datetime, window_days: int) -> list[PrometheusSample]:
+        return self.prometheus.query(restart_history_query(window_days), at)

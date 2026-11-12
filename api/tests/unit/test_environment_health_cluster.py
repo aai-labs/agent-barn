@@ -317,6 +317,78 @@ def test_old_restarts_on_a_ready_pod_are_history_but_recent_ones_are_not():
     assert issue.pod_name == "agentbarn-ui-1" and issue.repeatedly_restarting
 
 
+def test_a_pod_that_kept_restarting_this_week_is_listed_though_its_last_restart_was_days_ago():
+    workloads = cluster.workloads(
+        [_pod("rabbitmq-0", restarts=15, terminated="OOMKilled", stopped_ago=timedelta(days=2))],
+        {},
+        _NOW,
+        restarts={"rabbitmq-0": cluster.PodRestarts(restarts=15, oom_killed=True)},
+    )
+
+    [issue] = workloads.issues
+    assert (issue.restarts_in_window, issue.oom_killed, issue.repeatedly_restarting) == (15, True, True)
+
+
+def test_one_oom_kill_this_week_is_listed():
+    workloads = cluster.workloads(
+        [_pod("firecrawl-1", restarts=1, terminated="OOMKilled", stopped_ago=timedelta(days=3))],
+        {},
+        _NOW,
+        restarts={"firecrawl-1": cluster.PodRestarts(restarts=1, oom_killed=True)},
+    )
+
+    [issue] = workloads.issues
+    assert (issue.oom_killed, issue.repeatedly_restarting) == (True, False)
+
+
+def test_with_restart_history_lifetime_restarts_from_before_the_window_are_not_flagged():
+    workloads = cluster.workloads(
+        [
+            # 28 restarts since it was created, one of them this week, two hours ago.
+            _pod("agentbarn-api-1", restarts=28, terminated="Error", stopped_ago=timedelta(hours=2)),
+            # Not scraped yet: judged by the pod alone, as without the history.
+            _pod("agentbarn-ui-1", restarts=4, terminated="Error", stopped_ago=timedelta(minutes=20)),
+        ],
+        {},
+        _NOW,
+        restarts={"agentbarn-api-1": cluster.PodRestarts(restarts=1, oom_killed=False)},
+    )
+
+    [issue] = workloads.issues
+    assert issue.pod_name == "agentbarn-ui-1" and issue.restarts_in_window is None
+
+
+def test_without_restart_history_an_oom_kill_this_week_is_still_listed():
+    workloads = cluster.workloads(
+        [
+            _pod("rabbitmq-0", restarts=1, terminated="OOMKilled", stopped_ago=timedelta(days=2)),
+            _pod("redis-0", restarts=1, terminated="OOMKilled", stopped_ago=timedelta(days=9)),
+        ],
+        {},
+        _NOW,
+    )
+
+    [issue] = workloads.issues
+    assert issue.pod_name == "rabbitmq-0" and issue.oom_killed
+
+
+def test_restart_history_keeps_only_pod_names_and_whole_counts():
+    restarts = cluster.pod_restarts(
+        [
+            PrometheusSample({"pod": "rabbitmq-0", "signal": "restarts"}, 14.97),
+            PrometheusSample({"pod": "rabbitmq-0", "signal": "oom_killed"}, 1.0),
+            PrometheusSample({"pod": "firecrawl-1", "signal": "oom_killed"}, 1.0),
+            PrometheusSample({"pod": "Not A Pod; rm -rf", "signal": "restarts"}, 3.0),
+            PrometheusSample({"pod": "redis-0", "signal": "something-else"}, 9.0),
+        ]
+    )
+
+    assert restarts == {
+        "rabbitmq-0": cluster.PodRestarts(restarts=15, oom_killed=True),
+        "firecrawl-1": cluster.PodRestarts(restarts=0, oom_killed=True),
+    }
+
+
 def test_pods_committed_counts_what_the_pods_quota_counts():
     pods = [_pod("a"), _pod("b", phase="Pending", ready=False), _pod("c", phase="Succeeded"), _pod("d", phase="Failed")]
     assert cluster.pods_committed(pods) == 2

@@ -11,6 +11,7 @@ Needs Docker, like the rest of the integration suite. The image pin matches
 helm/monitoring/tests/run.sh.
 """
 
+import itertools
 import os
 import socket
 import subprocess
@@ -32,6 +33,8 @@ import pytest
 from testcontainers.core.container import DockerContainer
 
 from api.core.config import get_config
+from api.domains.environment_health.cluster import PodRestarts, pod_restarts
+from api.domains.environment_health.repository import restart_history_query
 from api.domains.resource_usage.models import ResourceUsageRange, UsageWindow
 from api.domains.resource_usage.repository import ResourceUsageRepository
 from api.infrastructure.prometheus.client import PrometheusClient, PrometheusError
@@ -147,9 +150,26 @@ _AGENT_REQUESTS = {
 }
 
 
+# Restart history: `crashing` restarts on every scrape and its container was last OOM-killed;
+# `steady` restarted long ago and not since, so its counter never moves.
+_RESTART_SCRAPES = itertools.count(1)
+
+
+def _restart_metrics() -> str:
+    scrape = next(_RESTART_SCRAPES)
+    return (
+        "# TYPE kube_pod_container_status_restarts_total counter\n"
+        f'kube_pod_container_status_restarts_total{{namespace="ns",pod="crashing",container="app"}} {scrape}\n'
+        'kube_pod_container_status_restarts_total{namespace="ns",pod="steady",container="app"} 28\n'
+        "# TYPE kube_pod_container_status_last_terminated_reason gauge\n"
+        'kube_pod_container_status_last_terminated_reason{namespace="ns",pod="crashing",container="app",reason="OOMKilled"} 1\n'
+        'kube_pod_container_status_last_terminated_reason{namespace="ns",pod="steady",container="app",reason="Error"} 1\n'
+    )
+
+
 class _KsmHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = _KSM_METRICS.encode()
+        body = (_KSM_METRICS + _restart_metrics()).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
@@ -462,6 +482,19 @@ def test_the_namespace_peaks_parse_and_hold_the_highest_commitment_and_pod_count
     # Running and Pending pods, never Succeeded ones: agent-a, two, waiting, both of agent
     # one's, agent two's and the restore job's.
     assert pods == 7
+
+
+def test_the_restart_history_keeps_the_pod_that_keeps_restarting_and_its_oom_kill(scraped: Scraped):
+    def history() -> dict[str, PodRestarts] | None:
+        found = pod_restarts(scraped.repository.prometheus.query(restart_history_query(7), _now()))
+        return found if found.get("crashing", PodRestarts(0, False)).restarts >= 3 else None
+
+    found = _wait_until(history, "a few scrapes of the restart counter")
+
+    # The pod whose counter moves is there with its OOM kill; the one whose counter stood still
+    # all along is not, however high its count, and an Error is not an OOM kill.
+    assert found["crashing"].oom_killed
+    assert "steady" not in found
 
 
 def test_each_agents_requests_are_found_by_its_pod_name_and_counted_once(scraped: Scraped):

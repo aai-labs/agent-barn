@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 # How far back each capacity line's peak looks: long enough to hold a day of cron schedules.
 PEAK_WINDOW_HOURS = 24
+RESTART_WINDOW_DAYS = cluster.RESTART_HISTORY_WINDOW.days
 
 T = TypeVar("T")
 
@@ -145,7 +146,7 @@ class EnvironmentHealthService:
         quotas = read(EnvironmentSource.RESOURCE_QUOTAS, self.repository.resource_quotas)
         events = read(EnvironmentSource.EVENTS, self.repository.warning_events)
 
-        alert_samples = runtime_samples = None
+        alert_samples = runtime_samples = restart_samples = None
         if not self.repository.prometheus_configured:
             sources[EnvironmentSource.PROMETHEUS] = SourceState.NOT_CONFIGURED
         else:
@@ -161,9 +162,15 @@ class EnvironmentHealthService:
             except PrometheusError:
                 logger.warning("Environment health cannot read runtime health from Prometheus", exc_info=True)
                 sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
+            try:
+                restart_samples = self.repository.restart_history(at=now, window_days=RESTART_WINDOW_DAYS)
+            except PrometheusError:
+                logger.warning("Environment health cannot read restart history from Prometheus", exc_info=True)
+                sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
 
         services = cluster.core_services(deployments or [], stateful_sets or [])
-        workloads = cluster.workloads(pods, identities, now) if pods is not None else WorkloadsRead()
+        restarts = cluster.pod_restarts(restart_samples) if restart_samples is not None else None
+        workloads = cluster.workloads(pods, identities, now, restarts) if pods is not None else WorkloadsRead()
         alerts = cluster.firing_alerts(alert_samples or [], identities)
         unhealthy = cluster.unhealthy_runtimes(
             runtime_samples or [], identities, cluster.agent_pod_readiness(pods or [])
@@ -178,6 +185,7 @@ class EnvironmentHealthService:
             observed_at=now,
             namespace=self.repository.namespace,
             peak_window_hours=PEAK_WINDOW_HOURS,
+            restart_window_days=RESTART_WINDOW_DAYS,
             level=overall_level(
                 sources=sources,
                 services=services,

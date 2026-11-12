@@ -10,8 +10,12 @@ const KIND_LABEL: Record<PodIssue["kind"], string> = {
 
 const STARTING = new Set(["ContainerCreating", "PodInitializing"]);
 
+function times(count: number): string {
+  return `${count} ${count === 1 ? "time" : "times"}`;
+}
+
 /** Why a pod needs a look, most telling first, then how often it restarted and why it last stopped. */
-function issueText(issue: PodIssue): string {
+function issueText(issue: PodIssue, windowDays: number): string {
   let state: string;
   if (issue.unschedulable) state = "No node has room for it";
   else if (issue.waitingReason && !STARTING.has(issue.waitingReason)) state = issue.waitingReason;
@@ -19,19 +23,32 @@ function issueText(issue: PodIssue): string {
   else if (issue.waitingReason) state = issue.waitingReason;
   else if (!issue.ready) state = "Not ready";
   else state = "Running";
+  // The count within the window when it is known: a lifetime count can be weeks old.
   const restarts =
-    issue.restartCount > 0 ? `restarted ${issue.restartCount} ${issue.restartCount === 1 ? "time" : "times"}` : null;
-  const last = issue.terminationReason ? `last stopped: ${issue.terminationReason}` : null;
-  return [state, restarts, last].filter(Boolean).join(" · ");
+    issue.restartsInWindow !== null
+      ? issue.restartsInWindow > 0
+        ? `restarted ${times(issue.restartsInWindow)} in the last ${windowDays} days`
+        : null
+      : issue.restartCount > 0
+        ? `restarted ${times(issue.restartCount)}`
+        : null;
+  const memory = issue.oomKilled ? "ran out of memory" : null;
+  const last =
+    issue.terminationReason && !(issue.oomKilled && issue.terminationReason === "OOMKilled")
+      ? `last stopped: ${issue.terminationReason}`
+      : null;
+  return [state, restarts, memory, last].filter(Boolean).join(" · ");
 }
 
 /** Pods that are failing, stuck or restarting, platform pods first. */
 export function WorkloadsPanel({
   workloads,
   podsState,
+  restartWindowDays,
 }: {
   workloads: EnvironmentHealth["workloads"];
   podsState: SourceState | undefined;
+  restartWindowDays: number;
 }) {
   const { podsTotal, podsReady, issues } = workloads;
   return (
@@ -40,7 +57,7 @@ export function WorkloadsPanel({
       testId="environment-workloads"
       description={
         podsState === "available"
-          ? `${podsReady} of ${podsTotal} pods ready. Listed: pods that failed, can't be scheduled, are stuck, or keep restarting.`
+          ? `${podsReady} of ${podsTotal} pods ready. Listed: pods that failed, can't be scheduled, are stuck, keep restarting, or ran out of memory in the last ${restartWindowDays} days.`
           : undefined
       }
     >
@@ -65,7 +82,7 @@ export function WorkloadsPanel({
                 </span>
               </div>
               <p className="m-0 mt-1" style={{ color: "var(--ink-2)" }}>
-                {issueText(issue)}
+                {issueText(issue, restartWindowDays)}
               </p>
               {issue.agent && (
                 <p className="m-0 mt-1 text-[12.5px]">
