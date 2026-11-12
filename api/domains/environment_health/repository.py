@@ -4,7 +4,9 @@ from datetime import datetime
 from injector import inject, singleton
 from kubernetes.client import (
     CoreV1Event,
+    V1CronJob,
     V1Deployment,
+    V1Job,
     V1PersistentVolumeClaim,
     V1Pod,
     V1ResourceQuota,
@@ -79,6 +81,12 @@ class EnvironmentHealthRepository:
 
     def services(self) -> list[V1Service]:
         return self.k8s.list_services(self.namespace)
+
+    def cron_jobs(self) -> list[V1CronJob]:
+        return self.k8s.list_cron_jobs(self.namespace)
+
+    def jobs(self) -> list[V1Job]:
+        return self.k8s.list_namespace_jobs(self.namespace)
 
     def resource_quotas(self) -> list[V1ResourceQuota]:
         return self.k8s.list_resource_quotas(self.namespace)

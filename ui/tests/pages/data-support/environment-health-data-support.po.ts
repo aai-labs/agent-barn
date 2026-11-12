@@ -34,6 +34,8 @@ export function mockEnvironmentHealth(overrides: Record<string, unknown> = {}): 
       { source: "stateful_sets", state: "available" },
       { source: "volume_claims", state: "available" },
       { source: "services", state: "available" },
+      { source: "cron_jobs", state: "available" },
+      { source: "jobs", state: "available" },
       { source: "resource_quotas", state: "forbidden" },
       { source: "events", state: "forbidden" },
       { source: "prometheus", state: "available" },

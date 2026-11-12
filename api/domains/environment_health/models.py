@@ -27,6 +27,8 @@ class EnvironmentSource(str, enum.Enum):
     STATEFUL_SETS = "stateful_sets"
     VOLUME_CLAIMS = "volume_claims"
     SERVICES = "services"
+    CRON_JOBS = "cron_jobs"
+    JOBS = "jobs"
     RESOURCE_QUOTAS = "resource_quotas"
     EVENTS = "events"
     PROMETHEUS = "prometheus"
@@ -102,6 +104,30 @@ class DeployedVersionRead(PydanticBaseModel):
     mixed: bool = False
     # The services on another build than `build_sha`.
     behind: list[str] = Field(default_factory=list)
+
+
+class CronJobState(str, enum.Enum):
+    OK = "ok"
+    # Its newest run failed.
+    FAILING = "failing"
+    # No run has succeeded for longer than every platform schedule allows, or none ever has.
+    STALLED = "stalled"
+    # Switched off on purpose. Not a problem in itself.
+    SUSPENDED = "suspended"
+
+
+class CronJobRead(PydanticBaseModel):
+    """One of the platform's scheduled jobs, named as its chart names it."""
+
+    name: str
+    # Only a schedule in the cron grammar is kept.
+    schedule: str | None = None
+    state: CronJobState
+    running: bool = False
+    last_scheduled_at: datetime | None = None
+    last_successful_at: datetime | None = None
+    # When its most recent failed run, of those Kubernetes still keeps, failed.
+    last_failed_at: datetime | None = None
 
 
 class FiringAlertRead(PydanticBaseModel):
@@ -267,6 +293,7 @@ class EnvironmentHealthRead(PydanticBaseModel):
     # The quota ceilings as entered, so the page can edit them whichever source `capacity` used.
     ceilings: ResourceLimitsRead = Field(default_factory=ResourceLimitsRead)
     services: list[CoreServiceRead] = Field(default_factory=list)
+    cron_jobs: list[CronJobRead] = Field(default_factory=list)
     alerts: list[FiringAlertRead] = Field(default_factory=list)
     capacity: list[CapacityLineRead] = Field(default_factory=list)
     volumes: VolumeAllocationRead = Field(default_factory=VolumeAllocationRead)

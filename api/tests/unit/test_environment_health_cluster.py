@@ -14,10 +14,17 @@ from kubernetes.client import (
     V1ContainerStateTerminated,
     V1ContainerStateWaiting,
     V1ContainerStatus,
+    V1CronJob,
+    V1CronJobSpec,
+    V1CronJobStatus,
     V1Deployment,
     V1DeploymentCondition,
     V1DeploymentSpec,
     V1DeploymentStatus,
+    V1Job,
+    V1JobCondition,
+    V1JobStatus,
+    V1JobTemplateSpec,
     V1LabelSelector,
     V1ObjectMeta,
     V1ObjectReference,
@@ -844,6 +851,7 @@ def _level(**overrides) -> HealthLevel:
         "volumes": VolumeAllocationRead(),
         "events": [],
         "deployed": None,
+        "cron_jobs": [],
         **overrides,
     }
     return overall_level(**arguments)
@@ -910,3 +918,97 @@ def test_services_on_another_build_are_a_warning_unless_a_rollout_is_under_way()
     assert _level(deployed=mixed) == HealthLevel.WARNING
     assert _level(deployed=mixed, services=[rolling]) == HealthLevel.OK
     assert _level(deployed=DeployedVersionRead(build_sha=_SHA)) == HealthLevel.OK
+
+
+# --- cron jobs ------------------------------------------------------------
+
+
+def _cron(
+    name: str,
+    *,
+    schedule: str = "*/5 * * * *",
+    suspend: bool = False,
+    scheduled_ago: timedelta | None = timedelta(minutes=3),
+    succeeded_ago: timedelta | None = timedelta(minutes=3),
+    age: timedelta = timedelta(days=30),
+    active: int = 0,
+) -> V1CronJob:
+    return V1CronJob(
+        metadata=V1ObjectMeta(name=name, creation_timestamp=_NOW - age),
+        spec=V1CronJobSpec(schedule=schedule, suspend=suspend, job_template=V1JobTemplateSpec()),
+        status=V1CronJobStatus(
+            last_schedule_time=_NOW - scheduled_ago if scheduled_ago else None,
+            last_successful_time=_NOW - succeeded_ago if succeeded_ago else None,
+            active=[V1ObjectReference(kind="Job", name=f"{name}-{n}") for n in range(active)] or None,
+        ),
+    )
+
+
+def _job(cron_name: str, *, failed: bool, ago: timedelta) -> V1Job:
+    condition = V1JobCondition(
+        type="Failed" if failed else "Complete",
+        status="True",
+        reason="BackoffLimitExceeded" if failed else None,
+        message="Job has reached the specified backoff limit: password=hunter2",
+        last_transition_time=_NOW - ago,
+    )
+    return V1Job(
+        metadata=V1ObjectMeta(
+            name=f"{cron_name}-{int(ago.total_seconds())}",
+            creation_timestamp=_NOW - ago - timedelta(seconds=30),
+            owner_references=[V1OwnerReference(api_version="batch/v1", kind="CronJob", name=cron_name, uid="1")],
+        ),
+        status=V1JobStatus(conditions=[condition]),
+    )
+
+
+def test_a_cron_job_whose_newest_run_failed_is_failing():
+    rows = cluster.cron_jobs(
+        [_cron("agentbarn-restore-point-schedule", succeeded_ago=timedelta(hours=3))],
+        [
+            _job("agentbarn-restore-point-schedule", failed=False, ago=timedelta(hours=3)),
+            _job("agentbarn-restore-point-schedule", failed=True, ago=timedelta(minutes=2)),
+        ],
+        _NOW,
+    )
+
+    [row] = rows
+    assert (row.name, row.state, row.schedule) == (
+        "agentbarn-restore-point-schedule",
+        cluster.CronJobState.FAILING,
+        "*/5 * * * *",
+    )
+    assert (row.last_successful_at, row.last_failed_at) == (_NOW - timedelta(hours=3), _NOW - timedelta(minutes=2))
+    assert "hunter2" not in row.model_dump_json() and "backoff" not in row.model_dump_json()
+
+
+def test_a_cron_job_with_no_success_for_a_day_is_stalled_and_a_suspended_one_is_not():
+    rows = cluster.cron_jobs(
+        [
+            _cron("agentbarn-cost-sync", succeeded_ago=timedelta(hours=30)),
+            _cron("agentbarn-memory-purge", succeeded_ago=None, scheduled_ago=None),
+            _cron("agentbarn-artifact-purge", suspend=True, succeeded_ago=timedelta(days=9)),
+            _cron("agentbarn-new", succeeded_ago=None, scheduled_ago=None, age=timedelta(hours=2)),
+            _cron("agentbarn-event-reconciler"),
+        ],
+        [],
+        _NOW,
+    )
+
+    states = {row.name: row.state for row in rows}
+    assert states == {
+        "agentbarn-cost-sync": cluster.CronJobState.STALLED,
+        "agentbarn-memory-purge": cluster.CronJobState.STALLED,
+        "agentbarn-artifact-purge": cluster.CronJobState.SUSPENDED,
+        "agentbarn-new": cluster.CronJobState.OK,
+        "agentbarn-event-reconciler": cluster.CronJobState.OK,
+    }
+    # The ones that need a look first.
+    assert [row.name for row in rows][:2] == ["agentbarn-cost-sync", "agentbarn-memory-purge"]
+
+
+def test_a_cron_schedule_outside_the_cron_grammar_is_not_carried():
+    [odd, macro] = cluster.cron_jobs(
+        [_cron("a-odd", schedule="* * * * * ; curl evil"), _cron("b-macro", schedule="@hourly")], [], _NOW
+    )
+    assert (odd.schedule, macro.schedule) == (None, "@hourly")

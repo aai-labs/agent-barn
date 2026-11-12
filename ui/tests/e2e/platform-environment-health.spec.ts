@@ -140,6 +140,68 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(page.getByTestId("service-agentbarn-gateway")).toContainText("0123456");
   });
 
+  test("lists failing and stalled scheduled jobs first, with when they last worked", async () => {
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        cron_jobs: [
+          {
+            name: "agentbarn-restore-point-schedule",
+            schedule: "2-59/5 * * * *",
+            state: "failing",
+            running: false,
+            last_scheduled_at: minutesAgo(3),
+            last_successful_at: minutesAgo(6 * 24 * 60),
+            last_failed_at: minutesAgo(2),
+          },
+          {
+            name: "agentbarn-cost-sync",
+            schedule: "6-59/15 * * * *",
+            state: "stalled",
+            running: false,
+            last_scheduled_at: minutesAgo(40 * 60),
+            last_successful_at: minutesAgo(40 * 60),
+            last_failed_at: null,
+          },
+          {
+            name: "agentbarn-event-reconciler",
+            schedule: "*/5 * * * *",
+            state: "ok",
+            running: true,
+            last_scheduled_at: minutesAgo(1),
+            last_successful_at: minutesAgo(4),
+            last_failed_at: null,
+          },
+        ],
+      }),
+    });
+
+    await healthPage.goto();
+
+    const failing = healthPage.cronJob("agentbarn-restore-point-schedule");
+    await expect(failing).toHaveAttribute("data-state", "failing");
+    await expect(failing).toContainText("Last run failed");
+    await expect(failing).toContainText("last succeeded 6 days ago");
+    await expect(healthPage.cronJob("agentbarn-cost-sync")).toContainText("No successful run in over a day");
+    await expect(healthPage.cronJob("agentbarn-event-reconciler")).toContainText("Running now");
+  });
+
+  test("says when scheduled jobs may not be read", async () => {
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        sources: [
+          { source: "pods", state: "available" },
+          { source: "cron_jobs", state: "forbidden" },
+        ],
+        cron_jobs: [],
+      }),
+    });
+
+    await healthPage.goto();
+
+    await expect(healthPage.section("scheduled")).toContainText("not permitted for the service account");
+  });
+
   test("breaks storage down by owner and lists the orphaned claim", async () => {
     await data.environmentHealth.interceptEnvironmentHealth();
 

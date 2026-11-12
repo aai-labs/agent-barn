@@ -11,6 +11,7 @@ import { formatTime, healthTone, SOURCE_LABELS, SOURCE_STATE_TEXT, TONE_COLOR } 
 import { AgentProblemsPanel } from "./agent-problems-panel";
 import { CapacityPanel } from "./capacity-panel";
 import { EventsPanel } from "./events-panel";
+import { ScheduledPanel } from "./scheduled-panel";
 import { ServicesPanel } from "./services-panel";
 import { VolumesPanel } from "./volumes-panel";
 import { WorkloadsPanel } from "./workloads-panel";
@@ -124,6 +125,7 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
           monitoringState={states.prometheus}
         />
       </div>
+      <ScheduledPanel cronJobs={health.cronJobs} state={states.cron_jobs} />
       <WorkloadsPanel
         workloads={health.workloads}
         podsState={states.pods}

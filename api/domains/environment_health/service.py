@@ -15,6 +15,8 @@ from api.domains.environment_health.models import (
     CapacityLevel,
     CapacityLineRead,
     CoreServiceRead,
+    CronJobRead,
+    CronJobState,
     DeployedVersionRead,
     EnvironmentHealthRead,
     EnvironmentSource,
@@ -67,7 +69,8 @@ def overall_level(
     alerts: Sequence[FiringAlertRead],
     volumes: VolumeAllocationRead,
     events: Sequence[WarningEventRead],
-    deployed: DeployedVersionRead | None = None,
+    deployed: DeployedVersionRead | None,
+    cron_jobs: Sequence[CronJobRead],
 ) -> HealthLevel:
     """The worst of what the page shows.
 
@@ -98,6 +101,7 @@ def overall_level(
         or alerts
         or volumes.attention
         or events
+        or any(cron.state in {CronJobState.FAILING, CronJobState.STALLED} for cron in cron_jobs)
         or (
             deployed is not None and deployed.mixed and not any(s.rollout == RolloutState.IN_PROGRESS for s in services)
         )
@@ -150,6 +154,8 @@ class EnvironmentHealthService:
         stateful_sets = read(EnvironmentSource.STATEFUL_SETS, self.repository.stateful_sets)
         claims = read(EnvironmentSource.VOLUME_CLAIMS, self.repository.volume_claims)
         kube_services = read(EnvironmentSource.SERVICES, self.repository.services)
+        crons = read(EnvironmentSource.CRON_JOBS, self.repository.cron_jobs)
+        jobs = read(EnvironmentSource.JOBS, self.repository.jobs)
         quotas = read(EnvironmentSource.RESOURCE_QUOTAS, self.repository.resource_quotas)
         events = read(EnvironmentSource.EVENTS, self.repository.warning_events)
 
@@ -177,6 +183,7 @@ class EnvironmentHealthService:
 
         services = cluster.core_services(deployments or [], stateful_sets or [])
         deployed = cluster.deployed_version(services)
+        cron_jobs = cluster.cron_jobs(crons, jobs or [], now) if crons is not None else []
         restarts = cluster.pod_restarts(restart_samples) if restart_samples is not None else None
         workloads = cluster.workloads(pods, identities, now, restarts) if pods is not None else WorkloadsRead()
         alerts = cluster.firing_alerts(alert_samples or [], identities)
@@ -205,11 +212,13 @@ class EnvironmentHealthService:
                 volumes=volumes,
                 events=warnings,
                 deployed=deployed,
+                cron_jobs=cron_jobs,
             ),
             sources=[EnvironmentSourceRead(source=source, state=state) for source, state in sources.items()],
             deployed=deployed,
             ceilings=ceilings,
             services=services,
+            cron_jobs=cron_jobs,
             alerts=alerts,
             capacity=capacity,
             volumes=volumes,
