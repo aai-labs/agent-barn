@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.workflows.models import WorkflowDraft, WorkflowVersion
 from api.domains.workflows.repository import WorkflowConflict, WorkflowRepository
 from api.domains.workflows.run_models import (
+    DECIDABLE_APPROVAL_STATES,
     TERMINAL_STATES,
     ApprovalDecisionCreate,
     ApprovalRead,
@@ -147,8 +149,9 @@ class WorkflowRunService:
             return ["rerun"] if can_start and not run.content_expired else []
         if run.state == "CANCELLING":
             return []
+        # A live request whose window has closed is about to park; deciding it would only conflict.
         decidable = approval is not None and (
-            (approval.state == "LIVE" and run.state == "RUNNING")
+            (approval.state == "LIVE" and run.state == "RUNNING" and approval.live_until > datetime.now(UTC))
             or (approval.state == "PARKED" and run.state == "AWAITING_APPROVAL")
         )
         return ["decide", "cancel"] if decidable else ["cancel"]
@@ -188,8 +191,7 @@ class WorkflowRunService:
         # Only a request still awaiting a decision is shown in lists, for the approvals inbox.
         pending = {
             item.run_id: ApprovalRead.model_validate(item, from_attributes=True)
-            for item in self.repository.approvals(run.id for run, _ in rows)
-            if item.state in ("LIVE", "PARKED")
+            for item in self.repository.approvals((run.id for run, _ in rows), DECIDABLE_APPROVAL_STATES)
         }
         agent = self.authorization.require_visible(context, agent_id)
         can_write = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]

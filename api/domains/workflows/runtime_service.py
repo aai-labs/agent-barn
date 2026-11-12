@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -83,7 +84,9 @@ class WorkflowRuntimeService:
     def raise_approval(self, attempt_id: UUID, token: str, raised: ApprovalRaised) -> dict:
         request, delivery_ids = self.repository.raise_approval(attempt_id, token, raised)
         self.dispatcher.enqueue_immediate(delivery_ids)
-        return {"id": str(request.id), "live_seconds": workflow_config.APPROVAL_LIVE_SECONDS}
+        # A retried report gets the time actually left, never a fresh window.
+        remaining = (request.live_until - datetime.now(UTC)).total_seconds()
+        return {"id": str(request.id), "live_seconds": max(remaining, 0)}
 
     def approval_status(self, attempt_id: UUID, token: str, request_id: UUID) -> dict:
         request = self.repository.approval_status(attempt_id, token, request_id)

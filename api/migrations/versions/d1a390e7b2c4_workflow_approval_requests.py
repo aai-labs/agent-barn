@@ -50,9 +50,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_workflow_approval_request_run_id", "workflow_approval_request", ["run_id"])
+    op.create_index(
+        "ix_workflow_approval_request_open",
+        "workflow_approval_request",
+        ["run_id"],
+        postgresql_where=sa.text("state IN ('LIVE','PARKED')"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_workflow_approval_request_open", table_name="workflow_approval_request")
     op.drop_index("ix_workflow_approval_request_run_id", table_name="workflow_approval_request")
     op.drop_table("workflow_approval_request")
     # Parked runs cannot be represented by the older constraint; block them for a person instead.

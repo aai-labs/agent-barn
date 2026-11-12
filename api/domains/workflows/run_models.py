@@ -1,4 +1,5 @@
-"""Durable WF02 execution records. Each attempt runs as a new session in the owning Agent."""
+"""Durable WF02 execution records. Each attempt runs as a new session in the owning Agent,
+except one continuing a late approval decision, which resumes its step's session."""
 
 from datetime import datetime
 from typing import Any, Literal
@@ -118,6 +119,12 @@ class WorkflowApprovalRequest(BaseModel, table=True):
             "state IN ('LIVE','PARKED','APPROVED','DECLINED','RELEASED','LAPSED')",
             name="ck_workflow_approval_request_state",
         ),
+        # Inbox and badge reads look only for requests still awaiting a decision.
+        sa.Index(
+            "ix_workflow_approval_request_open",
+            "run_id",
+            postgresql_where=sa.text("state IN ('LIVE','PARKED')"),
+        ),
     )
     run_id: UUID = SqlField(foreign_key="workflow_run.id", ondelete="CASCADE", index=True)
     attempt_id: UUID = SqlField(foreign_key="workflow_attempt.id", ondelete="CASCADE")
@@ -164,6 +171,8 @@ class ApprovalRaised(StrictDTO):
 
     command: str = Field(min_length=1, max_length=100_000)
     runtime_run_id: str = Field(min_length=1, max_length=256)
+    # Seconds since the runtime raised the request; its own approval timeout runs from then.
+    age_seconds: float = Field(default=0, ge=0, le=3600)
 
 
 class ApprovalDecisionCreate(StrictDTO):

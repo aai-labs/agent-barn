@@ -125,7 +125,7 @@ export function WorkflowApproval({
         {!live && (
           <ol className="grid gap-3 sm:grid-cols-3">
             {[
-              ["You decide", "Nothing has run while it waited."],
+              ["You decide", "The command was not released; the step stopped while it waited."],
               [`${agentName} resumes the same session`, "It sees your decision and its own earlier work."],
               ["You confirm live", `If ${agentName} asks again, the prompt appears here within seconds.`],
             ].map(([title, body], index) => (
@@ -192,7 +192,7 @@ export function WorkflowApproval({
 }
 
 const outcome = {
-  RELEASED: { label: "Approved and run", tone: "var(--ok)" },
+  RELEASED: { label: "Approved and sent to the Agent", tone: "var(--ok)" },
   APPROVED: { label: "Approved", tone: "var(--ok)" },
   DECLINED: { label: "Declined · never run", tone: "var(--err)" },
   LAPSED: { label: "Closed without a decision", tone: "var(--ink-3)" },

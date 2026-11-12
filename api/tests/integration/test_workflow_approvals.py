@@ -6,7 +6,7 @@ import pytest
 from hamcrest import assert_that, equal_to
 from sqlmodel import Session
 
-from api.domains.workflows.run_models import WorkflowAttempt
+from api.domains.workflows.run_models import WorkflowApprovalRequest, WorkflowAttempt
 from api.domains.workflows.runtime_service import WorkflowRuntimeService
 from api.tests.core.givenpy import given
 from api.tests.integration.test_workflow_runs import _RUN_GIVEN, attempt, start
@@ -24,12 +24,30 @@ def _runtime(row, token, path="", body=None, method="POST"):
     }
 
 
-def _raise(context, row, token, command=COMMAND):
+def _raise(context, row, token, command=COMMAND, **extra):
+    return _report(context, row, token, command, **extra)["id"]
+
+
+def _report(context, row, token, command=COMMAND, **extra):
     response = context.client.request(
-        **_runtime(row, token, body={"command": command, "runtime_run_id": "hermes-run-1"})
+        **_runtime(row, token, body={"command": command, "runtime_run_id": "hermes-run-1", **extra})
     )
     assert_that(response.status_code, equal_to(200), response.text)
-    return response.json()["id"]
+    return response.json()
+
+
+def _set(context, model, row_id, **values):
+    with Session(context.postgres_delegate.engine) as session:
+        stored = session.get_one(model, row_id)
+        for key, value in values.items():
+            setattr(stored, key, value)
+        session.add(stored)
+        session.commit()
+
+
+def _expires_at(context, row):
+    with Session(context.postgres_delegate.engine) as session:
+        return session.get_one(WorkflowAttempt, row.id).expires_at
 
 
 def _status(context, row, token, request_id, path=""):
@@ -57,22 +75,56 @@ def _started(context):
 def test_a_live_request_is_shown_exactly_and_waiting_does_not_consume_the_attempt() -> None:
     with given(_RUN_GIVEN) as context:
         _repository, row, token = _started(context)
-        with Session(context.postgres_delegate.engine) as session:
-            stored = session.get_one(WorkflowAttempt, row.id)
-            stored.expires_at = datetime.now(UTC) + timedelta(seconds=10)  # the request arrives near the deadline
-            session.add(stored)
-            session.commit()
+        # The request arrives 50 seconds before the step's deadline.
+        _set(context, WorkflowAttempt, row.id, expires_at=datetime.now(UTC) + timedelta(seconds=50))
         request_id = _raise(context, row, token)
         run = _run(context, row.run_id)
         assert_that(
             (run["state"], run["approval"]["command"], run["approval"]["state"], run["allowed_actions"]),
             equal_to(("RUNNING", COMMAND, "LIVE", ["decide", "cancel"])),
         )
+        assert _expires_at(context, row) > datetime.now(UTC) + timedelta(seconds=270 + 50)
+        # Approved after waiting about 200 seconds: the step keeps its own 50 seconds plus the wait.
+        waited = timedelta(seconds=200)
         with Session(context.postgres_delegate.engine) as session:
-            stored = session.get_one(WorkflowAttempt, row.id)
-            assert stored.expires_at > datetime.now(UTC) + timedelta(seconds=270)
-        # A retried report of the same request is the same request.
-        assert_that(_raise(context, row, token), equal_to(request_id))
+            request = session.get_one(WorkflowApprovalRequest, request_id)
+            _set(context, WorkflowApprovalRequest, request_id, live_until=request.live_until - waited)
+        _set(context, WorkflowAttempt, row.id, expires_at=_expires_at(context, row) - waited)
+        _decide(context, row.run_id, request_id, "approve")
+        remaining = (_expires_at(context, row) - datetime.now(UTC)).total_seconds()
+        assert 50 + 60 - 5 <= remaining <= 50 + 60 + 5, remaining
+
+
+def test_a_retried_report_is_the_same_request_with_only_the_time_left() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        first = _report(context, row, token)
+        assert 265 <= first["live_seconds"] <= 270
+        _set(context, WorkflowApprovalRequest, first["id"], live_until=datetime.now(UTC) + timedelta(seconds=240))
+        _decide(context, row.run_id, first["id"], "approve")
+        # The first response was lost; the retry lands after the decision and must not ask again.
+        retried = _report(context, row, token)
+        assert_that(retried["id"], equal_to(first["id"]))
+        assert 230 <= retried["live_seconds"] <= 240
+        assert_that(len(_run(context, row.run_id)["approvals"]), equal_to(1))
+        assert_that(_status(context, row, token, first["id"]).json(), equal_to({"state": "APPROVED"}))
+
+
+def test_the_live_window_counts_from_when_the_runtime_raised_the_request() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        raised = _report(context, row, token, age_seconds=40)
+        assert 225 <= raised["live_seconds"] <= 230
+
+
+def test_a_live_request_past_its_window_is_no_longer_offered_for_a_decision() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        request_id = _raise(context, row, token)
+        _set(context, WorkflowApprovalRequest, request_id, live_until=datetime.now(UTC) - timedelta(seconds=1))
+        run = _run(context, row.run_id)
+        assert_that((run["approval"]["state"], run["allowed_actions"]), equal_to(("LIVE", ["cancel"])))
+        assert_that(_decide(context, row.run_id, request_id, "approve").status_code, equal_to(409))
 
 
 def test_a_live_approval_is_released_once_and_recorded_with_its_decider() -> None:
@@ -148,15 +200,74 @@ def _expire(context, row):
         session.commit()
 
 
-def test_a_restart_while_a_request_is_unanswered_parks_the_run() -> None:
+def test_an_attempt_that_expires_with_a_request_unanswered_blocks_as_uncertain() -> None:
     with given(_RUN_GIVEN) as context:
         repository, row, token = _started(context)
-        _raise(context, row, token)
+        request_id = _raise(context, row, token)
         _expire(context, row)
         repository.advance(row.run_id)
         repository.advance(row.run_id, stopped=True)
         run = _run(context, row.run_id)
+        # Hermes may have denied the command itself and carried on; nothing proves it did not.
+        assert_that((run["state"], run["approval"]["state"]), equal_to(("BLOCKED", "LAPSED")))
+        assert "uncertain" in run["reason"]
+        assert_that(_decide(context, row.run_id, request_id, "approve").status_code, equal_to(409))
+
+
+def _agent_status(context, status):
+    from api.domains.agents.models import Agent
+
+    _set(context, Agent, context.agent.id, status=status)
+
+
+def _parked(context):
+    repository, row, token = _started(context)
+    request_id = _raise(context, row, token)
+    _status(context, row, token, request_id, "/park")
+    return repository, row, request_id
+
+
+def test_a_parked_request_survives_an_agent_stop_and_continues_after_restart() -> None:
+    from api.domains.agents.models import AgentStatus
+
+    with given(_RUN_GIVEN) as context:
+        repository, row, request_id = _parked(context)
+        _agent_status(context, AgentStatus.STOPPED)  # e.g. a managed update's backup
+        repository.advance(row.run_id)
+        run = _run(context, row.run_id)
         assert_that((run["state"], run["approval"]["state"]), equal_to(("AWAITING_APPROVAL", "PARKED")))
+        # Deciding while the Agent is stopped records the decision; the session continues later.
+        assert_that(_decide(context, row.run_id, request_id, "approve").json()["state"], equal_to("AWAITING_APPROVAL"))
+        continued, _ = repository.advance(row.run_id)
+        assert continued is None
+        _agent_status(context, AgentStatus.RUNNING)
+        continued, _ = repository.advance(row.run_id)
+        handoff = context.injector.get(WorkflowRuntimeService).handoff(continued.id, repository.token(continued.id))
+        assert_that((handoff["session_id"], handoff["resume"]), equal_to((f"workflow-{row.id}", True)))
+        history = context.client.get(
+            base(context) + f"/workflow-runs/{row.run_id}/history?page_size=100", headers=auth(context)
+        ).json()["items"]
+        assert any("continued in its previous session" in item["detail"] for item in history)
+
+
+def test_a_decider_who_lost_access_before_the_continuation_must_be_replaced() -> None:
+    with given(_RUN_GIVEN) as context:
+        repository, row, request_id = _parked(context)
+        _decide(context, row.run_id, request_id, "approve")
+        # The decider's membership is gone by the time the continuation would start.
+        _set(context, WorkflowApprovalRequest, request_id, decided_by_user_id=None)
+        continued, _ = repository.advance(row.run_id)
+        assert continued is None
+        run = _run(context, row.run_id)
+        assert_that(
+            (run["state"], run["approval"]["state"], run["allowed_actions"]),
+            equal_to(("AWAITING_APPROVAL", "PARKED", ["decide", "cancel"])),
+        )
+        assert "decide again" in run["reason"]
+        # A fresh decision by someone with access continues the step.
+        _decide(context, row.run_id, request_id, "approve")
+        continued, _ = repository.advance(row.run_id)
+        assert continued is not None
 
 
 def test_an_approval_the_runtime_never_confirmed_blocks_as_uncertain() -> None:

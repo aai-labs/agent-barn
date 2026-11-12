@@ -321,7 +321,7 @@ test.describe("WF02 run progress and text results", () => {
     await expect(rail.getByText("1 declined")).toBeVisible();
     await runs.selectStep("Step 1: Read pipeline");
     const history = page.getByLabel("Approvals in step 1");
-    await expect(history.getByText("Approved and run")).toBeVisible();
+    await expect(history.getByText("Approved and sent to the Agent")).toBeVisible();
     await expect(history.getByText("Declined · never run")).toBeVisible();
     await expect(history.getByText("“List the folder instead”")).toBeVisible();
   });

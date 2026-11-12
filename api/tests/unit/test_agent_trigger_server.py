@@ -608,7 +608,7 @@ def test_workflow_file_retrieval_runs_concurrently_and_preserves_manifest_order(
 class _FakeHermesWithApproval:
     """Hermes over real HTTP: the first run pauses a command until it is answered or stopped."""
 
-    def __init__(self):
+    def __init__(self, *, stop_status: int = 200, resume_status: int = 200, event: dict | None = None):
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -623,13 +623,16 @@ class _FakeHermesWithApproval:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
                 fake.requests.append((self.path, body))
+                status = 200
                 if self.path == "/v1/runs":
                     reply = {"run_id": f"run-{sum(path == '/v1/runs' for path, _ in fake.requests)}"}
+                    status = resume_status if body.get("resume_session") else 200
                 else:
                     reply = {}
+                    status = stop_status if self.path.endswith("/stop") else 200
                     fake.answered.set()
                 data = json.dumps(reply).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -641,8 +644,9 @@ class _FakeHermesWithApproval:
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
                 if self.path == "/v1/runs/run-1/events":
-                    event = {"event": "approval.request", "command": "rm -rf ./out", "choices": ["once", "deny"]}
-                    self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+                    approval = event or {"command": "rm -rf ./out"}
+                    event_data = {"event": "approval.request", "choices": ["once", "deny"], **approval}
+                    self.wfile.write(f"data: {json.dumps(event_data)}\n\n".encode())
                     self.wfile.flush()
                     fake.answered.wait(5)
                     done = {"event": "run.completed", "text": "Deployed"}
@@ -658,8 +662,8 @@ class _FakeHermesWithApproval:
         self.url = f"http://127.0.0.1:{self.server.server_port}"
 
 
-def _approval_step(monkeypatch, trigger_server, decision: dict, live_seconds: float = 30):
-    hermes = _FakeHermesWithApproval()
+def _approval_step(monkeypatch, trigger_server, decision: dict, live_seconds: float = 30, **hermes_options):
+    hermes = _FakeHermesWithApproval(**hermes_options)
     platform = []
 
     def post(url, token, body, *, method="POST"):
@@ -689,7 +693,11 @@ def test_a_live_approval_releases_exactly_once_and_the_step_continues(monkeypatc
     result, hermes, platform = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"})
     assert result == "Deployed"
     assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
-    assert platform[0] == ("POST", "/approvals", {"command": "rm -rf ./out", "runtime_run_id": "run-1"})
+    assert platform[0] == (
+        "POST",
+        "/approvals",
+        {"command": "rm -rf ./out", "runtime_run_id": "run-1", "age_seconds": 0.0},
+    )
     assert platform[-1] == ("POST", "/approvals/r1/released", {})
 
 
@@ -698,11 +706,47 @@ def test_a_live_decline_continues_the_same_session_with_the_guidance(monkeypatch
     result, hermes, _ = _approval_step(monkeypatch, trigger_server, decision)
     assert result == "Followed the guidance"
     assert ("/v1/runs/run-1/approval", {"choice": "once"}) not in hermes
-    assert ("/v1/runs/run-1/stop", {}) in hermes
+    # Hermes is told no before the run stops, so the command is denied rather than abandoned.
+    deny = hermes.index(("/v1/runs/run-1/approval", {"choice": "deny"}))
+    assert deny < hermes.index(("/v1/runs/run-1/stop", {}))
     assert hermes[-1] == (
         "/v1/runs",
-        {"input": decision["prompt"], "session_id": "workflow-a", "resume_session": True},
+        {
+            "input": decision["prompt"],
+            "session_id": "workflow-a",
+            "resume_session": True,
+            "resume_require_history": True,
+        },
     )
+
+
+def test_a_decline_whose_session_cannot_be_stopped_is_not_resumed(monkeypatch, trigger_server) -> None:
+    decision = {"state": "DECLINED", "prompt": "Do not run it."}
+    result, hermes, _ = _approval_step(monkeypatch, trigger_server, decision, stop_status=500)
+    assert isinstance(result, RuntimeError) and "could not be stopped" in str(result)
+    assert [path for path, _ in hermes].count("/v1/runs") == 1
+
+
+def test_a_continuation_without_session_history_fails_instead_of_starting_blind(monkeypatch, trigger_server) -> None:
+    decision = {"state": "DECLINED", "prompt": "Do not run it."}
+    result, _, _ = _approval_step(monkeypatch, trigger_server, decision, resume_status=409)
+    assert isinstance(result, RuntimeError) and "could not be resumed" in str(result)
+
+
+def test_the_live_window_is_measured_from_when_hermes_raised_the_request(monkeypatch, trigger_server) -> None:
+    import time
+
+    event = {"command": "rm -rf ./out", "timestamp": time.time() - 40}
+    _, _, platform = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"}, event=event)
+    assert 39 <= platform[0][2]["age_seconds"] <= 45
+
+
+def test_a_request_without_an_exact_command_is_never_put_to_a_person(monkeypatch, trigger_server) -> None:
+    event = {"description": "recursive delete"}
+    result, hermes, platform = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"}, event=event)
+    assert isinstance(result, trigger_server.NeedsAttention) and "recursive delete" in str(result)
+    assert platform == []
+    assert ("/v1/runs/run-1/stop", {}) in hermes
 
 
 def test_an_unanswered_approval_parks_and_stops_the_session(monkeypatch, trigger_server) -> None:

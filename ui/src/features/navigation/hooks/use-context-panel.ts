@@ -132,7 +132,11 @@ export function useContextPanel(): ContextPanelModel | null {
             href: tab === DEFAULT_AGENT_TAB ? agentBase : `${agentBase}?tab=${tab}`,
             icon: AGENT_TAB_ICONS[tab],
             active: tab === activeTab,
-            badge: tab === "workflows" ? awaiting.data?.total || undefined : undefined,
+            // Only requests this viewer may decide are waiting on them.
+            badge:
+              tab === "workflows"
+                ? awaiting.data?.items.filter((run) => run.allowedActions.includes("decide")).length || undefined
+                : undefined,
             // Conversations swaps the panel for its channel list; fetching the list as the
             // pointer arrives means the first visit shows it at once, as later ones do.
             onIntent:

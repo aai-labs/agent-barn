@@ -23,9 +23,13 @@ export function WorkflowApprovalInbox({
     return approval ? [{ run, approval }] : [];
   });
   if (items.length === 0) return null;
+  // Viewers see what is waiting, but only those who may decide are told it waits on them.
+  const title = items.some(({ run }) => run.allowedActions.includes("decide"))
+    ? "Waiting on your approval"
+    : "Waiting on approval";
   return (
     <section
-      aria-label="Waiting on your approval"
+      aria-label={title}
       className="mb-6 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] shadow-sm"
     >
       <div className="flex items-center justify-between border-b border-[var(--line)] px-6 py-3">
@@ -34,7 +38,7 @@ export function WorkflowApprovalInbox({
           style={{ color: "var(--warn)" }}
         >
           <Hourglass size={15} aria-hidden />
-          Waiting on your approval
+          {title}
         </h2>
         <span className="text-xs text-[var(--ink-3)]">
           {runs.data!.total} {runs.data!.total === 1 ? "run" : "runs"}
