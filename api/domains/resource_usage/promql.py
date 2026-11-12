@@ -154,6 +154,26 @@ def namespace_commitments_query() -> str:
     )
 
 
+def namespace_peak_commitments_query(*, window_seconds: int, step_seconds: int) -> str:
+    """The highest the namespace's commitments reached over the window, by resource and kind.
+
+    The same figure as `namespace_commitments_query`, evaluated every `step_seconds` and the
+    highest kept. Cron jobs starting together commit their limits for about a minute; with a
+    step no longer than the scrape interval (30s), a burst that long lands in at least one
+    sample. One shorter than a scrape can still fall between two.
+    """
+    return f"max_over_time(({namespace_commitments_query()})[{window_seconds}s:{step_seconds}s])"
+
+
+def namespace_peak_pods_query(*, window_seconds: int, step_seconds: int) -> str:
+    """The most Pending or Running pods the namespace held at once over the window.
+
+    What the `pods` quota counts, as kube-state-metrics saw it at each step.
+    """
+    live = f'kube_pod_status_phase{{{_KSM}, phase=~"Pending|Running"}} == 1'
+    return f"max_over_time(count({live})[{window_seconds}s:{step_seconds}s])"
+
+
 # A pod of an Agent is named after its Deployment, `agent-<uuid>`, then its ReplicaSet and pod
 # hashes. Restore jobs (`rp-cap-`, `rp-res-`) and hooks (`agentbarn-hook-`) never match.
 _AGENT_POD = "agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"

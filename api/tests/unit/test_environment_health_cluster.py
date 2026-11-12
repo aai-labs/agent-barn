@@ -467,6 +467,44 @@ def test_an_unknown_figure_is_unknown_not_zero():
     assert {line.resource: line.level for line in lines}["pods"] == CapacityLevel.UNKNOWN
 
 
+def _cpu_and_pods(cpu_used: float, cpu_hard: float | None, pods_used: int, pods_hard: int | None):
+    return cluster.entered_lines(
+        PlatformCapacityRead(limits_cpu_cores=cpu_hard, committed_limits_cpu_cores=cpu_used),
+        storage_requested=None,
+        pods_counted=pods_used,
+        storage_ceiling=None,
+        pods_ceiling=pods_hard,
+    )
+
+
+def test_a_peak_sits_beside_the_current_figure_with_its_own_ratio():
+    lines = cluster.with_peaks(_cpu_and_pods(10.0, 40.0, 30, 60), {"limits.cpu": 20.0, "pods": 33.0})
+
+    by_resource = {line.resource: line for line in lines}
+    cpu = by_resource["limits.cpu"]
+    assert (cpu.used, cpu.peak, cpu.peak_ratio, cpu.level) == (10.0, 20.0, 0.5, CapacityLevel.OK)
+    assert (by_resource["pods"].peak, by_resource["pods"].peak_ratio) == (33.0, 0.55)
+    assert by_resource["requests.storage"].peak is None
+
+
+def test_a_short_spike_near_the_ceiling_turns_a_quiet_line_into_a_warning():
+    lines = cluster.with_peaks(_cpu_and_pods(10.0, 40.0, 30, 60), {"limits.cpu": 39.6})
+
+    cpu = {line.resource: line for line in lines}["limits.cpu"]
+    # Now at a quarter, but it touched 99% when the cron jobs started together: a pod
+    # starting in that minute would have been refused.
+    assert (cpu.ratio, cpu.peak_ratio, cpu.level) == (0.25, 0.99, CapacityLevel.WARNING)
+
+
+def test_a_peak_never_lowers_a_level_or_judges_a_line_without_a_ceiling():
+    lines = cluster.with_peaks(_cpu_and_pods(38.0, 40.0, 30, None), {"limits.cpu": 39.0, "pods": 50.0})
+
+    by_resource = {line.resource: line for line in lines}
+    assert by_resource["limits.cpu"].level == CapacityLevel.CRITICAL
+    pods = by_resource["pods"]
+    assert (pods.peak, pods.peak_ratio, pods.level) == (50.0, None, CapacityLevel.UNKNOWN)
+
+
 # --- events ---------------------------------------------------------------
 
 

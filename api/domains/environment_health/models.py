@@ -118,6 +118,10 @@ class CapacityLineRead(PydanticBaseModel):
     used: float | None = None
     hard: float | None = None
     ratio: float | None = None
+    # The highest `used` reached over the last `peak_window_hours`, from kube-state-metrics,
+    # for the lines it can count (CPU, memory and pods). None when it is not known.
+    peak: float | None = None
+    peak_ratio: float | None = None
     level: CapacityLevel
 
 
@@ -222,6 +226,8 @@ class EnvironmentHealthRead(PydanticBaseModel):
     observed_at: datetime
     namespace: str
     level: HealthLevel
+    # The window each capacity line's `peak` covers.
+    peak_window_hours: int
     sources: list[EnvironmentSourceRead] = Field(default_factory=list)
     # The quota ceilings as entered, so the page can edit them whichever source `capacity` used.
     ceilings: ResourceLimitsRead = Field(default_factory=ResourceLimitsRead)

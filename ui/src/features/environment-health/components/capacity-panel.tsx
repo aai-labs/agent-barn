@@ -7,6 +7,7 @@ import { formatPercent } from "@/features/costs/format";
 import { ALL_CEILINGS, CapacityLimitsDialog } from "@/features/resource-usage/components/capacity-limits-dialog";
 import { UsageMeter } from "@/features/resource-usage/components/usage-meter";
 import type { ResourceLimits } from "@/features/resource-usage/schemas";
+import { METER_CRITICAL_RATIO, METER_WARN_RATIO } from "@/features/resource-usage/utils";
 
 import type { CapacityLine, SourceState } from "../schemas";
 import { capacityTone, formatQuantity, TONE_COLOR } from "../utils";
@@ -31,8 +32,27 @@ function lineText(line: CapacityLine): string {
   return `${formatPercent(line.ratio)} of ${hard}`;
 }
 
-function warningText(line: CapacityLine): string {
+/** A warning raised by the peak alone: quiet now, but it touched its limit inside the window. */
+function spikedOnly(line: CapacityLine): boolean {
+  return (
+    line.level === "warning" &&
+    line.peakRatio !== null &&
+    line.peakRatio >= METER_CRITICAL_RATIO &&
+    (line.ratio === null || line.ratio < METER_WARN_RATIO)
+  );
+}
+
+function peakText(line: CapacityLine, windowHours: number): string | null {
+  if (line.peak === null) return null;
+  const share = line.peakRatio === null ? "" : ` (${formatPercent(line.peakRatio)})`;
+  return `${windowHours}h peak: ${formatQuantity(line.peak, line.unit)}${share}`;
+}
+
+function warningText(line: CapacityLine, windowHours: number): string {
   const blocks = BLOCKS[line.resource] ?? "New pods may be refused";
+  if (spikedOnly(line) && line.peakRatio !== null) {
+    return `${line.resource} reached ${formatPercent(line.peakRatio)} of its quota in the last ${windowHours} hours. Pods starting then may have been refused.`;
+  }
   if (line.level === "ceiling_out_of_date") {
     return `${line.resource} is above the quota you entered. Check the namespace quota and update it.`;
   }
@@ -51,10 +71,12 @@ export function CapacityPanel({
   lines,
   ceilings,
   quotaState,
+  peakWindowHours,
 }: {
   lines: CapacityLine[];
   ceilings: ResourceLimits;
   quotaState: SourceState | undefined;
+  peakWindowHours: number;
 }) {
   const [open, setOpen] = useState(false);
   // Bumped on each opening, so the dialog starts from what is saved.
@@ -103,7 +125,7 @@ export function CapacityPanel({
             </p>
             {warnings.map((line) => (
               <p key={line.resource} className="m-0 mt-1 text-[13px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-                {warningText(line)}
+                {warningText(line, peakWindowHours)}
               </p>
             ))}
           </div>
@@ -133,6 +155,15 @@ export function CapacityPanel({
               <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }}>
                 {lineText(line)}
               </p>
+              {line.peak !== null && (
+                <p
+                  className="m-0 mt-0.5 text-[12px]"
+                  style={{ color: "var(--ink-4)" }}
+                  data-testid={`capacity-peak-${line.resource}`}
+                >
+                  {peakText(line, peakWindowHours)}
+                </p>
+              )}
               {line.ratio !== null && line.level !== "ceiling_out_of_date" && (
                 <UsageMeter ratio={line.ratio} label={`${line.resource} against its quota`} className="mt-2" />
               )}

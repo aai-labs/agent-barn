@@ -104,7 +104,12 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
     <>
       <LevelBanner level={health.level} />
       <SourcesNotice sources={health.sources} />
-      <CapacityPanel lines={health.capacity} ceilings={health.ceilings} quotaState={states.resource_quotas} />
+      <CapacityPanel
+        lines={health.capacity}
+        ceilings={health.ceilings}
+        quotaState={states.resource_quotas}
+        peakWindowHours={health.peakWindowHours}
+      />
       <div className="grid gap-x-6" style={TWO_COLUMNS}>
         <ServicesPanel
           services={health.services}

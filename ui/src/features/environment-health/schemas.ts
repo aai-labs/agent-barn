@@ -62,6 +62,9 @@ export const CapacityLineSchema = z.object({
   used: z.number().nullable().default(null),
   hard: z.number().nullable().default(null),
   ratio: z.number().nullable().default(null),
+  /** The highest `used` over the last `peakWindowHours`, for CPU, memory and pods. Null when unknown. */
+  peak: z.number().nullable().default(null),
+  peakRatio: z.number().nullable().default(null),
   level: CapacityLevelSchema,
 });
 export type CapacityLine = z.infer<typeof CapacityLineSchema>;
@@ -147,6 +150,7 @@ export const EnvironmentHealthSchema = z.object({
   observedAt: z.string(),
   namespace: z.string(),
   level: HealthLevelSchema,
+  peakWindowHours: z.number().int().default(24),
   sources: z.array(z.object({ source: EnvironmentSourceSchema, state: SourceStateSchema })).default([]),
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),
