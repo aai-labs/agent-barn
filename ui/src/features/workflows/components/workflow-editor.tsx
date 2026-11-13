@@ -1,9 +1,18 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 
@@ -103,6 +112,9 @@ function Control({
 
 export type DefaultAgentChoice = { id: string; name: string };
 
+/** Agent pills shown before the rest collapse into a searchable "+N more". */
+const VISIBLE_AGENTS = 4;
+
 /**
  * The workflow form: its name and purpose, the Agent runs start with by default, its
  * steps in order, and the inputs a run asks for. Every step is open at once.
@@ -164,6 +176,13 @@ export function WorkflowEditor({
     [steps[index], steps[index + delta]] = [steps[index + delta], steps[index]];
     onChange({ ...draft, steps });
   };
+  // The chosen default always has a pill, even when it is past the first few.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const firstAgents = agents.slice(0, VISIBLE_AGENTS);
+  const chosen = agents.find((agent) => agent.id === defaultAgentId);
+  const shownAgents =
+    chosen && !firstAgents.includes(chosen) ? [...firstAgents, chosen] : firstAgents;
+  const hiddenCount = agents.length - shownAgents.length;
   const chip = (selected: boolean) =>
     `inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors ${
       selected
@@ -194,35 +213,77 @@ export function WorkflowEditor({
             Default agent{" "}
             <span className="font-normal text-[var(--ink-3)]">(optional)</span>
           </p>
-          <div
-            role="radiogroup"
-            aria-labelledby="workflow-default-agent"
-            className="flex flex-wrap gap-2"
-          >
-            <button
-              type="button"
-              role="radio"
-              aria-checked={defaultAgentId === null}
-              className={chip(defaultAgentId === null)}
-              onClick={() => onDefaultAgentChange(null)}
+          <div className="flex flex-wrap gap-2">
+            <div
+              role="radiogroup"
+              aria-labelledby="workflow-default-agent"
+              className="flex flex-wrap gap-2"
             >
-              No default
-            </button>
-            {agents.map((agent) => (
               <button
-                key={agent.id}
                 type="button"
                 role="radio"
-                aria-checked={defaultAgentId === agent.id}
-                className={`${chip(defaultAgentId === agent.id)} pl-1.5`}
-                onClick={() => onDefaultAgentChange(agent.id)}
+                aria-checked={defaultAgentId === null}
+                className={chip(defaultAgentId === null)}
+                onClick={() => onDefaultAgentChange(null)}
               >
-                <span aria-hidden="true">
-                      <AgentAvatar agent={agent} size="xs" />
-                    </span>
-                {agent.name}
+                No default
               </button>
-            ))}
+              {shownAgents.map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={defaultAgentId === agent.id}
+                  className={`${chip(defaultAgentId === agent.id)} pl-1.5`}
+                  onClick={() => onDefaultAgentChange(agent.id)}
+                >
+                  <span aria-hidden="true">
+                    <AgentAvatar agent={agent} size="xs" />
+                  </span>
+                  {agent.name}
+                </button>
+              ))}
+            </div>
+            {hiddenCount > 0 && (
+              <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className={chip(false)}
+                    aria-label={`Choose from all ${agents.length} agents`}
+                  >
+                    <Plus size={14} aria-hidden="true" /> {hiddenCount} more
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search agents…" />
+                    <CommandList>
+                      <CommandEmpty>No agents found.</CommandEmpty>
+                      <CommandGroup>
+                        {agents.map((agent) => (
+                          <CommandItem
+                            key={agent.id}
+                            value={`${agent.name} ${agent.id}`}
+                            onSelect={() => {
+                              onDefaultAgentChange(agent.id);
+                              setMoreOpen(false);
+                            }}
+                          >
+                            <AgentAvatar agent={agent} size="xs" />
+                            <span className="truncate">{agent.name}</span>
+                            <Check
+                              aria-hidden="true"
+                              className={`ml-auto ${agent.id === defaultAgentId ? "opacity-100" : "opacity-0"}`}
+                            />
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            )}
           </div>
           <p className="mt-1.5 text-xs text-[var(--ink-3)]">
             Preselected under “Run as”. Whoever starts a run can pick another agent.

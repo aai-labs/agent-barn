@@ -86,6 +86,38 @@ test.describe("WF01 Organization workflow authoring", () => {
     await expect(page.getByRole("heading", { name: NAME })).toBeVisible();
   });
 
+  test("many Agents collapse past four pills into a searchable list", async ({ page }) => {
+    const team = Array.from({ length: 9 }, (_, i) => ({
+      ...mockAgent,
+      id: `00000000-0000-4000-8000-0000000000${String(i + 10)}`,
+      name: `Agent ${String.fromCharCode(65 + i)}`,
+    }));
+    await new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: team.length, items: team },
+    });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.create("Summarize weekly pipeline changes");
+    const pills = workflows.editor().getByRole("radiogroup", { name: /Default agent/ });
+    await expect(pills.getByRole("radio")).toHaveCount(5);
+    for (const name of ["No default", "Agent A", "Agent B", "Agent C", "Agent D"])
+      await expect(workflows.defaultAgent(name)).toBeVisible();
+    await expect(pills.getByRole("radio", { name: "Agent E" })).toHaveCount(0);
+    await workflows.editor().getByRole("button", { name: "Choose from all 9 agents" }).click();
+    await page.getByPlaceholder("Search agents…").fill("agent h");
+    await expect(page.getByRole("option")).toHaveCount(1);
+    await page.getByRole("option", { name: "Agent H" }).click();
+    // The chosen Agent gets its own pill, and the overflow shrinks by one.
+    await expect(workflows.defaultAgent("Agent H")).toBeChecked();
+    await expect(pills.getByRole("radio")).toHaveCount(6);
+    await expect(workflows.editor().getByRole("button", { name: /^Choose from all/ })).toHaveText(
+      "4 more",
+    );
+    await workflows.buildExample();
+    await workflows.save();
+    expect(support.saveRequests[0]).toMatchObject({ default_agent_id: team[7].id });
+  });
+
   test("create a workflow from the Organization page with a default Agent", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
