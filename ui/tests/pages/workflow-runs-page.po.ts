@@ -10,12 +10,16 @@ export class WorkflowRunsPage {
       `/dashboard/${organizationId}/agents/${agentId}?tab=workflows&workflow=${WORKFLOW_ID}${run ? `&workflowRun=${RUN_ID}` : ""}`,
     );
   }
-  async selectView(name: "Overview" | "Runs" | "Version history") {
+  /** The Agent's Workflows page, which opens on its Runs tab. */
+  async gotoLanding(agentId: string) {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=workflows`);
+  }
+  async selectView(name: "Overview" | "Version history") {
     await this.page.getByRole("tab", { name, exact: true }).click();
   }
   async openFirstRun() {
     await this.page
-      .getByLabel("Workflow runs", { exact: true })
+      .getByLabel("Recent runs", { exact: true })
       .getByRole("button")
       .first()
       .click();
@@ -76,7 +80,7 @@ export class WorkflowRunsPage {
   }
   async backToRuns() {
     await this.page
-      .getByRole("button", { name: "Back to runs", exact: true })
+      .getByRole("button", { name: "All workflows", exact: true })
       .click();
   }
   async selectStep(name: string) {

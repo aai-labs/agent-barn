@@ -8,7 +8,7 @@ from fastapi_injector import Injected
 from pydantic import ValidationError
 
 from api.domains.workflows.repository import WorkflowConflict
-from api.domains.workflows.run_models import AttemptFailure, AttemptResult
+from api.domains.workflows.run_models import ApprovalRaised, AttemptFailure, AttemptResult
 from api.domains.workflows.run_service import WorkflowRunService
 from api.domains.workflows.runtime_service import WorkflowRuntimeService
 
@@ -56,6 +56,44 @@ async def result(attempt_id: UUID, credential: Credential, service: Runs, reques
                 "fields": [{"path": ".".join(map(str, error["loc"])), "type": error["type"]} for error in exc.errors()],
             },
         ) from exc
+    except WorkflowConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return Response(status_code=204)
+
+
+@router.post("/approvals")
+async def raise_approval(attempt_id: UUID, credential: Credential, service: Runtime, request: Request):
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        parsed = ApprovalRaised.model_validate(await bounded_body(request))
+        return await run_in_threadpool(service.raise_approval, attempt_id, credential.credentials, parsed)
+    except ValidationError as exc:
+        raise HTTPException(422, "Invalid approval request") from exc
+    except WorkflowConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/approvals/{request_id}")
+def approval_status(attempt_id: UUID, request_id: UUID, credential: Credential, service: Runtime):
+    try:
+        return service.approval_status(attempt_id, credential.credentials, request_id)
+    except WorkflowConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/approvals/{request_id}/park")
+def park_approval(attempt_id: UUID, request_id: UUID, credential: Credential, service: Runtime):
+    try:
+        return service.park(attempt_id, credential.credentials, request_id)
+    except WorkflowConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/approvals/{request_id}/released", status_code=204)
+def approval_released(attempt_id: UUID, request_id: UUID, credential: Credential, service: Runtime):
+    try:
+        service.released(attempt_id, credential.credentials, request_id)
     except WorkflowConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     return Response(status_code=204)
