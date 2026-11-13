@@ -8,6 +8,7 @@ import {
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { mockResourceUsage } from "../pages/data-support/resource-usage-data-support.po";
+import { dayStartIso, UsageDatePickerPage } from "../pages/usage-date-picker.po";
 
 /** What the API returns for an agent it has nothing to say about. */
 const NOTHING = {
@@ -118,37 +119,37 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
     await expect(page.getByTestId("resource-usage-cpu-throttled")).toHaveAttribute("data-tone", "ok");
   });
 
-  test("asks for the range the reader picks", async ({ page }) => {
+  test("asks for the days the reader picks", async ({ page }) => {
     const requests = await dataSupportPage.resourceUsage.interceptAgentResourceUsage();
     await agentDetailPage.gotoResourceUsage();
     await expect(page.getByTestId("resource-usage-memory-now")).toBeVisible();
-    expect(requests.map((request) => request.get("range"))).toContain("24h");
+    expect(requests.at(0)?.get("from_date")).toBeNull();
 
-    await page.getByTestId("resource-usage-range").click();
-    await page.getByRole("option", { name: "Last 7 days" }).click();
+    await new UsageDatePickerPage(page).chooseLastDays(7);
 
-    await expect.poll(() => requests.map((request) => request.get("range"))).toContain("7d");
-    await expect(page).toHaveURL(/range=7d/);
-    await expect(page.getByTestId("resource-usage-memory-peak")).toContainText("last 7 days");
+    await expect.poll(() => requests.at(-1)?.get("from_date")).toBe(dayStartIso(6));
+    await expect(page).toHaveURL(/usageFrom=/);
+    await expect(page.getByTestId("resource-usage-memory-peak")).not.toContainText("last 24 hours");
   });
 
-  test("opens on the range in the link", async ({ page }) => {
+  test("opens on the days in the link", async () => {
     const requests = await dataSupportPage.resourceUsage.interceptAgentResourceUsage();
-    await agentDetailPage.gotoResourceUsage(MOCK_AGENT_ID, "6h");
+    const from = dayStartIso(2);
 
-    await expect(page.getByTestId("resource-usage-range")).toContainText("Last 6 hours");
-    expect(requests.map((request) => request.get("range"))).toEqual(["6h"]);
+    await agentDetailPage.gotoResourceUsage(MOCK_AGENT_ID, `usageFrom=${encodeURIComponent(from)}`);
+
+    await expect.poll(() => requests.at(0)?.get("from_date")).toBe(from);
   });
 
-  test("drops the range from the address when the reader leaves the tab", async ({ page }) => {
+  test("drops the days from the address when the reader leaves the tab", async ({ page }) => {
     await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
-    await agentDetailPage.gotoResourceUsage(MOCK_AGENT_ID, "7d");
-    await expect(page).toHaveURL(/range=7d/);
+    await agentDetailPage.gotoResourceUsage(MOCK_AGENT_ID, `usageFrom=${encodeURIComponent(dayStartIso(2))}`);
+    await expect(page).toHaveURL(/usageFrom=/);
 
     await agentDetailPage.openCostsTab();
 
     await expect(page).toHaveURL(/tab=costs/);
-    await expect(page).not.toHaveURL(/range=/);
+    await expect(page).not.toHaveURL(/usageFrom=/);
   });
 
   test.describe("when there is nothing to draw", () => {

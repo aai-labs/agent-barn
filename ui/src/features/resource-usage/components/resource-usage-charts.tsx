@@ -18,11 +18,10 @@ import {
   formatUsageTick,
   formatUsageTooltipTime,
 } from "../format";
-import type { ResourceUsagePoint, ResourceUsageRange } from "../schemas";
+import type { ResourceUsagePoint } from "../schemas";
 
 interface UsageAreaChartProps {
   points: { bucket: string; value: number | null }[];
-  range: ResourceUsageRange;
   label: string;
   format: (value: number) => string;
   /** Drawn as a dashed line, and the top of the axis, so the gap to it is the headroom. */
@@ -51,7 +50,6 @@ const CHART_CONFIG = {
  */
 const UsageAreaChart = memo(function UsageAreaChart({
   points,
-  range,
   label,
   format,
   limit,
@@ -70,6 +68,7 @@ const UsageAreaChart = memo(function UsageAreaChart({
     return <EmptyChart>No readings in this period.</EmptyChart>;
   }
 
+  const spanSeconds = (Date.parse(points[points.length - 1].bucket) - Date.parse(points[0].bucket)) / 1000;
   // With a limit, the axis ends on it, so its label is the limit and not a rounded-up
   // neighbour. Without one, a little headroom keeps the line off the top edge.
   const wanted = limit ? Math.max(limit, request ?? 0, highest) : Math.max(request ?? 0, highest) * 1.1;
@@ -86,7 +85,7 @@ const UsageAreaChart = memo(function UsageAreaChart({
           <CartesianGrid strokeDasharray="3 3" vertical={false} />
           <XAxis
             dataKey="bucket"
-            tickFormatter={(value: string) => formatUsageTick(value, range)}
+            tickFormatter={(value: string) => formatUsageTick(value, spanSeconds)}
             tickLine={false}
             axisLine={false}
             // Evenly spaced, and as many as fit without touching: a fixed count crowds a
@@ -153,14 +152,12 @@ const UsageAreaChart = memo(function UsageAreaChart({
 
 interface SeriesChartProps {
   series: ResourceUsagePoint[];
-  range: ResourceUsageRange;
   compact?: boolean;
   testId?: string;
 }
 
 export const MemoryChart = memo(function MemoryChart({
   series,
-  range,
   limitBytes,
   requestBytes = null,
   compact,
@@ -173,7 +170,6 @@ export const MemoryChart = memo(function MemoryChart({
   return (
     <UsageAreaChart
       points={points}
-      range={range}
       label="Memory over time"
       format={formatBytes}
       limit={limitBytes}
@@ -186,7 +182,6 @@ export const MemoryChart = memo(function MemoryChart({
 
 export const CpuChart = memo(function CpuChart({
   series,
-  range,
   limitCores,
   requestCores = null,
   compact,
@@ -199,7 +194,6 @@ export const CpuChart = memo(function CpuChart({
   return (
     <UsageAreaChart
       points={points}
-      range={range}
       label="CPU over time"
       format={formatCores}
       limit={limitCores}
@@ -212,7 +206,6 @@ export const CpuChart = memo(function CpuChart({
 
 export const ThrottlingChart = memo(function ThrottlingChart({
   series,
-  range,
   compact,
   testId,
 }: SeriesChartProps) {
@@ -223,7 +216,6 @@ export const ThrottlingChart = memo(function ThrottlingChart({
   return (
     <UsageAreaChart
       points={points}
-      range={range}
       label="CPU throttling over time"
       format={formatShare}
       minTop={0.1}
