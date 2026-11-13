@@ -34,6 +34,10 @@ export function emptyDraft(description: string): WorkflowDraft {
   };
 }
 
+/** Step reorder chevrons: a soft fill on hover, a firmer one while pressed. */
+const reorderButton =
+  "grid size-6 place-items-center rounded-md text-[var(--ink-3)] transition-colors hover:bg-[var(--bg-soft)] hover:text-[var(--ink)] active:bg-[var(--line-strong)] active:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-color)] disabled:pointer-events-none disabled:opacity-30";
+
 const count = (value: number, noun: string) =>
   `${value} ${value === 1 ? noun : `${noun}s`}`;
 
@@ -267,15 +271,16 @@ export function WorkflowEditor({
               key={step.id}
               data-section={step.id}
               aria-label={`Step ${index + 1}`}
-              className="flex gap-3 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-3"
+              className="group/step flex gap-3 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-3 transition-colors focus-within:border-[var(--line-strong)]"
             >
               <div className="flex shrink-0 flex-col items-center gap-0.5">
-                <span className="grid size-6 place-items-center rounded-full bg-[var(--bg-soft)] text-xs font-semibold">
+                {/* The step being edited shows its number in the accent colour. */}
+                <span className="grid size-6 place-items-center rounded-full bg-[var(--bg-soft)] text-xs font-semibold transition-colors group-focus-within/step:bg-[var(--accent-color)] group-focus-within/step:text-white">
                   {index + 1}
                 </span>
                 <button
                   type="button"
-                  className="rounded p-0.5 text-[var(--ink-3)] hover:text-[var(--ink)] disabled:opacity-30"
+                  className={reorderButton}
                   aria-label={`Move step ${index + 1} up`}
                   disabled={disabled || index === 0}
                   onClick={() => move(index, -1)}
@@ -284,7 +289,7 @@ export function WorkflowEditor({
                 </button>
                 <button
                   type="button"
-                  className="rounded p-0.5 text-[var(--ink-3)] hover:text-[var(--ink)] disabled:opacity-30"
+                  className={reorderButton}
                   aria-label={`Move step ${index + 1} down`}
                   disabled={disabled || index === draft.steps.length - 1}
                   onClick={() => move(index, 1)}
