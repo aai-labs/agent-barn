@@ -378,6 +378,20 @@ test.describe("WF01 Organization workflow authoring", () => {
     for (const input of inputs) expect(input.key).toMatch(/^[a-z][a-z0-9_-]{0,63}$/);
   });
 
+  test("an empty new step asks for its prompt, never a name", async ({ page }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(TEST_ORG_ID, WORKFLOW_ID);
+    await workflows.edit();
+    await workflows.addStep();
+    await workflows.stepInstructions(3).focus();
+    await workflows.name().focus();
+    await expect(workflows.step(3)).toContainText("Enter a description");
+    await workflows.save();
+    await expect(workflows.step(3)).toContainText("Enter a description");
+    await expect(workflows.editor()).not.toContainText("Enter a name");
+  });
+
   test("fields explain problems once left, and save names every problem", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
