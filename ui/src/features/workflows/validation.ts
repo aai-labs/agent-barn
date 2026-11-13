@@ -35,11 +35,11 @@ export const inputField = (index: number, field: string) =>
 function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
   const start = path.findIndex((part) => part !== "body" && part !== "draft");
   const [scope, index, rawField] = path.slice(Math.max(0, start));
-  // Input keys derive from labels and step names from prompts; neither is shown, so
-  // their problems belong to the field they come from.
+  // Input labels and keys derive from descriptions, and step names from prompts; none
+  // is edited directly, so their problems belong to the field they come from.
   const field =
-    rawField === "key"
-      ? "label"
+    scope === "inputs" && (rawField === "key" || rawField === "label")
+      ? "description"
       : scope === "steps" && rawField === "name"
         ? "goal"
         : rawField
@@ -132,8 +132,8 @@ export function workflowApiProblems(
       item.loc.at(-1) === "inputs" && item.msg.match(duplicateInputs);
     if (duplicate) {
       issues.push({
-        path: ["inputs", Number(duplicate[2]) - 1, "label"],
-        message: `Matches input ${duplicate[1]}; use a distinct label`,
+        path: ["inputs", Number(duplicate[2]) - 1, "description"],
+        message: `Matches input ${duplicate[1]}; start it differently`,
       });
       continue;
     }
@@ -141,7 +141,7 @@ export function workflowApiProblems(
       path: item.loc,
       message:
         item.loc.includes("inputs") && item.loc.at(-1) === "key"
-          ? "Edit the input label"
+          ? "Edit the input description"
           : item.msg,
     });
   }

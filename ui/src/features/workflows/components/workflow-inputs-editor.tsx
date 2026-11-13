@@ -5,7 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { type WorkflowDraft } from "../schemas";
-import { inputKeyFromLabel } from "../utils";
+import { inputKeyFromLabel, inputLabelFromDescription } from "../utils";
 import { inputField } from "../validation";
 
 type WorkflowInput = WorkflowDraft["inputs"][number];
@@ -35,45 +35,6 @@ export function WorkflowInputsEditor({
     onChange(
       inputs.map((input, i) => (i === index ? { ...input, ...patch } : input)),
     );
-  const text = (
-    index: number,
-    name: "label" | "description",
-    caption: string,
-    placeholder: string,
-    onValue: (value: string) => void,
-  ) => {
-    const field = inputField(index, name);
-    const error = errorFor(field);
-    const id = `workflow-${field.replaceAll(":", "-")}`;
-    return (
-      <div className="min-w-0">
-        <label
-          htmlFor={id}
-          className="mb-1 block text-xs font-medium text-[var(--ink-3)]"
-        >
-          {caption}
-        </label>
-        <input
-          id={id}
-          className={`af-input block w-full${name === "label" ? " font-semibold placeholder:font-normal" : ""}`}
-          // Names the row for assistive technology; it contains the visible caption.
-          aria-label={`Input ${index + 1} ${caption.toLowerCase()}`}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? `${id}-error` : undefined}
-          placeholder={placeholder}
-          value={inputs[index][name]}
-          onChange={(event) => onValue(event.target.value)}
-          onBlur={() => onTouch(field)}
-          style={error ? { borderColor: "var(--err)" } : undefined}
-        />
-        {error && (
-          <p id={`${id}-error`} className="mt-1.5 text-xs" style={{ color: "var(--err)" }}>
-            {error}
-          </p>
-        )}
-      </div>
-    );
-  };
   return (
     <section aria-label="Inputs">
       <div className="mb-2 flex items-baseline justify-between">
@@ -94,18 +55,19 @@ export function WorkflowInputsEditor({
             aria-label={`Input ${index + 1}`}
             className="rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]"
           >
-            <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-              {/* Saved keys stay unchanged until their label is edited. */}
-              {text(index, "label", "Label", "e.g. Release tag", (label) =>
-                update(index, { label, key: inputKeyFromLabel(label) }),
-              )}
-              {text(
-                index,
-                "description",
-                "Description",
-                "What should the person starting a run enter?",
-                (description) => update(index, { description }),
-              )}
+            <div className="p-4">
+              <InputDescription
+                index={index}
+                value={item.description}
+                error={errorFor(inputField(index, "description"))}
+                onBlur={() => onTouch(inputField(index, "description"))}
+                // Its first line becomes the label on the start-run form and the key
+                // behind it; saved labels and keys stay until it is edited.
+                onChange={(description) => {
+                  const label = inputLabelFromDescription(description);
+                  update(index, { description, label, key: inputKeyFromLabel(label) });
+                }}
+              />
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[var(--line)] px-4 py-2.5">
               <div
@@ -169,5 +131,41 @@ export function WorkflowInputsEditor({
         <Plus size={14} /> Add input
       </button>
     </section>
+  );
+}
+
+function InputDescription({
+  index,
+  value,
+  error,
+  onChange,
+  onBlur,
+}: {
+  index: number;
+  value: string;
+  error?: string;
+  onChange: (value: string) => void;
+  onBlur: () => void;
+}) {
+  const errorId = `workflow-input-${index}-description-error`;
+  return (
+    <div className="min-w-0">
+      <input
+        className="af-input block w-full"
+        aria-label={`Input ${index + 1} description`}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        placeholder="What should the person starting a run enter? e.g. Release tag"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
+        style={error ? { borderColor: "var(--err)" } : undefined}
+      />
+      {error && (
+        <p id={errorId} className="mt-1.5 text-xs" style={{ color: "var(--err)" }}>
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

@@ -36,19 +36,29 @@ export function inputKeyFromLabel(label: string): string {
   return key;
 }
 
-const STEP_NAME_MAX = 80;
+const SHORT_MAX = 80;
 
 /**
- * Derives a step's short name from its prompt, for run lists and the step timeline:
- * the first line with its whitespace collapsed, cut at a word near 80 characters.
+ * A short title from free text: its first line with whitespace collapsed, cut at a
+ * word near 80 characters.
  */
-export function stepNameFromGoal(goal: string): string {
-  const line = (goal.trim().split("\n")[0] ?? "").replace(/\s+/g, " ").trim();
-  if (line.length <= STEP_NAME_MAX) return line;
-  const cut = line.slice(0, STEP_NAME_MAX - 1);
+function shortTitle(text: string): string {
+  const line = (text.trim().split("\n")[0] ?? "").replace(/\s+/g, " ").trim();
+  if (line.length <= SHORT_MAX) return line;
+  const cut = line.slice(0, SHORT_MAX - 1);
   const space = cut.lastIndexOf(" ");
-  return `${(space > STEP_NAME_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+  return `${(space > SHORT_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
+
+/** A step's name, shown in run lists and the step timeline, from its prompt. */
+export const stepNameFromGoal = (goal: string) => shortTitle(goal);
+
+/** Help text under an input's label: its description, unless the label already says it all. */
+export const inputHelp = (input: { label: string; description: string }) =>
+  input.description.trim() === input.label ? null : input.description;
+
+/** An input's label, shown on the start-run form, from its description. */
+export const inputLabelFromDescription = (description: string) => shortTitle(description);
 
 const SHOWN_MAX = 200;
 const shown = (value: string | null) => {

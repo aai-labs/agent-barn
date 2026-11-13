@@ -69,7 +69,7 @@ start with a letter gain an `input-` prefix (or `input` when otherwise empty).
 Labels with non-ASCII letters/digits that cannot be folded, or keys exceeding 64
 characters, receive a deterministic eight-digit FNV-1a suffix; the key is truncated
 to fit. Blank labels remain invalid. Normalization collisions are reported on the
-later input label, naming the first matching input; suffixes reduce collisions
+later input's description, from which the label derives, naming the first matching input; suffixes reduce collisions
 but uniqueness is still validated rather than assumed. Keys stay hidden in both
 editing and saved inspection. Existing saved keys remain unchanged until their
 label is edited. Names cannot be blank. The workflow description is optional;
@@ -257,9 +257,12 @@ one text box, its prompt: what the Agent should do and produce. Every step is
 open at once. A step has no name field; editing the prompt sets the stored step
 name to its first line, whitespace collapsed and cut at a word to 80 characters,
 which run lists and the step timeline show. A step whose prompt is not edited
-keeps its saved name, and the API still requires one. Each input is a card with captioned
-Label and Description fields above a footer holding a Text / File / Number /
-Yes or no segmented type control, a Required checkbox and a remove control. Steps have no type selector. Opening a version saved with a legacy
+keeps its saved name, and the API still requires one. Each input is a card with one field, its
+description, above a footer holding a Text / File / Number / Yes or no segmented
+type control, a Required checkbox and a remove control. Editing the description
+sets the stored label to its first line (as for step names) and the key from that
+label; the API still stores all three. The start-run form and saved overview show
+the label, and the description under it only when it says more than the label. Steps have no type selector. Opening a version saved with a legacy
 step output description folds that text into the step's text, as the API does on
 save; no new version is written unless the author changes the plan. A change to
 the default Agent alone saves no version.
