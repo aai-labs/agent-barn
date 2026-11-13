@@ -5,9 +5,9 @@ piece of state with calibrated probabilities instead of free text. Callers ask w
 question types here and get the answer types here back; the provider's wire vocabulary
 stays inside this module, because OpenRouter's decisions route is still alpha.
 
-Pass derived features, not raw records. The state is sent to the model as given, so a
-caller that wants to keep row-level data, names or free text out of the provider must
-reduce it first, e.g. to ratios, counts and z-scores.
+The state is sent to the model provider exactly as given. What it contains is the
+caller's choice: a message to classify, or features reduced from records the caller
+wants to keep out of the provider.
 
 Answers are untrusted: every question must come back answered, from the offered set and
 with probabilities in range, or the whole call fails with `BAD_RESPONSE`.

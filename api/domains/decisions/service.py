@@ -1,11 +1,11 @@
-"""Decisions: typed questions that platform features ask a decision model about an Agent's data.
+"""Decisions: typed questions that platform features ask a decision model about an Agent.
 
 A feature asks through `DecisionService.decide` with the question types from
 `api.infrastructure.litellm.decisions` and gets typed answers back. Which model answers
 is a setting, not code: Platform Administrators choose the default by name, a caller
 may name another for one call, and `DECISION_MODELS` maps each name to its slug.
 
-Pass derived features, not raw records: the state goes to the model provider as given.
+The state goes to the model provider exactly as given; what it contains is the caller's choice.
 """
 
 import logging

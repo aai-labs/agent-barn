@@ -6,7 +6,7 @@ Read before asking a decision model anything from a platform feature, changing w
 
 ## Role in the system
 
-A **Decision** is one call that asks a decision model a fixed set of typed questions about a piece of state and gets calibrated answers back, instead of free text. Platform features use it to classify or score something an Agent produced; anomaly detection (MDP-44) is the first. The module knows nothing about its callers.
+A **Decision** is one call that asks a decision model a fixed set of typed questions about a piece of state and gets calibrated answers back, instead of free text. Platform features use it to classify or score anything about an Agent, such as whether an incoming message is worth replying to or whether its spend is unusual (MDP-44). The module knows nothing about its callers.
 
 - `api/infrastructure/litellm/decisions.py` holds the question and answer types and the client. All provider wire format stays there, because OpenRouter's decisions route is alpha.
 - `api/domains/decisions/` holds `DecisionService.decide`, which picks the model and the key, and the Platform setting.
@@ -23,7 +23,7 @@ A **Decision** is one call that asks a decision model a fixed set of typed quest
 
 The result also carries input and output tokens and `cost_usd` from LiteLLM (`None` when not reported). One call takes 1–128 questions. Questions outside these limits are a `ValueError` before any call.
 
-**Pass derived features, not raw records.** `state` (text, or a JSON object or list) goes to the model provider as given. A caller that must keep rows, names or free text away from the provider reduces it first, e.g. to ratios, counts and z-scores.
+**The caller decides what to send.** `state` (text, or a JSON object or list) goes to the model provider exactly as given; the module neither adds to it nor strips it. A caller may send content as is, such as a message to classify, or reduce records first to keep them away from the provider, e.g. to ratios, counts and z-scores. See [Data retention](#data-retention) for what the provider may keep.
 
 ## Models
 

@@ -41,7 +41,7 @@ export function PlatformDecisionSettings() {
       savedMessage="Decision model saved."
       details={[
         { label: "Applies to", value: "All Organizations" },
-        { label: "Used for", value: "Yes/no, choice and score questions the platform asks about an Agent's activity" },
+        { label: "Used for", value: "Yes/no, choice and score questions the platform asks about an Agent" },
         { label: "Costs charged to", value: "The Agent the question is about" },
       ]}
       currentModel={settings?.model ?? ""}
