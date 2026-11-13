@@ -258,12 +258,14 @@ keeps its saved name, and the API still requires one. Steps have no type selecto
 step output description folds that text into the step's text, as the API does on
 save; no new version is written unless the author changes the plan. A change to
 the default Agent alone saves no version.
-The editor supports adding, removing, undoing and reordering steps.
-Removing the last step offers an empty state and disables saving; undo
-restores the most recently removed step and its edited fields. Saved overview and
+The editor supports adding, removing and reordering steps. Removing a step with a
+prompt asks first in the shared confirmation dialog; an empty step is removed at
+once. There is no undo. Removing the last step offers an empty state and disables
+saving. The step whose prompt or controls have focus shows its number in the
+accent colour. Saved overview and
 version history expose actual snapshots; a version saved with a legacy step
-output description still shows it. Closing a changed draft and archiving use the
-shared branded dialog. Run is disabled while execution admission is unavailable
+output description still shows it. Closing a changed draft, removing a step and
+archiving use the shared branded dialog. Run is disabled while execution admission is unavailable
 and for an archived workflow. Drafts are saved with Web review as their
 destination; the editor offers no other.
 
@@ -286,8 +288,7 @@ the visible field labels, scrolls to the first invalid field and links each erro
 to its field. Fields also show accessible inline feedback after blur, and all
 invalid fields are revealed after a save attempt; editing revalidates revealed
 fields without submitting. Both client and API validation retain the draft;
-client validation prevents submission of an invalid draft. Removing a step moves
-keyboard focus to Undo. If save authority disappears, the form is disabled and
+client validation prevents submission of an invalid draft. If save authority disappears, the form is disabled and
 keeps the retained edits visible.
 
 Definition query keys include Organization identity, with structured
