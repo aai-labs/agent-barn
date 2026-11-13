@@ -161,6 +161,11 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# Decision models Platform Administrators choose from, as JSON mapping a name to a LiteLLM
+# slug, and the name used until they choose. The default must be a key of the map, or the
+# API refuses to start. Unset uses the values below.
+# DECISION_MODELS={"jev": "openrouter/typesafe/jev-1.14", "openai": "openrouter/openai/gpt-6-luna-decisions"}
+# DECISION_DEFAULT_MODEL=jev
 # API callback address Agent pods use to report workflow step outcomes. Local compose
 # derives it from API_PORT; deployments default to the in-cluster API service.
 # WORKFLOW_RUNTIME_BASE_URL=
