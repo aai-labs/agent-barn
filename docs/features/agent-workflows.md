@@ -14,7 +14,9 @@ Agent is the runner of the run, not the owner of the workflow. Terms follow
 
 **Definitions.** Every accepted Member of the Organization (`organization.read`)
 reads definitions, their immutable versions and the capabilities, and creates
-workflows. The creating Membership is recorded on the workflow. Saving a version,
+workflows. The creating Membership is recorded on the workflow, and every Member
+who reads a definition sees its creator's name and User and Membership
+identifiers, including Members without `membership.read`. Saving a version,
 changing the default Agent and archiving are limited to that creator and to
 Members holding the Organization Permission `workflow.manage`, which Owners and
 Admins hold; any other Member receives 403. A workflow of
