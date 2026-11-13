@@ -167,6 +167,10 @@ test.describe("WF01 Organization workflow authoring", () => {
       "Open latest run",
       "Archive",
     ]);
+    // Rows keep their label on one line rather than wrapping to the trigger's width.
+    const latest = await page.getByRole("menuitem", { name: "Open latest run" }).boundingBox();
+    const edit = await page.getByRole("menuitem", { name: "Edit" }).boundingBox();
+    expect(latest!.height).toBeLessThan(edit!.height * 1.25);
     await page.keyboard.press("Escape");
     await workflows.open(NAME);
     await expect(page.getByRole("heading", { name: NAME })).toBeVisible();
