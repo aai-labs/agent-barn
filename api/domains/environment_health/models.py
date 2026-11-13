@@ -153,7 +153,15 @@ class ScheduledBackupsRead(PydanticBaseModel):
     interval_minutes: int = 0
     # The window `failed` covers.
     failure_window_hours: int = 24
+    # Running Agents, which are the ones the schedule backs up.
+    running_agents: int = 0
+    # How many Agents fail or are overdue. When every backup fails at once (a full volume
+    # quota, say) that is the news, so only the worst few are named in the lists below.
+    failed_total: int = 0
+    overdue_total: int = 0
+    # Most failures first. An Agent named here is not named again under `overdue`.
     failed: list[BackupFailureRead] = Field(default_factory=list)
+    # Never backed up first, then the longest without one.
     overdue: list[OverdueBackupRead] = Field(default_factory=list)
 
 

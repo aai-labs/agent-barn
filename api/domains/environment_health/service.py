@@ -113,8 +113,8 @@ def overall_level(
         or alerts
         or volumes.attention
         or events
-        or backups.failed
-        or backups.overdue
+        or backups.failed_total
+        or backups.overdue_total
         or any(cron.state in {CronJobState.FAILING, CronJobState.STALLED} for cron in cron_jobs)
         or (
             deployed is not None and deployed.mixed and not any(s.rollout == RolloutState.IN_PROGRESS for s in services)

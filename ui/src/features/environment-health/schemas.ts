@@ -74,6 +74,12 @@ export const ScheduledBackupsSchema = z.object({
   enabled: z.boolean().default(false),
   intervalMinutes: z.number().int().default(0),
   failureWindowHours: z.number().int().default(24),
+  /** Running agents: the ones the schedule backs up. */
+  runningAgents: z.number().int().default(0),
+  /** How many agents fail or are overdue. The lists name only the worst few. */
+  failedTotal: z.number().int().default(0),
+  overdueTotal: z.number().int().default(0),
+  /** Most failures first. An agent named here is not named again under `overdue`. */
   failed: z
     .array(z.object({ agent: AgentRefSchema, failures: z.number().int(), lastFailedAt: z.string() }))
     .default([]),
@@ -215,7 +221,16 @@ export const EnvironmentHealthSchema = z.object({
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),
   cronJobs: z.array(CronJobSchema).default([]),
-  backups: ScheduledBackupsSchema.default({ enabled: false, intervalMinutes: 0, failureWindowHours: 24, failed: [], overdue: [] }),
+  backups: ScheduledBackupsSchema.default({
+    enabled: false,
+    intervalMinutes: 0,
+    failureWindowHours: 24,
+    runningAgents: 0,
+    failedTotal: 0,
+    overdueTotal: 0,
+    failed: [],
+    overdue: [],
+  }),
   alerts: z.array(FiringAlertSchema).default([]),
   capacity: z.array(CapacityLineSchema).default([]),
   volumes: VolumeAllocationSchema,

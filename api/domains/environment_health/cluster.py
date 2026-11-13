@@ -695,23 +695,40 @@ def cron_jobs(cron_jobs: Sequence[V1CronJob], jobs: Sequence[V1Job], now: dateti
     return rows
 
 
+# The most Agents named in each backups list; the rest are counted.
+BACKUP_LIST_LIMIT = 5
+
+
 def scheduled_backups(
     health: ScheduledBackupHealth, identities: Mapping[UUID, PlatformAgentIdentity], *, failure_window_hours: int
 ) -> ScheduledBackupsRead:
-    """Failing and overdue scheduled backups, each Agent named from the database."""
+    """Failing and overdue scheduled backups: how many Agents, and the worst few by name.
+
+    An Agent whose backups fail is usually overdue too, so it is counted and named once,
+    as failing.
+    """
+    failures = sorted(health.failures, key=lambda row: (-row.failures, -row.last_failed_at.timestamp()))
+    failing = {row.agent_id for row in failures}
+    overdue = sorted(
+        (row for row in health.overdue if row.agent_id not in failing),
+        key=lambda row: row.last_backup_at or _NEVER,
+    )
     return ScheduledBackupsRead(
         enabled=health.interval_minutes > 0,
         interval_minutes=health.interval_minutes,
         failure_window_hours=failure_window_hours,
+        running_agents=sum(1 for identity in identities.values() if identity.status == AgentStatus.RUNNING),
+        failed_total=len(failures),
+        overdue_total=len(overdue),
         failed=[
             BackupFailureRead(
                 agent=agent_ref(row.agent_id, identities), failures=row.failures, last_failed_at=row.last_failed_at
             )
-            for row in health.failures
+            for row in failures[:BACKUP_LIST_LIMIT]
         ],
         overdue=[
             OverdueBackupRead(agent=agent_ref(row.agent_id, identities), last_backup_at=row.last_backup_at)
-            for row in health.overdue
+            for row in overdue[:BACKUP_LIST_LIMIT]
         ],
     )
 
