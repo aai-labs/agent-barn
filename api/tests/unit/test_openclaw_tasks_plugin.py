@@ -995,13 +995,13 @@ def test_only_the_latest_sessions_requests_are_kept(tmp_path: Path):
 # --- each agent in a pod with Bots ---
 
 
-def _bot_pod(tmp_path: Path, **secret: str) -> dict[str, str]:
+def _bot_pod(tmp_path: Path, **secret: str) -> str:
     directory = tmp_path / "bots" / _BOT_ID
     directory.mkdir(parents=True)
     for name, value in {**_BOT_IDENTITY, **secret}.items():
         (directory / name).write_text(value)
     (tmp_path / ".openclaw" / f"workspace-{_BOT_ID}").mkdir(parents=True)
-    return {"BOT_SECRET_ROOT": str(tmp_path / "bots")}
+    return str(tmp_path / "bots")
 
 
 def _as(step: dict, agent: str | None = _BOT_ID) -> dict:
@@ -1017,7 +1017,7 @@ def _env_of(tmp_path: Path, command: str) -> list[dict]:
 def test_a_bots_task_tool_runs_the_command_as_that_bot_in_its_own_workspace(tmp_path: Path):
     pod = _bot_pod(tmp_path)
 
-    _drive(tmp_path, [_as(_tool(action="create", title="Report"))], **pod)
+    _drive(tmp_path, [_as(_tool(action="create", title="Report"))], BOT_SECRET_ROOT=pod)
 
     call = _calls(tmp_path)[-1]
     assert_that(call["env"], equal_to(_BOT_IDENTITY))
@@ -1030,7 +1030,7 @@ def test_a_bots_unrecorded_work_is_recorded_as_that_bot(tmp_path: Path, agent: s
     pod = _bot_pod(tmp_path)
     work = [_as(_after_tool(f"c{n}"), agent) for n in range(3)]
 
-    _drive(tmp_path, [*work, _as(_agent_end(), agent)], **pod)
+    _drive(tmp_path, [*work, _as(_agent_end(), agent)], BOT_SECRET_ROOT=pod)
 
     assert_that(_env_of(tmp_path, "create"), equal_to([_BOT_IDENTITY]))
 
@@ -1041,7 +1041,7 @@ def test_a_bots_files_are_found_in_its_own_workspace(tmp_path: Path):
     states.write_text("a,b\n")
     wrote = _after_tool("c1", tool="write", params={"path": "states.csv"})
 
-    _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end())], **pod)
+    _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end())], BOT_SECRET_ROOT=pod)
 
     assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, str(states), "--replace"]]))
     assert_that(_env_of(tmp_path, "attach"), equal_to([_BOT_IDENTITY]))
@@ -1052,7 +1052,7 @@ def test_a_bots_file_over_its_own_limit_is_named_on_the_next_turn(tmp_path: Path
     (tmp_path / ".openclaw" / f"workspace-{_BOT_ID}" / "states.csv").write_text("a,b\n")
     wrote = _after_tool("c1", tool="write", params={"path": "states.csv"})
 
-    driven = _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end()), _as(_prompt())], **pod)
+    driven = _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end()), _as(_prompt())], BOT_SECRET_ROOT=pod)
 
     assert_that((_attaches(tmp_path), "states.csv" in _context(driven["results"][-1])), equal_to(([], True)))
 
@@ -1061,11 +1061,13 @@ def test_a_bots_file_over_its_own_limit_is_named_on_the_next_turn(tmp_path: Path
     "secret", [None, {"AGENT_ID": _PARENT_ID}, {"INGEST_API_KEY": ""}], ids=["missing", "another_agent", "no_key"]
 )
 def test_a_bot_without_its_own_secret_records_nothing_and_never_as_the_parent(tmp_path: Path, secret: dict | None):
-    pod = _bot_pod(tmp_path, **secret) if secret is not None else {"BOT_SECRET_ROOT": str(tmp_path / "bots")}
+    pod = _bot_pod(tmp_path, **secret) if secret is not None else str(tmp_path / "bots")
     work = [_as(_after_tool(f"c{n}")) for n in range(3)]
 
     driven = _drive(
-        tmp_path, [_as(_tool(action="create", title="Report")), *work, _as(_agent_end()), _as(_prompt())], **pod
+        tmp_path,
+        [_as(_tool(action="create", title="Report")), *work, _as(_agent_end()), _as(_prompt())],
+        BOT_SECRET_ROOT=pod,
     )
 
     assert_that(_calls(tmp_path), equal_to([]))
@@ -1080,7 +1082,7 @@ def test_each_agent_is_shown_its_own_open_tasks(tmp_path: Path):
         tmp_path,
         [_prompt(), _as(_prompt()), _prompt(), _as(_prompt())],
         open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}],
-        **pod,
+        BOT_SECRET_ROOT=pod,
     )
 
     assert_that([env["AGENT_ID"] for env in _env_of(tmp_path, "list")], equal_to([_PARENT_ID, _BOT_ID]))
@@ -1089,7 +1091,7 @@ def test_each_agent_is_shown_its_own_open_tasks(tmp_path: Path):
 def test_the_parent_in_a_pod_with_bots_keeps_its_own_identity_and_workspace(tmp_path: Path):
     pod = _bot_pod(tmp_path)
 
-    _drive(tmp_path, [_as(_tool(action="create", title="Report"), "main")], **pod)
+    _drive(tmp_path, [_as(_tool(action="create", title="Report"), "main")], BOT_SECRET_ROOT=pod)
 
     call = _calls(tmp_path)[-1]
     assert_that(call["env"], has_entries(AGENT_ID=_PARENT_ID, INGEST_API_KEY="test-key-123"))
