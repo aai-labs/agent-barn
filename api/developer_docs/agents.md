@@ -23,6 +23,8 @@ is only preselected when a run is started; it grants no access.
 List compact card summaries with `GET /workflows` (optionally
 `created_by_me=true` or `archived=true|false`): each version
 contains its name, description and step/input counts, without the full draft.
+Each summary also carries `default_agent_name` and `run_count`; both cover only
+Agents the caller can read, so the count matches what `GET /workflow-runs` lists.
 Read the complete saved snapshot with `GET /workflows/{id}`;
 inspect immutable history with `GET /workflows/{id}/versions`.
 Collections use `page` and `page_size`. To save another version, submit the full
