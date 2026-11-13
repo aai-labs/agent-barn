@@ -11,7 +11,6 @@ def draft(name: str = "Weekly report") -> dict:
                 "name": "Prepare report",
                 "goal": "Summarize the pipeline",
                 "completion_criteria": "A summary covers changes and risks",
-                "artifact_description": "A readable Markdown report",
             }
         ],
         "inputs": [
@@ -59,3 +58,27 @@ def authoring_is_enabled(context) -> None:
     with Session(context.postgres_delegate.engine) as session:
         session.add(PlatformWorkflowSettings(authoring_enabled=True, updated_at=datetime.now(UTC)))
         session.commit()
+
+
+def legacy_version(context, workflow_id, body: dict):
+    """Store a version as it was saved before a step's output became part of its goal."""
+    import json
+
+    from sqlalchemy import text
+
+    version_id = uuid4()
+    with context.postgres_delegate.engine.begin() as connection:
+        number = connection.execute(
+            text("SELECT max(number) + 1 FROM workflow_version WHERE workflow_id = :id"), {"id": workflow_id}
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO workflow_version (id, created_at, updated_at, workflow_id, number, snapshot) "
+                "VALUES (:id, now(), now(), :workflow_id, :number, CAST(:snapshot AS jsonb))"
+            ),
+            {"id": version_id, "workflow_id": workflow_id, "number": number, "snapshot": json.dumps(body)},
+        )
+        connection.execute(
+            text("UPDATE workflow SET revision = :number WHERE id = :id"), {"number": number, "id": workflow_id}
+        )
+    return version_id

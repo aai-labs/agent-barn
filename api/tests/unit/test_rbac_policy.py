@@ -72,6 +72,8 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.AGENT_SIZE_MANAGE,
         # Buying credit spends the Owner's money.
         PermissionKey.BILLING_MANAGE,
+        # Changing or archiving any workflow of the Organization.
+        PermissionKey.WORKFLOW_MANAGE,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

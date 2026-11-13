@@ -883,7 +883,7 @@ journal to preserve dispatch deduplication across restarts. Failed/expired attem
 block for inspection rather than replaying possible external effects. Parked runs
 keep file pins until cancellation; see the [file workflow contract](../features/agent-workflows.md#file-workflow-inputs-and-results).
 The Platform Admin authoring setting controls definition changes only. Before
-running saved workflows, apply the migration. The owning Agent must be running,
+running saved workflows, apply the migration. The Agent chosen for a run must be running,
 and Agents started before this release must be restarted once so their trigger
 server can accept workflow steps. Each step runs as a session in that Agent, under
 its tools, Integrations, approval mode and spend limits. No runtime image pinning,
@@ -904,7 +904,7 @@ value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
 Workflow limits and text retention are hard coded in
 `api/domains/workflows/config.py`; they are not environment or Helm options.
 Workflow admission has no active-run concurrency cap. Runs execute as sessions
-in the owning Agent and share its resources. Waiting for an unreachable Agent consumes
+in the Agent chosen for each run and share its resources. Waiting for an unreachable Agent consumes
 the attempt deadline. Non-successful Agent dispatch responses are logged with
 the run identity and HTTP status. A 404 on the workflow step route indicates an
 older trigger server; pause and start that Agent to load the current configuration.
@@ -929,12 +929,19 @@ attachments to this execution model. The [artifact contract](../features/agent-a
 and [Garage operations guide](garage.md) own storage configuration, migrations
 and rollback.
 
+Migration `e4b439a1c7d2` follows `d1a390e7b2c4` and moves workflows from their
+Agent to the Organization, recording the Agent on each run instead. It needs no
+Agent update or restart. Its downgrade is lossy and deletes workflows and runs
+that the earlier one-Agent model cannot hold; take a backup first. The
+[feature specification](../features/agent-workflows.md#organization-ownership-migration-af-439)
+owns the column changes and the exact downgrade behavior.
+
 ## Workflow authoring (WF01)
 
 After migrating and verifying WF01, Platform Administrators can enable authoring
 at **Platform Settings → Workflows** and save the choice. It takes effect on
 subsequent API requests without a redeploy and allows manual definition creation,
-version saving and archive across all Organizations. Definition/version reads
+version saving, default-Agent changes and archive across all Organizations. Definition/version reads
 remain available when disabled. Authoring defaults to `false` until a Platform
 Admin saves a choice. The persisted choice survives restarts, with no environment
 or Helm override. Disable authoring through Platform Settings to stop new

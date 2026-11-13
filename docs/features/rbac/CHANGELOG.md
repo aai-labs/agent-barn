@@ -13,6 +13,12 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Changes
 
+### 2026-11-12 — [AF-439](https://aai-labs.atlassian.net/browse/AF-439) — PR pending — Organization-owned workflows
+
+- Delivered: workflow definitions are Organization resources read and created by any accepted Member (`organization.read`); saving a version, changing the default Agent and archiving are limited to the creating Membership and holders of the new Organization Permission `workflow.manage` (Owners and Admins). Workflow runs are subordinate resources of the Agent that runs them (`agent.read` to see, `agent.update` to start, cancel, decide and re-run), with the Agent named in the request body rather than the route.
+- Added: the Organization Permission `workflow.manage`, granted to Owners and Admins, by migration `e4b439a1c7d2`. No role is added. The creator rule is a Membership comparison in `WorkflowService`, not a catalogue Permission. The [implementation brief](IMPLEMENTATION-BRIEF.md#data-access-enforcement) records the enforcement; the [workflow specification](../agent-workflows.md#ownership-and-authority) owns the contract.
+- Follow-up: none.
+
 ### 2026-09-23 — [AF-337](https://aai-labs.atlassian.net/browse/AF-337) — PR pending — spend limit management Permission
 
 - Delivered: `llm_budget.manage`, an Organization-scoped Permission granted to Owners and Admins, gating the Organization's own spend limit, its default Agent spend limit and each Agent's own limit. Reading an Agent's limit uses the Agent's `cost.read`.

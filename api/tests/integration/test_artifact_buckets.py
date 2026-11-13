@@ -220,11 +220,11 @@ def test_uncertain_key_deletion_retains_journal_then_finishes_idempotently(stora
 
 def test_initializing_bucket_is_retryable_without_creating_file_metadata(storage):  # noqa: F811
     from api.tests.integration.test_artifacts import metadata
-    from api.tests.integration.test_workflows import auth, base
+    from api.tests.integration.test_workflows import agent_base, auth
 
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
-        response = context.client.post(base(context) + "/artifacts", headers=auth(context), json=metadata())
+        response = context.client.post(agent_base(context) + "/artifacts", headers=auth(context), json=metadata())
         assert_that(response.status_code, equal_to(503))
         assert_that("initializing" in response.text, is_(True))
         with Session(context.postgres_delegate.engine) as session:

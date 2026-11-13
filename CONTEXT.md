@@ -496,10 +496,21 @@ _Avoid_: webhook
 - “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.
 
 **Workflow**:
-An Agent-owned repeatable plan, explicitly saved before execution. Its ordered
-steps describe goals, required inputs and preserved outputs.
+An Organization-owned repeatable plan, explicitly saved before execution. Its
+ordered steps describe goals and required inputs. A Workflow is not tied to an
+Agent; Agents run it.
 See [Agent workflows](docs/features/agent-workflows.md).
-_Avoid_: Agent Skill, native scheduled job
+_Avoid_: Agent Skill, native scheduled job, Playbook, Agent-owned workflow
+
+**Workflow Run**:
+One Workflow Version executed by one Agent, chosen when the run starts. The Agent
+runs every step of that run and governs who may see and act on it.
+_Avoid_: owning Agent, workflow instance
+
+**Default Agent**:
+The Agent a Workflow preselects when a run is started. It grants no access and
+the person starting the run may choose another.
+_Avoid_: owner, assigned Agent
 
 **Workflow Version**:
 An immutable saved snapshot of a Workflow. Editing and saving appends a new

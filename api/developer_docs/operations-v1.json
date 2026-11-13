@@ -551,41 +551,6 @@
   ],
   [
     "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-capabilities",
-    "get_workflow_capabilities_organizations__organization_id__agents__agent_id__workflow_capabilities_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
-    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
-    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
-    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows",
-    "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}",
-    "get_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
-    "list_workflow_versions_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_get"
-  ],
-  [
-    "GET",
     "/organizations/{organization_id}/billing",
     "read_billing_organizations__organization_id__billing_get"
   ],
@@ -773,6 +738,41 @@
     "GET",
     "/organizations/{organization_id}/value/activity",
     "get_organization_activity_organizations__organization_id__value_activity_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-capabilities",
+    "get_workflow_capabilities_organizations__organization_id__workflow_capabilities_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs",
+    "list_runs_organizations__organization_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows",
+    "list_workflows_organizations__organization_id__workflows_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows/{workflow_id}",
+    "get_workflow_organizations__organization_id__workflows__workflow_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows/{workflow_id}/versions",
+    "list_workflow_versions_organizations__organization_id__workflows__workflow_id__versions_get"
   ],
   [
     "GET",
@@ -1043,6 +1043,11 @@
     "PATCH",
     "/organizations/{organization_id}/templates/{template_key}/draft",
     "update_org_draft_organizations__organization_id__templates__template_key__draft_patch"
+  ],
+  [
+    "PATCH",
+    "/organizations/{organization_id}/workflows/{workflow_id}",
+    "update_workflow_organizations__organization_id__workflows__workflow_id__patch"
   ],
   [
     "PATCH",
@@ -1321,41 +1326,6 @@
   ],
   [
     "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
-    "decide_approval_organizations__organization_id__agents__agent_id__workflow_runs__run_id__approvals__request_id__decision_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
-    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/re-run",
-    "rerun_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__re_run_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows",
-    "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
-    "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
-    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
-    "save_workflow_version_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_post"
-  ],
-  [
-    "POST",
     "/organizations/{organization_id}/billing/checkout",
     "create_checkout_organizations__organization_id__billing_checkout_post"
   ],
@@ -1453,6 +1423,41 @@
     "POST",
     "/organizations/{organization_id}/transfer-ownership",
     "transfer_ownership_organizations__organization_id__transfer_ownership_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs",
+    "start_run_organizations__organization_id__workflow_runs_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
+    "decide_approval_organizations__organization_id__workflow_runs__run_id__approvals__request_id__decision_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/re-run",
+    "rerun_run_organizations__organization_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows",
+    "create_workflow_organizations__organization_id__workflows_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows/{workflow_id}/archive",
+    "archive_workflow_organizations__organization_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows/{workflow_id}/versions",
+    "save_workflow_version_organizations__organization_id__workflows__workflow_id__versions_post"
   ],
   [
     "POST",

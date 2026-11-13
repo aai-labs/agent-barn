@@ -106,16 +106,22 @@ Agent file sync traffic from the pod has no user Membership either.
 - **Reading an Agent's File Sync status and history** (`GET …/agents/{agent_id}/file-sync` and `…/file-sync/activity`) requires `activity.read`. `AgentFileSyncRepository.status_inputs` reads the Agent through `agent_scope_predicates` and then only that Agent's Organization's active connection and that Agent's own folder ([Sync providers](../sync-provider/README.md#status)). `activity_page` joins `sync_activity` to the Agent under the same predicates before counting, ordering and paging.
 - **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
 
+Workflows split across both authority families ([Agent workflows](../agent-workflows.md#ownership-and-authority)).
+- **Definitions are Organization resources, not Agent-subordinate ones.** Reading them, their versions and the capabilities, and creating one, requires only an accepted Membership (`organization.read` through `PermissionPolicy.require_organization`). Saving a version, changing the default Agent and archiving are limited to the Membership that created the workflow and to Members holding the Organization Permission `workflow.manage`, which Owners and Admins hold; other Members receive 403. `WorkflowRepository` scopes every query by `workflow.organization_id`, so another Organization's workflow is a 404. Definition reads return the creator's name and User and Membership identifiers to every Member, including Members without `membership.read`.
+- **A default Agent grants nothing.** Setting one requires the author to read that Agent, and reads return it only to callers who can read it.
+- **Runs are subordinate resources of the Agent that runs them.** The Agent is named in the start request body and stored on the run; no workflow route carries an Agent in its path. Starting requires `agent.update` on that Agent through `AgentAuthorization.require_action`. Reads join the run to its Agent under `agent_scope_predicates` with `agent.read` before counting and paging; cancel, decide and re-run repeat the query under `agent.update`. An unreadable run is a 404.
+- **Runs of a deleted Agent** stay readable under the same `agent.read` predicates with the deleted Agent included, and accept no mutation.
+
 Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
 A purpose-separated credential derived from the per-start Agent secret resolves one
 undeleted, running Agent and its Organization. Runtime callers cannot choose another
 owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
-against that owning Agent, current generation/state/deadline and initiating Membership
+against the Agent running that run, current generation/state/deadline and initiating Membership
 authority. Workflow retrieval with an attempt ID uses those same fences and
 requires an active reference owned by that run. Human run start resolves and pins
 only READY files of the authorized Agent and Organization under `agent.update`.
 Completion credentials never enter model prompts or file-tool arguments.
-The entire owning Agent is the runtime trust boundary: all of its sessions share
+The entire Agent is the runtime trust boundary: all of its sessions share
 that identity and may publish into its current workflow attempts. Attempt IDs are
 non-secret provenance, not per-session capabilities; this is not session isolation.
 Human artifact reads require current `agent.read` and scoped visibility; publication
