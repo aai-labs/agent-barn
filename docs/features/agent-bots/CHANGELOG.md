@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the full end-to-end run in local k3d on a fresh API image.
+- Next: after the 2026-11-13 staging merge, make staging's in-pod pieces work per Bot: the observer's message recording, Task tracking, listen-in, and Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,18 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-13 — AF-425 — Staging merge (Agent Tasks, listen-in)
+
+- Merged: `origin/staging` through #347, bringing Agent Tasks (AF-411/412/413), Hermes listen-in, the observer's arrival and first-response recording, and the GitLab integration.
+- Changed: the two test files that conflicted keep both sides. Migration `3faf5ff99e14` joins staging's head `a9d2e7c4b1f8` with this branch's `d79ce00137d2`. `hermes-base/VERSION` goes to `0.2.12`, because both sides had moved it to `0.2.11`.
+- Known gaps, from staging's code assuming one Agent per Hermes process:
+  - the observer's new arrival and first-response wrappers patch process-wide classes, so every profile records every profile's messages;
+  - the `agentbarn-tasks` plugin isn't installed in Bot profiles, and would act as the Parent Agent if it were;
+  - a Bot's terminal runs `agentbarn-task` with the Parent Agent's ingest identity;
+  - the listen-in plugin and its startup check never reach a Bot's profile, though a Bot's config enables its rooms;
+  - the organization Tasks page shows Bot Tasks without a name or a filter entry.
+- Follow-up: fix those four areas, in that order, before the end-to-end run.
 
 ### 2026-11-09 — AF-425 — Staging merge
 
