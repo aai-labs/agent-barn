@@ -937,7 +937,7 @@ def test_a_bots_discord_connection_reaches_its_secret_and_config():
         config = yaml.safe_load(data["hermes-config.yaml"])
         assert_that(
             config["platforms"]["discord"]["extra"],
-            equal_to({"require_mention": False, "thread_require_mention": False}),
+            equal_to({"require_mention": False, "thread_require_mention": False, "free_response_channels": []}),
         )
 
 
