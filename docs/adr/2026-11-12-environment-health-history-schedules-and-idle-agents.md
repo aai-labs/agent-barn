@@ -21,7 +21,7 @@ On staging (AF-436) the volume-claim quota sat at 60 of 60 and scheduled backups
   - for each platform Deployment, its `build-sha` annotation (kept only as 7–40 hex characters), its rollout state from the `Progressing` condition's reason, and when its last rollout finished;
   - the newest build and the services on another one;
   - for each platform CronJob, its name, a schedule kept only when it matches the cron grammar, whether it is suspended or running, and the times of its last schedule, last success and last failure;
-  - for scheduled backups, the interval, and per Agent the count and time of failures in 24 hours and the time of its last successful one;
+  - for scheduled backups, the interval, how many running Agents there are and how many fail or are overdue, and for the worst five of each the count and time of failures in 24 hours or the time of the last successful one;
   - for idle Agents, the time of the last message a person sent and of the last model call, and counts and sizes of what each one holds.
 - It carries no Job or condition messages, no CronJob command or arguments, no `failure_reason` of a restore point, no message content, and no annotation other than `build-sha`.
 - The new cluster reads (Services, CronJobs, Jobs) are optional sources like the rest. A refusal shows as "not permitted" and the rest of the page renders. The backups and idle-Agent parts read only the database, so they work with no cluster at all.

@@ -187,7 +187,7 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(healthPage.cronJob("agentbarn-event-reconciler")).toContainText("Running now");
   });
 
-  test("names the agents whose scheduled backups fail or are overdue", async () => {
+  test("counts the agents whose scheduled backups fail or are overdue and names the worst", async () => {
     const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
     const ada = {
       agent_id: ENV_ADA_ID,
@@ -202,10 +202,13 @@ test.describe("Platform environment health (platform_admin)", () => {
           enabled: true,
           interval_minutes: 360,
           failure_window_hours: 24,
+          running_agents: 58,
+          failed_total: 41,
+          overdue_total: 12,
           failed: [{ agent: ada, failures: 2, last_failed_at: hoursAgo(1) }],
           overdue: [
-            { agent: ada, last_backup_at: hoursAgo(50) },
-            { agent: { ...ada, agent_id: ENV_ORPHAN_ID, agent_name: "Bo" }, last_backup_at: null },
+            { agent: { ...ada, agent_id: ENV_ORPHAN_ID, agent_name: "Bo" }, last_backup_at: hoursAgo(50) },
+            { agent: { ...ada, agent_id: "019f0000-0000-7000-8000-0000000000c1", agent_name: "Cy" }, last_backup_at: null },
           ],
         },
       }),
@@ -215,6 +218,10 @@ test.describe("Platform environment health (platform_admin)", () => {
 
     const backups = healthPage.backups();
     await expect(backups).toContainText("Every 6 hours");
+    await expect(backups.getByTestId("backups-summary")).toHaveText(
+      "41 of 58 running agents failed a backup in the last 24 hours · 12 more are overdue"
+    );
+    await expect(backups.getByTestId("backups-more")).toHaveText("and 50 more agents");
     await expect(backups.getByTestId("backup-failed").first()).toContainText("Ada");
     await expect(backups.getByTestId("backup-failed").first()).toContainText("2 failed in the last 24 hours");
     await expect(backups.getByTestId("backup-overdue").first()).toContainText("last backed up 2 days ago");

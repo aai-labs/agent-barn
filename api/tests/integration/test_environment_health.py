@@ -646,7 +646,7 @@ def _scheduled(context, agent, status: RestorePointStatus, age: timedelta, origi
     )
 
 
-def test_failing_and_overdue_scheduled_backups_are_named_by_agent():
+def test_failing_and_overdue_scheduled_backups_are_counted_and_named_by_agent():
     with given(
         [
             *_BASE_GIVEN,
@@ -659,7 +659,9 @@ def test_failing_and_overdue_scheduled_backups_are_named_by_agent():
         there_is_an_agent(name="Bo", status=AgentStatus.RUNNING)(context)
         bo = context.agent
         there_is_an_agent(name="Dee", status=AgentStatus.RUNNING)(context)
-        for agent in (ada, bo, cy):
+        there_is_an_agent(name="Eve", status=AgentStatus.RUNNING)(context)
+        eve = context.agent
+        for agent in (ada, bo, cy, eve):
             _backdate(context, agent, timedelta(days=3))
         # Ada's last good backup is two days old and the two tries since failed.
         _scheduled(context, ada, RestorePointStatus.READY, timedelta(days=2))
@@ -669,12 +671,15 @@ def test_failing_and_overdue_scheduled_backups_are_named_by_agent():
         _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(days=6))
         _scheduled(context, bo, RestorePointStatus.FAILED, timedelta(hours=2), origin=RestorePointOrigin.MANUAL)
         _scheduled(context, bo, RestorePointStatus.READY, timedelta(hours=1))
+        # Eve's last good backup is two days old and nothing has been tried since.
+        _scheduled(context, eve, RestorePointStatus.READY, timedelta(days=2))
         # Cy is stopped, so it is not backed up on a schedule; Dee is new and has not had its turn.
 
         body = _get(context).json()
 
         backups = body["backups"]
-        assert_that(backups, has_entries(enabled=True, interval_minutes=360))
+        # Ada is overdue too, but is counted and named once, as failing.
+        assert_that(backups, has_entries(enabled=True, interval_minutes=360, failed_total=1, overdue_total=1))
         assert_that(
             backups["failed"],
             contains_exactly(
@@ -683,7 +688,7 @@ def test_failing_and_overdue_scheduled_backups_are_named_by_agent():
         )
         assert_that(
             backups["overdue"],
-            contains_exactly(has_entries(agent=has_entries(agent_name="Ada"), last_backup_at=not_none())),
+            contains_exactly(has_entries(agent=has_entries(agent_name="Eve"), last_backup_at=not_none())),
         )
         assert_that("token=abc" not in response_text(body), equal_to(True))
         assert_that(body["level"], equal_to("warning"))

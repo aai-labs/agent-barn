@@ -64,6 +64,11 @@ from api.domains.environment_health.models import (
 )
 from api.domains.environment_health.service import overall_level
 from api.domains.resource_usage.models import PlatformCapacityRead
+from api.domains.restore_points.models import (
+    OverdueScheduledBackup,
+    ScheduledBackupFailures,
+    ScheduledBackupHealth,
+)
 from api.infrastructure.prometheus.client import PrometheusSample
 
 _NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
@@ -1100,3 +1105,53 @@ def test_only_finished_runs_of_platform_cron_jobs_are_judged():
     # A run still going, or a Job no CronJob owns, says nothing about the CronJob; an Agent's
     # CronJob is not the platform's, and a name outside the object grammar is not carried.
     assert [(row.name, row.state) for row in rows] == [("agentbarn-cost-sync", cluster.CronJobState.OK)]
+
+
+def test_a_backup_failure_across_the_platform_is_counted_and_only_the_worst_agents_are_named():
+    agents = [_agent(f"Agent {n}") for n in range(8)]
+    stopped = _agent("Stopped", AgentStatus.STOPPED)
+    failures = [
+        ScheduledBackupFailures(agent.id, failures=1 + n % 3, last_failed_at=_NOW - timedelta(minutes=n))
+        for n, agent in enumerate(agents)
+    ]
+
+    backups = cluster.scheduled_backups(
+        ScheduledBackupHealth(interval_minutes=360, failures=failures, overdue=[]),
+        _identities(*agents, stopped),
+        failure_window_hours=24,
+    )
+
+    # Every running Agent is under the schedule; the stopped one is not.
+    assert (backups.running_agents, backups.failed_total) == (8, 8)
+    # Most failures first, then the latest; the rest are only counted.
+    assert [(row.agent.agent_name, row.failures) for row in backups.failed] == [
+        ("Agent 2", 3),
+        ("Agent 5", 3),
+        ("Agent 1", 2),
+        ("Agent 4", 2),
+        ("Agent 7", 2),
+    ]
+    assert len(backups.failed) == cluster.BACKUP_LIST_LIMIT
+
+
+def test_an_agent_whose_backups_fail_is_not_named_again_as_overdue():
+    failing, never, stale, older = _agent("Failing"), _agent("Never"), _agent("Stale"), _agent("Older")
+
+    backups = cluster.scheduled_backups(
+        ScheduledBackupHealth(
+            interval_minutes=360,
+            failures=[ScheduledBackupFailures(failing.id, failures=4, last_failed_at=_NOW)],
+            overdue=[
+                OverdueScheduledBackup(failing.id, last_backup_at=_NOW - timedelta(days=2)),
+                OverdueScheduledBackup(stale.id, last_backup_at=_NOW - timedelta(days=1)),
+                OverdueScheduledBackup(never.id, last_backup_at=None),
+                OverdueScheduledBackup(older.id, last_backup_at=_NOW - timedelta(days=3)),
+            ],
+        ),
+        _identities(failing, never, stale, older),
+        failure_window_hours=24,
+    )
+
+    # Never backed up first, then the longest without one.
+    assert [row.agent.agent_name for row in backups.overdue] == ["Never", "Older", "Stale"]
+    assert (backups.failed_total, backups.overdue_total) == (1, 3)
