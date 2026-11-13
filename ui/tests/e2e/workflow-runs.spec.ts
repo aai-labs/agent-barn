@@ -887,6 +887,36 @@ test.describe("WF02 run progress and text results", () => {
     await expect(page.getByRole("heading", { name: "Week 42 report" })).toBeVisible();
   });
 
+  test("Run as shows four Agents and the default, with the rest behind a search", async ({
+    page,
+  }) => {
+    const team = Array.from({ length: 8 }, (_, i) => ({
+      ...mockAgent,
+      id: i === 0 ? MOCK_AGENT_ID : `00000000-0000-4000-8000-0000000001${String(i + 10)}`,
+      name: i === 0 ? "Maya" : `Agent ${String.fromCharCode(65 + i)}`,
+    }));
+    await new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: team.length, items: team },
+    });
+    // The default is past the first four, so it gets a pill of its own.
+    support.defaultAgentId = team[5].id;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.runAs(team[5].name)).toBeChecked();
+    await expect(runs.dialog().getByRole("radio")).toHaveCount(5);
+    await expect(runs.runAs(team[6].name)).toHaveCount(0);
+    await runs.dialog().getByRole("button", { name: "Choose from all 8 agents" }).click();
+    await page.getByPlaceholder("Search agents…").fill(team[6].name);
+    await page.getByRole("option", { name: team[6].name }).click();
+    await expect(runs.runAs(team[6].name)).toBeChecked();
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({ agent_id: team[6].id });
+  });
+
   test("a link from an Agent's page preselects that Agent over the default", async ({ page }) => {
     await twoAgents(page);
     support.defaultAgentId = OTHER_AGENT_ID;

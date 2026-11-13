@@ -251,7 +251,9 @@ The editor is a dialog over the page. It holds the name, a description, the
 default Agent (any Agent the author can see, or none), the steps and the inputs.
 Default Agent choices are pills: No default, the first four Agents and the current
 default when it is past them. The rest sit behind a "+N more" pill that opens a
-searchable list. The list covers the first 50 Agents the editor loads.
+searchable list. The Run dialog's "Run as" uses the same picker over the running
+Agents the viewer can update, without a No default pill. Both cover the first 50
+Agents the page loads.
 Each step is a card with its number, move up/down controls, a remove control and
 one text box, its prompt: what the Agent should do and produce. Every step is
 open at once. A step has no name field; editing the prompt sets the stored step

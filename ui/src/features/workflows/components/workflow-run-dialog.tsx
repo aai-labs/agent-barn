@@ -15,7 +15,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { canAgent } from "@/features/agents/utils";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
@@ -25,6 +24,7 @@ import { useWorkflow } from "../hooks/use-workflows";
 import type { WorkflowInputValue, WorkflowRun } from "../run-schemas";
 import type { Workflow, WorkflowVersion } from "../schemas";
 import { inputHelp } from "../utils";
+import { AgentPillPicker } from "./agent-pill-picker";
 import { WorkflowFileInput } from "./workflow-file-input";
 
 function RunForm({
@@ -167,35 +167,13 @@ function RunForm({
               No running agent you can update. Start an agent, then run this workflow.
             </p>
           ) : (
-            <div
-              role="radiogroup"
-              aria-labelledby="workflow-run-as"
-              className="flex flex-wrap gap-2"
-            >
-              {runnable.map((agent) => {
-                const selected = agent.id === agentId;
-                return (
-                  <button
-                    key={agent.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={pending}
-                    className={`inline-flex items-center gap-2 rounded-full border py-1.5 pr-3 pl-1.5 text-sm transition-colors ${
-                      selected
-                        ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)]"
-                        : "border-[var(--line-strong)] bg-[var(--bg-elev)] hover:bg-[var(--bg-soft)]"
-                    }`}
-                    onClick={() => chooseAgent(agent.id)}
-                  >
-                    <span aria-hidden="true">
-                      <AgentAvatar agent={agent} size="xs" />
-                    </span>
-                    {agent.name}
-                  </button>
-                );
-              })}
-            </div>
+            <AgentPillPicker
+              labelledBy="workflow-run-as"
+              agents={runnable}
+              value={agentId}
+              onChange={(id) => id && chooseAgent(id)}
+              disabled={pending}
+            />
           )}
         </div>
 
