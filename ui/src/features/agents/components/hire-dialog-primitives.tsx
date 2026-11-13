@@ -5,6 +5,7 @@ import { EyeIcon, EyeOffIcon, PlusIcon, XIcon } from "@/components/icons";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
+import { OAuthPopupCancelledError } from "../hooks/use-oauth-popup";
 
 export function DialogShell({
   children,
@@ -184,7 +185,7 @@ export function GoogleAuthButton({
   // cannot accept a connection that didn't report one.
   requireEmail?: boolean;
 }) {
-  const { connectGoogle, isConnecting } = useGoogleOAuth();
+  const { connectGoogle, cancelGoogle, isConnecting, isPopupUnreachable } = useGoogleOAuth();
   // google_workspace expects the user's own OAuth client, so its help text is the full
   // setup walkthrough rather than a short "optional" aside. It is rendered inline and
   // above the connect button — never behind a disclosure — because the client id/secret
@@ -260,6 +261,7 @@ export function GoogleAuthButton({
       }
       onConnected(result);
     } catch (err) {
+      if (err instanceof OAuthPopupCancelledError) return;
       setError(err instanceof Error ? err.message : "Authentication failed.");
     }
   }
@@ -386,6 +388,14 @@ export function GoogleAuthButton({
             ? "Reconnect Google account"
             : "Authenticate with Google"}
       </button>
+      {isPopupUnreachable && (
+        <div className="flex flex-wrap items-center gap-2 text-[0.75rem]" style={{ color: "var(--ink-3)" }}>
+          <span>Finish signing in in the Google window. If you closed it, cancel and try again.</span>
+          <button type="button" className="af-btn af-btn-sm" onClick={cancelGoogle}>
+            Cancel sign-in
+          </button>
+        </div>
+      )}
       {connected && !isConnecting && (
         <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
           {connectedEmail ? `✓ Connected as ${connectedEmail}` : `✓ Connected — ${connectedNote}`}

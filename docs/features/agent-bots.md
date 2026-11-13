@@ -11,7 +11,7 @@ A **Bot** is a full Agent created from its **Parent Agent**'s page. It has its o
 - A Bot belongs to its Parent Agent's Organization, and its parent link never changes.
 - At most 5 Bots per Parent Agent. Each Bot counts toward the Organization's Agent limit, so an Organization limited to one Agent cannot add Bots.
 - The Parent Agent is the first bot: it keeps its own profile or agent, Template and Connections.
-- Bots appear only inside their Parent Agent. Home and Agent lists show Parent Agents; a Bot keeps its own Agent id and URL.
+- Bots appear only inside their Parent Agent. Home and Agent lists show Parent Agents; a Bot keeps its own Agent id and URL. `GET /organizations/{organization_id}/agents?include_bots=true` also returns the Bots the caller can read, each with its `parent_agent_id`; the Organization Tasks page uses it to name and filter by Bots.
 
 ## Lifecycle
 
@@ -45,7 +45,7 @@ On OpenClaw, Bots also share:
 - Automatic memory. Hindsight recall and retain run for the Parent Agent only, and Bot conversations are kept out of the Parent Agent's memory bank.
 - The pod's memory limit, which is the Parent Agent's Agent Size and does not grow with Bots. A Parent Agent with two Bots used 890 MiB idle in local testing against the default 1 GiB limit, so a Parent Agent with several Bots may need a larger Agent Size.
 
-Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, scheduled jobs, plugin identity, and Agent Barn keys, and its terminal sees its own integration credentials. On Hermes it keeps its own built-in memory. On OpenClaw it keeps its own workspace, and it saves and recalls Agent Memory through the memory tool under its own key.
+Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, scheduled jobs, Tasks, plugin identity, and Agent Barn keys, and its terminal sees its own integration credentials and Agent Barn identity. On Hermes it keeps its own built-in memory. On OpenClaw it keeps its own workspace, and it saves and recalls Agent Memory through the memory tool under its own key.
 
 ## Messaging
 
@@ -54,6 +54,7 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 - Bots support Slack, Telegram, Discord and Web Chat. Microsoft Teams and Agent Barn Telegram are refused on Bots.
 - A Bot's scheduled jobs and webhook results are delivered from the Bot's own account on its own platform. On OpenClaw, the trigger server creates each job owned by its agent and pinned to that agent's account, `default` for the Parent Agent.
 - On OpenClaw, when an agent's message or scheduled job names a platform, it is sent from that agent's own account there. It is refused when the agent has no account of its own on that platform or names another agent's account, so no agent posts through another's app or bot. A reply to the current conversation needs no platform and is left as it is.
+- On Hermes, a Bot can listen in its own rooms. Its profile gets its own copy of the listen-in guard and its own startup check, the guard reads only the Bot's rooms, classifies only messages on the Bot's own apps and posts through them, and each Bot always carries its own room list in its platform settings, empty when it has none, so it never falls back to the Parent Agent's process-wide rooms.
 
 ## How a pod serves Bots
 
@@ -86,7 +87,7 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 ## UI
 
 - Opening an Agent shows the Parent Agent. A switcher in the path bar (`Organization / Parent Agent / Bot`) lists the Parent Agent, its Bots with their status, and New bot. Switching keeps the current tab.
-- Bot pages show the Bot's own Overview, Chat, Conversations, Memory, Tool calls, Artifacts, Playbooks, Activity, Costs and settings.
+- Bot pages show the Bot's own Overview, Chat, Conversations, Tasks, Memory, Tool calls, Artifacts, Playbooks, Activity, Costs and settings.
 - An "Agent" menu group holds Logs, Resource usage, File sync, Restore points and Size, and always acts on the Parent Agent. Every Agent on either runtime shows it, with or without Bots.
 - Home shows the Parent Agent with its Bot count.
 - The UI states that Bots share one trust boundary wherever Bots are created or shared.

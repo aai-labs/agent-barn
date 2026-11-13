@@ -42,6 +42,16 @@ docker run --rm --network none \
     "$image" \
     /driver.py
 
+# The listen-in guard relies on private Hermes code. Without it a free-response room
+# answers every message, so an upgrade that changes any of it must fail here.
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-listen-in:/plugin:ro" \
+    -v "$repo_root/api/domains/agents/scripts/hermes/listen-in-check.py:/listen-in-check.py:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_listen_in_driver.py:/driver.py:ro" \
+    --entrypoint python3 \
+    "$image" \
+    /driver.py
+
 # Native scheduler delivery remains active without the retired completion capture patch.
 docker run --rm --network none \
     -v "$repo_root/api/tests/fixtures/hermes_native_delivery_driver.py:/native-driver.py:ro" \

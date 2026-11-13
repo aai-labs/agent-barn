@@ -19,6 +19,21 @@ type RawOAuthMessage = {
   adminConsent?: boolean;
 };
 
+export class OAuthPopupCancelledError extends Error {}
+
+/**
+ * For providers whose pages can sever the popup link. The result then arrives over a
+ * same-origin BroadcastChannel, and a popup that reads as closed may still be open.
+ */
+export type OAuthPopupRelay = {
+  channelName: string;
+  state: string;
+  timeoutMs: number;
+  timeoutMessage: string;
+  signal: AbortSignal;
+  onPopupUnreachable: () => void;
+};
+
 /**
  * Opens the sign-in popup. Must be called synchronously from the click handler, before
  * any await, or browsers block it.
@@ -45,13 +60,19 @@ export function waitForOAuthPopupMessage(
   // Shown when the popup is closed without a result. Some providers stop on their own
   // pages (e.g. an approval prompt), so this is the only place to explain what to do next.
   closedMessage = "Authentication was cancelled.",
+  relay?: OAuthPopupRelay,
 ): Promise<OAuthPopupMessage> {
   return new Promise<OAuthPopupMessage>((resolve, reject) => {
     let settled = false;
+    const activeRelay = typeof BroadcastChannel === "undefined" ? undefined : relay;
+    const channel = activeRelay ? new BroadcastChannel(activeRelay.channelName) : null;
 
     const cleanup = () => {
       window.removeEventListener("message", onMessage);
       window.clearInterval(poll);
+      window.clearTimeout(timeout);
+      channel?.close();
+      activeRelay?.signal.removeEventListener("abort", onAbort);
     };
     const finish = (fn: () => void) => {
       if (settled) return;
@@ -68,6 +89,25 @@ export function waitForOAuthPopupMessage(
       if (event.source !== popup) return;
       const data = event.data as RawOAuthMessage;
       if (!data || data.type !== messageType) return;
+      settle(data);
+    }
+
+    function onChannelMessage(event: MessageEvent) {
+      const data = event.data as RawOAuthMessage;
+      if (!data || data.type !== messageType || data.state !== activeRelay?.state) return;
+      settle(data);
+    }
+
+    function onAbort() {
+      try {
+        popup.close();
+      } catch {
+        /* ignore */
+      }
+      finish(() => reject(new OAuthPopupCancelledError(closedMessage)));
+    }
+
+    function settle(data: RawOAuthMessage) {
       try {
         popup.close();
       } catch {
@@ -87,9 +127,18 @@ export function waitForOAuthPopupMessage(
     }
 
     window.addEventListener("message", onMessage);
+    if (channel) channel.onmessage = onChannelMessage;
+    activeRelay?.signal.addEventListener("abort", onAbort);
+    const timeout = activeRelay
+      ? window.setTimeout(() => finish(() => reject(new Error(activeRelay.timeoutMessage))), activeRelay.timeoutMs)
+      : undefined;
     // If the user closes the popup without finishing, stop waiting.
     const poll = window.setInterval(() => {
-      if (popup.closed) {
+      if (!popup.closed) return;
+      if (activeRelay) {
+        window.clearInterval(poll);
+        activeRelay.onPopupUnreachable();
+      } else {
         finish(() => reject(new Error(closedMessage)));
       }
     }, 500);

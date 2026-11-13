@@ -217,12 +217,13 @@ move DTO validation, migration where needed, UI Zod schemas, tests and this
 specification together. Execution pins an immutable saved version and validates
 actual run inputs; what a step may do is governed by the owning Agent's configuration.
 
-Workflow-specific approval UI, notifications, provider adapters and fanout belong
-to later AF-387 slices. No release version bump accompanies WF02.
+Command approvals are delivered by [Workflow approvals](#workflow-approvals-af-390);
+notifications, provider adapters and fanout belong to later AF-387 slices. No release version bump accompanies WF02.
 
 ## WF02 execution and outputs
 
-WF02 runs each step as a new session in the owning Agent and persists text results
+WF02 runs each step as a new session in the owning Agent (a step continued after a
+late [approval decision](#workflow-approvals-af-390) resumes its own session) and persists text results
 in PostgreSQL. A step is governed by whatever is configured on the Agent: its
 tools, connected Integrations, approval mode and spend limits. A step can do
 exactly what the Agent can do in chat, under the same rules, including acting
@@ -313,7 +314,7 @@ across retries from that run page, then opens the new run. A re-run shows "Re-ru
 run …" linking to the original, and the Runs list marks it "Re-run".
 
 The PostgreSQL ledger comprises `workflow_run`, `workflow_attempt`,
-`workflow_checkpoint` and `workflow_history`. Each transition stages a safe
+`workflow_checkpoint`, `workflow_history` and `workflow_approval_request`. Each transition stages a safe
 `workflow.run.changed` Domain Event in the same transaction. After commit, the
 service or controller immediately enqueues the staged delivery IDs; a broker
 outage leaves durable pending deliveries for recovery. Its handler advances
@@ -338,15 +339,13 @@ accepted as the summary. Malformed result envelopes receive one correction turn 
 (`handoff`, `result`, `failure`) are outside the product API and public discovery.
 A derived capability binds one attempt/generation. Handoff and outcome admission
 check current initiator authority, Agent lifecycle, generation, attempt state and
-deadline under the run lock. An explicit non-retryable failure fails and settles the run; an approval request or retryable failure blocks it for inspection.
+deadline under the run lock. An explicit non-retryable failure fails and settles the run; a retryable failure blocks it for inspection.
 An attempt exceeding its 15-minute deadline is fenced, a stop is requested and
 the run blocks with an uncertain-outcome reason. No unfinished step is automatically
 replayed: session end, callback loss and stop acknowledgement do not prove absence
 of external effects. Inspect effects before explicitly starting another run;
-there is no generic resume/reconciliation API in this slice. When the Agent asks
-for a command approval, the session is stopped and the run becomes BLOCKED with the
-reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
-approval handling arrives with WF03. Agent stop or lost initiator authority pauses
+there is no generic resume/reconciliation API in this slice. Command approvals follow
+[Workflow approvals](#workflow-approvals-af-390). Agent stop or lost initiator authority pauses
 progression; restarting the Agent does not resume it implicitly.
 
 The result envelope accepts only `summary` and `criteria_met: true`. It does not
@@ -362,24 +361,27 @@ stops a Hermes run) and CANCELLED is recorded. Work the session already performe
 is not undone. Completed summaries remain
 available. Soft deletion conceals the run tree and fences/stops attempts. Existing
 hard Agent/Organization deletion cascades workflow-owned records. Active runs
-retain their checkpoint summaries. Settled inputs, checkpoints and content-bearing
-history expire after the module-owned 90-day retention period, while run status
-and metadata remain. File retention and purge are independent and follow the
+retain their checkpoint summaries. Settled inputs, checkpoints, content-bearing
+history and approval commands and guidance expire after the module-owned 90-day
+retention period, while run status and metadata (including who decided each
+approval, and when) remain. File retention and purge are independent and follow the
 [shared artifact lifecycle](agent-artifacts.md#retention-deletion-and-recovery).
 
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
 `workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
 `POST /workflow-runs/{id}/cancel` with `expected_revision`, and
-`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)). Collections retain the
-standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`) controls
-those actions with independent backend authorization. Artifact routes, generic
-resume and approvals are not exposed in WF02.
+`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)), and
+`POST /workflow-runs/{id}/approvals/{request_id}/decision` (see
+[Workflow approvals](#workflow-approvals-af-390)). Collections retain the
+standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`, `decide`) controls
+those actions with independent backend authorization. Artifact routes and generic
+resume are not exposed.
 
 The Workflows UI includes explicit input review, a Runs view, durable step
 progress/history and cancellation confirmation. `workflowRun` retains the run in
 the URL. Queries include Organization/Agent identity, refetch on focus, poll
 queued/running/cancelling mounted views every three seconds and stop on parked
-(paused/blocked), terminal, error or unmounted views. Focus refetch and mutations
+(paused/blocked/awaiting approval), terminal, error or unmounted views. Focus refetch and mutations
 still refresh parked views. Start retries retain their identity and inputs. Access errors replace
 protected run content. Authoring retains its existing cache behavior.
 
@@ -392,7 +394,87 @@ each completed step's `summary`, shown under “What each step did”, and a
 completion card. The last step is excluded from the per-step card on success to
 avoid repeating its text. Run and selected-step file attachments are delivered
 through the shared [Agent artifact service](agent-artifacts.md) alongside summaries.
-Dedicated preview pages, approvals and messaging remain follow-ups.
+Dedicated preview pages and approval notifications remain follow-ups.
+
+## Workflow approvals (AF-390)
+
+Terms follow [`CONTEXT.md`](../../CONTEXT.md): **Workflow Approval Request**,
+**Approval Decision** and **Awaiting Approval**. Approvals extend the Agent's own
+Hermes command approval; they never widen what its approval mode allows.
+
+- **Coverage.** Hermes only. A command Hermes's policy does not flag (approval mode
+  `off`, or `auto` judging it safe) runs unattended. OpenClaw raises no approval
+  events, so its steps stay unattended under its `auto` policy; support is
+  [AF-444](https://aai-labs.atlassian.net/browse/AF-444).
+- **Live window.** On `approval.request` the trigger server reports the verbatim
+  command to `POST /workflow-runtime/v1/attempts/{id}/approvals` and polls
+  `GET …/approvals/{request_id}`. Only a verbatim `command` of at most 100,000
+  characters is put to a person; anything else stops the step as needing attention.
+  The API persists the request (run, step, attempt, session, Hermes run ID, command
+  and its SHA-256) before review is exposed and keeps it decidable for
+  `APPROVAL_LIVE_SECONDS` (270) counted from when Hermes raised it (`age_seconds`,
+  from the event timestamp), ending before Hermes's 300-second auto-deny. A retried
+  report of the same Hermes run and command returns the same request in whatever
+  state it reached, with only the seconds left. The attempt deadline extends by the
+  window; a live decision gives back the part not waited, so only time spent waiting
+  for a person is added to the step's budget. Decide is offered only while the window
+  is open. Approve is sent to Hermes as `once` and confirmed with `…/released`;
+  `session` and `always` are never offered. Hermes's approval endpoint takes no request
+  identifier, so `once` answers the run's active approval. Decline sends Hermes `deny`,
+  stops the run, and only once both succeed resumes the same session
+  (`resume_session`) with the decline and verbatim guidance.
+- **Parking.** When the window closes the trigger server calls `…/park` before
+  stopping the session. Park and decision serialize under the run lock: a decision
+  that arrived first wins and is acted on; otherwise the request becomes `PARKED`, the
+  attempt `STOPPED` and the run `AWAITING_APPROVAL`. Parked runs keep their file pins,
+  never expire and can be cancelled.
+- **Late decisions.** Approving or declining a parked request queues a new attempt
+  that resumes the request's original session with a continuation prompt naming the
+  command and decision (and guidance). A late approval never releases the command:
+  if Hermes flags it again, a new live request is raised. Every resume sends
+  `resume_require_history`; Hermes refuses a session with no stored history, and the
+  attempt fails instead of continuing blind.
+- **Bounds.** The third decline in one step blocks the run (cancel only) and fences
+  the session.
+- **Authority.** Deciding requires current `agent.update` on the Agent, checked at
+  decision time; the decider is recorded. Runtime callbacks use the attempt
+  capability and cannot decide. A late decision continues only while the Agent runs,
+  the initiator keeps authority and the decider still holds `agent.update`; until then
+  the run stays Awaiting Approval with the decision recorded. If the decider lost
+  access, the request returns to `PARKED` for someone else to decide. Agent stops,
+  managed updates and authority changes never lapse a parked request. Initiator
+  authority loss or an Agent stop while a request is live pauses the run and lapses
+  it; cancellation, a reported failure and settlement lapse open requests in the same
+  transaction, so a stopped run never waits in the inbox. A decided, lapsed or stale
+  request returns 409.
+- **Interruption.** An attempt that expires (restart, lost session) blocks the run as
+  uncertain and lapses its open request, like any expired attempt: Hermes may have
+  denied the command itself and carried on, so an ended session is no evidence that
+  nothing ran.
+- **Reads.** Single-run reads carry the current step's latest request (`approval`) and
+  every request of the run (`approvals`). List reads carry `approval` only while it
+  awaits a decision; `awaiting_decision=true` lists only those runs.
+- **UI.** A request awaiting a decision leads the run page: an amber approval card
+  with the exact command, a live countdown or the paused explanation, optional
+  guidance, and Approve/Decline when `allowed_actions` includes `decide`. The card
+  states that Hermes supplies no target, parameters or rationale. The run badge reads
+  "Waiting on you" (live) or "Awaiting approval · paused" and the step's rail marker
+  turns amber. Decided commands stay on their step: rail chips count approvals and
+  declines, and step detail lists each command, its outcome, decider and guidance.
+  The Workflows navigation item shows the count of requests the viewer may decide,
+  polled every 10 seconds; Viewers see the inbox as "Waiting on approval".
+- **Workflows page.** The Agent's Workflows page has two tabs (`workflowsTab`):
+  **Runs** (default) lists runs waiting on approval, then every run of the Agent
+  newest first (`agentRunPage`); **Workflows** lists the saved workflows. A workflow's
+  own page has Overview and Version history only; runs open on their own page, whose
+  breadcrumb returns to the Runs tab. Old `workflowView=runs` links open Overview.
+
+Migration `d1a390e7b2c4` adds `workflow_approval_request`, a partial index on open
+(`LIVE`/`PARKED`) requests and the `AWAITING_APPROVAL` run state; downgrade blocks
+parked runs. Agents need the updated trigger server (Agent update/restart) for live
+approvals; older trigger servers keep the previous stop-and-block behavior. Refusing
+an empty resumed session needs the updated Hermes base image; older images ignore
+`resume_require_history`.
 
 ## AF-389 acceptance dependencies
 

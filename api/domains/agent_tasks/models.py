@@ -19,6 +19,13 @@ class AgentTaskStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class AgentTaskOrigin(str, enum.Enum):
+    """Who recorded a Task: the Agent itself, or its runtime's Task plugin when the Agent did not."""
+
+    AGENT = "agent"
+    AUTOMATIC = "automatic"
+
+
 class AgentTask(BaseModel, table=True):
     """One piece of work an Agent records for itself.
 
@@ -39,6 +46,9 @@ class AgentTask(BaseModel, table=True):
         sa.UniqueConstraint("id", "organization_id", name="uq_agent_task_id_organization"),
         sa.Index("ix_agent_task_organization_agent_created", "organization_id", "agent_id", "created_at"),
         sa.Index("ix_agent_task_organization_status", "organization_id", "status"),
+        # Lists put the most recently changed Task first, for one Agent or the Organization.
+        sa.Index("ix_agent_task_organization_agent_updated", "organization_id", "agent_id", "updated_at"),
+        sa.Index("ix_agent_task_organization_updated", "organization_id", "updated_at"),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
@@ -54,6 +64,18 @@ class AgentTask(BaseModel, table=True):
                 values_callable=lambda statuses: [status.value for status in statuses],
             ),
             nullable=False,
+        ),
+    )
+    origin: AgentTaskOrigin = SqlField(
+        default=AgentTaskOrigin.AGENT,
+        sa_column=Column(
+            sa.Enum(
+                AgentTaskOrigin,
+                name="agenttaskorigin",
+                values_callable=lambda origins: [origin.value for origin in origins],
+            ),
+            nullable=False,
+            server_default=AgentTaskOrigin.AGENT.value,
         ),
     )
 
@@ -108,6 +130,15 @@ class AgentTaskCreate(PydanticBaseModel):
 
     title: Title
     description: LongText | None = None
+    # Set on create so a Task the Agent is starting on is in progress from the one request.
+    status: AgentTaskStatus = AgentTaskStatus.OPEN
+    origin: AgentTaskOrigin = AgentTaskOrigin.AGENT
+
+
+class AgentTaskStatusUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: AgentTaskStatus
 
 
 class AgentTaskNoteCreate(PydanticBaseModel):
@@ -127,6 +158,9 @@ class AgentTaskFilter(PydanticBaseModel):
 
     agent_id: UUID | None = None
     status: AgentTaskStatus | None = None
+    # Only Tasks last changed within these bounds, both inclusive; boards default to recent work.
+    updated_since: datetime | None = None
+    updated_before: datetime | None = None
 
 
 class AgentTaskRead(PydanticBaseModel):
@@ -137,8 +171,18 @@ class AgentTaskRead(PydanticBaseModel):
     title: str
     description: str | None
     status: AgentTaskStatus
+    origin: AgentTaskOrigin
     created_at: datetime
     updated_at: datetime
+
+
+class AgentTaskSummary(AgentTaskRead):
+    """A Task as people see it in a list: enough to tell what it produced without opening it."""
+
+    file_count: int
+    note_count: int
+    # The start of the latest Note, as a preview.
+    latest_note: str | None
 
 
 class AgentTaskNoteRead(PydanticBaseModel):

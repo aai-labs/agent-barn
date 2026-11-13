@@ -8,7 +8,7 @@ metadata:
     {{- include "agentbarn-api.labels" . | nindent 4 }}
     app.kubernetes.io/component: memory-purge
 spec:
-  schedule: "*/5 * * * *"
+  schedule: "1-59/5 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -42,5 +42,5 @@ spec:
                       name: {{ .Values.memory.hindsightSecretName }}
                       key: HINDSIGHT_API_TENANT_API_KEY
               resources:
-                {{- toYaml .Values.memory.resources | nindent 16 }}
+                {{- toYaml .Values.jobs.resources | nindent 16 }}
 {{- end }}

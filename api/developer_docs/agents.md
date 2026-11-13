@@ -39,9 +39,12 @@ Retry an uncertain start with the same identity and body; conflicting reuse retu
 Each step runs as a new session inside the owning Agent, using its current tools,
 Integrations, model, approval mode and spend limits. The run pins its saved workflow
 version and inputs, not an image or model. Declared step capabilities do not gate
-admission. Sessions share the Agent's environment and workspace. If a step needs
-human attention, such as a command approval, the run becomes `BLOCKED`; WF02 has
-no approval or resume operations.
+admission. Sessions share the Agent's environment and workspace. When a Hermes step
+asks to run a flagged command, the run shows the request in `approval`; anyone with
+`agent.update` decides with `POST /workflow-runs/{run_id}/approvals/{request_id}/decision`
+(`{"decision": "approve" | "decline", "guidance"?}`). Unanswered requests move the
+run to `AWAITING_APPROVAL`; a late decision continues the step's session. List
+runs awaiting a decision with `GET /workflow-runs?awaiting_decision=true`.
 
 Inspect paginated `/{agent_id}/workflow-runs` (optionally `workflow_id`), individual
 `/workflow-runs/{run_id}` and `/history`. Run detail includes each completed

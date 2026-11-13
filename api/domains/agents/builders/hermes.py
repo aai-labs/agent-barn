@@ -31,11 +31,14 @@ from .memory import (
     memory_command_mount,
     memory_command_volume,
 )
+from .tasks import TASK_COMMAND, TASK_TOOL, TASK_TOOL_INSTRUCTIONS, task_command_mount, task_command_volume
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
+_LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 _SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
@@ -50,6 +53,11 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+TASKS_PLUGIN_YAML: str = (_TASKS_PLUGIN / "plugin.yaml").read_text()
+TASKS_PLUGIN_INIT: str = (_TASKS_PLUGIN / "__init__.py").read_text()
+LISTEN_IN_PLUGIN_YAML: str = (_LISTEN_IN / "plugin.yaml").read_text()
+LISTEN_IN_PLUGIN_INIT: str = (_LISTEN_IN / "__init__.py").read_text()
+LISTEN_IN_CHECK_PY: str = (_SCRIPTS / "listen-in-check.py").read_text()
 SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
 SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
@@ -96,12 +104,20 @@ _HERMES_RUNTIME_INHERITING_TASKS = ("curator", "background_review")
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 
+_LISTEN_IN_ROOM_SETTINGS = {
+    "slack": "free_response_channels",
+    "discord": "free_response_channels",
+    "telegram": "free_response_chats",
+}
+
+
 # Persistent working directory for the agent's terminal and messaging layer.
 HERMES_WORKSPACE_DIR = "/workspace"
 BOT_ENV_DIR = "/run/agentbarn/env"
 _BOT_ENV_VOLUME = "bot-env"
 _BOT_ENV_VOLUME_SIZE = "1Mi"
 _BOT_PASSTHROUGH_PREFIXES = ("AF_GATEWAY_", "MEMORY_", "ARTIFACT_", "GOG_")
+_BOT_PASSTHROUGH_ALWAYS = ("AAI_CONFIG", "AGENT_ID", "INGEST_URL", "INGEST_API_KEY")
 _NEVER_PASSTHROUGH_PREFIXES = ("OPENAI_", "OPENROUTER_", "API_SERVER_", "FIRECRAWL_")
 
 
@@ -117,6 +133,10 @@ def _hermes_config_core(
         model_name = model
     return {
         "toolsets": ["all"],
+        # Tool search hides plugin and MCP tools behind a search bridge, so the model must look
+        # agentbarn_task up before every use and, in practice, skips it. Our Agents have no other
+        # deferrable tools, so serving them all directly costs one schema; revisit if MCP lands.
+        "tools": {"tool_search": {"enabled": "off"}},
         "model": {
             "provider": "openrouter",
             "default": model_name,
@@ -183,6 +203,19 @@ def _hermes_config_core(
     }
 
 
+def _enable_listen_in(config: dict, rooms_by_platform: dict[str, list[str]]) -> None:
+    for platform, rooms in rooms_by_platform.items():
+        config[platform][_LISTEN_IN_ROOM_SETTINGS[platform]] = rooms
+        # Verbose output would post a listening turn's progress into the room.
+        config["display"]["platforms"][platform].update(tool_progress="off", interim_assistant_messages=False)
+    config["plugins"]["enabled"].append("agentbarn-listen-in")
+    # Each queued message must stay its own turn with its own classification, and
+    # an unaddressed message must neither interrupt a turn nor be acknowledged.
+    config["display"].update(busy_input_mode="queue", busy_text_mode="interrupt", busy_ack_enabled=False)
+    # Hermes otherwise hides plugin tools, post_to_room included, behind its tool search.
+    config["tools"] = {"tool_search": {"enabled": "off"}}
+
+
 def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
@@ -196,8 +229,10 @@ def build_hermes_gateway_config(
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
     max_turns: int | None = None,
+    slack_listen_in: list[str] | None = None,
+    discord_listen_in: list[str] | None = None,
 ) -> dict:
-    plugins = ["telemetry-push"]
+    plugins = ["telemetry-push", "agentbarn-tasks"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
     if native_slack:
@@ -274,13 +309,20 @@ def build_hermes_gateway_config(
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
         }
+    listen_in = {
+        "slack": slack_listen_in if native_slack else None,
+        "discord": discord_listen_in if native_discord else None,
+        "telegram": _setting_ids(telegram_settings or {}, "listen_in_chat_ids") if not agentbarn_telegram else None,
+    }
+    if rooms_by_platform := {platform: rooms for platform, rooms in listen_in.items() if rooms}:
+        _enable_listen_in(config, rooms_by_platform)
     return config
 
 
 def bot_passthrough_names(bot_env_names: Iterable[str], tool_env_names: Iterable[str]) -> list[str]:
     matched = {name for name in bot_env_names if name.startswith(_BOT_PASSTHROUGH_PREFIXES)}
     tools = {name for name in tool_env_names if not name.startswith(_NEVER_PASSTHROUGH_PREFIXES)}
-    return sorted({"AAI_CONFIG", *matched, *tools})
+    return sorted({*_BOT_PASSTHROUGH_ALWAYS, *matched, *tools})
 
 
 def with_passthrough_placeholders(env: dict[str, str], names: Iterable[str]) -> None:
@@ -315,6 +357,14 @@ def bot_gateway_config(
     if discord_settings is not None:
         extra = platforms.setdefault("discord", {}).setdefault("extra", {})
         extra["require_mention"] = extra["thread_require_mention"] = discord_settings.get("require_mention", True)
+    for platform, settings in (
+        ("slack", slack_settings),
+        ("telegram", telegram_settings),
+        ("discord", discord_settings),
+    ):
+        if settings is not None:
+            setting = _LISTEN_IN_ROOM_SETTINGS[platform]
+            platforms[platform]["extra"][setting] = list((profile.get(platform) or {}).get(setting) or [])
     return profile
 
 
@@ -481,8 +531,11 @@ def build_hermes_config_map(
         "agentbarn_artifacts.py": ARTIFACT_TOOL,
         "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
+        "agentbarn_task.py": TASK_TOOL,
+        "agentbarn-task": TASK_COMMAND,
         "TOOLS.md": tools_md,
         "AGENTS.md": agents_md
+        + TASK_TOOL_INSTRUCTIONS
         + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
         + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
@@ -491,7 +544,12 @@ def build_hermes_config_map(
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
+        "agentbarn-tasks-plugin.yaml": TASKS_PLUGIN_YAML,
+        "agentbarn-tasks-init.py": TASKS_PLUGIN_INIT,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
+        "agentbarn-listen-in-plugin.yaml": LISTEN_IN_PLUGIN_YAML,
+        "agentbarn-listen-in-init.py": LISTEN_IN_PLUGIN_INIT,
+        "listen-in-check.py": LISTEN_IN_CHECK_PY,
         "slack-access-plugin.yaml": SLACK_ACCESS_PLUGIN_YAML,
         "slack-access-init.py": SLACK_ACCESS_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
@@ -688,6 +746,7 @@ def build_hermes_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                task_command_mount(),
                                 artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
@@ -715,6 +774,7 @@ def build_hermes_deployment(
                     volumes=[
                         *_bot_volumes(bot_ids),
                         memory_command_volume(name),
+                        task_command_volume(name),
                         artifact_command_volume(name),
                         client.V1Volume(
                             name="config",

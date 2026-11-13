@@ -140,7 +140,13 @@ real-adapter admission, thread-context, and group-DM button contracts.
 behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
 scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.
 
-`../../api/runtime_tests/test_openclaw_bots.py` is the OpenClaw equivalent and runs with
+`hermes_listen_in_driver.py` is in the filter too. Beside the guard's own contract, it
+checks listen-in per profile: a Bot's own room list beats the process-wide
+`*_FREE_RESPONSE_*` variables, a Bot's guard reads its own rooms, owns only messages on
+its own adapter, keys them in its own profile and posts through its own app, and the
+startup check empties a Bot's own rooms rather than removing them.
+
+`../../api/runtime_tests/test_openclaw_bots.py` is the OpenClaw equivalent of `hermes_bots_driver.py` and runs with
 the other OpenClaw runtime contracts (`OPENCLAW_TEST_IMAGE=<image> make test-api-runtime
 RUNTIME=openclaw`), offline. It renders a Parent Agent's gateway config with two Bots
 through the builders and proves the pinned image accepts it: the config validates, each

@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 # aai-cli main after Custom API landed (PR #30); keep both runtimes on this revision.
-ARG AAI_CLI_COMMIT=69d280f0762200fde5bea164adee83573eef5ea1
+ARG AAI_CLI_COMMIT=826339ad92c874ca8fe93035ae75be8631e5a4ba
 COPY aai-token-url.patch /tmp/aai-token-url.patch
 COPY aai-apollo-routing.patch /tmp/aai-apollo-routing.patch
 RUN git init repo && \

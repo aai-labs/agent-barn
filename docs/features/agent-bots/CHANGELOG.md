@@ -16,8 +16,8 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
-- In transition: nothing for OpenClaw beyond the slices still to come.
-- Next: Hermes, the full end-to-end run in local k3d on a fresh API image. OpenClaw, the full end-to-end run in local k3d with real Slack, Telegram and Discord apps.
+- In transition: OpenClaw Tasks and listen-in act as the Parent Agent for every Bot until the two slices named in the AF-425 merge entry land.
+- Next: OpenClaw Tasks per agent, then OpenClaw listen-in per agent. Then the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in and the organization Tasks page); OpenClaw with real Slack, Telegram and Discord apps.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,63 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-13 — AF-445 — AF-425 merge (Agent Tasks, listen-in, workflow approvals)
+
+- Merged: `AF-425-hermes-multi-persona-feat` through `11ce0477`, bringing staging's Agent Tasks, OpenClaw and Hermes listen-in and workflow approvals, and the Hermes Bot work on top of them.
+- Changed: the conflicted files keep both sides. Migration `d3c8e1f4a2b7` joins this branch's `865ce7d7db04` with AF-425's `ed009c1e7a7c`.
+- Known gaps, from staging's OpenClaw plugins assuming one agent per gateway:
+  - `agentbarn-tasks` runs `agentbarn-task` with the Parent Agent's identity and workspace and caches one open-Tasks list for the pod, so a Bot records its work as the Parent Agent and is shown the Parent Agent's Tasks;
+  - the `agentbarn-listen-in` guard is loaded only when the Parent Agent has listen-in rooms, reads Slack history only for the Parent Agent's rooms and with its app, and Discord auto-threads stop only on the account that has the rooms.
+- Follow-up: OpenClaw Tasks per agent, then OpenClaw listen-in per agent.
+
+### 2026-11-13 — AF-425 — Listen-in test type checking
+
+- Fixed: the listen-in test adapter declares its nullable owner profile, so the per-Bot ingress test passes type checking. Runtime behavior is unchanged.
+
+### 2026-11-13 — AF-425 — Bots on the organization Tasks page
+
+- Delivered: `GET /organizations/{organization_id}/agents` takes `include_bots` (default false). With it, the list also returns the Bots the caller can read, through the same visibility rule, so a Bot readable only through its Parent Agent's grants is included. The Organization Tasks page asks for it: Bots appear in the Agent filter right after their Parent Agent as "Bot · Parent Agent", their Tasks show that name, and the Task dialog links to the Bot.
+- Changed: no other caller passes `include_bots`, so Home, Agent lists, onboarding and resource usage still leave Bots out. `operations-v1.json` is unchanged because it lists no query parameters.
+- Follow-up: the end-to-end run.
+
+### 2026-11-13 — AF-425 — Listen-in per Bot
+
+- Delivered:
+  - `bot-setup.py` copies `agentbarn-listen-in` into each Bot profile and, when the Bot's config enables it, runs `listen-in-check.py` on that profile's `config.yaml`.
+  - The guard works out its profile from its install path. It reads that profile's rooms (a Bot's own `config.yaml`, the Parent Agent's `HERMES_HOME`), classifies only messages that belong to its profile, keys them in its own session namespace without changing the message, posts and reads Slack history through its own adapters (`_profile_adapters`), and never treats another profile's session as a room session.
+  - `bot_gateway_config` always sets a Bot's `free_response_channels` / `free_response_chats` in its platform settings, empty when it has none.
+  - `listen-in-check.py` empties a Bot's own room list when the guard fails to load, instead of removing it.
+- Found while checking the pinned Hermes source: its Slack adapter falls back to the process-wide `SLACK_FREE_RESPONSE_CHANNELS`, which the Parent Agent's listen-in config sets, when a profile's own setting is missing. So before this change a Bot's Slack app could take the Parent Agent's listen-in channels as its own free-response rooms, with no guard, wherever it was also allowed in.
+- Changed: `ci.yml` selects the Hermes image workflow for `hermes_listen_in_driver.py`, which now also checks listen-in per profile.
+- Follow-up: Bots on the organization Tasks page.
+
+### 2026-11-13 — AF-425 — Task tracking per Bot
+
+- Delivered:
+  - `bot-setup.py` copies the `agentbarn-tasks` plugin into each Bot profile; the Bot's own config already enabled it.
+  - The plugin reads its identity the way telemetry-push does: the profile's `.env`, else the process environment. It registers only with a full identity, and runs `agentbarn-task` with `AGENT_ID`, `INGEST_URL`, `INGEST_API_KEY` and the `ARTIFACT_*` names from that identity, replaced together so Parent Agent and Bot values never mix.
+  - `bot_passthrough_names` always includes `AGENT_ID`, `INGEST_URL` and `INGEST_API_KEY`, so the `agentbarn-task` fallback in a Bot's terminal acts as the Bot.
+- Changed: nothing for a pod without Bots, whose plugin keeps reading the process environment (`start.sh` removes `/opt/data/.env`). The API already stored and showed Tasks per Bot.
+- Follow-up: listen-in per Bot.
+
+### 2026-11-13 — AF-425 — Observer records only its own profile
+
+- Fixed: the observer's arrival and first-response wrappers patch process-wide classes, so every profile's copy saw every profile's messages. Each copy now works out its profile from where it is installed (`profiles/<id>` for a Bot, none for the Parent Agent) and records only messages that belong to that profile. Like Hermes' own `_session_key_profile`, it takes the profile stamped on the message (`source.profile`, set by shared ingress such as webhooks and the API relay), else the adapter's owner (`_owner_profile`, which `_configure_profile_adapter` sets on every Bot adapter before it handles anything). A Parent Agent's adapters have neither, so in a pod without Bots everything is recorded exactly as before. Hooks such as `pre_gateway_dispatch` already run per profile, because Hermes keeps one plugin manager per profile home.
+- Changed: the two Bot identity tests stub the ingress install that staging added to `register`. The Bot image driver runs Hermes' real `_configure_profile_adapter` and checks it names the Bot's profile on its adapter, and none on the default profile's.
+- Follow-up: Task tracking per Bot.
+
+### 2026-11-13 — AF-425 — Staging merge (Agent Tasks, listen-in)
+
+- Merged: `origin/staging` through #347, bringing Agent Tasks (AF-411/412/413), Hermes listen-in, the observer's arrival and first-response recording, and the GitLab integration.
+- Changed: the two test files that conflicted keep both sides. Migration `3faf5ff99e14` joins staging's head `a9d2e7c4b1f8` with this branch's `d79ce00137d2`. `hermes-base/VERSION` goes to `0.2.12`, because both sides had moved it to `0.2.11`.
+- Known gaps, from staging's code assuming one Agent per Hermes process:
+  - the observer's new arrival and first-response wrappers patch process-wide classes, so every profile records every profile's messages;
+  - the `agentbarn-tasks` plugin isn't installed in Bot profiles, and would act as the Parent Agent if it were;
+  - a Bot's terminal runs `agentbarn-task` with the Parent Agent's ingest identity;
+  - the listen-in plugin and its startup check never reach a Bot's profile, though a Bot's config enables its rooms;
+  - the organization Tasks page shows Bot Tasks without a name or a filter entry.
+- Follow-up: fix those four areas, in that order, before the end-to-end run.
 
 ### 2026-11-12 — AF-445 — Bots on OpenClaw in the UI
 

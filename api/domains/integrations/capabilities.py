@@ -33,6 +33,10 @@ ISOLATION_CAPABILITIES = {
         "This Agent receives the Bitbucket credential and connects to Bitbucket directly.",
         "The Bitbucket credential stays outside this Agent; Agent Barn authenticates requests.",
     ),
+    SecretProvider.GITLAB: IsolationCapabilities(
+        "This Agent receives the GitLab token and connects to GitLab directly.",
+        "The GitLab token stays outside this Agent; Agent Barn authenticates requests.",
+    ),
     SecretProvider.APOLLO: IsolationCapabilities(
         "This Agent receives the Apollo API key and connects to Apollo directly.",
         "The Apollo API key stays outside this Agent; Agent Barn authenticates requests.",

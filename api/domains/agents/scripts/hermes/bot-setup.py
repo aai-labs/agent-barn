@@ -37,7 +37,10 @@ PLUGINS = (
     ("telemetry-push", "telemetry-push"),
     ("agentbarn-observer", "agentbarn-observer"),
     ("agentbarn-slack-access", "slack-access"),
+    ("agentbarn-tasks", "agentbarn-tasks"),
+    ("agentbarn-listen-in", "agentbarn-listen-in"),
 )
+LISTEN_IN_PLUGIN = "agentbarn-listen-in"
 HELPERS = ("communications-runtime-adapter.py", "agent-trigger-server.py", "boot-run.py")
 
 
@@ -148,6 +151,12 @@ def write_skills(files, home):
         target.write_text(entry["content"], encoding="utf-8")
 
 
+def check_listen_in(home):
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8")) or {}
+    if LISTEN_IN_PLUGIN in ((config.get("plugins") or {}).get("enabled") or []):
+        subprocess.run([sys.executable, str(CONFIG / "listen-in-check.py"), str(home / "config.yaml")], check=True)
+
+
 def setup_bot(bot_id, passthrough):
     secret = read_secret(bot_id)
     files = CONFIG_ROOT / bot_id
@@ -174,6 +183,7 @@ def setup_bot(bot_id, passthrough):
             shutil.copyfile(files / f"{source}-plugin.yaml", directory / "plugin.yaml")
             shutil.copyfile(files / f"{source}-init.py", directory / "__init__.py")
     write_skills(files, home)
+    check_listen_in(home)
 
     values = env_values(secret, home, passthrough)
     environment = {name: value for name, value in os.environ.items() if not name.startswith(MEMORY_PREFIXES)}

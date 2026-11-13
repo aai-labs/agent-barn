@@ -1,0 +1,3 @@
+name: agentbarn-listen-in
+version: "1.0"
+description: Keep an Agent silent in listen-in rooms unless a message addresses it

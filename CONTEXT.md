@@ -516,6 +516,24 @@ An immutable saved snapshot of a Workflow. Editing and saving appends a new
 version; a future run pins the version it starts with.
 _Avoid_: mutable draft, runtime session
 
+**Workflow Approval Request**:
+One exact command a workflow step's Agent asks a person to allow or refuse,
+recorded with its run, step and attempt. Each time the Agent asks again is a new
+request.
+_Avoid_: chat approval, approval prompt, pending approval
+
+**Approval Decision**:
+One person's Approve or Decline on one Workflow Approval Request; a Decline may
+carry verbatim guidance. A late Decision does not release the command; it
+continues the step's session with that context, and the Agent may ask again.
+_Avoid_: grant, verdict, allowlist entry
+
+**Awaiting Approval**:
+The run state in which a step's session has been stopped with a Workflow Approval
+Request unanswered. Nothing runs while parked; a late Approval Decision continues
+the same session.
+_Avoid_: suspended, waiting session, resume
+
 **Agent Artifact**:
 An immutable published file owned by one Organization and Agent, with PostgreSQL
 metadata and private Garage/S3 bytes. Workflow provenance is optional. Consumers

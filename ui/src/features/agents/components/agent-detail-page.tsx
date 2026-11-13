@@ -28,6 +28,7 @@ import { WorkflowsPage } from "@/features/workflows/components/workflows-page";
 import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
+import { AgentTasksTab } from "@/features/tasks/components/agent-tasks-tab";
 import { FileSyncTab } from "@/features/file-sync/components/file-sync-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
@@ -82,7 +83,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
   const [workflowRun, setWorkflowRun] = useQueryState("workflowRun", parseAsString.withOptions({ history: "replace" }));
   const [, setWorkflowView] = useQueryState("workflowView", parseAsString.withOptions({ history: "replace", scroll: false }));
-  const [, setWorkflowRunPage] = useQueryState("workflowRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [, setWorkflowsTab] = useQueryState("workflowsTab", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [, setAgentRunPage] = useQueryState("agentRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
   const [startingRun, setStartingRun] = useState(false);
 
   function selectTab(next: AgentPageTab) {
@@ -96,7 +98,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       void setWorkflow(null);
       void setWorkflowRun(null);
       void setWorkflowView(null);
-      void setWorkflowRunPage(null);
+      void setWorkflowsTab(null);
+      void setAgentRunPage(null);
     }
   }
 
@@ -220,6 +223,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded onStartingChange={setStartingRun} />
             )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
+            {resolvedTab === "tasks" && <AgentTasksTab agent={agent} />}
             {resolvedTab === "file-sync" && canReadActivity && <FileSyncTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}

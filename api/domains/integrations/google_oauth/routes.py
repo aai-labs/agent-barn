@@ -163,6 +163,7 @@ def _post_message_html(
     provider: str,
     code: str | None = None,
     error: str | None = None,
+    state: str | None = None,
 ) -> HTMLResponse:
     """HTML that posts the result back to the opener window and closes the popup.
 
@@ -170,6 +171,10 @@ def _post_message_html(
     it via ``/token``. ``targetOrigin`` is the app's own origin (``web_app_url``): the
     popup is served on that same origin (Next.js proxies ``/api/*`` to the backend), so
     the opener's origin check matches.
+
+    The result also goes over a same-origin ``BroadcastChannel``, because Google's
+    unverified-app warning page severs ``window.opener``. ``state`` lets the waiting
+    window recognise its own result.
     """
     if error is not None:
         message: dict = {"type": MESSAGE_TYPE, "provider": provider, "error": error}
@@ -181,6 +186,8 @@ def _post_message_html(
             "code": code,
         }
         blurb = "Authentication complete. You can close this window."
+    if state is not None:
+        message["state"] = state
 
     # json.dumps does not escape "/", so a payload containing a literal "</script>" (e.g.
     # from the unauthenticated `error` query param) would otherwise close the script block
@@ -199,6 +206,10 @@ def _post_message_html(
     var msg = {_script_safe(message)};
     if (window.opener) {{
       window.opener.postMessage(msg, {_script_safe(config.web_app_url)});
+    }}
+    if (window.BroadcastChannel) {{
+      var channel = new BroadcastChannel({_script_safe(MESSAGE_TYPE)});
+      channel.postMessage(msg);
     }}
     window.close();
   }})();
@@ -284,16 +295,20 @@ def google_callback(
             config,
             provider=provider or DEFAULT_PROVIDER,
             error=f"Google authorization was denied or failed ({error}).",
+            state=state,
         )
     if provider is None:
         return _post_message_html(
             config,
             provider=DEFAULT_PROVIDER,
             error="Invalid or expired authorization state. Please try again.",
+            state=state,
         )
     if not code:
-        return _post_message_html(config, provider=provider, error="Missing authorization code from Google.")
-    return _post_message_html(config, provider=provider, code=code)
+        return _post_message_html(
+            config, provider=provider, error="Missing authorization code from Google.", state=state
+        )
+    return _post_message_html(config, provider=provider, code=code, state=state)
 
 
 def _email_from_id_token(id_token: str | None) -> str | None:

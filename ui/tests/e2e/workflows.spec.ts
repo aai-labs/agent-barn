@@ -501,7 +501,7 @@ test.describe("WF01 workflow authoring", () => {
     ).toBeVisible();
     await expect(page).not.toHaveURL(/workflowPage=/);
     await page.goto(
-      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=workflows&workflowPage=99`,
+      `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=workflows&workflowsTab=workflows&workflowPage=99`,
     );
     await expect(
       page.getByRole("heading", { name: "No workflows on this page" }),
@@ -612,6 +612,7 @@ test.describe("WF01 workflow authoring", () => {
     // Back to the same Agent in the other Organization, in-app so the query cache stays.
     await page.getByRole("link", { name: "View Maya", exact: true }).click();
     await section(page, "Workflows").click();
+    await page.getByRole("tab", { name: "Workflows" }).click();
     await expect(
       page.getByRole("heading", { name: "No workflows yet" }),
     ).toBeVisible();
@@ -919,6 +920,8 @@ test.describe("WF01 workflow authoring", () => {
     await section(page, "Overview").click();
     await expect(page).not.toHaveURL(/workflow=/);
     await section(page, "Workflows").click();
+    await expect(page.getByRole("tab", { name: "Runs", selected: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Workflows" }).click();
     await expect(
       page.getByRole("button", { name: "Open Weekly pipeline report" }),
     ).toBeVisible();

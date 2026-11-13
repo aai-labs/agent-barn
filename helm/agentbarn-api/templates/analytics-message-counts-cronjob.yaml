@@ -35,5 +35,5 @@ spec:
                 - secretRef:
                     name: {{ .Values.secretName }}
               resources:
-                {{- toYaml .Values.worker.resources | nindent 16 }}
+                {{- toYaml .Values.jobs.resources | nindent 16 }}
 {{- end }}

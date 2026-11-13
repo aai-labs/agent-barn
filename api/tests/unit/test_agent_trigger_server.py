@@ -264,7 +264,7 @@ def _step_reports(monkeypatch, trigger_server, reply=None, error=None, runtime="
         reports.append((url.rsplit("/", 1)[1], body))
         return None
 
-    def run(*args):
+    def run(*args, **kwargs):
         if error:
             raise error
         return reply
@@ -302,7 +302,7 @@ def test_malformed_result_is_corrected_without_repeating_work(monkeypatch, trigg
             return {"session_id": "workflow-a", "prompt": "Do the step"}
         reports.append((url.rsplit("/", 1)[1], body))
 
-    def run(*args):
+    def run(*args, **kwargs):
         prompts.append(args[-1])
         return next(replies)
 
@@ -343,7 +343,7 @@ def test_a_stopped_step_reports_nothing(monkeypatch, trigger_server) -> None:
         ),
     )
 
-    def stopped(*args):
+    def stopped(*args, **kwargs):
         trigger_server._STEPS["a"]["stopped"] = True
         raise RuntimeError("Agent session cancelled")
 
@@ -457,7 +457,7 @@ def test_file_handoff_failure_never_starts_runtime(monkeypatch, trigger_server, 
 
     monkeypatch.setattr(trigger_server, "_post_json", post)
     monkeypatch.setattr(trigger_server, "_retrieve_workflow_files", retrieve)
-    monkeypatch.setattr(trigger_server, "_hermes_step", lambda *args: sessions.append(args))
+    monkeypatch.setattr(trigger_server, "_hermes_step", lambda *args, **kwargs: sessions.append(args))
     trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
     assert sessions == []
     assert len(reports) == (0 if failure == "cancelled" else 1)
@@ -496,7 +496,7 @@ def test_verified_workflow_inputs_are_readable_but_not_offered_to_file_sync(
         destination.write_bytes(b"private pinned input\n")
         return [{**files[0], "path": str(destination)}]
 
-    def step(*arguments):
+    def step(*arguments, **kwargs):
         prompt = arguments[-1]
         manifest = json.loads(prompt.split("Verified input files (read these actual bytes): ")[1])
         seen["bytes"] = Path(manifest[0]["path"]).read_bytes()
@@ -650,3 +650,161 @@ def test_a_pod_without_bots_schedules_jobs_as_before(monkeypatch, trigger_server
 
     assert "--agent" not in arguments
     assert "--account" not in arguments
+
+
+class _FakeHermesWithApproval:
+    """Hermes over real HTTP: the first run pauses a command until it is answered or stopped."""
+
+    def __init__(self, *, stop_status: int = 200, resume_status: int = 200, event: dict | None = None):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests: list[tuple[str, dict]] = []
+        self.answered = threading.Event()
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                import json
+
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                fake.requests.append((self.path, body))
+                status = 200
+                if self.path == "/v1/runs":
+                    reply = {"run_id": f"run-{sum(path == '/v1/runs' for path, _ in fake.requests)}"}
+                    status = resume_status if body.get("resume_session") else 200
+                else:
+                    reply = {}
+                    status = stop_status if self.path.endswith("/stop") else 200
+                    fake.answered.set()
+                data = json.dumps(reply).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                import json
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                if self.path == "/v1/runs/run-1/events":
+                    approval = event or {"command": "rm -rf ./out"}
+                    event_data = {"event": "approval.request", "choices": ["once", "deny"], **approval}
+                    self.wfile.write(f"data: {json.dumps(event_data)}\n\n".encode())
+                    self.wfile.flush()
+                    fake.answered.wait(5)
+                    done = {"event": "run.completed", "text": "Deployed"}
+                else:
+                    done = {"event": "run.completed", "text": "Followed the guidance"}
+                self.wfile.write(f"data: {json.dumps(done)}\n\n".encode())
+
+            def log_message(self, format, *args):
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+
+def _approval_step(monkeypatch, trigger_server, decision: dict, live_seconds: float = 30, **hermes_options):
+    hermes = _FakeHermesWithApproval(**hermes_options)
+    platform = []
+
+    def post(url, token, body, *, method="POST"):
+        platform.append((method, url.removeprefix("http://api/attempts/a"), body))
+        if url.endswith("/approvals"):
+            return {"id": "r1", "live_seconds": live_seconds}
+        if url.endswith("/park") or method == "GET":
+            return decision
+        return None
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_APPROVAL_POLL_SECONDS", 0)
+    trigger_server.RUNTIME_API_URL = hermes.url
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    try:
+        result = trigger_server._hermes_step(
+            "a", "workflow-a", "Do the step", callback=("token", "http://api/attempts/a")
+        )
+    except Exception as exc:  # returned so each test can assert on the exact outcome
+        result = exc
+    finally:
+        hermes.server.shutdown()
+    return result, hermes.requests, platform
+
+
+def test_a_live_approval_releases_exactly_once_and_the_step_continues(monkeypatch, trigger_server) -> None:
+    result, hermes, platform = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"})
+    assert result == "Deployed"
+    assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
+    assert platform[0] == (
+        "POST",
+        "/approvals",
+        {"command": "rm -rf ./out", "runtime_run_id": "run-1", "age_seconds": 0.0},
+    )
+    assert platform[-1] == ("POST", "/approvals/r1/released", {})
+
+
+def test_a_live_decline_continues_the_same_session_with_the_guidance(monkeypatch, trigger_server) -> None:
+    decision = {"state": "DECLINED", "prompt": "Do not run it. Their guidance: write to ./tmp instead"}
+    result, hermes, _ = _approval_step(monkeypatch, trigger_server, decision)
+    assert result == "Followed the guidance"
+    assert ("/v1/runs/run-1/approval", {"choice": "once"}) not in hermes
+    # Hermes is told no before the run stops, so the command is denied rather than abandoned.
+    deny = hermes.index(("/v1/runs/run-1/approval", {"choice": "deny"}))
+    assert deny < hermes.index(("/v1/runs/run-1/stop", {}))
+    assert hermes[-1] == (
+        "/v1/runs",
+        {
+            "input": decision["prompt"],
+            "session_id": "workflow-a",
+            "resume_session": True,
+            "resume_require_history": True,
+        },
+    )
+
+
+def test_a_decline_whose_session_cannot_be_stopped_is_not_resumed(monkeypatch, trigger_server) -> None:
+    decision = {"state": "DECLINED", "prompt": "Do not run it."}
+    result, hermes, _ = _approval_step(monkeypatch, trigger_server, decision, stop_status=500)
+    assert isinstance(result, RuntimeError) and "could not be stopped" in str(result)
+    assert [path for path, _ in hermes].count("/v1/runs") == 1
+
+
+def test_a_continuation_without_session_history_fails_instead_of_starting_blind(monkeypatch, trigger_server) -> None:
+    decision = {"state": "DECLINED", "prompt": "Do not run it."}
+    result, _, _ = _approval_step(monkeypatch, trigger_server, decision, resume_status=409)
+    assert isinstance(result, RuntimeError) and "could not be resumed" in str(result)
+
+
+def test_the_live_window_is_measured_from_when_hermes_raised_the_request(monkeypatch, trigger_server) -> None:
+    import time
+
+    event = {"command": "rm -rf ./out", "timestamp": time.time() - 40}
+    _, _, platform = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"}, event=event)
+    assert 39 <= platform[0][2]["age_seconds"] <= 45
+
+
+def test_a_request_without_an_exact_command_is_never_put_to_a_person(monkeypatch, trigger_server) -> None:
+    event = {"description": "recursive delete"}
+    result, hermes, platform = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"}, event=event)
+    assert isinstance(result, trigger_server.NeedsAttention) and "recursive delete" in str(result)
+    assert platform == []
+    assert ("/v1/runs/run-1/stop", {}) in hermes
+
+
+def test_an_unanswered_approval_parks_and_stops_the_session(monkeypatch, trigger_server) -> None:
+    result, hermes, platform = _approval_step(monkeypatch, trigger_server, {"state": "PARKED"}, live_seconds=0)
+    assert isinstance(result, trigger_server.ApprovalParked)
+    assert ("/v1/runs/run-1/stop", {}) in hermes
+    assert ("/v1/runs/run-1/approval", {"choice": "once"}) not in hermes
+    assert ("POST", "/approvals/r1/park", {}) in platform
+
+
+def test_a_decision_that_wins_the_park_race_is_still_honoured(monkeypatch, trigger_server) -> None:
+    result, hermes, _ = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"}, live_seconds=0)
+    assert result == "Deployed"
+    assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes

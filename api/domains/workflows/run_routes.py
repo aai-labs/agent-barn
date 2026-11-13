@@ -6,6 +6,7 @@ from fastapi_injector import Injected
 
 from api.domains.workflows.routes import Context
 from api.domains.workflows.run_models import (
+    ApprovalDecisionCreate,
     WorkflowHistoryRead,
     WorkflowRunCancel,
     WorkflowRunCreate,
@@ -39,8 +40,9 @@ def list_runs(
     page: Page = 1,
     page_size: Size = 20,
     workflow_id: UUID | None = None,
+    awaiting_decision: bool = False,
 ):
-    return service.list_runs(agent_id, context, page, page_size, workflow_id)
+    return service.list_runs(agent_id, context, page, page_size, workflow_id, awaiting_decision)
 
 
 @router.get("/workflow-runs/{run_id}", response_model=WorkflowRunRead)
@@ -51,6 +53,18 @@ def get_run(agent_id: UUID, run_id: UUID, context: Context, service: Service):
 @router.post("/workflow-runs/{run_id}/cancel", response_model=WorkflowRunRead)
 def cancel_run(agent_id: UUID, run_id: UUID, payload: WorkflowRunCancel, context: Context, service: Service):
     return service.cancel(agent_id, run_id, payload.expected_revision, context)
+
+
+@router.post("/workflow-runs/{run_id}/approvals/{request_id}/decision", response_model=WorkflowRunRead)
+def decide_approval(
+    agent_id: UUID,
+    run_id: UUID,
+    request_id: UUID,
+    payload: ApprovalDecisionCreate,
+    context: Context,
+    service: Service,
+):
+    return service.decide(agent_id, run_id, request_id, payload, context)
 
 
 @router.get("/workflow-runs/{run_id}/history", response_model=PaginatedItems[WorkflowHistoryRead])

@@ -21,6 +21,7 @@ Parse the incoming message for one of:
 
 - A Bitbucket PR URL or `<workspace>/<repo>#<id>` reference.
 - A GitHub PR URL or `<owner>/<repo>#<id>` reference.
+- A GitLab merge request URL or `<group>/<project>!<iid>` reference.
 - A raw diff between fenced markers (e.g. ` ```diff … ``` `).
 - A "review the snippet" request with code in the message body.
 
@@ -34,7 +35,9 @@ If you were summoned over the gateway (`send-message`) rather than Slack, skip t
 
 ## 5. Pull the inputs
 
-Get `<repo_owner>`, `<repository>`, and `<host>` from the `## Configured Integrations` section of TOOLS.md (e.g. GitHub lists `owner/repo`; Bitbucket lists `workspace/repo`). Read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through `aai-cli` — never call the code host API directly.
+Get `<repo_owner>`, `<repository>`, and `<host>` from the `## Configured Integrations` section of TOOLS.md (e.g. GitHub lists `owner/repo`; Bitbucket lists `workspace/repo`; GitLab lists the full `group/project` path). Read the relevant skill files first (see TOOLS.md Skill Index). All API calls go through `aai-cli` — never call the code host API directly.
+
+On GitLab the commands differ, so read `aai-gitlab/SKILL.md` and use its equivalents: `mrs get <iid> --project <group/project>` for metadata, `mrs diffs <iid> --project <group/project> --limit 1000 --output local/logs/mr-N.json` for the diff (if the saved file has `truncated: true`, raise the limit and fetch it again, because you haven't got every file), `source get <ref> <path> --project <group/project>` for full files, and `commits list --ref-name <branch> --project <group/project>` for history.
 
 1. Fetch PR metadata: read the code-host skill file (`aai-bitbucket/SKILL.md` or `aai-github/SKILL.md`, `## … Pull Requests` section), then run `prs get <PR_NUMBER> --repo <repository> --owner <repo_owner> --profile <host>-work` for title, description, author, source/target branch, and linked tickets.
 2. Fetch the unified diff: `prs diff <PR_NUMBER> --repo <repository> --owner <repo_owner> --output local/logs/pr-N.diff --profile <host>-work` for large PRs.

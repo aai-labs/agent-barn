@@ -15,9 +15,24 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-11-07 — MDP-118 — OpenClaw guard decides per run; no auto-threads beside listen-in — PR pending
+
+- Fixed: the OpenClaw listen-in guard decided from a per-session queue of dispatched messages, so a mention steered into a running turn, or a command, left a stale entry that shifted every later turn: unmentioned chatter could reach `exec` and a mention could lose its tools. It now decides per run from OpenClaw's room-event marker in the run's own messages.
+- Changed: an OpenClaw Agent with listen-in rooms no longer auto-threads its other Discord channels. OpenClaw skips the mention requirement in threads it auto-created, so an untagged follow-up there became a room event, with limited tools and possible silence. Those channels now reply in place, and follow-ups need a mention.
+
+### 2026-11-03 — MDP-118 — Limit tools on unmentioned OpenClaw turns — PR pending
+
+- Added: the `agentbarn-listen-in` OpenClaw plugin limits unmentioned room-event turns to posting and web lookups. Mentions keep every tool. It is enabled with room events, on Agents with native Slack, Discord, or Telegram.
+- Changed: the listen-in rules tell the Agent never to answer an @mention with silence. The runtime configuration digest changes.
+
 ### 2026-10-29 — MDP-118 — OpenClaw transcripts keep reply threads and names — PR pending
 
 - Fixed: OpenClaw transcripts now record sender and channel names, which OpenClaw reports under the message hook's `metadata`; they were always empty. A reply in the same session as an inbound message is recorded under that message's channel ID and thread, so Conversations shows it inside the thread. OpenClaw's `message_sent` hook carries no thread, and a message-tool send names the channel as the model typed it, so a listen-in reply previously opened a second channel such as `c0b3k981aak` beside `C0B3K981AAK`. A reply sent to another channel keeps its own target. Already-recorded rows are not repaired.
+
+### 2026-11-03 — MDP-118 — Hermes listen-in
+
+- Changed: Listen-in channels and groups now apply to Hermes Agents. The settings descriptions no longer say OpenClaw only, and they note that on Hermes Verbose mode is off for that platform and new messages wait for the running turn.
+- Added: `listen-in-check.py` removes a Hermes Agent's listen-in rooms at start if the guard plugin can't load, so it falls back to mentions.
 
 ### 2026-10-29 — MDP-118 — Telegram listen-in groups — PR pending
 

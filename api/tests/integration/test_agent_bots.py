@@ -157,6 +157,28 @@ def test_bots_are_left_out_of_the_agent_list():
         assert_that(response.json()["total"], equal_to(1))
 
 
+def test_the_agent_list_includes_bots_only_when_asked():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        response = _get(context, "?include_bots=true")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(_names(response), equal_to(["Parent", "Bot 1", "Bot 2"]))
+        assert_that(response.json()["total"], equal_to(3))
+        parents = {item["name"]: item["parent_agent_id"] for item in response.json()["items"]}
+        assert_that(parents["Bot 1"], equal_to(str(context.parent.id)))
+
+
+def test_a_member_sees_the_bots_of_a_parent_they_can_read():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _grant(context, context.parent, AGENT_VIEWER_ROLE_ID)
+        _act_as_member(context)
+
+        response = _get(context, "?include_bots=true")
+
+        assert_that(_names(response), equal_to(["Parent", "Bot 1"]))
+
+
 def test_a_bot_is_reachable_by_its_own_id():
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
         response = _get(context, f"/{context.bot.id}")
@@ -982,7 +1004,7 @@ def test_a_bots_discord_connection_reaches_its_secret_and_config():
         config = yaml.safe_load(data["hermes-config.yaml"])
         assert_that(
             config["platforms"]["discord"]["extra"],
-            equal_to({"require_mention": False, "thread_require_mention": False}),
+            equal_to({"require_mention": False, "thread_require_mention": False, "free_response_channels": []}),
         )
 
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { Workflow } from "lucide-react";
 import { AppErrorState } from "@/components/app-error-state";
 
 import { useWorkflows } from "../hooks/use-workflows";
@@ -37,11 +38,14 @@ export function WorkflowList({
         </p>
       )}
       {list.data?.items.length === 0 && (
-        <div className="af-card p-8 text-center">
+        <div className="flex flex-col items-center pt-16 pb-12 text-center">
+          <span className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-[var(--bg-soft)] text-[var(--ink-3)]">
+            <Workflow aria-hidden="true" size={24} />
+          </span>
           <h2 className="text-lg font-semibold">
             {list.data.total ? "No workflows on this page" : "No workflows yet"}
           </h2>
-          <p className="text-sm">
+          <p className="mt-2 max-w-sm text-sm text-[var(--ink-3)]">
             {list.data.total
               ? "Return to the first page to browse your workflows."
               : `Create a repeatable plan for ${agentName}.`}

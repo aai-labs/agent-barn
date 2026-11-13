@@ -1,4 +1,6 @@
+import logging
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -7,11 +9,14 @@ from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agents.models import (
+    PROVIDER_DISPLAY_NAMES,
+    SecretProvider,
     decrypt_content,
     encrypt_content,
     validate_content,
 )
 from api.domains.auth.models import CurrentUserContext
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.rbac.catalog import IMPLICIT_AGENT_OWNER_ROLES
 from api.domains.shared_credentials.models import (
     SHARED_CREDENTIAL_ALLOWED_PROVIDERS,
@@ -28,6 +33,8 @@ from api.infrastructure.integration_validators import (
     format_validation_result,
 )
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+logger = logging.getLogger(__name__)
 
 
 @inject
@@ -72,6 +79,7 @@ class SharedCredentialService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=e.errors(),
             )
+        self._check_with_provider(data.provider, validated)
         encrypted = encrypt_content(validated, self.config.agent_token_encryption_key)
 
         credential = SharedCredential(
@@ -104,6 +112,7 @@ class SharedCredentialService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=e.errors(),
                 )
+            self._check_with_provider(credential.provider, validated)
             credential.content = encrypt_content(validated, self.config.agent_token_encryption_key)
 
         self.repository.save(credential)
@@ -174,6 +183,33 @@ class SharedCredentialService:
         )
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
+
+    @staticmethod
+    def _check_with_provider(provider: SecretProvider, content: Any) -> None:
+        """Ask the provider about content whose host the user chose, before it is stored.
+
+        Only providers that set ``upstream_public_only`` are asked: for them, a host that
+        isn't public would otherwise save cleanly and fail only once an agent uses it.
+        Every other provider keeps the format-only check, as before.
+        """
+        if not INTEGRATION_PLUGINS.require(provider).upstream_public_only:
+            return
+        validator = PROVIDER_VALIDATORS.get(provider)
+        if validator is None:
+            return
+        try:
+            result = validator(content)
+        except Exception as exc:
+            logger.warning("Shared credential validation raised for %s (%s)", provider.value, type(exc).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{PROVIDER_DISPLAY_NAMES[provider]} could not be validated; try again.",
+            ) from exc
+        if not result.valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result.error or f"{PROVIDER_DISPLAY_NAMES[provider]} credential is invalid.",
+            )
 
     @staticmethod
     def _to_read(credential: SharedCredential, *, agent_count: int) -> SharedCredentialRead:

@@ -23,6 +23,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   jira: "Jira",
   confluence: "Confluence",
   bitbucket: "Bitbucket",
+  gitlab: "GitLab",
   google_workspace: "Google Workspace",
   gmail: "Gmail",
   gmail_app_password: "Gmail (app password)",

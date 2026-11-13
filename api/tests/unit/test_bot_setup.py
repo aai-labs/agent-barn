@@ -136,6 +136,8 @@ class Pod:
             (files / name).write_text(f"bot {name}")
         (files / "telemetry-push-plugin.yaml").write_text("name: telemetry-push")
         (files / "telemetry-push-init.py").write_text("x = 1")
+        (files / "agentbarn-tasks-plugin.yaml").write_text("name: agentbarn-tasks")
+        (files / "agentbarn-tasks-init.py").write_text("tasks = 1")
         if skills is not None:
             (files / "skills.json").write_text(json.dumps(skills))
 
@@ -418,13 +420,16 @@ def test_a_helper_runs_as_its_bot_only(pod):
     assert "MEMORY_API_KEY" not in env
 
 
-@pytest.mark.parametrize("problem", ["not_served", "missing_secret", "wrong_identity"])
+@pytest.mark.parametrize("problem", ["not_served", "missing_secret", "wrong_identity", "missing_runtime_key"])
 def test_a_helper_never_starts_for_a_broken_bot(pod, problem):
     pod.manifest()
     if problem == "not_served":
         pod.bot()
         (pod.env_dir / "active-bots.json").write_text("[]")
     elif problem == "missing_secret":
+        (pod.env_dir / "active-bots.json").write_text(json.dumps([{"id": BOT_A, "slot": 1}]))
+    elif problem == "missing_runtime_key":
+        pod.bot(secret={"API_SERVER_KEY": ""})
         (pod.env_dir / "active-bots.json").write_text(json.dumps([{"id": BOT_A, "slot": 1}]))
     else:
         pod.bot(secret={"AGENT_ID": "parent-id"})
@@ -497,3 +502,36 @@ def test_a_failing_gog_setup_means_the_bot_is_not_served(pod):
     _ok(pod.setup())
 
     assert pod.served() == []
+
+
+def test_a_bot_gets_its_own_copy_of_the_tasks_plugin(pod):
+    pod.manifest()
+    pod.bot()
+
+    pod.setup()
+
+    plugin = pod.home() / "plugins/agentbarn-tasks"
+    assert (plugin / "plugin.yaml").read_text() == "name: agentbarn-tasks"
+    assert (plugin / "__init__.py").read_text() == "tasks = 1"
+
+
+LISTEN_IN_CHECK_STUB = """
+import sys
+from pathlib import Path
+Path(sys.argv[1]).with_name("listen-in-checked").write_text(sys.argv[1])
+"""
+
+
+def test_a_bot_gets_the_listen_in_guard_and_its_startup_check(pod):
+    (pod.config / "listen-in-check.py").write_text(LISTEN_IN_CHECK_STUB)
+    pod.manifest()
+    pod.bot(config={**BOT_CONFIG, "plugins": {"enabled": ["agentbarn-listen-in"]}})
+    files = pod.files / BOT_A
+    (files / "agentbarn-listen-in-plugin.yaml").write_text("name: agentbarn-listen-in")
+    (files / "agentbarn-listen-in-init.py").write_text("listen = 1")
+
+    _ok(pod.setup())
+
+    home = pod.home()
+    assert (home / "plugins/agentbarn-listen-in/__init__.py").read_text() == "listen = 1"
+    assert (home / "listen-in-checked").read_text() == str(home / "config.yaml")
