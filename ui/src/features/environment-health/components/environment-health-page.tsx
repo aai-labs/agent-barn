@@ -17,7 +17,6 @@ import { ServicesPanel } from "./services-panel";
 import { VolumesPanel } from "./volumes-panel";
 import { WorkloadsPanel } from "./workloads-panel";
 
-const TWO_COLUMNS = { gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))" };
 
 const LEVEL_COPY: Record<EnvironmentHealth["level"], { title: string; body: string }> = {
   ok: { title: "Everything is running", body: "Platform services are up and the namespace has room for new agents." },
@@ -102,6 +101,8 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
   const workloadsState =
     states.deployments === "available" || states.stateful_sets === "available" ? "available" : states.deployments;
 
+  // One column, most urgent first. Side by side, a full list next to an empty one left a gap
+  // as tall as the difference, and on a healthy platform that is most of the time.
   return (
     <>
       <LevelBanner level={health.level} />
@@ -112,20 +113,18 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
         quotaState={states.resource_quotas}
         peakWindowHours={health.peakWindowHours}
       />
-      <div className="grid gap-x-6" style={TWO_COLUMNS}>
-        <ServicesPanel
-          services={health.services}
-          deployed={health.deployed}
-          alerts={health.alerts}
-          workloadsState={workloadsState}
-          monitoringState={states.prometheus}
-        />
-        <AgentProblemsPanel
-          failed={health.failedAgents}
-          unhealthy={health.unhealthyRuntimes}
-          monitoringState={states.prometheus}
-        />
-      </div>
+      <ServicesPanel
+        services={health.services}
+        deployed={health.deployed}
+        alerts={health.alerts}
+        workloadsState={workloadsState}
+        monitoringState={states.prometheus}
+      />
+      <AgentProblemsPanel
+        failed={health.failedAgents}
+        unhealthy={health.unhealthyRuntimes}
+        monitoringState={states.prometheus}
+      />
       <ScheduledPanel cronJobs={health.cronJobs} backups={health.backups} state={states.cron_jobs} />
       <WorkloadsPanel
         workloads={health.workloads}
@@ -133,10 +132,8 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
         restartWindowDays={health.restartWindowDays}
       />
       <IdleAgentsPanel idle={health.idleAgents} idleAfterDays={health.idleAfterDays} />
-      <div className="grid gap-x-6" style={TWO_COLUMNS}>
-        <VolumesPanel volumes={health.volumes} state={states.volume_claims} />
-        <EventsPanel events={health.events} state={states.events} />
-      </div>
+      <VolumesPanel volumes={health.volumes} state={states.volume_claims} />
+      <EventsPanel events={health.events} state={states.events} />
     </>
   );
 }
