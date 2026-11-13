@@ -35,9 +35,16 @@ export const inputField = (index: number, field: string) =>
 function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
   const start = path.findIndex((part) => part !== "body" && part !== "draft");
   const [scope, index, rawField] = path.slice(Math.max(0, start));
-  // Input keys are derived from labels and never shown, so their problems belong to the label.
+  // Input keys derive from labels and step names from prompts; neither is shown, so
+  // their problems belong to the field they come from.
   const field =
-    rawField === "key" ? "label" : rawField ? camel(String(rawField)) : "";
+    rawField === "key"
+      ? "label"
+      : scope === "steps" && rawField === "name"
+        ? "goal"
+        : rawField
+          ? camel(String(rawField))
+          : "";
   if (scope === "steps" && typeof index === "number") {
     const step = draft.steps[index];
     return {

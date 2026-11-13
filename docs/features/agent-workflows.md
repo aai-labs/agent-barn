@@ -249,9 +249,12 @@ so an open editor and its draft stay.
 
 The editor is a dialog over the page. It holds the name, a description, the
 default Agent (any Agent the author can see, or none), the steps and the inputs.
-Each step is a card with its number, move up/down controls, a name, a remove
-control and one text box for what the Agent should do and produce; every step is
-open at once. Steps have no type selector. Opening a version saved with a legacy
+Each step is a card with its number, move up/down controls, a remove control and
+one text box, its prompt: what the Agent should do and produce. Every step is
+open at once. A step has no name field; editing the prompt sets the stored step
+name to its first line, whitespace collapsed and cut at a word to 80 characters,
+which run lists and the step timeline show. A step whose prompt is not edited
+keeps its saved name, and the API still requires one. Steps have no type selector. Opening a version saved with a legacy
 step output description folds that text into the step's text, as the API does on
 save; no new version is written unless the author changes the plan. A change to
 the default Agent alone saves no version.

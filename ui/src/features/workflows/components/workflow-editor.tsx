@@ -11,6 +11,7 @@ import {
   workflowFieldErrors,
   type WorkflowProblem,
 } from "../validation";
+import { stepNameFromGoal } from "../utils";
 import { WorkflowInputsEditor } from "./workflow-inputs-editor";
 
 export function emptyStep(): WorkflowStep {
@@ -291,41 +292,34 @@ export function WorkflowEditor({
                   <ChevronDown size={14} />
                 </button>
               </div>
-              <div className="min-w-0 flex-1 space-y-2">
-                <div className="flex items-start gap-2">
-                  <Control
-                    className="flex-1"
-                    label={`Step ${index + 1} name`}
-                    hideLabel
-                    placeholder="e.g. Draft release notes"
-                    value={step.name}
-                    onChange={(name) => updateStep(step.id, { name })}
-                    {...field(stepField(step.id, "name"))}
-                  />
-                  <button
-                    type="button"
-                    className="af-btn af-btn-icon af-btn-sm mt-0.5 shrink-0"
-                    aria-label={`Remove step ${index + 1}`}
-                    onClick={() => {
-                      setRemoved({ step, index });
-                      onChange({
-                        ...draft,
-                        steps: draft.steps.filter((item) => item.id !== step.id),
-                      });
-                    }}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
+              <div className="flex min-w-0 flex-1 items-start gap-2">
                 <Control
+                  className="flex-1"
                   label={`Step ${index + 1} instructions`}
                   hideLabel
                   area
                   placeholder="What should the agent do in this step, and what should it produce?"
                   value={step.goal}
-                  onChange={(goal) => updateStep(step.id, { goal })}
+                  // The step's name, shown in run lists and the timeline, follows its prompt.
+                  onChange={(goal) =>
+                    updateStep(step.id, { goal, name: stepNameFromGoal(goal) })
+                  }
                   {...field(stepField(step.id, "goal"))}
                 />
+                <button
+                  type="button"
+                  className="af-btn af-btn-icon af-btn-sm mt-0.5 shrink-0"
+                  aria-label={`Remove step ${index + 1}`}
+                  onClick={() => {
+                    setRemoved({ step, index });
+                    onChange({
+                      ...draft,
+                      steps: draft.steps.filter((item) => item.id !== step.id),
+                    });
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
               </div>
             </li>
           ))}

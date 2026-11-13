@@ -18,8 +18,10 @@ function draftSchema(authoring: boolean) {
   const name = authoring ? limited("Enter a name", 200) : z.string();
   const step = z.object({
     id: authoring ? z.guid() : z.string(),
-    name,
+    // Prompt first: the name derives from it (stepNameFromGoal), so a blank prompt
+    // reports "Enter a description" rather than its derived name.
     goal: text,
+    name,
     // Drafts opened before this field was removed can still contain an empty value.
     completionCriteria: z.string().nullable().transform((value) =>
       value?.trim() ? value : undefined,

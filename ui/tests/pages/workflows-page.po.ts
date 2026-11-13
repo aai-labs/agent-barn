@@ -35,9 +35,6 @@ export class WorkflowsPage {
   step(index: number) {
     return this.editor().getByRole("listitem", { name: `Step ${index}`, exact: true });
   }
-  stepName(index: number) {
-    return this.editor().getByLabel(`Step ${index} name`, { exact: true });
-  }
   stepInstructions(index: number) {
     return this.editor().getByLabel(`Step ${index} instructions`, { exact: true });
   }
@@ -52,7 +49,6 @@ export class WorkflowsPage {
     await this.name().fill(workflowDraft.name);
     for (const [index, step] of workflowDraft.steps.entries()) {
       if (index) await this.addStep();
-      await this.stepName(index + 1).fill(step.name);
       await this.stepInstructions(index + 1).fill(step.goal);
     }
     for (const [index, input] of workflowDraft.inputs.entries()) {
