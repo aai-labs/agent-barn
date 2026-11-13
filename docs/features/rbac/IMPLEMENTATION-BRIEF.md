@@ -72,6 +72,7 @@ An Agent remains owned by its Organization. Agent Creator is immutable provenanc
 - Organization Owner/Admin have implicit Agent Owner authority over every Agent in that Organization. No bulk Agent Access rows are required.
 - Creating an Agent atomically records creator provenance and grants the creator explicit Agent Owner access, including when the creator is currently Organization Owner/Admin.
 - An Organization Member without explicit Agent Access or applicable Agent General Access cannot see the Agent or any subordinate resource.
+- A Bot's effective Permissions are its own grants plus its Parent Agent's grants. A Membership may be granted access to a Bot only if it can read the Parent Agent. Creating a Bot needs `agent.create` in the Organization and `agent.update` on the Parent Agent; lifecycle needs `agent.lifecycle.manage` on the Parent Agent. Inside the pod a Bot is not a security boundary: Bot grants control what people see in Agent Barn, not what one Bot can reach of another's credentials. See [Agent Bots](../agent-bots.md).
 - One Membership has at most one explicit Agent Access Role per Agent.
 - Agent General Access is one Agent-scoped setting: Restricted (`NULL`) or All Organization Members with one Agent Access Role. New and migrated Agents default to Restricted.
 - Agent General Access applies dynamically to current and future accepted Organization Members. Pending and removed Memberships receive nothing from it.

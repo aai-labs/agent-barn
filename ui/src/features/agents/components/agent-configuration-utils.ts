@@ -132,13 +132,14 @@ export function configurationSectionLabel(
  * can see without that access does not offer them.
  */
 export function visibleAgentConfigurationSections(
-  agent: Pick<Agent, "allowedActions"> | null | undefined,
+  agent: Pick<Agent, "allowedActions" | "parentAgentId"> | null | undefined,
 ): AgentConfigurationSection[] {
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
   return AGENT_CONFIGURATION_SECTIONS.filter(
     (item) =>
-      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
+      (item.key !== "restore" || (canReadActivity && !agent?.parentAgentId)) &&
+      (item.key !== "spend" || canReadCosts),
   );
 }
 

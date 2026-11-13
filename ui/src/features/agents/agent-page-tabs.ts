@@ -53,6 +53,8 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   about: "Overview",
 };
 
+export const AGENT_POD_TABS: AgentPageTab[] = ["logs", "file-sync", "resource-usage"];
+
 /** Where an Agent opens: its Overview, listed first in the navigation panel. */
 export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
 
@@ -61,7 +63,7 @@ export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
  * panel, so both gate on the same Permissions.
  */
 export function visibleAgentPageTabs(
-  agent: Pick<Agent, "allowedActions"> | null | undefined,
+  agent: Pick<Agent, "allowedActions" | "parentAgentId"> | null | undefined,
   role: OrganizationRole | undefined,
   /** Whether the platform offers workflow authoring to this Agent (its workflow capabilities). */
   { workflowAuthoring = false }: { workflowAuthoring?: boolean } = {},
@@ -71,7 +73,7 @@ export function visibleAgentPageTabs(
   // A run reads this Agent's activity and writes an Organization Skill, so it needs both
   // activity.read and the Owner/Admin Organization Role that holds skill.manage.
   const canExtractPlaybooks = canReadActivity && (role === "OWNER" || role === "ADMIN");
-  return [
+  const tabs: AgentPageTab[] = [
     // Memory content is conversation content, so it follows activity.read.
     ...(canReadActivity
       ? (["chat", "conversations", "tool-calls", "logs", "memory"] as AgentPageTab[])
@@ -97,4 +99,5 @@ export function visibleAgentPageTabs(
     ...(canReadActivity ? (["resource-usage"] as AgentPageTab[]) : []),
     "about",
   ];
+  return agent?.parentAgentId ? tabs.filter((tab) => !AGENT_POD_TABS.includes(tab)) : tabs;
 }

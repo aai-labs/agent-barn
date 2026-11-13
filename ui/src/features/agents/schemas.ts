@@ -128,6 +128,7 @@ export const AgentSchema = z.object({
   status: z.enum(["STOPPED", "RUNNING", "ERROR"]),
   agentType: z.enum(["openclaw", "hermes"]).default("openclaw"),
   organizationId: z.string().uuid(),
+  parentAgentId: z.string().uuid().nullable().default(null),
   templateKey: z.string(),
   templateVersion: z.number().int(),
   templatePinType: z.enum(["shared", "override"]).default("shared"),

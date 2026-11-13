@@ -29,6 +29,7 @@ os.environ["HERMES_HOME"] = str(HOME)
 sys.path.insert(0, "/opt/hermes")
 
 SLACK_ROOM, DISCORD_ROOM, TELEGRAM_ROOM = "C1", "111", "-100"
+BOT_PROFILE, BOT_ROOM = "0000000b-0000-4000-8000-00000000000b", "C9"
 BOT_ID = 999
 SECRET = "sk-ant-abcdefghijklmnopqrstuvwxyz123456"
 CONFIG = {
@@ -323,9 +324,9 @@ def check_forks():
     expect("original_user_message" in parameters, "the memory sync changed its arguments")
 
 
-def run_startup_check(plugin_source):
+def run_startup_check(plugin_source, config=CONFIG):
     home = Path(tempfile.mkdtemp())
-    (home / "config.yaml").write_text(yaml.safe_dump(CONFIG))
+    (home / "config.yaml").write_text(yaml.safe_dump(config))
     installed = home / "plugins" / "agentbarn-listen-in"
     installed.mkdir(parents=True)
     (installed / "plugin.yaml").write_text(Path("/plugin/plugin.yaml").read_text())
@@ -355,6 +356,67 @@ def check_the_guard_loads_the_way_hermes_loads_it():
     expect(
         "agentbarn-listen-in" not in result["plugins"]["enabled"], "the startup check kept a guard that failed to load"
     )
+    bot_config = {**CONFIG, "platforms": {"slack": {"extra": {"free_response_channels": [SLACK_ROOM]}}}}
+    extra = run_startup_check(broken, bot_config)["platforms"]["slack"]["extra"]
+    expect(
+        extra == {"free_response_channels": []},
+        "the startup check removed a Bot's own rooms instead of emptying them, so it would fall back to the parent's",
+    )
+
+
+def check_a_bots_own_rooms_beat_the_process_env():
+    os.environ.update(
+        {
+            "SLACK_FREE_RESPONSE_CHANNELS": SLACK_ROOM,
+            "DISCORD_FREE_RESPONSE_CHANNELS": DISCORD_ROOM,
+            "TELEGRAM_FREE_RESPONSE_CHATS": TELEGRAM_ROOM,
+        }
+    )
+    slack = SlackAdapter(PlatformConfig(enabled=True, token="xoxb-2", extra={"free_response_channels": []}))
+    discord = DiscordAdapter(PlatformConfig(enabled=True, token="d2", extra={"free_response_channels": [BOT_ROOM]}))
+    telegram = TelegramAdapter(PlatformConfig(enabled=True, token="2:x", extra={"free_response_chats": []}))
+    expect(slack._slack_free_response_channels() == set(), "a Bot's Slack adapter took the parent's rooms")
+    expect(discord._discord_free_response_channels() == {BOT_ROOM}, "a Bot's Discord rooms are not its own")
+    expect(telegram._telegram_free_response_chats() == set(), "a Bot's Telegram adapter took the parent's rooms")
+
+
+def check_a_bot_profile_listens_as_itself(parent):
+    home = HOME / "profiles" / BOT_PROFILE
+    installed = home / "plugins" / "agentbarn-listen-in"
+    installed.mkdir(parents=True)
+    (installed / "__init__.py").write_text(Path("/plugin/__init__.py").read_text())
+    (home / "config.yaml").write_text(yaml.safe_dump({"slack": {"free_response_channels": [BOT_ROOM]}}))
+    bot = load(installed / "__init__.py", "agentbarn_listen_in_bot")
+    bot.register(MagicMock())
+    expect(bot._rooms == {"slack": {BOT_ROOM}}, f"a Bot's guard read another profile's rooms: {bot._rooms}")
+
+    multiplex = GatewayConfig(multiplex_profiles=True)
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = SessionStore(HOME / "bot-sessions", multiplex)
+    runner.config = multiplex
+    parents_slack, bots_slack = slack_adapter(), slack_adapter()
+    GatewayRunner._configure_profile_adapter(MagicMock(), bots_slack, BOT_PROFILE, Platform.SLACK)
+    runner.adapters = {Platform.SLACK: parents_slack}
+    runner._profile_adapters = {BOT_PROFILE: {Platform.SLACK: bots_slack}}
+    previous = gateway_run._gateway_runner_ref
+    gateway_run._gateway_runner_ref = weakref.ref(runner)
+    try:
+        source = SessionSource(platform=Platform.SLACK, chat_id=BOT_ROOM, chat_type="group", user_id="U1")
+        expect(
+            bot._owned(bots_slack, source) and not parent._owned(bots_slack, source),
+            "a message on a Bot's adapter is not the Bot's alone",
+        )
+        expect(
+            parent._owned(parents_slack, source) and not bot._owned(parents_slack, source),
+            "a message on the parent's adapter is not the parent's alone",
+        )
+        key = bot._session_key(source)
+        expect(key.startswith(f"agent:{BOT_PROFILE}:"), f"a Bot's room message is keyed outside its profile: {key}")
+        expect(not source.profile, "classifying a Bot's message changed the message")
+        expect(bot._adapter("slack") is bots_slack, "a Bot's guard posts through another profile's app")
+        expect(parent._adapter("slack") is parents_slack, "the parent's guard posts through a Bot's app")
+    finally:
+        gateway_run._gateway_runner_ref = previous
 
 
 def main():
@@ -379,6 +441,8 @@ def main():
     check_turn_and_delivery(plugin, hooks, post, runner, loop)
     check_slack_history(plugin, hooks, runner, loop)
     check_the_guard_loads_the_way_hermes_loads_it()
+    check_a_bots_own_rooms_beat_the_process_env()
+    check_a_bot_profile_listens_as_itself(plugin)
     print("listen-in contract holds")
 
 

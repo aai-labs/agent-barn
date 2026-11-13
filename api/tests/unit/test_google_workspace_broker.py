@@ -149,3 +149,10 @@ def test_the_installer_puts_the_shim_ahead_of_the_real_binary():
     assert_that(install, contains_string("/home/hermes/.local/bin/gog"))
     assert_that(install, contains_string("chmod 755"))
     assert_that(install, is_not(contains_string("gog auth")))
+
+
+def test_the_shim_hands_over_to_the_real_binary_in_a_pod_with_bots():
+    shim = build_gog_shim_sh()
+    assert_that(shim, contains_string("[ -f /app/config/bots.json ]"))
+    fallback = shim.index("exec /usr/local/bin/gog")
+    assert_that(fallback < shim.index("exit 78"), is_(True))

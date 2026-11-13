@@ -2,10 +2,11 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Settings2 } from "lucide-react";
+import { Scaling, Settings2 } from "lucide-react";
 
 import {
   AGENT_PAGE_TAB_LABELS,
+  AGENT_POD_TABS,
   DEFAULT_AGENT_TAB,
   visibleAgentPageTabs,
   type AgentPageTab,
@@ -17,6 +18,7 @@ import {
 } from "@/features/agents/components/agent-configuration-utils";
 import { conversationChannelsQuery } from "@/features/agents/hooks/use-conversations";
 import type { Agent } from "@/features/agents/schemas";
+import { canAgent } from "@/features/agents/utils";
 import {
   ORGANIZATION_SETTINGS_ICONS,
   visibleOrganizationSettingsSections,
@@ -63,6 +65,7 @@ export function useContextPanel(): ContextPanelModel | null {
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
   const agentRoute = parseAgentRoute(pathname);
   const agent = useCachedAgent(agentRoute?.agentId);
+  const pod = useCachedAgent(agent?.parentAgentId ?? agentRoute?.agentId);
   const workflowAuthoring = useCachedWorkflowAuthoring(agentRoute?.agentId);
   const queryClient = useQueryClient();
   const awaiting = useAwaitingApprovals(agentRoute?.agentId ?? "", Boolean(agent));
@@ -117,15 +120,17 @@ export function useContextPanel(): ContextPanelModel | null {
       : requested && tabs.includes(requested)
         ? requested
         : DEFAULT_AGENT_TAB;
+    const isHermes = agent?.agentType === "hermes";
+    const podGroups = isHermes && pod ? [podNavGroup(pod, orgBase, role, activeTab)] : [];
     return {
       title: agent?.name ?? "Agent",
       crumb: { label: "Your team", href: orgBase },
       agent,
-      groups: AGENT_TAB_GROUPS.map((group) => ({
+      groups: [...AGENT_TAB_GROUPS.map((group) => ({
         key: group.key,
         label: group.label,
         items: group.tabs
-          .filter((tab) => tabs.includes(tab))
+          .filter((tab) => tabs.includes(tab) && !(isHermes && AGENT_POD_TABS.includes(tab)))
           .map((tab) => ({
             key: tab,
             label: AGENT_PAGE_TAB_LABELS[tab],
@@ -148,7 +153,7 @@ export function useContextPanel(): ContextPanelModel | null {
                     })
                 : undefined,
           })),
-      })).filter((group) => group.items.length > 0),
+      })), ...podGroups].filter((group) => group.items.length > 0),
       footer: agent
         ? {
             key: "agent-settings",
@@ -192,6 +197,42 @@ export function useContextPanel(): ContextPanelModel | null {
   }
 
   return null;
+}
+
+function podNavGroup(
+  pod: Agent,
+  orgBase: string,
+  role: ReturnType<typeof useActiveOrgRole>["role"],
+  activeTab: AgentPageTab | null,
+): NavGroup {
+  const podBase = `${orgBase}/agents/${pod.id}`;
+  const tabs = visibleAgentPageTabs(pod, role);
+  return {
+    key: "pod",
+    label: "Agent",
+    hint: "Shared by every bot",
+    items: [
+      ...AGENT_POD_TABS.filter((tab) => tabs.includes(tab)).map((tab) => ({
+        key: tab,
+        label: AGENT_PAGE_TAB_LABELS[tab],
+        href: `${podBase}?tab=${tab}`,
+        icon: AGENT_TAB_ICONS[tab],
+        active: tab === activeTab,
+      })),
+      ...(canAgent(pod, "activity.read")
+        ? [
+            {
+              key: "restore",
+              label: configurationSectionLabel("restore"),
+              href: `${podBase}/configuration?section=restore`,
+              icon: AGENT_CONFIGURATION_ICONS.restore,
+              active: false,
+            },
+          ]
+        : []),
+      { key: "size", label: "Size", href: `${podBase}/configuration?section=profile`, icon: Scaling, active: false },
+    ],
+  };
 }
 
 function platformPanel(pathname: string, requestedSection: string | null): ContextPanelModel | null {

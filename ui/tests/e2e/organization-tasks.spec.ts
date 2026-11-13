@@ -10,6 +10,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const OTHER_AGENT_ID = "44444444-4444-4444-8444-444444444444";
 const TASK_READER_ACTIONS = [...mockAgentAllowedActions, "task.read"];
+const BOT_ID = "66666666-6666-4666-8666-666666666661";
 
 async function open(page: Page, { tasks }: { tasks?: Record<string, unknown>[] } = {}) {
   const data = new DataSupport(page);
@@ -204,4 +205,33 @@ test("the Organization board also shows the last 30 days of finished work, or a 
   await page.goto(`/dashboard/${TEST_ORG_ID}/tasks?from=${daysAgo(50)}&to=${daysAgo(30)}`);
   await expect(tasksPage.column("Done")).toContainText("Old report");
   await expect(tasksPage.column("Done").getByTestId("task-card")).toHaveCount(1);
+});
+
+test("a Bot's Tasks name the Bot and its parent, filter by the Bot and link to it", async ({ page }) => {
+  const { tasksPage } = await open(page, {
+    tasks: [mockTask({ id: "aaaaaaaa-0000-4000-8000-0000000000b1", agent_id: BOT_ID, title: "Draft the outreach email" })],
+  });
+  await page.route("**/api/v1/organizations/*/agents?*", async (route) => {
+    const url = new URL(route.request().url());
+    const maya = { ...mockAgent, name: "Maya", allowed_actions: TASK_READER_ACTIONS };
+    const scout = { ...maya, id: BOT_ID, name: "Scout", parent_agent_id: MOCK_AGENT_ID };
+    const items = url.searchParams.get("include_bots") === "true" ? [maya, scout] : [maya];
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ page: 1, page_size: 100, total: items.length, items }),
+    });
+  });
+  await page.reload();
+  await tasksPage.showList();
+
+  await expect(tasksPage.rows().filter({ hasText: "Draft the outreach email" })).toContainText("Scout · Maya");
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await expect(page.getByRole("option", { name: "Scout · Maya" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await tasksPage.open("Draft the outreach email");
+  await expect(tasksPage.detail().getByRole("link", { name: "Scout · Maya" })).toHaveAttribute(
+    "href",
+    `/dashboard/${TEST_ORG_ID}/agents/${BOT_ID}?tab=tasks`,
+  );
 });

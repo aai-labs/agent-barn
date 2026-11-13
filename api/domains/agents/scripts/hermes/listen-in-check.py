@@ -37,6 +37,9 @@ def _disable_listen_in(config: dict, config_path: Path) -> None:
     config["plugins"]["enabled"].remove(_PLUGIN)
     for platform, setting in _ROOM_SETTINGS:
         (config.get(platform) or {}).pop(setting, None)
+        extra = ((config.get("platforms") or {}).get(platform) or {}).get("extra") or {}
+        if setting in extra:
+            extra[setting] = []
     staged = config_path.with_name(f"{config_path.name}.tmp")
     staged.write_text(yaml.safe_dump(config, default_flow_style=False, sort_keys=False))
     os.replace(staged, config_path)

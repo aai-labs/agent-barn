@@ -7,6 +7,7 @@ import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
+import { usePodAgent } from "../hooks/use-pod-agent";
 import { ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
@@ -47,7 +48,8 @@ interface AgentDetailPageProps {
 }
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
-  const { agent, isLoading, error, refetch } = useAgent(agentId);
+  const { agent: loadedAgent, isLoading, error, refetch } = useAgent(agentId);
+  const { agent, pod } = usePodAgent(loadedAgent);
   const canReadActivity = canAgent(agent, "activity.read");
   const { role } = useActiveOrgRole();
   const workflowCapabilities = useWorkflowCapabilities(agentId, canAgent(agent, "agent.read"));
@@ -176,7 +178,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   and two copies of the lifecycle and Share dialogs must not coexist. */}
               {!isDesktop && (
                 <div className="flex flex-wrap gap-2">
-                  {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
+                  {canManageLifecycle && pod && <AgentLifecycleMenu agent={pod} />}
                   {canManageAccess && (
                     <button className="af-btn" onClick={() => setShareOpen(true)}>
                       <ShareIcon /> Share
@@ -246,6 +248,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           organizationId={agent.organizationId}
           open={shareOpen}
           onOpenChange={setShareOpen}
+          parent={agent.parentAgentId ? pod : undefined}
+          isBot={agent.parentAgentId !== null}
         />
       )}
     </div>

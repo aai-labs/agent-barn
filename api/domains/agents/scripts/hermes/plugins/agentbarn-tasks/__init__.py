@@ -22,6 +22,7 @@ import shlex
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,15 @@ _OPAQUE_WORD = re.compile(r"\b[A-Za-z0-9_-]{32,}\b")
 # A short message made only of these words is small talk ("Thanks!", "That's all for now"): it gets
 # no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
 _SMALL_TALK_MAX_WORDS = 8
+_IDENTITY_NAMES = (
+    "AGENT_ID",
+    "INGEST_URL",
+    "INGEST_API_KEY",
+    "ARTIFACT_URL",
+    "ARTIFACT_API_KEY",
+    "ARTIFACT_MAX_BYTES",
+    "ARTIFACT_UPLOAD_ROOTS",
+)
 _SMALL_TALK_WORDS = frozenset(
     [
         "hi",
@@ -228,6 +238,24 @@ def _opaque(match: re.Match) -> str:
     return _REDACTED if mixed or re.fullmatch(r"[0-9a-fA-F]{32,}", word) else word
 
 
+def _identity():
+    try:
+        lines = (Path(__file__).resolve().parents[2] / ".env").read_text(encoding="utf-8").splitlines()
+    except (OSError, IndexError):
+        return os.environ
+    values = {}
+    for line in lines:
+        name, separator, value = line.partition("=")
+        if separator:
+            values[name] = value[1:-1].replace('\\"', '"').replace("\\\\", "\\") if value.startswith('"') else value
+    return values if values.get("AGENT_ID") else os.environ
+
+
+def _identity_env() -> dict[str, str]:
+    identity = _identity()
+    return {name: identity[name] for name in _IDENTITY_NAMES if identity.get(name)}
+
+
 def _command() -> str:
     return os.environ.get("AGENTBARN_TASK_COMMAND") or "/usr/local/bin/agentbarn-task"
 
@@ -245,6 +273,10 @@ def _run(argv: list[str], stdin: str = "", timeout: float = _COMMAND_TIMEOUT_SEC
             text=True,
             timeout=timeout,
             cwd=_workspace(),
+            env={
+                **{name: value for name, value in os.environ.items() if name not in _IDENTITY_NAMES},
+                **_identity_env(),
+            },
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -505,7 +537,7 @@ def _attach_automatically(turn: dict) -> list[str]:
     if len(turn["task_ids"]) != 1:
         return [name for name, _ in unattached]
     (task_id,) = turn["task_ids"]
-    limit = os.environ.get("ARTIFACT_MAX_BYTES", "")
+    limit = _identity_env().get("ARTIFACT_MAX_BYTES", "")
     names = [name for name, _ in unattached]
     failed = []
     for name, path in unattached:
@@ -679,7 +711,8 @@ def _on_pre_llm_call(session_id="", turn_id="", user_message="", parent_session_
 
 
 def register(ctx):
-    if not (os.environ.get("AGENT_ID") and os.environ.get("INGEST_URL") and os.environ.get("INGEST_API_KEY")):
+    identity = _identity_env()
+    if not (identity.get("AGENT_ID") and identity.get("INGEST_URL") and identity.get("INGEST_API_KEY")):
         return
     ctx.register_tool(
         name=_TOOL,

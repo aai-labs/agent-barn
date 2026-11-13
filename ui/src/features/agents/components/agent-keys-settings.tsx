@@ -11,6 +11,7 @@ import { ApiError } from "@/shared/api/error/errors";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 import { IntegrationsStep } from "./hire-dialog-steps";
 import { IntegrationIsolationControl } from "./integration-isolation-control";
+import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import { useIntegrationIsolation } from "../hooks/use-integration-isolation";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useUpdateAgent } from "../hooks/use-update-agent";
@@ -18,6 +19,7 @@ import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import type { Agent, AgentSecretRead } from "../schemas";
 import { agentsKey } from "../utils";
 import { coerceBooleanFields, expandGithubContent, getIntegrationProvider, hasIncompleteIntegration, isSignInOnlyProvider, type IntegrationDraft } from "../integrations";
+import { podIdOf } from "../utils";
 
 function setupDrafts(agent: Agent): IntegrationDraft[] {
   return (agent.secrets ?? []).map((secret) => ({ provider: secret.provider, content: {}, existing: true,
@@ -50,6 +52,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const [customDrafts, setCustomDrafts] = useState<ConnectionDraft[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
   const updateAgent = useUpdateAgent();
+  const { applyAndRestart } = useAgentApplyAndRestart(agent);
   const isolation = useIntegrationIsolation(agent.id);
   const startAgent = useStartAgent();
   const [drafts, setDrafts] = useState<IntegrationDraft[]>(() => setupDrafts(agent));
@@ -104,7 +107,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
       } else if (!hasCustomChanges && !hasCredentialChanges && changedPolicies.length <= 1) {
         const draft = changedPolicies[0] ?? drafts[0];
         if (draft) await isolation.mutateAsync({ provider: draft.provider, isolated: draft.isolated ?? false, restart });
-        else if (restart) await startAgent.mutateAsync(agent.id);
+        else if (restart) await startAgent.mutateAsync(podIdOf(agent));
       } else {
         const batch = {
           creates: customChanges.filter((draft) => !draft.connection).map((draft) => connectionPayload(draft.value)),
@@ -115,7 +118,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         if (hasCustomChanges && !hasCredentialChanges && changedPolicies.length === 0) {
           await customApi.batchMutation.mutateAsync(batch);
         } else {
-          await updateAgent.mutateAsync({
+          const integrations = {
             agentId: agent.id,
             secrets: changedCredentials.filter((draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider)).map((draft) => ({
               provider: draft.provider,
@@ -125,8 +128,12 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
             removedSecretProviders: removedProviders,
             policies: changedPolicies.map((draft) => ({ provider: draft.provider, isolated: draft.isolated ?? false })),
             customApi: { creates: batch.creates, updates: batch.updates, deletes: batch.deletes },
-            restart,
-          });
+          };
+          if (agent.parentAgentId) {
+            await applyAndRestart(() => updateAgent.mutateAsync({ ...integrations, restart: false }).then(() => undefined));
+          } else {
+            await updateAgent.mutateAsync({ ...integrations, restart });
+          }
         }
       }
       setRestartRequired(false);

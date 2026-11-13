@@ -40,7 +40,15 @@ from api.domains.agents.builders.restore_point import (
     COMPONENT_LABEL_KEY,
     RESTORE_POINT_ID_LABEL_KEY,
 )
-from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
+from api.domains.agents.models import (
+    Agent,
+    AgentRestorePoint,
+    AgentStatus,
+    AgentType,
+    CommandApprovalMode,
+    RestorePointOrigin,
+    RestorePointStatus,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
 from api.domains.agents.service import AgentService
@@ -1294,6 +1302,36 @@ def test_applying_the_recorded_configuration_repins_the_agent():
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
             assert_that(agent["template_key"], equal_to(pinned.template_key))
+
+
+def test_applying_the_recorded_configuration_reaches_a_parents_bots():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES, status=AgentStatus.STOPPED)]) as context:
+        parent = context.agent
+        there_is_an_agent(
+            name="Bot",
+            agent_type=AgentType.HERMES,
+            status=AgentStatus.STOPPED,
+            parent_agent_id=parent.id,
+            bot_slot=1,
+        )(context)
+        bot_id = context.agent.id
+        context.agent = parent
+        pinned = cast(AgentTemplate, context.injector.get(TemplateRepository).get_pinned_template(parent))
+        manifest = {
+            **_manifest_for(context, template_key=pinned.template_key),
+            "approval_mode": "manual",
+            "max_turns": 41,
+        }
+        row = _seed_with_manifest(context, manifest)
+
+        with when("I apply the parent's recorded configuration"):
+            response = context.client.post(f"{_url(context)}/{row.id}/configuration", headers=_auth(context))
+
+        with then("its Bot follows the parent's approval mode and turn limit"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT), response.text)
+            bot = cast(Agent, context.injector.get(AgentRepository).get_by_id(bot_id))
+            assert_that(bot.max_turns, equal_to(41))
+            assert_that(bot.approval_mode, equal_to(CommandApprovalMode.MANUAL))
 
 
 def test_applying_a_configuration_that_no_longer_resolves_is_refused():

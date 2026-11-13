@@ -681,6 +681,73 @@ def test_capture_reports_nothing_skipped_for_an_ordinary_volume(tmp_path):
     assert_that(capture(source, dest, _HERMES)["skipped"], equal_to(0))
 
 
+BOT_PREFIX = "profiles/aaaaaaaa-0000-4000-8000-00000000000a"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env",
+        ".env_123.tmp",
+        ".config/aai-cli/aai-secrets.enc.json",
+        ".config/aai-cli/key",
+        "SOUL.md",
+        "AGENTS.md",
+        "IDENTITY.md",
+        "TOOLS.md",
+        "BOOT.md",
+        "HEARTBEAT.md",
+        "config.yaml",
+        "plugins/telemetry-push/__init__.py",
+        "skills/a/SKILL.md",
+    ],
+)
+def test_a_bots_secrets_and_generated_files_are_left_out(name):
+    assert_that(is_excluded(f"{BOT_PREFIX}/{name}", _HERMES), equal_to(True))
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["state.db", "state.db-wal", "memories/USER.md", "memories/MEMORY.md", "cron/jobs.json", "hindsight/config.json"],
+)
+def test_a_bots_own_state_is_kept(name):
+    assert_that(is_excluded(f"{BOT_PREFIX}/{name}", _HERMES), equal_to(False))
+
+
+def test_a_leftover_env_temp_file_at_the_root_is_left_out():
+    assert_that(is_excluded(".env_123.tmp", _HERMES), equal_to(True))
+
+
+def test_a_bots_daily_notes_are_kept():
+    assert_that(is_excluded("workspace/bots/x/memory/2026-11-09.md", _HERMES), equal_to(False))
+
+
+def test_the_bot_rule_is_hermes_only():
+    assert_that(is_excluded(f"{BOT_PREFIX}/.env", _OPENCLAW), equal_to(False))
+
+
+def test_only_the_top_level_profiles_folder_counts():
+    assert_that(is_excluded(f"workspace/{BOT_PREFIX}/.env", _HERMES), equal_to(False))
+
+
+def test_a_capture_of_a_parent_with_bots_skips_nothing_because_of_env_links(tmp_path):
+    source = tmp_path / "source"
+    home = source / BOT_PREFIX
+    home.mkdir(parents=True)
+    (home / "state.db").write_text("sessions")
+    try:
+        (home / ".env").symlink_to("/run/agentbarn/env/x.env")
+    except OSError:
+        pytest.skip("needs symlink privileges")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+
+    manifest = capture(source, dest, _HERMES)
+
+    assert_that(manifest["skipped"], equal_to(0))
+    assert_that(manifest["file_count"], equal_to(1))
+
+
 def test_a_file_deleted_during_a_live_capture_is_skipped_and_the_archive_stays_valid(tmp_path, monkeypatch):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()

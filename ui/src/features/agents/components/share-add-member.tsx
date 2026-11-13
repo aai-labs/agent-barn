@@ -21,17 +21,22 @@ type RowStatus =
   | { kind: "addable" }
   | { kind: "already-has-access" }
   | { kind: "implicit-owner" }
-  | { kind: "pending" };
+  | { kind: "pending" }
+  | { kind: "needs-parent" };
+
+export type ParentReachable = { name: string; userIds: Set<string> };
 
 function statusFor(
   member: OrganizationMember,
   assignedUserIds: Set<string>,
+  parentReachable: ParentReachable | null,
 ): RowStatus {
   if (assignedUserIds.has(member.userId)) return { kind: "already-has-access" };
   if (member.role === "OWNER" || member.role === "ADMIN") {
     return { kind: "implicit-owner" };
   }
   if (member.isPending) return { kind: "pending" };
+  if (parentReachable && !parentReachable.userIds.has(member.userId)) return { kind: "needs-parent" };
   return { kind: "addable" };
 }
 
@@ -41,9 +46,11 @@ function ShareCandidateRow({
   roles,
   onGrant,
   disabled,
+  parentName,
 }: {
   member: OrganizationMember;
   status: RowStatus;
+  parentName?: string;
   roles: AgentAccessRoleRead[];
   onGrant: (member: OrganizationMember, roleId: string) => void;
   disabled: boolean;
@@ -88,6 +95,14 @@ function ShareCandidateRow({
           Pending invite
         </span>
       )}
+      {status.kind === "needs-parent" && (
+        <span
+          className="text-[12px] shrink-0"
+          style={{ color: "var(--ink-4)" }}
+        >
+          Needs access to {parentName} first
+        </span>
+      )}
       {addable && (
         <>
           <ShareRoleSelect
@@ -121,6 +136,7 @@ interface ShareAddMemberProps {
   /** Local draft's currently-assigned user ids — drives the "already has access" state
    * so search results reflect the in-progress edit, not just the last-saved snapshot. */
   assignedUserIds: string[];
+  parentReachable?: ParentReachable | null;
 }
 
 export function ShareAddMember({
@@ -130,6 +146,7 @@ export function ShareAddMember({
   disabled,
   isOpen,
   assignedUserIds,
+  parentReachable = null,
 }: ShareAddMemberProps) {
   const [search, setSearch] = useState("");
   const term = search.trim();
@@ -172,7 +189,8 @@ export function ShareAddMember({
               <ShareCandidateRow
                 key={member.userId}
                 member={member}
-                status={statusFor(member, assigned)}
+                status={statusFor(member, assigned, parentReachable)}
+                parentName={parentReachable?.name}
                 roles={roles}
                 onGrant={onGrant}
                 disabled={disabled}

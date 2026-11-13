@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from injector import inject, singleton
 
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.agents.models import AgentRead, AgentStatus, IntegrationIsolationUpdate, SecretProvider
+from api.domains.agents.models import AgentRead, AgentStatus, IntegrationIsolationUpdate, SecretProvider, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService, _refuse_during_managed_update
 from api.domains.auth.models import CurrentUserContext
@@ -35,25 +35,26 @@ class IntegrationIsolationService:
             select_egress_mode(provider, isolated=data.isolated)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        self.agents.restore_points.reconcile_agent(agent.id)
+        self.agents.restore_points.reconcile_agent(pod_agent_id(agent))
         with self.agent_repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
             current = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
             self.authorization.require_action_for_visible(context, current, PermissionKey.AGENT_UPDATE)
-            _refuse_during_managed_update(current)
-            if self.agents.restore_points.has_blocking_operation(agent_id):
+            pod = self.agents.pod_of(current)
+            _refuse_during_managed_update(pod)
+            if self.agents.restore_points.has_blocking_operation(pod.id):
                 raise HTTPException(409, "An Agent restore operation is in progress")
             if self.agent_repository.get_secret(agent_id, provider) is None and (
                 provider != SecretProvider.FIRECRAWL
                 or not (self.agents.config.agent_firecrawl_api_key and self.agents.config.agent_firecrawl_base_url)
             ):
                 raise HTTPException(404, "Integration not configured")
-            running = current.status == AgentStatus.RUNNING
+            running = pod.status == AgentStatus.RUNNING
             if data.restart:
-                self.authorization.require_action_for_visible(context, current, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+                self.authorization.require_action_for_visible(context, pod, PermissionKey.AGENT_LIFECYCLE_MANAGE)
             if running:
-                self.authorization.require_action_for_visible(context, current, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+                self.authorization.require_action_for_visible(context, pod, PermissionKey.AGENT_LIFECYCLE_MANAGE)
                 if not data.restart:
                     raise HTTPException(409, "Applying isolation to a running Agent requires an explicit restart")
             try:
@@ -67,13 +68,13 @@ class IntegrationIsolationService:
             actor = resolve_actor_identity(context, current.organization_id)
             if running:
                 # Capture a healthy ordinary Start before replacing its generation.
-                self.agents._observe_integration_readiness(current)
-                current = self.agents._stop_agent_unchecked(current, actor)
-            elif current.status == AgentStatus.ERROR and data.restart:
-                name = f"agent-{agent_id}"
+                self.agents._observe_integration_readiness(pod)
+                pod = self.agents._stop_agent_unchecked(pod, actor)
+            elif pod.status == AgentStatus.ERROR and data.restart:
+                name = f"agent-{pod.id}"
                 self.agents.k8s.delete_deployment(name, self.agents.config.k8s_namespace)
                 self.agents.k8s.wait_for_termination(name, self.agents.config.k8s_namespace)
-                self.agents.credential_gateway.revoke_for_agent(agent_id, current.organization_id)
+                self.agents.credential_gateway.revoke_for_agent(pod.id, pod.organization_id)
             source = "agent_secret" if self.agent_repository.get_secret(agent_id, provider) else "platform_default"
             deliveries = self.repository.set_policy(
                 agent_id,
@@ -85,8 +86,8 @@ class IntegrationIsolationService:
             )
             self.agents.event_delivery_dispatcher.enqueue_immediate(deliveries)
             if running or data.restart:
-                self.authorization.require_action_for_visible(context, current, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-                current = self.agents._start_agent_unchecked(current, actor)
+                self.authorization.require_action_for_visible(context, pod, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+                pod = self.agents._start_agent_unchecked(pod, actor)
                 # Scheduling, volume attach and image pulls continue independently.
                 # A created deployment is provisioned, never assumed ready.
-        return self.agents._get_agent_read(current, context)
+        return self.agents._get_agent_read(pod if pod.id == agent_id else current, context)

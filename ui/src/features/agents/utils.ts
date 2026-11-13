@@ -26,6 +26,7 @@ export const agentsKey = {
     [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
   diagnostics: (org: string, id: string) => [..._agentsKeyBase.detail(id), "diagnostics", org] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
+  bots: (id: string) => [..._agentsKeyBase.detail(id), "bots"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
   llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
@@ -71,6 +72,8 @@ const AGENT_COLORS = [
   ["#4338ca", "#5b21b6"],
   ["#0f766e", "#0e7490"],
 ];
+
+export const podIdOf = (agent: Pick<Agent, "id" | "parentAgentId">) => agent.parentAgentId ?? agent.id;
 
 export function canAgent(
   agent: Pick<Agent, "allowedActions"> | null | undefined,

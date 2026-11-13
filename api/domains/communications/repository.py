@@ -130,6 +130,21 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
+    def related_bot_platform_keys(self, agent: Agent) -> set[str]:
+        relation = (
+            col(Agent.id) == agent.parent_agent_id
+            if agent.parent_agent_id is not None
+            else col(Agent.parent_agent_id) == agent.id
+        )
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(CommunicationConnection.platform_key)
+                    .join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id))
+                    .where(relation, col(Agent.deleted_at).is_(None), col(CommunicationConnection.retired_at).is_(None))
+                ).all()
+            )
+
     def get_active_by_platform_key(self, agent_id: UUID, platform_key: str) -> CommunicationConnection | None:
         with Session(self.delegate.engine) as session:
             return session.exec(

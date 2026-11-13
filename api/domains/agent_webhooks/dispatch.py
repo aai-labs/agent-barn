@@ -8,7 +8,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agent_webhooks.models import AgentWebhook, WebhookInvocation
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import AgentStatus, trigger_target
 from api.domains.agents.repository import AgentRepository
 from api.infrastructure.crypto import decrypt_token
 
@@ -49,9 +49,11 @@ class AgentWebhookDispatcher:
             return WebhookDispatchResult(0, error_code="AGENT_NOT_RUNNING", error_message="Agent is not running")
 
         trigger_key = decrypt_token(agent.communication_key_encrypted, self.config.agent_token_encryption_key)
+        pod_id, port = trigger_target(agent)
         url = self.config.agent_trigger_url.format(
-            agent_id=invocation.agent_id,
+            agent_id=pod_id,
             namespace=self.config.k8s_namespace,
+            port=port,
         )
         body = json.dumps(
             {

@@ -69,6 +69,9 @@ class ManagedUpdateOutcome(str, enum.Enum):
 # answer at all; the upper one keeps a runaway run inside one spend-limit window.
 MAX_TURNS_MIN = 1
 MAX_TURNS_MAX = 500
+MAX_BOTS_PER_PARENT = 5
+AGENT_TRIGGER_PORT = 8082
+BOT_TRIGGER_BASE_PORT = 8100
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -544,9 +547,27 @@ class Agent(BaseModel, table=True):
             name="ck_agent_template_pin_state",
         ),
         sa.CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_agent_llm_budget_non_negative"),
+        sa.ForeignKeyConstraint(
+            ["parent_agent_id", "organization_id"],
+            ["agent.id", "agent.organization_id"],
+            name="fk_agent_parent_agent",
+            ondelete="CASCADE",
+        ),
+        sa.CheckConstraint("(parent_agent_id IS NULL) = (bot_slot IS NULL)", name="ck_agent_bot_slot_with_parent"),
+        sa.CheckConstraint("bot_slot IS NULL OR bot_slot BETWEEN 1 AND 5", name="ck_agent_bot_slot_range"),
+        sa.CheckConstraint("parent_agent_id IS NULL OR parent_agent_id <> id", name="ck_agent_not_own_parent"),
+        sa.Index(
+            "uq_agent_live_bot_slot",
+            "parent_agent_id",
+            "bot_slot",
+            unique=True,
+            postgresql_where=sa.text("parent_agent_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
+    parent_agent_id: UUID | None = SqlField(default=None, nullable=True)
+    bot_slot: int | None = SqlField(default=None, sa_column=Column(sa.SmallInteger, nullable=True))
     created_by_user_id: UUID | None = SqlField(
         default=None,
         foreign_key="user.id",
@@ -718,6 +739,16 @@ class Agent(BaseModel, table=True):
 # the heartbeat, so one this old is treated as no update at all. Long enough to
 # cover the slowest single step between beats (a stop or a start).
 MANAGED_UPDATE_STALE_SECONDS = 120
+
+
+def pod_agent_id(agent: Agent) -> UUID:
+    return agent.parent_agent_id or agent.id
+
+
+def trigger_target(agent: Agent) -> tuple[UUID, int]:
+    if agent.bot_slot is None:
+        return agent.id, AGENT_TRIGGER_PORT
+    return pod_agent_id(agent), BOT_TRIGGER_BASE_PORT + agent.bot_slot
 
 
 def managed_update_in_flight(agent: Agent) -> bool:
@@ -1206,11 +1237,10 @@ class AgentNameSuggestionRead(PydanticBaseModel):
     first_name: str
 
 
-class AgentCreate(PydanticBaseModel):
+class AgentDefinition(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
-    agent_type: AgentType = AgentType.OPENCLAW
     # Template reference. The agent pins to template_version if given, else to
     # the lineage's latest version.
     template_key: str = Field(min_length=1, max_length=255)
@@ -1226,6 +1256,17 @@ class AgentCreate(PydanticBaseModel):
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
     verbose_mode: bool = False
+
+    @model_validator(mode="after")
+    def validate_unique_secret_providers(self) -> Self:
+        providers = [s.provider for s in self.secrets]
+        if len(providers) != len(set(providers)):
+            raise ValueError("Duplicate secret providers are not allowed")
+        return self
+
+
+class AgentCreate(AgentDefinition):
+    agent_type: AgentType = AgentType.OPENCLAW
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
     file_sync_enabled: bool = True
@@ -1233,12 +1274,9 @@ class AgentCreate(PydanticBaseModel):
     # agent.size.manage and a size the Organization may choose.
     agent_size_id: UUID | None = None
 
-    @model_validator(mode="after")
-    def validate_unique_secret_providers(self) -> AgentCreate:
-        providers = [s.provider for s in self.secrets]
-        if len(providers) != len(set(providers)):
-            raise ValueError("Duplicate secret providers are not allowed")
-        return self
+
+class BotCreate(AgentDefinition):
+    pass
 
 
 class IntegrationPolicyUpdate(PydanticBaseModel):
@@ -1681,6 +1719,7 @@ class AgentRead(PydanticBaseModel):
     status: AgentStatus
     agent_type: AgentType
     organization_id: UUID
+    parent_agent_id: UUID | None = None
     template_key: str
     template_version: int
     template_pin_type: AgentTemplatePinType = AgentTemplatePinType.SHARED
@@ -1738,6 +1777,8 @@ class AgentRead(PydanticBaseModel):
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+    parent_agent_id: UUID | None = None
+    include_bots: bool = False
 
 
 class PlatformAgentIdentity(NamedTuple):
@@ -1834,8 +1875,9 @@ class AgentHealthRead(PydanticBaseModel):
 
 def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
+    include_bots: bool = Query(default=False),
 ) -> AgentFilter:
-    return AgentFilter(status=status)
+    return AgentFilter(status=status, include_bots=include_bots)
 
 
 class AgentLogsRead(PydanticBaseModel):

@@ -7,6 +7,7 @@ import Link from "next/link";
 import type { Agent, AgentHealth } from "../schemas";
 import { canAgent, currentModelOf, formatModelName, isQuiet, isRecent } from "../utils";
 import { useAgentHealth } from "../hooks/use-agent-health";
+import { useBots } from "../hooks/use-bots";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
 
@@ -35,6 +36,23 @@ function presenceOf(status: Agent["status"], health: AgentHealth | null | undefi
     return { label: "Working", dot: "var(--ok)", badge: { bg: "color-mix(in srgb, var(--ok) 7%, var(--bg-elev))", fg: "var(--ok)" } };
   }
   return { label: "Disconnected", dot: "var(--warn)", badge: { bg: "var(--warn-soft)", fg: "var(--warn)" } };
+}
+
+function BotCount({ parentAgentId }: { parentAgentId: string }) {
+  const { bots } = useBots(parentAgentId);
+  if (bots.length === 0) return null;
+  const needingAttention = bots.filter((bot) => bot.status === "ERROR").length;
+  return (
+    <div className="mt-2.5 text-xs" style={{ color: "var(--ink-3)" }}>
+      {bots.length} {bots.length === 1 ? "bot" : "bots"}
+      {needingAttention > 0 && (
+        <span style={{ color: "var(--err)" }}>
+          {" "}
+          · {needingAttention} {needingAttention === 1 ? "needs" : "need"} attention
+        </span>
+      )}
+    </div>
+  );
 }
 
 export function AgentCard({ agent, href }: AgentCardProps) {
@@ -104,6 +122,7 @@ export function AgentCard({ agent, href }: AgentCardProps) {
             {formatModelName(model)}
           </div>
         )}
+        {agent.agentType === "hermes" && <BotCount parentAgentId={agent.id} />}
       </div>
 
       <div className="mt-auto flex min-h-16 items-center justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>

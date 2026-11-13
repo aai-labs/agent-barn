@@ -6,6 +6,7 @@ from injector import inject, singleton
 
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
 from api.domains.agent_sizes.models import size_is_pending
+from api.domains.agents.exceptions import refuse_on_bot
 from api.domains.agents.models import PlatformAgentRead, PlatformAgentRow
 from api.domains.agents.repository import AgentRepository, AgentSizeUnavailable
 from api.domains.agents.service import AgentService
@@ -77,6 +78,10 @@ class PlatformAgentService:
         row = self.repository.get_platform_agent(agent_id)
         if row is None:
             raise _not_found(agent_id)
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None:
+            raise _not_found(agent_id)
+        refuse_on_bot(agent)
         unchanged = row.agent_size_id == agent_size_id and row.agent_size_set_by_platform == (agent_size_id is not None)
         if unchanged:
             # Before the size rules, so re-sending a size since disabled is the no-op it is.
@@ -86,9 +91,6 @@ class PlatformAgentService:
             if size is None or not size.enabled:
                 raise _size_unavailable()
 
-        agent = self.repository.get_by_id(agent_id)
-        if agent is None:
-            raise _not_found(agent_id)
         with self.repository.lifecycle_lock(agent.id) as acquired:
             if not acquired:
                 raise HTTPException(

@@ -1,6 +1,8 @@
 from fastapi import status
 from fastapi.exceptions import HTTPException
 
+from api.domains.agents.models import Agent
+
 
 class AgentProvisioningPrecondition(HTTPException):
     """Raised when a start request fails a check, such as an Agent already running.
@@ -8,6 +10,14 @@ class AgentProvisioningPrecondition(HTTPException):
     The Agent keeps its current status and its recorded error. Any other exception
     raised while provisioning moves the Agent to ERROR and records why it failed.
     """
+
+
+def refuse_on_bot(agent: Agent) -> None:
+    if agent.parent_agent_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This Bot runs inside Parent Agent {agent.parent_agent_id}. Do this on the Parent Agent.",
+        )
 
 
 class AgentLimitReached(HTTPException):

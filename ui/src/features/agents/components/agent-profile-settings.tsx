@@ -51,6 +51,7 @@ export function AgentProfileSettings({
   // Only an Agent on the default reports what the default is.
   const platformDefaultMaxTurns = agent.maxTurns === null ? agent.effectiveMaxTurns : null;
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const isBot = agent.parentAgentId !== null;
   const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Full access — no approval prompts";
   const isDirty =
     name.trim() !== agent.name ||
@@ -65,7 +66,8 @@ export function AgentProfileSettings({
         agentId: agent.id,
         name: name.trim(),
         model,
-        ...(agent.agentType === "hermes" ? { approvalMode, verboseMode, maxTurns: parsedMaxTurns } : {}),
+        ...(agent.agentType === "hermes" ? { approvalMode, verboseMode } : {}),
+        ...(agent.agentType === "hermes" && !isBot ? { maxTurns: parsedMaxTurns } : {}),
       }).then(() => undefined),
     );
   }
@@ -133,7 +135,7 @@ export function AgentProfileSettings({
               Verbose mode — show progress while the Agent is working
             </Label>
           )}
-          {agent.agentType === "hermes" && (
+          {agent.agentType === "hermes" && !isBot && (
             <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
               Turn limit
               <input
@@ -222,7 +224,7 @@ export function AgentProfileSettings({
             <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Communications</div>
             <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>Managed as independent connections</div>
           </div>
-          <AgentSizeTile agent={agent} />
+          {!isBot && <AgentSizeTile agent={agent} />}
         </div>
         <p className="mb-0 mt-4 text-[0.8rem]" style={{ color: "var(--ink-4)" }}>
           Live deployment inventory is intentionally not editable from this page. Starting the Agent reconciles its deployment, service, storage, secrets, and configuration resources.

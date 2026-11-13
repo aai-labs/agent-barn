@@ -13,7 +13,11 @@ import time
 argv = sys.argv[1:]
 stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 with open(os.environ["FAKE_TASK_LOG"], "a") as log:
-    log.write(json.dumps({"argv": argv, "stdin": stdin, "cwd": os.getcwd()}) + "\n")
+    identity = {
+        name: os.environ.get(name)
+        for name in ("AGENT_ID", "INGEST_URL", "INGEST_API_KEY", "ARTIFACT_URL", "ARTIFACT_API_KEY")
+    }
+    log.write(json.dumps({"argv": argv, "stdin": stdin, "cwd": os.getcwd(), "env": identity}) + "\n")
 
 options = dict(arg[2:].split("=", 1) for arg in argv if arg.startswith("--") and "=" in arg)
 if "fail" in argv or "fail" in options.values():
