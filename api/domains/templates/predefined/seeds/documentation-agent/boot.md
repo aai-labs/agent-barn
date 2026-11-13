@@ -5,7 +5,7 @@ On startup, orient yourself to the event type and the latest relevant context.
 ## 1. Setup Check
 
 Read USER.md. If the Required fields (Confluence space + parent, Slack digest
-channel) are empty — or no source-control host is usable (no GitHub/Bitbucket
+channel) are empty — or no source-control host is usable (no GitHub/Bitbucket/GitLab
 repos mapped and USER.md's **Repos to document** is also empty):
 - **Slack DM or mention**: run the Setup Flow (AGENTS.md) instead of normal
   handling. Stop here.

@@ -529,6 +529,15 @@ preparation, assign new immutable runtime versions under the versioning rules be
 and deploy the connection migration, API, credential gateway and UI together.
 Existing Agents apply connection changes only on an explicit start or restart.
 
+GitLab requires both runtime images to include the `gitlab` command (aai-cli PR #35).
+Hermes 0.2.11 and OpenClaw 0.7.8 pin merged commit
+`826339ad92c874ca8fe93035ae75be8631e5a4ba`, which also carries the Custom API command.
+Rebuild and verify both images, and publish them, before deploying the GitLab
+migration, API, credential gateway and UI; an older image has the GitLab form and
+skill but cannot run either. The template seeder does not update templates that
+already exist, so on an existing environment the PR Reviewer template keeps requiring
+GitHub or Bitbucket until a new version of it is published.
+
 For a failed application, open the integration setup and Apply & Restart to retry, or select Restore previous mode and then Apply & Restart. A SharePoint reconnect-required message means the broker could not prove continuity; reconnect the sign-in before retrying. Preserve the aai-cli PVC store/key/marker until the handoff succeeds. Credential setup failures now stop startup; repair a corrupted store/key pair rather than booting with stale credentials. The gateway cache needs no separate service or replica affinity. Apply & Restart returns after provisioning; a slow image pull remains unverified and is not torn down on a readiness timeout. If an old pod stays Terminating past the termination budget, inspect its node and volume state before retrying; an operator must establish that the old process cannot run before forcing deletion. Preserve its gateway authorization until termination is established.
 
 Before rolling the application/schema back, apply direct SharePoint through the current API to hand back the latest service-side grant, then stop affected Agents. Do not downgrade while isolated SharePoint generations are live. The generation migration's downgrade requires `AGENT_TOKEN_ENCRYPTION_KEY` when SharePoint rows exist; it removes broker/cache metadata from encrypted payloads while preserving the latest refresh token so older strict schemas can decrypt them. It keeps the latest service-side refresh grant. Downgrade removes the revision marker metadata, so the older setup imports that DB grant again; it cannot capture any subsequent direct-PVC rotation. Keep the rollback interval short and reconnect if Microsoft refuses that grant. Default-source policy is discarded on schema downgrade because older applications have no such binding; restart Agents under the older application's routing after rollback. Keep a database backup and the PVC together; a mode change cannot revoke credentials already received by an Agent.
@@ -773,6 +782,12 @@ Documentation-only changes do not change a service image and do not require a se
   are `RESTORE_POINT_MAX_PER_AGENT` and `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, which are per
   Agent and not per Organization. With scheduled snapshots on, plan for up to
   `scheduled max + max + 1` restore point volumes per Agent.
+- **Per-environment sizing and retention.** `RESTORE_POINT_SIZE`, `RESTORE_POINT_MAX_PER_AGENT`,
+  `RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES`, `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT` and
+  `RESTORE_POINT_SCHEDULE_MAX_CONCURRENT` are optional GitHub Variables: `STAGING_`-prefixed for
+  staging, unprefixed for production (`deploy.yml`), and `PUBLIC_`-prefixed for the public
+  deploy (`deploy-public.yml`). Unset leaves the Helmfile default from `.env.deploy.spec`.
+  `make check-restore-points` fails if a deploy workflow stops passing one through.
 - **Scheduled snapshots** come from a `<release>-restore-point-schedule` CronJob
   (`restorePoints.schedule.*`: `cron` every 5 minutes, `intervalMinutes` 360 with 0 to turn
   snapshots off, `maxPerAgent` 4, `maxConcurrent` 2; disable the CronJob with

@@ -68,7 +68,7 @@ From USER.md:
 
 ### 2. Fetch new emails
 
-Use `aai-cli email` with the profile for `email_platform` (see TOOLS.md). Fetch all emails received **after** `last_check_timestamp`.
+Use `gog gmail` (see TOOLS.md). Fetch all emails received **after** `last_check_timestamp`.
 
 Skip:
 - Automated/noreply senders (newsletters, receipts, marketing, CI notifications, calendar confirmations)

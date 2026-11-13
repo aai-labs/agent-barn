@@ -7,10 +7,12 @@ upgrade that renames a state, column, or hook argument fails here.
 Exits non-zero with a message when the contract no longer holds.
 """
 
+import asyncio
 import importlib.util
 import os
 import sys
 import tempfile
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -20,12 +22,17 @@ os.environ["HERMES_HOME"] = str(HOME)
 sys.path.insert(0, "/opt/hermes")
 
 # Only resolvable inside the Hermes image, which is the only place this runs.
+import gateway.run as gateway_run  # ty: ignore[unresolved-import]
 from gateway import delivery_ledger  # ty: ignore[unresolved-import]
-from gateway.config import GatewayConfig, Platform  # ty: ignore[unresolved-import]
+from gateway.config import GatewayConfig, Platform, PlatformConfig  # ty: ignore[unresolved-import]
+from gateway.platforms.base import BasePlatformAdapter, SendResult  # ty: ignore[unresolved-import]
 from gateway.run import GatewayRunner  # ty: ignore[unresolved-import]
 from gateway.session import SessionSource, SessionStore  # ty: ignore[unresolved-import]
 from gateway.status import write_runtime_status  # ty: ignore[unresolved-import]
 from hermes_cli.plugins import VALID_HOOKS  # ty: ignore[unresolved-import]
+from plugins.platforms.discord.adapter import DiscordAdapter  # ty: ignore[unresolved-import]
+from plugins.platforms.slack.adapter import SlackAdapter  # ty: ignore[unresolved-import]
+from plugins.platforms.telegram.adapter import TelegramAdapter  # ty: ignore[unresolved-import]
 
 
 def fail(message):
@@ -54,6 +61,41 @@ def stages(mod):
     events = [(e["stage"], e.get("correlation_id")) for e in mod._buffer]
     mod._buffer.clear()
     return events
+
+
+def check_busy_turns(mod, gateway, source):
+    if BasePlatformAdapter.handle_message.__name__ != "handle_message":
+        fail("the adapter ingress changed")
+    for adapter_class in (SlackAdapter, DiscordAdapter, TelegramAdapter):
+        if adapter_class.handle_message is not BasePlatformAdapter.handle_message:
+            fail(f"{adapter_class.__name__} overrides handle_message, so queued messages lose their row")
+
+    gateway_run._gateway_runner_ref = weakref.ref(gateway)
+    mod._messages.clear()
+    queued = SimpleNamespace(text="queued", source=source, message_id="1700000000.000200", internal=False)
+    adapter = SlackAdapter(PlatformConfig(enabled=True, token="xoxb-1"))
+    asyncio.run(adapter.handle_message(queued))
+    if [row["provider_message_id"] for row in mod._messages] != ["1700000000.000200"]:
+        fail(f"a message was not recorded at the adapter: {mod._messages}")
+
+    mod._messages.clear()
+    sent = []
+
+    async def send(chat_id, content, metadata=None):
+        sent.append(content)
+        return SendResult(success=True, message_id="m1")
+
+    adapter.send = send
+    asyncio.run(
+        gateway._deliver_queued_first_response(
+            "The first answer. [[as_document]]", source=source, adapter=adapter, deliver_media=False
+        )
+    )
+    if sent != ["The first answer."]:
+        fail(f"the first response was not sent as expected: {sent}")
+    rows = [(row["direction"], row["content"]) for row in mod._messages]
+    if rows != [("OUTBOUND", "The first answer.")]:
+        fail(f"the first response was not recorded: {rows}")
 
 
 def main():
@@ -122,6 +164,8 @@ def main():
     expected = [("connection_degraded", None), ("connection_connected", None)]
     if (got := stages(mod)) != expected:
         fail(f"health stages {got}, expected {expected}")
+
+    check_busy_turns(mod, gateway, source)
 
     print("hermes observer contract ok")
 

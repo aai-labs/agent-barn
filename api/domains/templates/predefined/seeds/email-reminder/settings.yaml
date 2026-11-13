@@ -1,2 +1,4 @@
 name: Email Reminder
-description: Monitors a mailbox, flags action-required emails, and posts P1/P2 priority pings to Slack.
+description: Requires Google Workspace with Gmail selected. Monitors a mailbox, flags action-required emails, and posts P1/P2 priority pings to Slack.
+required_skills:
+- Google Workspace

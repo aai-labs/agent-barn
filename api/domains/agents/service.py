@@ -2727,6 +2727,8 @@ class AgentService:
                 agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
                 max_turns=agent.max_turns,
+                slack_listen_in=native_slack[0].get("listen_in_channel_ids") if native_slack else None,
+                discord_listen_in=native_discord.settings.get("listen_in_channel_ids") if native_discord else None,
             )
             if agent.parent_agent_id is not None:
                 hermes_cfg = bot_gateway_config(
