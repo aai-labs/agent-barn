@@ -128,7 +128,7 @@ under an Agent; the Agent that runs a run is a field of the run. The earlier
 | Route | Behavior |
 | --- | --- |
 | `GET /workflow-capabilities` | Independent authoring/execution availability; web review only |
-| `GET /workflows` | Paginated card summaries, including archives; no full snapshots. Filters: `created_by_me=true`, `archived=true\|false` |
+| `GET /workflows` | Paginated card summaries, including archives; no full snapshots. Each carries `default_agent_name` and `run_count`, both limited to Agents the caller can read. Filters: `created_by_me=true`, `archived=true\|false` |
 | `POST /workflows` | `{draft, default_agent_id?}`; 201 immutable v1 |
 | `GET /workflows/{id}` | Latest saved snapshot, revision, archive status, creator, default Agent and current allowed actions |
 | `PATCH /workflows/{id}` | `{expected_revision, default_agent_id}` (null clears it); new revision, no new version, or 409. Sending the default it already has changes nothing and keeps the revision |
@@ -205,9 +205,9 @@ Archive appear only for the creator and Organization Owners/Admins; Duplicate
 opens the editor filled from the saved snapshot, names the copy
 "<name> (copy)" and saves a new workflow.
 
-The Workflows tab filters the list: **All** shows workflows that are not
-archived, **Created by me** the viewer's own unarchived workflows, and
-**Archived** only archived ones. A card's name opens the saved workflow, which has
+The Workflows tab lists workflows that are not archived, with their count;
+**Show archived** switches to archived ones only (`workflowFilter=archived`). The
+API's `created_by_me` filter has no control on the page. A card's name opens the saved workflow, which has
 three views: Overview (the saved snapshot), Runs (that workflow's runs on Agents
 the viewer can read) and Version history. A card's menu also offers Open latest
 run, which opens the newest run of that workflow the viewer can see.
@@ -257,10 +257,14 @@ shared branded dialog. Run is disabled while execution admission is unavailable
 and for an archived workflow. Drafts are saved with Web review as their
 destination; the editor offers no other.
 
-The workflow list uses individual cards with the outcome, step/input counts,
-saved version, creator and archive status. Cards carry no run counts, because a
-count would reveal activity on Agents the viewer cannot read. A card's name opens
-the saved definition and the grid adapts to narrow screens.
+The workflow list uses individual cards with the saved version, archive status,
+description, the default Agent (name and avatar, or Unassigned) and a run count.
+The default Agent is shown only when the viewer can read it, and the count covers
+only runs on Agents the viewer can read, as the run lists do, so a card reveals no
+activity on other Agents. Counts for a page of cards come from one grouped query
+on the run table's workflow index. Run reads **Assign & run** when there is no
+default Agent. A card's name opens the saved definition and the grid adapts to
+narrow screens.
 
 The saved Overview shows numbered steps beside one focused detail panel.
 Overview, Runs and Version history are compact tabs; archive and duplicate live

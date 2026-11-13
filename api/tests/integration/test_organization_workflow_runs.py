@@ -184,6 +184,46 @@ def test_member_sees_and_acts_only_on_runs_of_agents_they_can_reach() -> None:
                 assert_that(response.status_code, equal_to(403), suffix)
 
 
+def test_workflow_list_counts_the_runs_and_names_the_default_agent_each_viewer_can_read() -> None:
+    with given(_RUN_GIVEN) as context:
+        readable = second_agent(context, "Readable Agent")
+        on_readable = create(context, default_agent_id=readable.id)
+        on_hidden = create(context, default_agent_id=context.agent.id)
+        unrun = create(context)
+        for workflow, agent in [
+            (on_readable, context.agent),
+            (on_readable, readable),
+            (on_readable, readable),
+            (on_hidden, None),
+        ]:
+            response, _, _ = start(context, workflow, agent=agent)
+            assert_that(response.status_code, equal_to(202), response.text)
+        member = member_headers(context)
+        grant(context, readable, AGENT_VIEWER_ROLE_ID)
+
+        def cards(headers: dict) -> dict[str, dict]:
+            response = context.client.get(base(context) + "/workflows", headers=headers)
+            assert_that(response.status_code, equal_to(200), response.text)
+            return {item["id"]: item for item in response.json()["items"]}
+
+        with then("the Owner sees every run and every default Agent"):
+            owner = cards(auth(context))
+            assert_that(owner[on_readable["id"]]["run_count"], equal_to(3))
+            assert_that(owner[on_readable["id"]]["default_agent_name"], equal_to("Readable Agent"))
+            assert_that(owner[on_hidden["id"]]["run_count"], equal_to(1))
+            assert_that(owner[on_hidden["id"]]["default_agent_name"], equal_to(context.agent.name))
+            assert_that(owner[unrun["id"]]["run_count"], equal_to(0))
+            assert_that(owner[unrun["id"]]["default_agent_name"], equal_to(None))
+
+        with then("a Member counts only runs on Agents they can read and sees only such a default Agent"):
+            seen = cards(member)
+            assert_that(seen[on_readable["id"]]["run_count"], equal_to(2))
+            assert_that(seen[on_readable["id"]]["default_agent_name"], equal_to("Readable Agent"))
+            assert_that(seen[on_hidden["id"]]["run_count"], equal_to(0))
+            assert_that(seen[on_hidden["id"]]["default_agent_id"], equal_to(None))
+            assert_that(seen[on_hidden["id"]]["default_agent_name"], equal_to(None))
+
+
 def test_runs_are_filtered_by_active_or_settled() -> None:
     with given(_RUN_GIVEN) as context:
         saved = create(context)

@@ -107,9 +107,9 @@ class WorkflowService:
             self.agents.require_visible(context, agent_id)
         return agent_id
 
-    def _readable_agents(self, agent_ids: set[UUID | None], context: CurrentUserContext) -> set[UUID]:
+    def _readable_agents(self, agent_ids: set[UUID | None], context: CurrentUserContext) -> dict[UUID, str]:
         scope = self.agents.authorization_scope(context, PermissionKey.AGENT_READ)
-        return self.repository.readable_agent_ids(agent_ids, scope)
+        return self.repository.readable_agents(agent_ids, scope)
 
     def capabilities(self, organization_id: UUID, context: CurrentUserContext) -> WorkflowCapabilitiesRead:
         self._member(organization_id, context)
@@ -181,12 +181,20 @@ class WorkflowService:
         )
         creators = self.repository.creators(row.created_by_membership_id for row in rows)
         readable = self._readable_agents({row.default_agent_id for row in rows}, context)
+        run_counts = self.repository.run_counts(
+            (row.id for row in rows), self.agents.authorization_scope(context, PermissionKey.AGENT_READ)
+        )
         authoring = self._authoring_enabled()
         return PaginatedItems(
             page,
             size,
             total,
-            [self._summary_read(organization_id, row, creators, readable, authoring, context) for row in rows],
+            [
+                self._summary_read(
+                    organization_id, row, creators, readable, run_counts.get(row.id, 0), authoring, context
+                )
+                for row in rows
+            ],
         )
 
     def _summary_read(
@@ -194,7 +202,8 @@ class WorkflowService:
         organization_id: UUID,
         row: WorkflowSummaryRow,
         creators: dict[UUID, WorkflowCreator],
-        readable: set[UUID],
+        readable: dict[UUID, str],
+        run_count: int,
         authoring: bool,
         context: CurrentUserContext,
     ) -> WorkflowSummaryRead:
@@ -203,6 +212,8 @@ class WorkflowService:
             id=row.id,
             created_by=self._creator(creators, row.created_by_membership_id),
             default_agent_id=row.default_agent_id if row.default_agent_id in readable else None,
+            default_agent_name=readable.get(row.default_agent_id) if row.default_agent_id else None,
+            run_count=run_count,
             revision=row.revision,
             archived_at=row.archived_at,
             version=WorkflowVersionSummaryRead(

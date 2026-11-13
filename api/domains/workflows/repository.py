@@ -18,6 +18,7 @@ from api.domains.workflows.models import (
     WorkflowDraft,
     WorkflowVersion,
 )
+from api.domains.workflows.run_models import WorkflowRun
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -176,14 +177,37 @@ class WorkflowRepository:
             ).all()
             return {row[0]: WorkflowCreator(*row) for row in rows}
 
-    def readable_agent_ids(self, agent_ids: Iterable[UUID | None], scope: AuthorizationScope) -> set[UUID]:
-        """The active Agents among these that the scope may read."""
+    def readable_agents(self, agent_ids: Iterable[UUID | None], scope: AuthorizationScope) -> dict[UUID, str]:
+        """The names of the active Agents among these that the scope may read."""
         agent_ids = {item for item in agent_ids if item is not None}
         if not agent_ids:
-            return set()
+            return {}
         with Session(self.delegate.engine) as session:
-            return set(
-                session.exec(select(Agent.id).where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(scope)))
+            return dict(
+                session.exec(
+                    select(Agent.id, Agent.name).where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(scope))
+                ).all()
+            )
+
+    def run_counts(self, workflow_ids: Iterable[UUID], scope: AuthorizationScope) -> dict[UUID, int]:
+        """How many runs of each workflow the scope may read, as the run lists show them.
+
+        One grouped count for a page of workflows, served by the run table's workflow index.
+        """
+        workflow_ids = set(workflow_ids)
+        if not workflow_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            return dict(
+                session.exec(
+                    select(WorkflowRun.workflow_id, func.count())
+                    .join(Agent, col(Agent.id) == col(WorkflowRun.agent_id))
+                    .where(
+                        col(WorkflowRun.workflow_id).in_(workflow_ids),
+                        *agent_scope_predicates(scope, include_deleted=True),
+                    )
+                    .group_by(col(WorkflowRun.workflow_id))
+                ).all()
             )
 
     def create(

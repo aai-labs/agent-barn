@@ -160,6 +160,9 @@ class WorkflowSummaryRead(DTO):
     created_by: WorkflowCreatorRead | None
     # Null when unset, archived, or not readable by the caller.
     default_agent_id: UUID | None
+    default_agent_name: str | None = None
+    # Runs the caller can read, counted as the run lists count them.
+    run_count: int = 0
     revision: int
     archived_at: datetime | None
     version: WorkflowVersionSummaryRead
