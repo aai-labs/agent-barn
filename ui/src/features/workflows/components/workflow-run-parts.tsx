@@ -5,9 +5,10 @@ import { Hourglass, Pause } from "lucide-react";
 import type { WorkflowApproval, WorkflowRun } from "../run-schemas";
 import { runStateLabel } from "../run-schemas";
 
-type Tone = "ok" | "warn" | "err" | "muted";
+type Tone = "accent" | "ok" | "warn" | "err" | "muted";
 
-const toneStyle: Record<Tone, CSSProperties> = {
+export const toneStyle: Record<Tone, CSSProperties> = {
+  accent: { background: "var(--accent-soft)", color: "var(--accent-ink)" },
   ok: { background: "var(--ok-soft)", color: "var(--ok)" },
   warn: { background: "var(--warn-soft)", color: "var(--warn)" },
   err: { background: "var(--err-soft)", color: "var(--err)" },
@@ -17,7 +18,7 @@ const toneStyle: Record<Tone, CSSProperties> = {
 export const runTone = (state: WorkflowRun["state"]): Tone =>
   ({
     QUEUED: "muted",
-    RUNNING: "ok",
+    RUNNING: "accent",
     PAUSED: "warn",
     BLOCKED: "warn",
     AWAITING_APPROVAL: "warn",
