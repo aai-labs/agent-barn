@@ -23,6 +23,7 @@ from api.domains.agents.builders import (
     native_telegram_channel,
     runtime_teams_channel,
 )
+from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
 from api.domains.agents.builders.openclaw import (
     LEGACY_WORKSPACE_MIGRATION_SH,
     LISTEN_IN_SYSTEM_PROMPT,
@@ -632,9 +633,10 @@ def test_artifact_command_and_instructions_are_available_without_memory() -> Non
     assert "agentbarn_artifacts.py" in config_map.data
     assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
     assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
-    assert "Do not wait for the user to mention artifacts, storage or the CLI" in config_map.data["AGENTS.md"]
-    assert "Do not publish scratch/intermediate files" in config_map.data["AGENTS.md"]
-    assert "Give the user a concise Markdown download link" in config_map.data["AGENTS.md"]
+    assert "When someone asks for a file" in config_map.data["AGENTS.md"]
+    assert "never a workspace path (people\ncan't open it)" in config_map.data["AGENTS.md"]
+    assert "Reply with\n`[Download <name>](<url>)`, the returned URL unchanged" in config_map.data["AGENTS.md"]
+    assert len(ARTIFACT_INSTRUCTIONS) < 1000
 
 
 def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
