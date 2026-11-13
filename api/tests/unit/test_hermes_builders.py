@@ -724,8 +724,11 @@ def test_passthrough_covers_every_tool_name_and_never_a_runtime_key():
             "AAI_CONFIG",
             "AAI_CUSTOM_API_ABC_TOKEN",
             "AF_GATEWAY_TOKEN_JIRA",
+            "AGENT_ID",
             "ARTIFACT_URL",
             "GOG_HOME",
+            "INGEST_API_KEY",
+            "INGEST_URL",
             "JIRA_EMAIL",
             "MEMORY_API_KEY",
         ]

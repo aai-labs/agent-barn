@@ -37,6 +37,7 @@ PLUGINS = (
     ("telemetry-push", "telemetry-push"),
     ("agentbarn-observer", "agentbarn-observer"),
     ("agentbarn-slack-access", "slack-access"),
+    ("agentbarn-tasks", "agentbarn-tasks"),
 )
 HELPERS = ("communications-runtime-adapter.py", "agent-trigger-server.py", "boot-run.py")
 

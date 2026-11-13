@@ -136,6 +136,8 @@ class Pod:
             (files / name).write_text(f"bot {name}")
         (files / "telemetry-push-plugin.yaml").write_text("name: telemetry-push")
         (files / "telemetry-push-init.py").write_text("x = 1")
+        (files / "agentbarn-tasks-plugin.yaml").write_text("name: agentbarn-tasks")
+        (files / "agentbarn-tasks-init.py").write_text("tasks = 1")
         if skills is not None:
             (files / "skills.json").write_text(json.dumps(skills))
 
@@ -497,3 +499,14 @@ def test_a_failing_gog_setup_means_the_bot_is_not_served(pod):
     _ok(pod.setup())
 
     assert pod.served() == []
+
+
+def test_a_bot_gets_its_own_copy_of_the_tasks_plugin(pod):
+    pod.manifest()
+    pod.bot()
+
+    pod.setup()
+
+    plugin = pod.home() / "plugins/agentbarn-tasks"
+    assert (plugin / "plugin.yaml").read_text() == "name: agentbarn-tasks"
+    assert (plugin / "__init__.py").read_text() == "tasks = 1"

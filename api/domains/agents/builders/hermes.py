@@ -119,6 +119,7 @@ BOT_CONFIG_ROOT = "/app/bots"
 _BOT_ENV_VOLUME = "bot-env"
 _BOT_ENV_VOLUME_SIZE = "1Mi"
 _BOT_PASSTHROUGH_PREFIXES = ("AF_GATEWAY_", "MEMORY_", "ARTIFACT_", "GOG_")
+_BOT_PASSTHROUGH_ALWAYS = ("AAI_CONFIG", "AGENT_ID", "INGEST_URL", "INGEST_API_KEY")
 _NEVER_PASSTHROUGH_PREFIXES = ("OPENAI_", "OPENROUTER_", "API_SERVER_", "FIRECRAWL_")
 
 
@@ -323,7 +324,7 @@ def build_hermes_gateway_config(
 def bot_passthrough_names(bot_env_names: Iterable[str], tool_env_names: Iterable[str]) -> list[str]:
     matched = {name for name in bot_env_names if name.startswith(_BOT_PASSTHROUGH_PREFIXES)}
     tools = {name for name in tool_env_names if not name.startswith(_NEVER_PASSTHROUGH_PREFIXES)}
-    return sorted({"AAI_CONFIG", *matched, *tools})
+    return sorted({*_BOT_PASSTHROUGH_ALWAYS, *matched, *tools})
 
 
 def with_passthrough_placeholders(env: dict[str, str], names: Iterable[str]) -> None:

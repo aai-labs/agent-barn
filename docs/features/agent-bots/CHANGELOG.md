@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: after the 2026-11-13 staging merge, make the rest of staging's in-pod pieces work per Bot: Task tracking, listen-in, and Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
+- Next: after the 2026-11-13 staging merge, make the rest of staging's in-pod pieces work per Bot: listen-in, and Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,15 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-13 — AF-425 — Task tracking per Bot
+
+- Delivered:
+  - `bot-setup.py` copies the `agentbarn-tasks` plugin into each Bot profile; the Bot's own config already enabled it.
+  - The plugin reads its identity the way telemetry-push does: the profile's `.env`, else the process environment. It registers only with a full identity, and runs `agentbarn-task` with `AGENT_ID`, `INGEST_URL`, `INGEST_API_KEY` and the `ARTIFACT_*` names from that identity, replaced together so Parent Agent and Bot values never mix.
+  - `bot_passthrough_names` always includes `AGENT_ID`, `INGEST_URL` and `INGEST_API_KEY`, so the `agentbarn-task` fallback in a Bot's terminal acts as the Bot.
+- Changed: nothing for a pod without Bots, whose plugin keeps reading the process environment (`start.sh` removes `/opt/data/.env`). The API already stored and showed Tasks per Bot.
+- Follow-up: listen-in per Bot.
 
 ### 2026-11-13 — AF-425 — Observer records only its own profile
 

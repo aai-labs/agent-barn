@@ -35,7 +35,7 @@ Bots have separate configuration and state, not enforced isolation. Everything b
 - The run cap of 10 concurrent runs; beyond it a delivery fails.
 - Volume, CPU, memory, image, logs, and crashes.
 
-Each Bot keeps its own SOUL and instructions, sessions, built-in memory, model and LiteLLM key, scheduled jobs, plugin identity, and Agent Barn keys, and its terminal sees its own integration credentials.
+Each Bot keeps its own SOUL and instructions, sessions, built-in memory, model and LiteLLM key, scheduled jobs, Tasks, plugin identity, and Agent Barn keys, and its terminal sees its own integration credentials and Agent Barn identity.
 
 ## Messaging
 
@@ -60,7 +60,7 @@ Each Bot keeps its own SOUL and instructions, sessions, built-in memory, model a
 ## UI
 
 - Opening an Agent shows the Parent Agent. A switcher in the path bar (`Organization / Parent Agent / Bot`) lists the Parent Agent, its Bots with their status, and New bot. Switching keeps the current tab.
-- Bot pages show the Bot's own Overview, Chat, Conversations, Memory, Tool calls, Artifacts, Playbooks, Activity, Costs and settings.
+- Bot pages show the Bot's own Overview, Chat, Conversations, Tasks, Memory, Tool calls, Artifacts, Playbooks, Activity, Costs and settings.
 - An "Agent" menu group holds Logs, Resource usage, File sync, Restore points and Size, and always acts on the Parent Agent.
 - Home shows the Parent Agent with its Bot count.
 - The UI states that Bots share one trust boundary wherever Bots are created or shared.
