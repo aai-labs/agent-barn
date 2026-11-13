@@ -135,40 +135,46 @@ export function CapacityPanel({
       {lines.length === 0 ? (
         <EmptyRow>No quota lines to show.</EmptyRow>
       ) : (
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}>
-          {lines.map((line) => (
-            <div
-              key={line.resource}
-              className="af-card min-w-0 px-4 py-3.5"
-              data-testid={`capacity-line-${line.resource}`}
-              data-level={line.level}
-            >
-              <p className="m-0 mb-1 truncate font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
-                {line.resource}
-              </p>
-              <p
-                className="m-0 truncate text-[20px] font-semibold"
-                style={{ color: line.level === "ok" || line.level === "unknown" ? "var(--ink)" : TONE_COLOR[capacityTone(line.level)] }}
+        // Two rows of four, or four rows of two where the section is narrow: never a short last row.
+        <div className="@container">
+          <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4">
+            {lines.map((line) => (
+              <div
+                key={line.resource}
+                className="af-card flex min-w-0 flex-col px-4 py-3.5"
+                data-testid={`capacity-line-${line.resource}`}
+                data-level={line.level}
               >
-                {line.used === null ? "—" : formatQuantity(line.used, line.unit)}
-              </p>
-              <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }}>
-                {lineText(line)}
-              </p>
-              {line.peak !== null && (
-                <p
-                  className="m-0 mt-0.5 text-[12px]"
-                  style={{ color: "var(--ink-4)" }}
-                  data-testid={`capacity-peak-${line.resource}`}
-                >
-                  {peakText(line, peakWindowHours)}
+                <p className="m-0 mb-1 truncate font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  {line.resource}
                 </p>
-              )}
-              {line.ratio !== null && line.level !== "ceiling_out_of_date" && (
-                <UsageMeter ratio={line.ratio} label={`${line.resource} against its quota`} className="mt-2" />
-              )}
-            </div>
-          ))}
+                <p
+                  className="m-0 truncate text-[20px] font-semibold"
+                  style={{ color: line.level === "ok" || line.level === "unknown" ? "var(--ink)" : TONE_COLOR[capacityTone(line.level)] }}
+                >
+                  {line.used === null ? "—" : formatQuantity(line.used, line.unit)}
+                </p>
+                <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  {lineText(line)}
+                </p>
+                {line.peak !== null && (
+                  <p
+                    className="m-0 mt-0.5 text-[12px]"
+                    style={{ color: "var(--ink-4)" }}
+                    data-testid={`capacity-peak-${line.resource}`}
+                  >
+                    {peakText(line, peakWindowHours)}
+                  </p>
+                )}
+                {/* Pushed to the bottom, so the bars line up whether or not a card has a peak line. */}
+                {line.ratio !== null && line.level !== "ceiling_out_of_date" && (
+                  <div className="mt-auto pt-2">
+                    <UsageMeter ratio={line.ratio} label={`${line.resource} against its quota`} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
