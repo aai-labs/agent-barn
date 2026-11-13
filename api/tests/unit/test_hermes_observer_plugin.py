@@ -21,6 +21,10 @@ _PLUGIN = (
     / "__init__.py"
 )
 
+_PROFILE_BOT = "0000000a-0000-4000-8000-00000000000a"
+_PARENT_INSTALL = "/opt/data/plugins/agentbarn-observer/__init__.py"
+_BOT_INSTALL = f"/opt/data/profiles/{_PROFILE_BOT}/plugins/agentbarn-observer/__init__.py"
+
 
 def _load_plugin():
     spec = importlib.util.spec_from_file_location("test_agentbarn_observer", _PLUGIN)
@@ -489,3 +493,61 @@ def test_register_without_ingest_settings_observes_nothing(monkeypatch) -> None:
         plugin.register(MagicMock())
 
     install.assert_not_called()
+
+
+def _installed_at(path: str):
+    plugin = _load_plugin()
+    plugin.__file__ = path
+    return plugin
+
+
+def _owned_adapter(adapter_class, owner):
+    adapter = adapter_class()
+    adapter._owner_profile = owner
+    return adapter
+
+
+def test_each_profile_records_only_arrivals_on_its_own_adapters() -> None:
+    parent, bot = _installed_at(_PARENT_INSTALL), _installed_at(_BOT_INSTALL)
+    calls: list = []
+    adapter_class = _adapter_class(calls)
+    parent._patch_ingress(adapter_class)
+    bot._patch_ingress(adapter_class)
+    runner = _gateway_runner()
+
+    with patch.object(parent, "_runner", return_value=runner), patch.object(bot, "_runner", return_value=runner):
+        asyncio.run(_owned_adapter(adapter_class, None).handle_message(_inbound(message_id="to-parent")))
+        asyncio.run(_owned_adapter(adapter_class, _PROFILE_BOT).handle_message(_inbound(message_id="to-bot")))
+
+    assert len(calls) == 2
+    assert [row["provider_message_id"] for row in _inbound_rows(parent)] == ["to-parent"]
+    assert [row["provider_message_id"] for row in _inbound_rows(bot)] == ["to-bot"]
+
+
+def test_each_profile_records_only_first_responses_through_its_own_adapters() -> None:
+    parent, bot = _installed_at(_PARENT_INSTALL), _installed_at(_BOT_INSTALL)
+    runner_class = _runner_class()
+    parent._patch_first_response(runner_class)
+    bot._patch_first_response(runner_class)
+    adapter_class = _adapter_class([])
+
+    for plugin in (parent, bot):
+        patch.object(plugin, "_visible_text", side_effect=lambda text, _adapter: text).start()
+    try:
+        for owner, response in ((None, "From the parent."), (_PROFILE_BOT, "From the bot.")):
+            asyncio.run(
+                runner_class()._deliver_queued_first_response(
+                    response, source=_source(), adapter=_owned_adapter(adapter_class, owner), metadata={}
+                )
+            )
+    finally:
+        patch.stopall()
+
+    assert len(runner_class.delivered) == 2
+    assert [row["content"] for row in _outbound_rows(parent)] == ["From the parent."]
+    assert [row["content"] for row in _outbound_rows(bot)] == ["From the bot."]
+
+
+def test_a_bot_install_belongs_to_its_profile_and_the_parents_to_none() -> None:
+    assert _installed_at(_BOT_INSTALL)._own_profile() == _PROFILE_BOT
+    assert _installed_at(_PARENT_INSTALL)._own_profile() is None

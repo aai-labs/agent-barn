@@ -76,7 +76,7 @@ def test_the_observer_reports_as_its_own_home(tmp_path, parent_env):
     module = _installed_plugin(tmp_path, "agentbarn-observer")
     _write_env(tmp_path, BOT_ENV)
 
-    with patch.object(module.threading, "Thread") as thread:
+    with patch.object(module.threading, "Thread") as thread, patch.object(module, "_install_ingress"):
         module.register(MagicMock())
 
     url, api_key, home = thread.call_args.kwargs["args"]
@@ -88,7 +88,7 @@ def test_the_observer_without_a_home_identity_uses_the_process(tmp_path, parent_
     module = _installed_plugin(tmp_path, "agentbarn-observer")
     monkeypatch.setenv("HERMES_HOME", "/opt/data")
 
-    with patch.object(module.threading, "Thread") as thread:
+    with patch.object(module.threading, "Thread") as thread, patch.object(module, "_install_ingress"):
         module.register(MagicMock())
 
     url, _, home = thread.call_args.kwargs["args"]

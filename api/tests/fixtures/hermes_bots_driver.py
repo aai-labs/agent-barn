@@ -197,6 +197,10 @@ def main() -> None:
     in_scope(second, strict_bot._snapshot_gate_env)
     check("a Bot's Discord allow list is its own", open_bot._gate_env("DISCORD_ALLOWED_USERS") == "111")
     check("another Bot's Discord allow list is its own", strict_bot._gate_env("DISCORD_ALLOWED_USERS") == "222")
+    open_bot.set_owner_profile(BOT_A)
+    strict_bot.set_owner_profile("default")
+    check("an adapter names the Bot profile that owns it", open_bot._owner_profile == BOT_A)
+    check("the default profile's adapter names no owner", strict_bot._owner_profile is None)
     print("All Bot checks passed")
 
 

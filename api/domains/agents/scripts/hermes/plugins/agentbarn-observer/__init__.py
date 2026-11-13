@@ -175,13 +175,27 @@ def _record_first_response(runner, response: str, source, adapter) -> None:
     )
 
 
+def _own_profile() -> str | None:
+    try:
+        home = Path(__file__).resolve().parents[2]
+    except IndexError:
+        return None
+    return _status_source(home)[1]
+
+
+def _owned(adapter) -> bool:
+    owner = getattr(adapter, "_owner_profile", None)
+    return (owner if isinstance(owner, str) else None) == _own_profile()
+
+
 def _patch_first_response(runner_class) -> None:
     original = runner_class._deliver_queued_first_response
 
     async def deliver(self, response, source, adapter, *args, **kwargs):
         await original(self, response, source, adapter, *args, **kwargs)
         try:
-            _record_first_response(self, response, source, adapter)
+            if _owned(adapter):
+                _record_first_response(self, response, source, adapter)
         except Exception as exc:
             logger.warning("agentbarn-observer could not record a first response: %s", exc)
 
@@ -213,7 +227,8 @@ def _patch_ingress(adapter_class) -> None:
 
     async def handle_message(self, event):
         try:
-            _observe_arrival(event)
+            if _owned(self):
+                _observe_arrival(event)
         except Exception as exc:
             logger.warning("agentbarn-observer could not record an arrival: %s", exc)
         return await original(self, event)

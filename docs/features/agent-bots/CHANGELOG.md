@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: after the 2026-11-13 staging merge, make staging's in-pod pieces work per Bot: the observer's message recording, Task tracking, listen-in, and Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
+- Next: after the 2026-11-13 staging merge, make the rest of staging's in-pod pieces work per Bot: Task tracking, listen-in, and Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-13 — AF-425 — Observer records only its own profile
+
+- Fixed: the observer's arrival and first-response wrappers patch process-wide classes, so every profile's copy saw every profile's messages. Each copy now works out its profile from where it is installed (`profiles/<id>` for a Bot, none for the Parent Agent) and records only messages on adapters Hermes marks as owned by that profile (`_owner_profile`). Hooks such as `pre_gateway_dispatch` already run per profile, because Hermes keeps one plugin manager per profile home.
+- Changed: the two Bot identity tests stub the ingress install that staging added to `register`. The Bot image driver checks that Hermes names an adapter's owning profile, and none for the default profile.
+- Follow-up: Task tracking per Bot.
 
 ### 2026-11-13 — AF-425 — Staging merge (Agent Tasks, listen-in)
 
