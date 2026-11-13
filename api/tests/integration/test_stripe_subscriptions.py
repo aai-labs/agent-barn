@@ -33,6 +33,7 @@ from api.tests.integration.test_subscriptions import (
     TIER_IDS,
     a_platform_administrator_is_signed_in,
     auth,
+    half_the_period_is_left,
     ledger,
     organization,
     someone_signed_up_on_free,
@@ -437,13 +438,14 @@ def test_the_sweep_leaves_stripe_periods_to_stripe():
 
 
 def test_an_upgrade_is_charged_now_and_applies_at_once():
-    with given(_setup(subscribed_through_stripe("cloud_1"))) as context:
+    with given(_setup(subscribed_through_stripe("cloud_1"), half_the_period_is_left)) as context:
         response = subscribe(context, "cloud_2")
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(stripe(context).price_changes, equal_to(["price_cloud_2"]))
         assert_that(organization(context).tier_id, equal_to(TIER_IDS["cloud_2"]))
-        assert_that(allowances(context), equal_to([Decimal(20), Decimal(80)]))
+        # Stripe prorates the price; the period's usage grows by the same share.
+        assert_that(allowances(context), equal_to([Decimal(20), Decimal(40)]))
 
 
 def test_a_declined_upgrade_changes_nothing():

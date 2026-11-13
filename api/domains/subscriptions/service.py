@@ -55,6 +55,14 @@ def _money(value: float | Decimal | None) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.000001"))
 
 
+def _prorated(amount: Decimal, subscription: OrganizationSubscription, now: datetime) -> Decimal:
+    """`amount` for the share of the current period still to run at `now`, to the cent."""
+    period = (subscription.current_period_end - subscription.current_period_start).total_seconds()
+    left = (subscription.current_period_end - now).total_seconds()
+    share = Decimal(str(min(1.0, max(0.0, left / period)))) if period > 0 else Decimal(0)
+    return (amount * share).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
 @dataclass(frozen=True)
 class _Actor:
     identity: ActorIdentity
@@ -550,12 +558,20 @@ class SubscriptionService:
         return f"{self.config.web_app_url.rstrip('/')}/dashboard/{organization_id}/billing"
 
     def _switch(self, subscription: OrganizationSubscription, tier: Tier, actor: _Actor) -> SubscriptionRead:
-        """Move to another paid Tier at once. A bigger allowance tops this period up to it;
-        a smaller one takes nothing back."""
+        """Move to another paid Tier at once. A bigger allowance tops this period up by the
+        difference for the part of the period that is left, as the provider prorates the
+        price; a smaller one takes nothing back."""
+        previous = self._tier(subscription.tier_id)
         subscription.tier_id = tier.id
         subscription = self._save(subscription, ORGANIZATION_SUBSCRIPTION_CHANGED, actor, change="tier")
         self._set_tier(subscription.organization_id, tier, actor)
-        top_up = tier.monthly_usage_usd - subscription.period_allowance_usd
+        # A period not paid for yet has no allowance to top up: it gets the new Tier's whole
+        # allowance once it is paid (`ensure_allowance`).
+        top_up = (
+            _prorated(tier.monthly_usage_usd - previous.monthly_usage_usd, subscription, datetime.now(UTC))
+            if subscription.period_allowance_usd > 0
+            else Decimal(0)
+        )
         if top_up > 0:
             subscription = self._grant_allowance(subscription, top_up, actor, reference_suffix=f":{tier.key}")
         self.holds.apply(subscription.organization_id, actor=actor.identity, actor_display=actor.display)

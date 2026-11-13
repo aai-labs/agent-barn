@@ -65,6 +65,7 @@ Related context: [Tiers](../tiers.md), [Credit](../credit.md), [Trial onboarding
 - Changed:
   - the tiers and subscriptions packages no longer import each other: Tier assignment and `TierPlans` moved to the subscriptions domain;
   - assigning the Tier an Organization is already on, as the platform's choice, records the change of who chose it;
+  - an upgrade's allowance top-up is prorated like its price: the difference in monthly usage for the share of the period left, rather than the new Tier's whole allowance;
   - schema: the seven Tier migrations are squashed into three (`55e07653f502`, `86bca32c95be`, `38de1199ae19`); `organization_subscription.activated_at` is new. The revisions the entries below name no longer exist;
   - docs: `tiers.md`.
 

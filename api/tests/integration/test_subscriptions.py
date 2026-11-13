@@ -303,14 +303,42 @@ def test_a_tier_chosen_by_the_platform_is_not_replaced_by_a_subscription():
         assert_that(subscribe(context, "cloud_1").status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
-def test_moving_to_a_bigger_tier_tops_the_months_usage_up():
+def half_the_period_is_left(context):
+    """The live subscription's 30-day period began 15 days ago."""
+    now = datetime.now(UTC)
+    with Session(context.postgres_delegate.engine) as session:
+        subscription = session.exec(
+            select(OrganizationSubscription).where(OrganizationSubscription.organization_id == context.organization.id)
+        ).one()
+        subscription.current_period_start = now - timedelta(days=15)
+        subscription.current_period_end = now + timedelta(days=15)
+        session.add(subscription)
+        session.commit()
+
+
+def test_moving_to_a_bigger_tier_tops_up_the_rest_of_the_period():
+    with given(_setup()) as context:
+        subscribe(context, "cloud_1")
+        half_the_period_is_left(context)
+
+        with when("the owner moves to Cloud Tier 2 halfway through the period"):
+            response = subscribe(context, "cloud_2")
+
+        with then("the period's usage grows by half the difference, as the price is prorated"):
+            assert_that(
+                response.json()["subscription"], has_entries(tier=has_entries(key="cloud_2"), allowance_usd=60.0)
+            )
+            assert_that(organization(context).tier_id, equal_to(TIER_IDS["cloud_2"]))
+            assert_that(ledger(context)[-1], equal_to((CreditGrantKind.ALLOWANCE, Decimal(40))))
+
+
+def test_moving_to_a_bigger_tier_at_the_start_of_the_period_tops_up_the_whole_difference():
     with given(_setup()) as context:
         subscribe(context, "cloud_1")
 
         response = subscribe(context, "cloud_2")
 
-        assert_that(response.json()["subscription"], has_entries(tier=has_entries(key="cloud_2"), allowance_usd=100.0))
-        assert_that(organization(context).tier_id, equal_to(TIER_IDS["cloud_2"]))
+        assert_that(response.json()["subscription"], has_entries(allowance_usd=100.0))
         assert_that(ledger(context)[-1], equal_to((CreditGrantKind.ALLOWANCE, Decimal(80))))
 
 
