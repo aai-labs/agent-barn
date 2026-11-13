@@ -381,7 +381,7 @@ def test_postgresql_keeps_a_run_on_its_agent_and_inside_the_workflows_organizati
                     session.commit()
 
 
-def _insert_previous_schema_workflow(connection, agent_id) -> UUID:
+def _insert_previous_schema_workflow(connection, agent_id, author_id=None) -> UUID:
     workflow_id = uuid4()
     connection.execute(
         text(
@@ -392,10 +392,16 @@ def _insert_previous_schema_workflow(connection, agent_id) -> UUID:
     )
     connection.execute(
         text(
-            "INSERT INTO workflow_version (id, created_at, updated_at, workflow_id, number, snapshot) "
-            "VALUES (:id, now(), now(), :workflow, 1, CAST(:snapshot AS jsonb))"
+            "INSERT INTO workflow_version "
+            "(id, created_at, updated_at, workflow_id, number, snapshot, created_by_user_id) "
+            "VALUES (:id, now(), now(), :workflow, 1, CAST(:snapshot AS jsonb), :author)"
         ),
-        {"id": uuid4(), "workflow": workflow_id, "snapshot": json.dumps(draft("Deleted Agent's report"))},
+        {
+            "id": uuid4(),
+            "workflow": workflow_id,
+            "snapshot": json.dumps(draft("Earlier report")),
+            "author": author_id,
+        },
     )
     return workflow_id
 
@@ -411,6 +417,10 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
         response, _, _ = start(context, saved)
         run_id = response.json()["id"]
         deleted = second_agent(context, "Deleted Agent")
+        author_headers = member_headers(context)
+        author, author_membership = context.member, context.member_membership.id
+        member_headers(context)
+        departed, departed_membership = context.member, context.member_membership.id
         engine = context.postgres_delegate.engine
         owner_membership = context.organization_user.id
         later_admin, earliest_admin = uuid4(), uuid4()
@@ -427,6 +437,9 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
                     runs = connection.execute(text("SELECT count(*) FROM workflow_run")).scalar_one()
                     assert_that(runs, equal_to(1))
                 orphan = _insert_previous_schema_workflow(connection, deleted.id)
+                authored = _insert_previous_schema_workflow(connection, context.agent.id, author.id)
+                left = _insert_previous_schema_workflow(connection, context.agent.id, departed.id)
+                connection.execute(text("DELETE FROM user_organization WHERE id = :id"), {"id": departed_membership})
                 connection.execute(text("UPDATE agent SET deleted_at = now() WHERE id = :id"), {"id": deleted.id})
                 if not has_owner:
                     connection.execute(
@@ -462,15 +475,27 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
                 text("SELECT agent_id FROM workflow_run WHERE id = :id"), {"id": run_id}
             ).scalar_one()
             permissions = connection.execute(permission).scalar_one()
-        creator = owner_membership if has_owner else earliest_admin if has_admin else None
+        fallback = owner_membership if has_owner else earliest_admin if has_admin else None
 
         with then("the workflow.manage Permission is in the catalogue again"):
             assert_that(permissions, equal_to(1))
-        with then("each workflow belongs to its Agent's Organization, created by the Owner, else the earliest Admin"):
-            assert_that(
-                {(row.organization_id, row.created_by_membership_id) for row in rows.values()},
-                equal_to({(context.organization.id, creator)}),
+        with then("each workflow belongs to its Agent's Organization"):
+            assert_that({row.organization_id for row in rows.values()}, equal_to({context.organization.id}))
+        with then("its creator is whoever saved the first version, whatever their Organization Role is now"):
+            assert_that(rows[UUID(saved["id"])].created_by_membership_id, equal_to(owner_membership))
+            assert_that(rows[authored].created_by_membership_id, equal_to(author_membership))
+        with then("a workflow with no author, or whose author left, goes to the Owner, else the earliest Admin"):
+            assert_that(rows[orphan].created_by_membership_id, equal_to(fallback))
+            assert_that(rows[left].created_by_membership_id, equal_to(fallback))
+        with then("a Member who wrote a workflow before the upgrade still changes it"):
+            url = base(context) + f"/workflows/{authored}"
+            detail = context.client.get(url, headers=author_headers).json()
+            assert_that(detail["allowed_actions"], equal_to(["save_version", "archive"]))
+            assert_that(detail["created_by"]["user_id"], equal_to(str(author.id)))
+            response = context.client.post(
+                url + "/versions", headers=author_headers, json={"expected_revision": 1, "draft": draft()}
             )
+            assert_that(response.status_code, equal_to(201), response.text)
         with then("the Agent it was written for becomes its default, unless that Agent was deleted"):
             assert_that(rows[UUID(saved["id"])].default_agent_id, equal_to(context.agent.id))
             assert_that(rows[orphan].default_agent_id, is_(None))
@@ -478,9 +503,11 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
             assert_that(run_agent, equal_to(context.agent.id))
 
         if has_owner:
-            with then("both workflows are served to the Organization, the deleted Agent's included"):
+            with then("every workflow is served to the Organization, the deleted Agent's included"):
                 items = context.client.get(base(context) + "/workflows", headers=auth(context)).json()["items"]
-                assert_that({item["id"] for item in items}, equal_to({saved["id"], str(orphan)}))
+                assert_that(
+                    {item["id"] for item in items}, equal_to({saved["id"], str(orphan), str(authored), str(left)})
+                )
                 detail = context.client.get(runs_url(context) + f"/{run_id}", headers=auth(context))
                 assert_that(detail.json()["agent_id"], equal_to(str(context.agent.id)))
 

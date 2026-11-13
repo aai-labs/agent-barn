@@ -89,12 +89,16 @@ def upgrade() -> None:
     op.execute(
         "UPDATE workflow w SET default_agent_id = a.id FROM agent a WHERE a.id = w.agent_id AND a.deleted_at IS NULL"
     )
-    # Their creator becomes the Organization's Owner, else its earliest Admin.
+    # Their creator is whoever saved the first version, while still a Member of the
+    # Organization; otherwise the Organization's Owner, else its earliest Admin.
     op.execute(
-        """UPDATE workflow w SET created_by_membership_id = (
-             SELECT m.id FROM user_organization m
-             WHERE m.organization_id = w.organization_id AND m.role IN ('OWNER', 'ADMIN')
-             ORDER BY (m.role = 'OWNER') DESC, m.created_at, m.id LIMIT 1)"""
+        """UPDATE workflow w SET created_by_membership_id = COALESCE(
+             (SELECT m.id FROM workflow_version v
+              JOIN user_organization m ON m.user_id = v.created_by_user_id AND m.organization_id = w.organization_id
+              WHERE v.workflow_id = w.id AND v.number = 1),
+             (SELECT m.id FROM user_organization m
+              WHERE m.organization_id = w.organization_id AND m.role IN ('OWNER', 'ADMIN')
+              ORDER BY (m.role = 'OWNER') DESC, m.created_at, m.id LIMIT 1))"""
     )
     op.execute("UPDATE workflow_run r SET agent_id = w.agent_id FROM workflow w WHERE w.id = r.workflow_id")
 

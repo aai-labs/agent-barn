@@ -606,7 +606,7 @@ requests are unchanged. No Agent update or restart is needed.
 | Table | Change |
 | --- | --- |
 | `workflow` | Adds `organization_id` (required, cascades with the Organization), filled from the workflow's Agent. |
-| `workflow` | Adds `created_by_membership_id` (nullable, set to null when the Membership is removed), filled with the Organization's Owner, else its earliest Admin. |
+| `workflow` | Adds `created_by_membership_id` (nullable, set to null when the Membership is removed), filled with the Membership of whoever saved the workflow's first version while they are still a Member of the Organization, else the Organization's Owner, else its earliest Admin. |
 | `workflow` | Adds `default_agent_id` (nullable, set to null when the Agent row is removed), filled with the workflow's Agent unless that Agent was already deleted. |
 | `workflow` | Drops `agent_id`. |
 | `workflow_run` | Adds `agent_id` (required, cascades with the Agent), filled from the workflow's Agent, and the nullable `title`. |
