@@ -1218,6 +1218,8 @@ def test_each_profile_classifies_only_messages_on_its_own_adapters(plugin, monke
     monkeypatch.setattr(bot, "_is_known_command", lambda name: False)
 
     class Adapter:
+        _owner_profile: str | None = None
+
         _self_is_explicitly_mentioned = staticmethod(lambda _raw: False)
 
         async def handle_message(self, event):

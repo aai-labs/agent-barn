@@ -52,6 +52,10 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-13 — AF-425 — Listen-in test type checking
+
+- Fixed: the listen-in test adapter declares its nullable owner profile, so the per-Bot ingress test passes type checking. Runtime behavior is unchanged.
+
 ### 2026-11-13 — AF-425 — Bots on the organization Tasks page
 
 - Delivered: `GET /organizations/{organization_id}/agents` takes `include_bots` (default false). With it, the list also returns the Bots the caller can read, through the same visibility rule, so a Bot readable only through its Parent Agent's grants is included. The Organization Tasks page asks for it: Bots appear in the Agent filter right after their Parent Agent as "Bot · Parent Agent", their Tasks show that name, and the Task dialog links to the Bot.
