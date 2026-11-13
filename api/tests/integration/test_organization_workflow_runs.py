@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session
 
+from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_VIEWER_ROLE_ID
@@ -182,6 +183,41 @@ def test_member_sees_and_acts_only_on_runs_of_agents_they_can_reach() -> None:
             ]:
                 response = context.client.post(readable_url + suffix, headers=member, json=body)
                 assert_that(response.status_code, equal_to(403), suffix)
+
+
+def test_update_access_lost_after_the_first_check_still_stops_the_action(monkeypatch) -> None:
+    with given(_RUN_GIVEN) as context:
+        saved = create(context)
+        response, _, _ = start(context, saved)
+        url = runs_url(context) + f"/{response.json()['id']}"
+        _, row, token = attempt(context, response.json()["id"])
+        request_id = _raise(context, row, token)
+        member = member_headers(context)
+        grant(context, context.agent, AGENT_VIEWER_ROLE_ID)
+        revision = context.client.get(url, headers=member).json()["revision"]
+
+        with when("the request's first check passed just before the Member's agent.update was withdrawn"):
+            monkeypatch.setattr(AgentAuthorization, "require_action_for_visible", lambda *args, **kwargs: None)
+            monkeypatch.setattr(
+                AgentAuthorization,
+                "require_action",
+                lambda self, context, agent_id, *args, **kwargs: self.require_visible(context, agent_id),
+            )
+
+        with then("cancel, decide and start check again under their lock and refuse"):
+            for target, body, detail in [
+                (url + "/cancel", {"expected_revision": revision}, "Run access changed"),
+                (url + f"/approvals/{request_id}/decision", {"decision": "approve"}, "Run access changed"),
+                (runs_url(context), run_payload(context, saved), "Workflow access changed"),
+            ]:
+                refused = context.client.post(target, headers=member, json=body)
+                assert_that((refused.status_code, refused.json()["detail"]), equal_to((409, detail)), target)
+
+        with then("the run, its request and the run list are as they were"):
+            [run] = listed(context)
+            assert_that(
+                (run["state"], run["revision"], run["approval"]["state"]), equal_to(("RUNNING", revision, "LIVE"))
+            )
 
 
 def test_workflow_list_counts_the_runs_and_names_the_default_agent_each_viewer_can_read() -> None:
