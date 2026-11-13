@@ -2,20 +2,20 @@
 
 import { Plus, Trash2 } from "lucide-react";
 
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 
 import { type WorkflowDraft } from "../schemas";
 import { inputKeyFromLabel } from "../utils";
 import { inputField } from "../validation";
 
 type WorkflowInput = WorkflowDraft["inputs"][number];
+
+const TYPES: { value: WorkflowInput["type"]; label: string }[] = [
+  { value: "text", label: "Text" },
+  { value: "file", label: "File" },
+  { value: "number", label: "Number" },
+  { value: "boolean", label: "Yes / no" },
+];
 
 /** The information a run asks for when it starts, one row per input. */
 export function WorkflowInputsEditor({
@@ -38,25 +38,36 @@ export function WorkflowInputsEditor({
   const text = (
     index: number,
     name: "label" | "description",
-    label: string,
+    caption: string,
     placeholder: string,
     onValue: (value: string) => void,
   ) => {
-    const error = errorFor(inputField(index, name));
+    const field = inputField(index, name);
+    const error = errorFor(field);
+    const id = `workflow-${field.replaceAll(":", "-")}`;
     return (
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0">
+        <label
+          htmlFor={id}
+          className="mb-1 block text-xs font-medium text-[var(--ink-3)]"
+        >
+          {caption}
+        </label>
         <input
-          className={`af-input block w-full${name === "label" ? " font-semibold" : ""}`}
-          aria-label={label}
+          id={id}
+          className={`af-input block w-full${name === "label" ? " font-semibold placeholder:font-normal" : ""}`}
+          // Names the row for assistive technology; it contains the visible caption.
+          aria-label={`Input ${index + 1} ${caption.toLowerCase()}`}
           aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
           placeholder={placeholder}
           value={inputs[index][name]}
           onChange={(event) => onValue(event.target.value)}
-          onBlur={() => onTouch(inputField(index, name))}
+          onBlur={() => onTouch(field)}
           style={error ? { borderColor: "var(--err)" } : undefined}
         />
         {error && (
-          <p className="mt-1.5 text-xs" style={{ color: "var(--err)" }}>
+          <p id={`${id}-error`} className="mt-1.5 text-xs" style={{ color: "var(--err)" }}>
             {error}
           </p>
         )}
@@ -81,51 +92,66 @@ export function WorkflowInputsEditor({
           <li
             key={index}
             aria-label={`Input ${index + 1}`}
-            className="flex flex-wrap items-start gap-2 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-3"
+            className="rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]"
           >
-            {/* Saved keys stay unchanged until their label is edited. */}
-            {text(index, "label", `Input ${index + 1} label`, "e.g. Release tag", (label) =>
-              update(index, { label, key: inputKeyFromLabel(label) }),
-            )}
-            {text(
-              index,
-              "description",
-              `Input ${index + 1} description`,
-              "What should the person starting a run enter?",
-              (description) => update(index, { description }),
-            )}
-            <Select
-              value={item.type}
-              onValueChange={(type: WorkflowInput["type"]) => update(index, { type })}
-            >
-              <SelectTrigger aria-label={`Input ${index + 1} type`} className="w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="text">Text</SelectItem>
-                  <SelectItem value="file">File</SelectItem>
-                  <SelectItem value="number">Number</SelectItem>
-                  <SelectItem value="boolean">Yes / no</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <label className="flex h-9 items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={item.required}
-                onChange={(event) => update(index, { required: event.target.checked })}
-              />
-              Required
-            </label>
-            <button
-              type="button"
-              className="af-btn af-btn-icon af-btn-sm"
-              aria-label={`Remove input ${index + 1}`}
-              onClick={() => onChange(inputs.filter((_, i) => i !== index))}
-            >
-              <Trash2 size={15} />
-            </button>
+            <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+              {/* Saved keys stay unchanged until their label is edited. */}
+              {text(index, "label", "Label", "e.g. Release tag", (label) =>
+                update(index, { label, key: inputKeyFromLabel(label) }),
+              )}
+              {text(
+                index,
+                "description",
+                "Description",
+                "What should the person starting a run enter?",
+                (description) => update(index, { description }),
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[var(--line)] px-4 py-2.5">
+              <div
+                role="radiogroup"
+                aria-label={`Input ${index + 1} type`}
+                className="inline-flex rounded-lg bg-[var(--bg-soft)] p-0.5"
+              >
+                {TYPES.map((type) => {
+                  const selected = item.type === type.value;
+                  return (
+                    <button
+                      key={type.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => update(index, { type: type.value })}
+                      className={`h-7 rounded-md px-3 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-color)] ${
+                        selected
+                          ? "bg-[var(--bg-elev)] text-[var(--ink)] shadow-sm"
+                          : "text-[var(--ink-3)] hover:text-[var(--ink)]"
+                      }`}
+                    >
+                      {type.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <label className="ml-auto flex items-center gap-2 text-sm text-[var(--ink-2)]">
+                <Checkbox
+                  checked={item.required}
+                  onCheckedChange={(checked) =>
+                    update(index, { required: checked === true })
+                  }
+                  aria-label={`Input ${index + 1} required`}
+                />
+                Required
+              </label>
+              <button
+                type="button"
+                className="af-btn af-btn-icon af-btn-sm"
+                aria-label={`Remove input ${index + 1}`}
+                onClick={() => onChange(inputs.filter((_, i) => i !== index))}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
           </li>
         ))}
       </ul>
