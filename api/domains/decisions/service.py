@@ -76,15 +76,19 @@ class DecisionService:
 
     def current_model(self) -> str:
         """The Platform's chosen name, or the deployment default if that is no longer configured."""
-        chosen = self.repository.read(self.config.decision_default_model).model
-        if chosen in self.config.decision_models:
-            return chosen
-        logger.warning("The chosen decision model is no longer configured; using the deployment default")
-        return self.config.decision_default_model
+        return self._effective_settings().model
 
     def read_settings(self, context: CurrentUserContext) -> PlatformDecisionSettingsRead:
+        """The model that answers now, which is the default when the saved choice is no longer configured."""
         self.authority.require_platform_admin(context.user)
-        return self.repository.read(self.config.decision_default_model)
+        return self._effective_settings()
+
+    def _effective_settings(self) -> PlatformDecisionSettingsRead:
+        settings = self.repository.read(self.config.decision_default_model)
+        if settings.model in self.config.decision_models:
+            return settings
+        logger.warning("The chosen decision model is no longer configured; using the deployment default")
+        return PlatformDecisionSettingsRead(model=self.config.decision_default_model)
 
     def models(self, context: CurrentUserContext) -> list[dict[str, str]]:
         self.authority.require_platform_admin(context.user)

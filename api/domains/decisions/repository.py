@@ -41,8 +41,8 @@ class PlatformDecisionRepository:
             )
             row = session.get(PlatformDecisionSettings, 1)
             previous = row.model if row else default_model
-            if row and previous == model:
-                return PlatformDecisionSettingsRead(model=row.model, updated_at=row.updated_at), []
+            if previous == model:
+                return PlatformDecisionSettingsRead(model=model, updated_at=row.updated_at if row else None), []
             now = datetime.now(UTC)
             session.merge(PlatformDecisionSettings(id=1, model=model, updated_at=now, updated_by=actor_id))
             event = EVENT_REGISTRY.build_event(

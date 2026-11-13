@@ -89,6 +89,30 @@ def test_choosing_a_model_persists_it_with_one_audit_event():
             assert_that(events[0].payload, has_entries(previous="jev", current="openai"))
 
 
+def test_saving_the_default_before_any_choice_records_nothing():
+    with given(decisions_api_setup(a_platform_admin_without_membership())) as context:
+        with when("a Platform Administrator saves the default model on a fresh Platform"):
+            response = context.client.put(BASE, headers=_auth(context), json={"model": "jev"})
+
+        with then("the default is reported and nothing is stored or audited"):
+            assert_that(response.json(), has_entries(model="jev", updated_at=None))
+            with Session(context.postgres_delegate.engine) as session:
+                assert_that(session.get(PlatformDecisionSettings, 1), equal_to(None))
+            assert_that(_changed_events(context), has_length(0))
+
+
+def test_a_saved_choice_no_longer_configured_is_shown_as_the_default():
+    with given(decisions_api_setup(a_platform_admin_without_membership())) as context:
+        context.client.put(BASE, headers=_auth(context), json={"model": "openai"})
+        context.injector.get(Config).decision_models = {"jev": JEV}
+
+        with when("a Platform Administrator reads the setting after OpenAI is removed from configuration"):
+            response = context.client.get(BASE, headers=_auth(context))
+
+        with then("the model that answers is reported"):
+            assert_that(response.json(), has_entries(model="jev", updated_at=None))
+
+
 @pytest.mark.parametrize("model", ["gemini", JEV, ""])
 def test_models_that_are_not_configured_are_refused(model):
     with given(decisions_api_setup(a_platform_admin_without_membership())) as context:
