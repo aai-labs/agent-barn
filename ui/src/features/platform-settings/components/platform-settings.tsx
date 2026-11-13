@@ -42,7 +42,7 @@ export const PLATFORM_SETTINGS_SECTIONS = {
   decisions: {
     label: "Decisions",
     Icon: Scale,
-    description: "The model that answers the platform's questions about Agents' activity, for every Organization.",
+    description: "The model that answers the platform's questions about Agents, for every Organization.",
   },
   trials: {
     label: "Signup & trials",
