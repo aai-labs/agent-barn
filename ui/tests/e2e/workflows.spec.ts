@@ -147,18 +147,19 @@ test.describe("WF01 Organization workflow authoring", () => {
     await expect(workflows.saveButton()).toBeEnabled();
   });
 
-  test("cards show the plan, its creator and no owning Agent or run count", async ({ page }) => {
+  test("cards show the plan, its default Agent and the runs the viewer can see", async ({ page }) => {
+    support.defaultAgentId = MOCK_AGENT_ID;
+    support.runCount = 12;
     await support.intercept(MOCK_AGENT_ID, { saved: true });
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     const card = workflows.card(NAME);
     await expect(card).toContainText("v1");
     await expect(card).toContainText("Summarize weekly pipeline changes");
-    await expect(card).toContainText("Created by Dana Creator");
-    await expect(card).toContainText("2 steps · 1 input");
-    await expect(card).not.toContainText(/\d+ runs?\b/);
-    await expect(card).not.toContainText("Maya");
-    await expect(card.getByRole("button", { name: `Run ${NAME}` })).toBeVisible();
+    await expect(card).toContainText("Maya");
+    await expect(card).toContainText("12 runs");
+    await expect(card).not.toContainText("Created by");
+    await expect(card.getByRole("button", { name: `Run ${NAME}` })).toHaveText("Run");
     await card.getByRole("button", { name: `Actions for ${NAME}` }).click();
     await expect(page.getByRole("menuitem")).toHaveText([
       "Edit",
@@ -170,6 +171,16 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.open(NAME);
     await expect(page.getByRole("heading", { name: NAME })).toBeVisible();
     await expect(page.getByText("Created by Dana Creator", { exact: false })).toBeVisible();
+  });
+
+  test("a card without a default Agent offers to assign one when run", async ({ page }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    const card = workflows.card(NAME);
+    await expect(card).toContainText("Unassigned");
+    await expect(card).toContainText("0 runs");
+    await expect(card.getByRole("button", { name: `Run ${NAME}` })).toHaveText("Assign & run");
   });
 
   test("a Member who did not create a workflow can read, run and duplicate it, not change it", async ({
@@ -442,23 +453,21 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(support.saveRequests).toHaveLength(0);
   });
 
-  test("filters ask for the viewer's own and archived workflows", async ({ page }) => {
+  test("archived workflows are one toggle away and the choice survives reload", async ({ page }) => {
     await support.intercept(MOCK_AGENT_ID, { saved: true });
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     await expect(workflows.card(NAME)).toBeVisible();
+    await expect(page.getByText("1 workflow", { exact: true })).toBeVisible();
     expect(support.listQueries.at(-1)).toContain("archived=false");
     expect(support.listQueries.at(-1)).not.toContain("created_by_me");
-    await workflows.filter("Created by me");
-    await expect(page).toHaveURL(/workflowFilter=mine/);
-    await expect.poll(() => support.listQueries.at(-1)).toContain("created_by_me=true");
-    await workflows.filter("Archived");
+    await workflows.toggleArchived();
     await expect(page.getByRole("heading", { name: "Nothing here" })).toBeVisible();
     expect(support.listQueries.at(-1)).toContain("archived=true");
     await page.reload();
-    await expect(
-      page.getByRole("group", { name: "Filter workflows" }).getByRole("button", { name: "Archived" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Back to workflows" })).toBeVisible();
+    await workflows.toggleArchived();
+    await expect(workflows.card(NAME)).toBeVisible();
   });
 
   test("archive from a card moves the workflow to Archived and keeps its history", async ({
@@ -470,7 +479,7 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.cardAction(NAME, "Archive");
     await workflows.confirmArchive();
     await expect(workflows.card(NAME)).toHaveCount(0);
-    await workflows.filter("Archived");
+    await workflows.toggleArchived();
     const card = workflows.card(NAME);
     await expect(card).toContainText("Archived");
     await expect(card.getByRole("button", { name: `Run ${NAME}` })).toBeDisabled();

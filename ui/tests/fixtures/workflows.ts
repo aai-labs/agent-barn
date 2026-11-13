@@ -58,10 +58,12 @@ export function workflowFixture(defaultAgentId: string | null = null, viewer = f
 }
 
 /** The list endpoint's card projection of a definition fixture. */
-export function workflowSummary(workflow: ReturnType<typeof workflowFixture>) {
+export function workflowSummary(workflow: ReturnType<typeof workflowFixture>, runCount = 0) {
   const { draft, ...version } = workflow.version;
   return {
     ...workflow,
+    default_agent_name: workflow.default_agent_id ? "Maya" : null,
+    run_count: runCount,
     version: {
       ...version,
       name: draft.name,

@@ -94,10 +94,11 @@ export class WorkflowsPage {
   async open(name: string) {
     await this.page.getByRole("button", { name: `Open ${name}`, exact: true }).click();
   }
-  async filter(name: "All" | "Created by me" | "Archived") {
+  /** Toggle between the active workflows and the archived ones. */
+  async toggleArchived() {
     await this.page
-      .getByRole("group", { name: "Filter workflows" })
-      .getByRole("button", { name, exact: true })
+      .getByRole("region", { name: "Saved workflows" })
+      .getByRole("button", { name: /^(Show archived|Back to workflows)$/ })
       .click();
   }
   async edit() {

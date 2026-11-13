@@ -9,12 +9,6 @@ import { type WorkflowSummary } from "../schemas";
 import { WorkflowCard } from "./workflow-card";
 import { WorkflowPager } from "./workflow-pager";
 
-const FILTERS: { value: WorkflowListFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "mine", label: "Created by me" },
-  { value: "archived", label: "Archived" },
-];
-
 const EMPTY: Record<WorkflowListFilter, string> = {
   all: "Create a repeatable plan any of your agents can run.",
   mine: "Workflows you create appear here.",
@@ -52,29 +46,20 @@ export function WorkflowList({
   const list = useWorkflows(page, filter);
   return (
     <section aria-label="Saved workflows">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div role="group" aria-label="Filter workflows" className="flex flex-wrap gap-1.5">
-          {FILTERS.map(({ value, label }) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={filter === value}
-              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                filter === value
-                  ? "border-[var(--line-strong)] bg-[var(--bg-elev)] text-[var(--ink)] shadow-sm"
-                  : "border-transparent text-[var(--ink-3)] hover:text-[var(--ink)]"
-              }`}
-              onClick={() => onFilterChange(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {list.data && (
-          <p className="text-xs text-[var(--ink-3)]">
-            {list.data.total} {list.data.total === 1 ? "workflow" : "workflows"}
-          </p>
-        )}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-[13px] text-[var(--ink-3)]">
+        <p>
+          {list.data &&
+            `${list.data.total} ${filter === "archived" ? "archived " : ""}${
+              list.data.total === 1 ? "workflow" : "workflows"
+            }`}
+        </p>
+        <button
+          type="button"
+          className="hover:text-[var(--ink)] hover:underline"
+          onClick={() => onFilterChange(filter === "archived" ? "all" : "archived")}
+        >
+          {filter === "archived" ? "Back to workflows" : "Show archived"}
+        </button>
       </div>
       {list.error && (
         <AppErrorState
@@ -107,7 +92,7 @@ export function WorkflowList({
           </p>
         </div>
       )}
-      <ul className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {list.data?.items.map((workflow) => (
           <li key={workflow.id} className="min-w-0">
             <WorkflowCard
