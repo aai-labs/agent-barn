@@ -325,11 +325,18 @@ test.describe("WF01 Organization workflow authoring", () => {
     await expect(workflows.editor().getByLabel("Input 1 key")).toHaveCount(0);
     await workflows.editor().getByLabel("Input 1 label").fill("  Sales   Region  ");
     await workflows.useFileInput();
+    await expect(
+      workflows.editor().getByRole("radio", { name: "File", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+    // Clicking the visible caption toggles the checkbox.
+    await workflows.editor().getByText("Required", { exact: true }).click();
+    await expect(workflows.editor().getByLabel("Input 1 required")).not.toBeChecked();
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
     expect(draftOf(support.saveRequests[0]).inputs[0]).toMatchObject({
       key: "sales-region",
       type: "file",
+      required: false,
     });
   });
 

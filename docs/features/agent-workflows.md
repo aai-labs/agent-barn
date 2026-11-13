@@ -254,7 +254,9 @@ one text box, its prompt: what the Agent should do and produce. Every step is
 open at once. A step has no name field; editing the prompt sets the stored step
 name to its first line, whitespace collapsed and cut at a word to 80 characters,
 which run lists and the step timeline show. A step whose prompt is not edited
-keeps its saved name, and the API still requires one. Steps have no type selector. Opening a version saved with a legacy
+keeps its saved name, and the API still requires one. Each input is a card with captioned
+Label and Description fields above a footer holding a Text / File / Number /
+Yes or no segmented type control, a Required checkbox and a remove control. Steps have no type selector. Opening a version saved with a legacy
 step output description folds that text into the step's text, as the API does on
 save; no new version is written unless the author changes the plan. A change to
 the default Agent alone saves no version.

@@ -60,8 +60,10 @@ export class WorkflowsPage {
     }
   }
   async useFileInput() {
-    await this.editor().getByRole("combobox", { name: "Input 1 type" }).click();
-    await this.page.getByRole("option", { name: "File", exact: true }).click();
+    await this.editor()
+      .getByRole("radiogroup", { name: "Input 1 type" })
+      .getByRole("radio", { name: "File", exact: true })
+      .click();
   }
   /** The default Agent chips; "No default" clears it. */
   defaultAgent(name: string) {
