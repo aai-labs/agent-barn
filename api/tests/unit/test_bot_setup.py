@@ -420,13 +420,16 @@ def test_a_helper_runs_as_its_bot_only(pod):
     assert "MEMORY_API_KEY" not in env
 
 
-@pytest.mark.parametrize("problem", ["not_served", "missing_secret", "wrong_identity"])
+@pytest.mark.parametrize("problem", ["not_served", "missing_secret", "wrong_identity", "missing_runtime_key"])
 def test_a_helper_never_starts_for_a_broken_bot(pod, problem):
     pod.manifest()
     if problem == "not_served":
         pod.bot()
         (pod.env_dir / "active-bots.json").write_text("[]")
     elif problem == "missing_secret":
+        (pod.env_dir / "active-bots.json").write_text(json.dumps([{"id": BOT_A, "slot": 1}]))
+    elif problem == "missing_runtime_key":
+        pod.bot(secret={"API_SERVER_KEY": ""})
         (pod.env_dir / "active-bots.json").write_text(json.dumps([{"id": BOT_A, "slot": 1}]))
     else:
         pod.bot(secret={"AGENT_ID": "parent-id"})

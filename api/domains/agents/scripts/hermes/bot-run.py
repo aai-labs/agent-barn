@@ -25,7 +25,11 @@ def main():
         if directory.is_dir()
         else {}
     )
-    if bot_id not in [entry["id"] for entry in served] or secret.get("AGENT_ID") != bot_id:
+    if (
+        bot_id not in [entry["id"] for entry in served]
+        or secret.get("AGENT_ID") != bot_id
+        or not secret.get("API_SERVER_KEY")
+    ):
         print(f"[bot-run] not starting {Path(script).name} for {bot_id}", flush=True)
         return 1
 
