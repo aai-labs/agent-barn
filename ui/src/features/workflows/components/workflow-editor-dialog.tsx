@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -175,55 +176,58 @@ function EditorForm({
             {editing ? "Refine the workflow" : "Design a reusable workflow"}
           </DialogTitle>
         </header>
-        <div ref={body} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-          {error && (
-            <WorkflowSaveAlert
-              message={error}
+        {/* The dialog sets only a max height, so the viewport sizes by flex, not 100%. */}
+        <ScrollArea className="flex min-h-0 flex-1 flex-col [&>[data-slot=scroll-area-viewport]]:min-h-0 [&>[data-slot=scroll-area-viewport]]:flex-1">
+          <div ref={body} className="px-6 pb-6">
+            {error && (
+              <WorkflowSaveAlert
+                message={error}
+                problems={problems}
+                onSelect={reveal}
+                onLoadCurrent={
+                  conflict && editing
+                    ? async () => {
+                        const latest = await detail.refetch();
+                        if (!latest.data) return;
+                        setNotice(changedByOthers(base, latest.data.version.draft));
+                        setBase(latest.data.version.draft);
+                        setRevision(latest.data.revision);
+                        setConflict(false);
+                        setError("");
+                      }
+                    : undefined
+                }
+              />
+            )}
+            {editing && !error && notice.length > 0 && (
+              <div role="status" className="af-card mb-5 p-5 text-sm">
+                <p>
+                  Current revision loaded. Your edits are retained; saving replaces
+                  these changes made since you started:
+                </p>
+                <ul className="mt-2 list-disc pl-5">
+                  {notice.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <WorkflowEditor
+              draft={draft}
+              onChange={(next) => {
+                setDraft(next);
+                setProblems([]);
+                setError("");
+              }}
+              disabled={!maySave || pending}
               problems={problems}
-              onSelect={reveal}
-              onLoadCurrent={
-                conflict && editing
-                  ? async () => {
-                      const latest = await detail.refetch();
-                      if (!latest.data) return;
-                      setNotice(changedByOthers(base, latest.data.version.draft));
-                      setBase(latest.data.version.draft);
-                      setRevision(latest.data.revision);
-                      setConflict(false);
-                      setError("");
-                    }
-                  : undefined
-              }
+              revealed={attempted}
+              agents={agents.map(({ id, name }) => ({ id, name }))}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
             />
-          )}
-          {editing && !error && notice.length > 0 && (
-            <div role="status" className="af-card mb-5 p-5 text-sm">
-              <p>
-                Current revision loaded. Your edits are retained; saving replaces
-                these changes made since you started:
-              </p>
-              <ul className="mt-2 list-disc pl-5">
-                {notice.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <WorkflowEditor
-            draft={draft}
-            onChange={(next) => {
-              setDraft(next);
-              setProblems([]);
-              setError("");
-            }}
-            disabled={!maySave || pending}
-            problems={problems}
-            revealed={attempted}
-            agents={agents.map(({ id, name }) => ({ id, name }))}
-            defaultAgentId={defaultAgentId}
-            onDefaultAgentChange={setDefaultAgentId}
-          />
-        </div>
+          </div>
+        </ScrollArea>
         <footer className="flex items-center justify-between gap-3 border-t border-[var(--line)] bg-[var(--bg-soft)] px-6 py-4">
           <button type="button" className="af-btn af-btn-ghost" disabled={pending} onClick={close}>
             Cancel
