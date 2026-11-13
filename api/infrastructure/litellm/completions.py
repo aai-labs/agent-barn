@@ -86,19 +86,23 @@ class LiteLLMCompletionClient:
 
 
 def failure_for(response: httpx.Response) -> CompletionFailure:
-    # An exhausted key or team budget has a budget error type and arrives as 400, 429, or
-    # 422 (LiteLLM's default from v1.104 on), depending on the release and which budget was hit.
-    if response.status_code in (400, 422, 429) and "budget" in _error_type(response):
+    # An exhausted key or team budget arrives as 400 or 429 on older releases, with "budget"
+    # in the error type or message, and as 422 with the budget_exceeded type on v1.108.6.
+    # A 422 is judged by its type alone, because its message may echo the caller's input.
+    if response.status_code in (400, 429) and "budget" in _error_text(response):
+        return CompletionFailure.BUDGET_EXCEEDED
+    if response.status_code == 422 and "budget" in _error_text(response, message=False):
         return CompletionFailure.BUDGET_EXCEEDED
     if response.status_code in (400, 401, 403, 404, 422):
         return CompletionFailure.KEY_OR_MODEL_REJECTED
     return CompletionFailure.UNAVAILABLE
 
 
-def _error_type(response: httpx.Response) -> str:
+def _error_text(response: httpx.Response, *, message: bool = True) -> str:
     try:
         error = response.json().get("error") or {}
-        return f"{error.get('type', '')} {error.get('message', '')}".lower()
+        text = f"{error.get('type', '')} {error.get('message', '') if message else ''}"
+        return text.lower()
     except ValueError, AttributeError, json.JSONDecodeError:
         return ""
 
