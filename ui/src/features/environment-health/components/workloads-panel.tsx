@@ -1,6 +1,6 @@
 import type { EnvironmentHealth, PodIssue, SourceState } from "../schemas";
 import { formatAgo } from "../utils";
-import { AgentLabel, EmptyRow, Section, StatusDot } from "./section";
+import { AgentLabel, EmptyRow, Section, StatusDot, ExpandableList } from "./section";
 
 const KIND_LABEL: Record<PodIssue["kind"], string> = {
   infrastructure: "Platform",
@@ -43,10 +43,12 @@ function issueText(issue: PodIssue, windowDays: number): string {
 /** Pods that are failing, stuck or restarting, platform pods first. */
 export function WorkloadsPanel({
   workloads,
+  issuesTotal,
   podsState,
   restartWindowDays,
 }: {
   workloads: EnvironmentHealth["workloads"];
+  issuesTotal: number;
   podsState: SourceState | undefined;
   restartWindowDays: number;
 }) {
@@ -64,7 +66,7 @@ export function WorkloadsPanel({
       {issues.length === 0 ? (
         <EmptyRow state={podsState}>Every pod is running normally.</EmptyRow>
       ) : (
-        <ul className="af-card m-0 list-none divide-y p-0">
+        <ExpandableList total={issuesTotal}>
           {issues.map((issue) => (
             <li key={issue.podName} className="px-4 py-3 text-[13px]" data-testid="pod-issue">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -91,7 +93,7 @@ export function WorkloadsPanel({
               )}
             </li>
           ))}
-        </ul>
+        </ExpandableList>
       )}
     </Section>
   );

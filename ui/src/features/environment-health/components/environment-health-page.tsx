@@ -123,17 +123,20 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
       <AgentProblemsPanel
         failed={health.failedAgents}
         unhealthy={health.unhealthyRuntimes}
+        failedTotal={health.totals.failedAgents}
+        unhealthyTotal={health.totals.unhealthyRuntimes}
         monitoringState={states.prometheus}
       />
       <ScheduledPanel cronJobs={health.cronJobs} backups={health.backups} state={states.cron_jobs} />
       <WorkloadsPanel
         workloads={health.workloads}
+        issuesTotal={health.totals.podIssues}
         podsState={states.pods}
         restartWindowDays={health.restartWindowDays}
       />
-      <IdleAgentsPanel idle={health.idleAgents} idleAfterDays={health.idleAfterDays} />
-      <VolumesPanel volumes={health.volumes} state={states.volume_claims} />
-      <EventsPanel events={health.events} state={states.events} />
+      <IdleAgentsPanel idle={health.idleAgents} total={health.totals.idleAgents} idleAfterDays={health.idleAfterDays} />
+      <VolumesPanel volumes={health.volumes} attentionTotal={health.totals.volumeClaims} state={states.volume_claims} />
+      <EventsPanel events={health.events} total={health.totals.events} state={states.events} />
     </>
   );
 }

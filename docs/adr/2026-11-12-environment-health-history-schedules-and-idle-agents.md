@@ -27,4 +27,5 @@ On staging (AF-436) the volume-claim quota sat at 60 of 60 and scheduled backups
 - The new cluster reads (Services, CronJobs, Jobs) are optional sources like the rest. A refusal shows as "not permitted" and the rest of the page renders. The backups and idle-Agent parts read only the database, so they work with no cluster at all.
 - The conversation, activity and restore-point services each gain one platform-wide read with no Organization scope, returning times or counts by Agent id. They are for `require_platform_admin` routes only, as `find_live_for_platform_usage` is.
 - A peak sampled every 30 seconds can still miss a burst shorter than one scrape.
+- Each list that grows with the platform carries how many rows it has and at most 100 of them, worst first, so the response stays small when something fails across the platform. Counts are numbers only and add nothing to classify.
 - Idle Agents are listed for a person to act on. The page stops and deletes nothing, and an idle Agent does not change the page's level.

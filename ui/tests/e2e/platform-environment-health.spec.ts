@@ -221,7 +221,7 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(backups.getByTestId("backups-summary")).toHaveText(
       "41 of 58 running agents failed a backup in the last 24 hours · 12 more are overdue"
     );
-    await expect(backups.getByTestId("backups-more")).toHaveText("and 50 more agents");
+    await expect(backups).toContainText("Showing 3 of 53");
     await expect(backups.getByTestId("backup-failed").first()).toContainText("Ada");
     await expect(backups.getByTestId("backup-failed").first()).toContainText("2 failed in the last 24 hours");
     await expect(backups.getByTestId("backup-overdue").first()).toContainText("last backed up 2 days ago");
@@ -277,6 +277,42 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(adaRow).toContainText("2 volumes · 3 GiB");
     await expect(adaRow).toContainText("4 restore points · 512 MiB");
     await expect(adaRow).toContainText("last model call 1 h ago");
+  });
+
+  test("a long list shows the first five and the rest on request, and says how many there are", async () => {
+    const idleAgent = (n: number) => ({
+      agent: {
+        agent_id: `019f0000-0000-7000-8000-0000000001${String(n).padStart(2, "0")}`,
+        agent_name: `Helper ${n}`,
+        organization_id: ENV_ACME_ID,
+        organization_name: "Acme",
+        status: "RUNNING",
+      },
+      last_user_message_at: null,
+      last_call_at: null,
+      holds_pod: false,
+      volume_claims: 0,
+      requested_bytes: 0,
+      restore_points: 0,
+      restore_point_bytes: 0,
+    });
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        idle_agents: Array.from({ length: 7 }, (_, n) => idleAgent(n + 1)),
+        totals: { idle_agents: 130 },
+      }),
+    });
+
+    await healthPage.goto();
+
+    const idle = healthPage.section("idle");
+    await expect(healthPage.idleAgents()).toHaveCount(5);
+    await idle.getByRole("button", { name: "Show all 130" }).click();
+    await expect(healthPage.idleAgents()).toHaveCount(7);
+    // Past what the page was sent, it says so rather than pretending the list is whole.
+    await expect(idle).toContainText("Showing 7 of 130");
+    await idle.getByRole("button", { name: "Show fewer" }).click();
+    await expect(healthPage.idleAgents()).toHaveCount(5);
   });
 
   test("says when scheduled backups are switched off", async () => {

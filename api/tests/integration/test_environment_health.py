@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4, uuid7
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_item, none, not_none
 from kubernetes.client import (
@@ -51,6 +52,7 @@ from sqlmodel import Session
 
 from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.environment_health import cluster
 from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -761,6 +763,33 @@ def test_agents_no_one_wrote_to_for_two_weeks_are_listed_with_what_they_hold():
         )
         # A cleanup candidate is not a fault.
         assert_that(body["level"], equal_to("ok"))
+
+
+def test_a_long_list_carries_the_worst_rows_and_says_how_many_there_are(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(cluster, "LIST_LIMIT", 1)
+    with given(
+        [
+            set_env_variable({"RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES": "0"}),
+            *_BASE_GIVEN,
+            _two_organizations("env-limit-1@example.com", "env-limit-2@example.com"),
+            *_platform_admin("env-admin-limit@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        for agent in (context.ada, context.cy):
+            _backdate(context, agent, timedelta(days=30))
+        _cluster(context).list_pods.return_value = [
+            _pod("agentbarn-api-1-a", {"app": "agentbarn-api"}, ready=False),
+            _pod("agentbarn-ui-1-a", {"app": "agentbarn-ui"}, ready=False),
+        ]
+
+        body = _get(context).json()
+
+        assert_that(len(body["idle_agents"]), equal_to(1))
+        assert_that(len(body["workloads"]["issues"]), equal_to(1))
+        assert_that(body["totals"], has_entries(idle_agents=2, pod_issues=2))
+        # The level is worked out from every row, not only those carried.
+        assert_that(body["level"], equal_to("warning"))
 
 
 def test_refused_services_leave_their_line_unknown():

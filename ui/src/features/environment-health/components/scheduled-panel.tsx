@@ -1,6 +1,6 @@
 import type { CronJob, ScheduledBackups, SourceState } from "../schemas";
 import { formatAge, type Tone } from "../utils";
-import { AgentLabel, EmptyRow, Section, StatusDot } from "./section";
+import { AgentLabel, EmptyRow, ExpandableList, Section, StatusDot } from "./section";
 
 const STATE_TONE: Record<CronJob["state"], Tone> = { failing: "err", stalled: "warn", ok: "ok", suspended: "muted" };
 
@@ -24,10 +24,6 @@ function every(minutes: number): string {
   return `Every ${minutes} minutes`;
 }
 
-function moreAgents(count: number): string {
-  return `and ${count} more ${count === 1 ? "agent" : "agents"}`;
-}
-
 /** How many agents are affected, so a failure across the platform reads as one, not as a long list. */
 function backupsSummary(backups: ScheduledBackups): string {
   const { failedTotal, overdueTotal, runningAgents, failureWindowHours } = backups;
@@ -45,7 +41,6 @@ function BackupsList({ backups }: { backups: ScheduledBackups }) {
     return <EmptyRow>Scheduled backups are switched off.</EmptyRow>;
   }
   const { failed, overdue, failureWindowHours } = backups;
-  const unnamed = backups.failedTotal + backups.overdueTotal - failed.length - overdue.length;
   return (
     <>
       <p className="m-0 mb-2 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
@@ -54,10 +49,10 @@ function BackupsList({ backups }: { backups: ScheduledBackups }) {
       {failed.length === 0 && overdue.length === 0 ? (
         <EmptyRow>Every running agent has a recent backup.</EmptyRow>
       ) : (
-        <ul className="af-card m-0 list-none divide-y p-0">
-          <li className="px-4 py-2.5 text-[13px] font-medium" data-testid="backups-summary">
-            {backupsSummary(backups)}
-          </li>
+        <ExpandableList
+          total={backups.failedTotal + backups.overdueTotal}
+          summary={<span data-testid="backups-summary">{backupsSummary(backups)}</span>}
+        >
           {failed.map((row) => (
             <li key={`failed-${row.agent.agentId}`} className="px-4 py-2.5 text-[13px]" data-testid="backup-failed">
               <span className="flex items-center gap-2">
@@ -80,12 +75,7 @@ function BackupsList({ backups }: { backups: ScheduledBackups }) {
               </p>
             </li>
           ))}
-          {unnamed > 0 && (
-            <li className="px-4 py-2.5 text-[12.5px]" style={{ color: "var(--ink-4)" }} data-testid="backups-more">
-              {moreAgents(unnamed)}
-            </li>
-          )}
-        </ul>
+        </ExpandableList>
       )}
     </>
   );

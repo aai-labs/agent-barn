@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Children, useState, type ReactNode } from "react";
 import Link from "next/link";
 
 import type { AgentRef, SourceState } from "../schemas";
@@ -97,5 +97,59 @@ export function AgentLabel({ agent }: { agent: AgentRef }) {
         </>
       )}
     </span>
+  );
+}
+
+/** Rows shown before "Show all". */
+export const ROWS_SHOWN_FIRST = 5;
+
+/**
+ * A list that shows its first rows and the rest on request, so one failure across the platform
+ * does not push everything else off the page. `total` is how many rows there are; the page is
+ * sent at most a hundred, worst first, and says so when there are more than it has.
+ */
+export function ExpandableList({
+  total,
+  summary,
+  testId,
+  className = "",
+  children,
+}: {
+  total: number;
+  summary?: ReactNode;
+  testId?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const rows = Children.toArray(children);
+  const count = Math.max(total, rows.length);
+  const canExpand = rows.length > ROWS_SHOWN_FIRST;
+  const shown = expanded || !canExpand ? rows : rows.slice(0, ROWS_SHOWN_FIRST);
+  const partial = (expanded || !canExpand) && count > rows.length;
+  return (
+    <ul className={`af-card m-0 list-none divide-y p-0 ${className}`} data-testid={testId}>
+      {summary && (
+        <li className="px-4 py-2.5 text-[13px] font-medium" data-testid="list-summary">
+          {summary}
+        </li>
+      )}
+      {shown}
+      {(canExpand || partial) && (
+        <li className="flex flex-wrap items-center gap-x-3 px-4 py-2 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
+          {partial && <span>Showing {rows.length} of {count}, worst first.</span>}
+          {canExpand && (
+            <button
+              type="button"
+              className="cursor-pointer font-medium underline-offset-2 hover:underline"
+              style={{ color: "var(--ink-2)" }}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? "Show fewer" : `Show all ${count}`}
+            </button>
+          )}
+        </li>
+      )}
+    </ul>
   );
 }
