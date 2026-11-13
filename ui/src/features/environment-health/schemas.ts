@@ -243,6 +243,17 @@ export const EnvironmentHealthSchema = z.object({
   failedAgents: z.array(FailedAgentSchema).default([]),
   idleAgents: z.array(IdleAgentSchema).default([]),
   idleAfterDays: z.number().int().default(14),
+  /** How many rows each list has; a list carries at most a hundred of them, worst first. */
+  totals: z
+    .object({
+      failedAgents: z.number().int().default(0),
+      unhealthyRuntimes: z.number().int().default(0),
+      podIssues: z.number().int().default(0),
+      idleAgents: z.number().int().default(0),
+      volumeClaims: z.number().int().default(0),
+      events: z.number().int().default(0),
+    })
+    .default({ failedAgents: 0, unhealthyRuntimes: 0, podIssues: 0, idleAgents: 0, volumeClaims: 0, events: 0 }),
   events: z.array(WarningEventSchema).default([]),
 });
 export type EnvironmentHealth = z.infer<typeof EnvironmentHealthSchema>;

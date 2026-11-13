@@ -333,6 +333,17 @@ class IdleAgentRead(PydanticBaseModel):
     restore_point_bytes: int = 0
 
 
+class ListTotalsRead(PydanticBaseModel):
+    """How many rows each list has. A list carries at most `LIST_LIMIT` of them, worst first."""
+
+    failed_agents: int = 0
+    unhealthy_runtimes: int = 0
+    pod_issues: int = 0
+    idle_agents: int = 0
+    volume_claims: int = 0
+    events: int = 0
+
+
 class EnvironmentHealthRead(PydanticBaseModel):
     observed_at: datetime
     namespace: str
@@ -359,3 +370,4 @@ class EnvironmentHealthRead(PydanticBaseModel):
     # How long without a user message before an Agent is listed in `idle_agents`.
     idle_after_days: int = 14
     events: list[WarningEventRead] = Field(default_factory=list)
+    totals: ListTotalsRead = Field(default_factory=ListTotalsRead)

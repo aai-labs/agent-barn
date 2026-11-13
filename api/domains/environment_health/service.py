@@ -29,6 +29,7 @@ from api.domains.environment_health.models import (
     FiringAlertRead,
     HealthLevel,
     IdleAgentRead,
+    ListTotalsRead,
     RolloutState,
     ScheduledBackupsRead,
     SourceState,
@@ -210,6 +211,8 @@ class EnvironmentHealthService:
         )
         restarts = cluster.pod_restarts(restart_samples) if restart_samples is not None else None
         workloads = cluster.workloads(pods, identities, now, restarts) if pods is not None else WorkloadsRead()
+        if crons is not None:
+            workloads = cluster.without_cron_runs(workloads, [cron.name for cron in cron_jobs])
         alerts = cluster.firing_alerts(alert_samples or [], identities)
         unhealthy = cluster.unhealthy_runtimes(
             runtime_samples or [], identities, cluster.agent_pod_readiness(pods or [])
@@ -219,7 +222,13 @@ class EnvironmentHealthService:
         ceilings = self.resource_limits_service.get_limits()
         capacity = self._capacity(now, ceilings, quotas, claims, pods, kube_services)
         volumes = cluster.volume_allocation(claims or [], identities)
-        warnings = cluster.warning_events(events or [], identities, now)
+        owners = {
+            **{workload.metadata.name: "Deployment" for workload in deployments or [] if workload.metadata.name},
+            **{workload.metadata.name: "StatefulSet" for workload in stateful_sets or [] if workload.metadata.name},
+            **{cron.metadata.name: "CronJob" for cron in crons or [] if cron.metadata.name},
+        }
+        warnings = cluster.warning_events(events or [], identities, now, owners=owners)
+        limit = cluster.LIST_LIMIT
 
         return EnvironmentHealthRead(
             observed_at=now,
@@ -248,13 +257,22 @@ class EnvironmentHealthService:
             backups=backups,
             alerts=alerts,
             capacity=capacity,
-            volumes=volumes,
-            workloads=workloads,
-            unhealthy_runtimes=unhealthy,
-            failed_agents=failed,
-            idle_agents=idle,
+            # The level above is worked out from every row; each list carries the worst `limit`.
+            volumes=volumes.model_copy(update={"attention": volumes.attention[:limit]}),
+            workloads=workloads.model_copy(update={"issues": workloads.issues[:limit]}),
+            unhealthy_runtimes=unhealthy[:limit],
+            failed_agents=failed[:limit],
+            idle_agents=idle[:limit],
             idle_after_days=IDLE_AFTER_DAYS,
-            events=warnings,
+            events=warnings[:limit],
+            totals=ListTotalsRead(
+                failed_agents=len(failed),
+                unhealthy_runtimes=len(unhealthy),
+                pod_issues=len(workloads.issues),
+                idle_agents=len(idle),
+                volume_claims=len(volumes.attention),
+                events=len(warnings),
+            ),
         )
 
     def _idle_agents(

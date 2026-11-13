@@ -752,14 +752,73 @@ def test_events_that_differ_only_in_their_message_read_as_one():
     assert by_reason["Failed"].last_seen == _NOW - timedelta(minutes=1)
 
 
-def test_events_are_newest_first_and_bounded():
-    events = [
-        _event("BackOff", "x", name=f"pod-{minute}", age=timedelta(minutes=minute))
-        for minute in range(cluster.MAX_EVENTS + 5)
-    ]
+def test_events_are_newest_first():
+    events = [_event("BackOff", "x", name=f"pod-{minute}", age=timedelta(minutes=minute)) for minute in (3, 0, 7)]
     rows = cluster.warning_events(events, {}, _NOW)
-    assert len(rows) == cluster.MAX_EVENTS
-    assert rows[0].last_seen == _NOW
+    assert [row.last_seen for row in rows] == [_NOW, _NOW - timedelta(minutes=3), _NOW - timedelta(minutes=7)]
+
+
+def test_events_about_a_workloads_runs_and_pods_read_as_one_row_for_the_workload():
+    ada = _agent("Ada")
+    events = [
+        _event("BackoffLimitExceeded", "x", kind="Job", name="agentbarn-backup-29909210", age=timedelta(minutes=5)),
+        _event("BackoffLimitExceeded", "x", kind="Job", name="agentbarn-backup-29909212", age=timedelta(minutes=3)),
+        _event("BackOff", "x", name="agentbarn-api-5c9f8d-abcde", count=4),
+        _event("BackOff", "x", name="agentbarn-api-gateway-7f-xyz12"),
+        _event("BackOff", "x", name="agentbarn-api-5c9f8d-fghij", count=2),
+        _event("Unhealthy", "x", name=f"agent-{ada.id}-7d9f-abcde"),
+        # Not a run of anything listed: read as itself.
+        _event("BackOff", "x", name="report-renderer-1"),
+    ]
+    owners = {
+        "agentbarn-backup": "CronJob",
+        "agentbarn-api": "Deployment",
+        "agentbarn-api-gateway": "Deployment",
+        f"agent-{ada.id}": "Deployment",
+    }
+
+    rows = cluster.warning_events(events, _identities(ada), _NOW, owners=owners)
+
+    by_object = {(row.reason, row.object_kind, row.object_name): row for row in rows}
+    assert set(by_object) == {
+        ("BackoffLimitExceeded", "CronJob", "agentbarn-backup"),
+        ("BackOff", "Deployment", "agentbarn-api"),
+        ("BackOff", "Deployment", "agentbarn-api-gateway"),
+        ("Unhealthy", "Deployment", f"agent-{ada.id}"),
+        ("BackOff", "Pod", "report-renderer-1"),
+    }
+    backups = by_object["BackoffLimitExceeded", "CronJob", "agentbarn-backup"]
+    assert (backups.count, backups.last_seen) == (2, _NOW - timedelta(minutes=3))
+    assert by_object["BackOff", "Deployment", "agentbarn-api"].count == 6
+    agent_row = by_object["Unhealthy", "Deployment", f"agent-{ada.id}"]
+    assert agent_row.agent is not None and agent_row.agent.agent_name == "Ada"
+
+
+def test_a_cron_jobs_failed_runs_are_left_to_the_scheduled_jobs_list():
+    pods = [
+        _pod(
+            "agentbarn-backup-29909210-abcde",
+            ready=False,
+            phase="Failed",
+            terminated="Error",
+            owner=V1OwnerReference(api_version="batch/v1", kind="Job", name="agentbarn-backup-29909210", uid="1"),
+        ),
+        _pod(
+            "rp-capture-abc-xyz",
+            ready=False,
+            phase="Failed",
+            terminated="Error",
+            owner=V1OwnerReference(api_version="batch/v1", kind="Job", name="rp-capture-abc", uid="2"),
+        ),
+        _pod("agentbarn-backup-ui-5c-xyz", ready=False, waiting="CrashLoopBackOff", restarts=4),
+    ]
+
+    workloads = cluster.without_cron_runs(cluster.workloads(pods, {}, _NOW), ["agentbarn-backup"])
+
+    # The run's pod goes, since its CronJob shows as failing; a Job no CronJob runs and a
+    # Deployment whose name starts the same way stay. The pod counts are unchanged.
+    assert sorted(issue.pod_name for issue in workloads.issues) == ["agentbarn-backup-ui-5c-xyz", "rp-capture-abc-xyz"]
+    assert workloads.pods_total == 3
 
 
 # --- Prometheus -----------------------------------------------------------
@@ -1119,6 +1178,7 @@ def test_a_backup_failure_across_the_platform_is_counted_and_only_the_worst_agen
         ScheduledBackupHealth(interval_minutes=360, failures=failures, overdue=[]),
         _identities(*agents, stopped),
         failure_window_hours=24,
+        limit=5,
     )
 
     # Every running Agent is under the schedule; the stopped one is not.
@@ -1131,7 +1191,6 @@ def test_a_backup_failure_across_the_platform_is_counted_and_only_the_worst_agen
         ("Agent 4", 2),
         ("Agent 7", 2),
     ]
-    assert len(backups.failed) == cluster.BACKUP_LIST_LIMIT
 
 
 def test_an_agent_whose_backups_fail_is_not_named_again_as_overdue():

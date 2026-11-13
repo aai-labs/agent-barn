@@ -2,7 +2,7 @@ import { formatBytes } from "@/features/resource-usage/format";
 
 import type { IdleAgent } from "../schemas";
 import { formatAge } from "../utils";
-import { AgentLabel, EmptyRow, Section } from "./section";
+import { AgentLabel, EmptyRow, Section, ExpandableList } from "./section";
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -29,7 +29,15 @@ function holdings(row: IdleAgent): string {
  * counts as use: the platform wakes agents on its own, so a recent model call is shown for
  * context but does not keep an agent off the list.
  */
-export function IdleAgentsPanel({ idle, idleAfterDays }: { idle: IdleAgent[]; idleAfterDays: number }) {
+export function IdleAgentsPanel({
+  idle,
+  total,
+  idleAfterDays,
+}: {
+  idle: IdleAgent[];
+  total: number;
+  idleAfterDays: number;
+}) {
   return (
     <Section
       title="Idle agents"
@@ -39,7 +47,7 @@ export function IdleAgentsPanel({ idle, idleAfterDays }: { idle: IdleAgent[]; id
       {idle.length === 0 ? (
         <EmptyRow>Every agent has been used recently.</EmptyRow>
       ) : (
-        <ul className="af-card m-0 list-none divide-y p-0">
+        <ExpandableList total={total}>
           {idle.map((row) => (
             <li key={row.agent.agentId} className="px-4 py-3 text-[13px]" data-testid="idle-agent">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -56,7 +64,7 @@ export function IdleAgentsPanel({ idle, idleAfterDays }: { idle: IdleAgent[]; id
               </p>
             </li>
           ))}
-        </ul>
+        </ExpandableList>
       )}
     </Section>
   );

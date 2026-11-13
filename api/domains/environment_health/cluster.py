@@ -103,7 +103,9 @@ STARTUP_GRACE = timedelta(minutes=2)
 # Warning Events older than this are history, not news. Kubernetes keeps them about an hour
 # by default, so this is a bound for clusters that keep them longer.
 EVENT_WINDOW = timedelta(hours=6)
-MAX_EVENTS = 50
+# The most rows any list on the page carries, worst first. Each list also carries how many
+# there are, so a failure across the platform reads as a count and not a page of rows.
+LIST_LIMIT = 100
 
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _AGENT_APP = re.compile(rf"agent-({_UUID})")
@@ -494,6 +496,22 @@ def agent_pod_readiness(pods: Sequence[V1Pod]) -> dict[UUID, bool]:
     return ready
 
 
+def without_cron_runs(read: WorkloadsRead, cron_names: Iterable[str]) -> WorkloadsRead:
+    """Drop the pods of CronJob runs, whose failures the scheduled jobs list already shows.
+
+    A run's Job is named `<cron job>-<scheduled minute>`. Pod counts are left as they are.
+    """
+    names = tuple(cron_names)
+
+    def is_run(workload_name: str | None) -> bool:
+        return any(
+            (workload_name or "").startswith(f"{cron}-") and (workload_name or "")[len(cron) + 1 :].isdigit()
+            for cron in names
+        )
+
+    return read.model_copy(update={"issues": [issue for issue in read.issues if not is_run(issue.workload_name)]})
+
+
 def workloads(
     pods: Sequence[V1Pod],
     identities: Mapping[UUID, PlatformAgentIdentity],
@@ -695,14 +713,14 @@ def cron_jobs(cron_jobs: Sequence[V1CronJob], jobs: Sequence[V1Job], now: dateti
     return rows
 
 
-# The most Agents named in each backups list; the rest are counted.
-BACKUP_LIST_LIMIT = 5
-
-
 def scheduled_backups(
-    health: ScheduledBackupHealth, identities: Mapping[UUID, PlatformAgentIdentity], *, failure_window_hours: int
+    health: ScheduledBackupHealth,
+    identities: Mapping[UUID, PlatformAgentIdentity],
+    *,
+    failure_window_hours: int,
+    limit: int = LIST_LIMIT,
 ) -> ScheduledBackupsRead:
-    """Failing and overdue scheduled backups: how many Agents, and the worst few by name.
+    """Failing and overdue scheduled backups: how many Agents, and the worst `limit` of each by name.
 
     An Agent whose backups fail is usually overdue too, so it is counted and named once,
     as failing.
@@ -724,11 +742,11 @@ def scheduled_backups(
             BackupFailureRead(
                 agent=agent_ref(row.agent_id, identities), failures=row.failures, last_failed_at=row.last_failed_at
             )
-            for row in failures[:BACKUP_LIST_LIMIT]
+            for row in failures[:limit]
         ],
         overdue=[
             OverdueBackupRead(agent=agent_ref(row.agent_id, identities), last_backup_at=row.last_backup_at)
-            for row in overdue[:BACKUP_LIST_LIMIT]
+            for row in overdue[:limit]
         ],
     )
 
@@ -933,8 +951,28 @@ def _event_time(event: CoreV1Event) -> datetime | None:
     return event.last_timestamp or series_time or event.event_time or event.metadata.creation_timestamp
 
 
+def _owning_workload(kind: str | None, name: str | None, owners: Mapping[str, str]) -> tuple[str, str] | None:
+    """The Deployment, StatefulSet or CronJob a pod, ReplicaSet or Job belongs to, from its name.
+
+    Their names start with the owner's name and a hyphen. The Event does not carry the owner,
+    and a CronJob's old runs are deleted before their Events expire, so the name is all there
+    is. The longest matching owner wins, so `api-gateway` is not read as `api`.
+    """
+    if kind not in {"Pod", "ReplicaSet", "Job"} or not name:
+        return None
+    matches = [owner for owner in owners if name.startswith(f"{owner}-")]
+    if not matches:
+        return None
+    owner = max(matches, key=len)
+    return owners[owner], owner
+
+
 def warning_events(
-    events: Sequence[CoreV1Event], identities: Mapping[UUID, PlatformAgentIdentity], now: datetime
+    events: Sequence[CoreV1Event],
+    identities: Mapping[UUID, PlatformAgentIdentity],
+    now: datetime,
+    *,
+    owners: Mapping[str, str] | None = None,
 ) -> list[WarningEventRead]:
     """The namespace's recent Warning Events, newest first.
 
@@ -944,7 +982,9 @@ def warning_events(
 
     Kubernetes keeps one Event per distinct message, so one failing image pull leaves several
     Events that differ only in text this page never shows. Those read as one row: the same
-    reason, object and detail, with their counts added up and the latest time kept.
+    reason, object and detail, with their counts added up and the latest time kept. Events
+    about the pods, ReplicaSets or Jobs of a workload in `owners` (name to kind) are read as
+    about the workload, so a CronJob failing every run is one row, not one per run.
     """
     rows: dict[tuple[str, str | None, str | None, str | None], WarningEventRead] = {}
     for event in events:
@@ -962,6 +1002,9 @@ def warning_events(
         involved = event.involved_object
         kind = involved.kind if involved and involved.kind in _EVENT_OBJECT_KINDS else None
         name = _name(involved.name) if kind and involved else None
+        owner = _owning_workload(kind, name, owners or {})
+        if owner is not None:
+            kind, name = owner
         match = _AGENT_OBJECT.fullmatch(name or "")
         agent_id = _uuid(match.group(1)) if match else None
         count = event.count or (event.series.count if event.series else None) or 1
@@ -981,8 +1024,7 @@ def warning_events(
             explanation=explanation,
             detail=detail,
         )
-    ordered = sorted(rows.values(), key=lambda row: row.last_seen or now, reverse=True)
-    return ordered[:MAX_EVENTS]
+    return sorted(rows.values(), key=lambda row: row.last_seen or now, reverse=True)
 
 
 # --- Prometheus -----------------------------------------------------------
