@@ -548,6 +548,25 @@ def test_each_profile_records_only_first_responses_through_its_own_adapters() ->
     assert [row["content"] for row in _outbound_rows(bot)] == ["From the bot."]
 
 
+@pytest.mark.parametrize(("stamped", "recorder"), [(_PROFILE_BOT, "bot"), ("default", "parent")])
+def test_a_shared_adapters_message_belongs_to_the_profile_stamped_on_it(stamped, recorder) -> None:
+    plugins = {"parent": _installed_at(_PARENT_INSTALL), "bot": _installed_at(_BOT_INSTALL)}
+    adapter_class = _adapter_class([])
+    runner = _gateway_runner()
+    for plugin in plugins.values():
+        plugin._patch_ingress(adapter_class)
+
+    with (
+        patch.object(plugins["parent"], "_runner", return_value=runner),
+        patch.object(plugins["bot"], "_runner", return_value=runner),
+    ):
+        asyncio.run(_owned_adapter(adapter_class, None).handle_message(_inbound(source=_source(profile=stamped))))
+
+    assert {name: len(_inbound_rows(plugin)) for name, plugin in plugins.items()} == {
+        name: int(name == recorder) for name in plugins
+    }
+
+
 def test_a_bot_install_belongs_to_its_profile_and_the_parents_to_none() -> None:
     assert _installed_at(_BOT_INSTALL)._own_profile() == _PROFILE_BOT
     assert _installed_at(_PARENT_INSTALL)._own_profile() is None

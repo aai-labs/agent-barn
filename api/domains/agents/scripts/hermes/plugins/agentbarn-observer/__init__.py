@@ -183,9 +183,13 @@ def _own_profile() -> str | None:
     return _status_source(home)[1]
 
 
-def _owned(adapter) -> bool:
-    owner = getattr(adapter, "_owner_profile", None)
-    return (owner if isinstance(owner, str) else None) == _own_profile()
+def _owned(adapter, source) -> bool:
+    profile = None
+    for candidate in (getattr(source, "profile", None), getattr(adapter, "_owner_profile", None)):
+        if isinstance(candidate, str) and candidate.strip():
+            profile = None if candidate == "default" else candidate
+            break
+    return profile == _own_profile()
 
 
 def _patch_first_response(runner_class) -> None:
@@ -194,7 +198,7 @@ def _patch_first_response(runner_class) -> None:
     async def deliver(self, response, source, adapter, *args, **kwargs):
         await original(self, response, source, adapter, *args, **kwargs)
         try:
-            if _owned(adapter):
+            if _owned(adapter, source):
                 _record_first_response(self, response, source, adapter)
         except Exception as exc:
             logger.warning("agentbarn-observer could not record a first response: %s", exc)
@@ -227,7 +231,7 @@ def _patch_ingress(adapter_class) -> None:
 
     async def handle_message(self, event):
         try:
-            if _owned(self):
+            if _owned(self, getattr(event, "source", None)):
                 _observe_arrival(event)
         except Exception as exc:
             logger.warning("agentbarn-observer could not record an arrival: %s", exc)

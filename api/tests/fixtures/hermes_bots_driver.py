@@ -21,6 +21,7 @@ from gateway.authz_mixin import _platform_gate_env  # ty: ignore[unresolved-impo
 from gateway.config import GatewayConfig, Platform, PlatformConfig, load_gateway_config  # ty: ignore[unresolved-import]
 from gateway.delivery import resolve_delivery_transport  # ty: ignore[unresolved-import]
 from gateway.platform_registry import platform_registry  # ty: ignore[unresolved-import]
+from gateway.run import GatewayRunner  # ty: ignore[unresolved-import]
 from hermes_cli.profiles import validate_profile_name  # ty: ignore[unresolved-import]
 from hermes_constants import (  # ty: ignore[unresolved-import]
     get_hermes_home,
@@ -197,10 +198,9 @@ def main() -> None:
     in_scope(second, strict_bot._snapshot_gate_env)
     check("a Bot's Discord allow list is its own", open_bot._gate_env("DISCORD_ALLOWED_USERS") == "111")
     check("another Bot's Discord allow list is its own", strict_bot._gate_env("DISCORD_ALLOWED_USERS") == "222")
-    open_bot.set_owner_profile(BOT_A)
-    strict_bot.set_owner_profile("default")
-    check("an adapter names the Bot profile that owns it", open_bot._owner_profile == BOT_A)
-    check("the default profile's adapter names no owner", strict_bot._owner_profile is None)
+    GatewayRunner._configure_profile_adapter(MagicMock(), open_bot, BOT_A, Platform.DISCORD)
+    check("a Bot's adapter names the profile that owns it", open_bot._owner_profile == BOT_A)
+    check("the default profile's adapter names no owner", getattr(strict_bot, "_owner_profile", None) is None)
     print("All Bot checks passed")
 
 

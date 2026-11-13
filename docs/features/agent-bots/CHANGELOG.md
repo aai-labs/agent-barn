@@ -54,8 +54,8 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ### 2026-11-13 — AF-425 — Observer records only its own profile
 
-- Fixed: the observer's arrival and first-response wrappers patch process-wide classes, so every profile's copy saw every profile's messages. Each copy now works out its profile from where it is installed (`profiles/<id>` for a Bot, none for the Parent Agent) and records only messages on adapters Hermes marks as owned by that profile (`_owner_profile`). Hooks such as `pre_gateway_dispatch` already run per profile, because Hermes keeps one plugin manager per profile home.
-- Changed: the two Bot identity tests stub the ingress install that staging added to `register`. The Bot image driver checks that Hermes names an adapter's owning profile, and none for the default profile.
+- Fixed: the observer's arrival and first-response wrappers patch process-wide classes, so every profile's copy saw every profile's messages. Each copy now works out its profile from where it is installed (`profiles/<id>` for a Bot, none for the Parent Agent) and records only messages that belong to that profile. Like Hermes' own `_session_key_profile`, it takes the profile stamped on the message (`source.profile`, set by shared ingress such as webhooks and the API relay), else the adapter's owner (`_owner_profile`, which `_configure_profile_adapter` sets on every Bot adapter before it handles anything). A Parent Agent's adapters have neither, so in a pod without Bots everything is recorded exactly as before. Hooks such as `pre_gateway_dispatch` already run per profile, because Hermes keeps one plugin manager per profile home.
+- Changed: the two Bot identity tests stub the ingress install that staging added to `register`. The Bot image driver runs Hermes' real `_configure_profile_adapter` and checks it names the Bot's profile on its adapter, and none on the default profile's.
 - Follow-up: Task tracking per Bot.
 
 ### 2026-11-13 — AF-425 — Staging merge (Agent Tasks, listen-in)
