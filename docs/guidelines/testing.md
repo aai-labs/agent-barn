@@ -140,6 +140,12 @@ real-adapter admission, thread-context, and group-DM button contracts.
 behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
 scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.
 
+`hermes_listen_in_driver.py` is in the filter too. Beside the guard's own contract, it
+checks listen-in per profile: a Bot's own room list beats the process-wide
+`*_FREE_RESPONSE_*` variables, a Bot's guard reads its own rooms, owns only messages on
+its own adapter, keys them in its own profile and posts through its own app, and the
+startup check empties a Bot's own rooms rather than removing them.
+
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
 doing so ran every commit on a PR branch twice. A branch without a pull request

@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: after the 2026-11-13 staging merge, make the rest of staging's in-pod pieces work per Bot: listen-in, and Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
+- Next: after the 2026-11-13 staging merge, make the rest of staging's in-pod pieces work per Bot: Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,17 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-13 — AF-425 — Listen-in per Bot
+
+- Delivered:
+  - `bot-setup.py` copies `agentbarn-listen-in` into each Bot profile and, when the Bot's config enables it, runs `listen-in-check.py` on that profile's `config.yaml`.
+  - The guard works out its profile from its install path. It reads that profile's rooms (a Bot's own `config.yaml`, the Parent Agent's `HERMES_HOME`), classifies only messages that belong to its profile, keys them in its own session namespace without changing the message, posts and reads Slack history through its own adapters (`_profile_adapters`), and never treats another profile's session as a room session.
+  - `bot_gateway_config` always sets a Bot's `free_response_channels` / `free_response_chats` in its platform settings, empty when it has none.
+  - `listen-in-check.py` empties a Bot's own room list when the guard fails to load, instead of removing it.
+- Found while checking the pinned Hermes source: its Slack adapter falls back to the process-wide `SLACK_FREE_RESPONSE_CHANNELS`, which the Parent Agent's listen-in config sets, when a profile's own setting is missing. So before this change a Bot's Slack app could take the Parent Agent's listen-in channels as its own free-response rooms, with no guard, wherever it was also allowed in.
+- Changed: `ci.yml` selects the Hermes image workflow for `hermes_listen_in_driver.py`, which now also checks listen-in per profile.
+- Follow-up: Bots on the organization Tasks page.
 
 ### 2026-11-13 — AF-425 — Task tracking per Bot
 

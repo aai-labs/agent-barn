@@ -359,6 +359,14 @@ def bot_gateway_config(
     if discord_settings is not None:
         extra = platforms.setdefault("discord", {}).setdefault("extra", {})
         extra["require_mention"] = extra["thread_require_mention"] = discord_settings.get("require_mention", True)
+    for platform, settings in (
+        ("slack", slack_settings),
+        ("telegram", telegram_settings),
+        ("discord", discord_settings),
+    ):
+        if settings is not None:
+            setting = _LISTEN_IN_ROOM_SETTINGS[platform]
+            platforms[platform]["extra"][setting] = list((profile.get(platform) or {}).get(setting) or [])
     return profile
 
 

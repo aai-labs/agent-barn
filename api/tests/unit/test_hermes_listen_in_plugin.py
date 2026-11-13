@@ -1172,3 +1172,87 @@ def test_the_longest_context_stays_under_the_hermes_spill_limit(plugin, gateway_
     context = plugin._on_pre_llm_call(is_first_turn=True)["context"]
 
     assert len(context) < _HERMES_SPILL_CHARS
+
+
+# --- Bots: each profile listens in its own rooms ---
+
+_BOT = "0000000b-0000-4000-8000-00000000000b"
+
+
+def _bot_install(tmp_path: Path, rooms: dict) -> Any:
+    home = tmp_path / "profiles" / _BOT
+    installed = home / "plugins" / "agentbarn-listen-in" / "__init__.py"
+    installed.parent.mkdir(parents=True)
+    installed.write_text(_PLUGIN.read_text(encoding="utf-8"), encoding="utf-8")
+    (home / "config.yaml").write_text(yaml.safe_dump(rooms))
+    spec = importlib.util.spec_from_file_location("test_agentbarn_listen_in_bot", installed)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _profile_runner():
+    runner = MagicMock()
+    runner._session_key_for_source.side_effect = lambda source: f"agent:{getattr(source, 'profile', None) or 'main'}:k"
+    return runner
+
+
+def test_a_bot_listens_in_its_own_rooms_not_the_parents(monkeypatch, tmp_path) -> None:
+    parent_home = tmp_path / "parent"
+    parent_home.mkdir()
+    (parent_home / "config.yaml").write_text(yaml.safe_dump({"slack": {"free_response_channels": ["C-PARENT"]}}))
+    monkeypatch.setenv("HERMES_HOME", str(parent_home))
+    bot = _bot_install(tmp_path, {"slack": {"free_response_channels": ["C-BOT"]}})
+    monkeypatch.setattr(bot, "_install_ingress", MagicMock())
+
+    bot.register(MagicMock())
+
+    assert bot._rooms == {"slack": {"C-BOT"}}
+
+
+def test_each_profile_classifies_only_messages_on_its_own_adapters(plugin, monkeypatch, tmp_path) -> None:
+    bot = _bot_install(tmp_path, {})
+    bot._rooms.update({"discord": {_DISCORD_ROOM}})
+    monkeypatch.setattr(bot, "_runner", _profile_runner)
+    monkeypatch.setattr(bot, "_is_known_command", lambda name: False)
+
+    class Adapter:
+        _self_is_explicitly_mentioned = staticmethod(lambda _raw: False)
+
+        async def handle_message(self, event):
+            return None
+
+    plugin._patch_ingress(Adapter)
+    bot._patch_ingress(Adapter)
+    parents, bots = Adapter(), Adapter()
+    bots._owner_profile = _BOT
+    to_bot = _event()
+
+    asyncio.run(bots.handle_message(to_bot))
+    asyncio.run(parents.handle_message(_event()))
+
+    assert list(bot._queues) == [f"agent:{_BOT}:k"]
+    assert list(bot._queues[f"agent:{_BOT}:k"]) == [True]
+    assert list(plugin._queues) == [_KEY]
+    assert not hasattr(to_bot.source, "profile")
+
+
+def test_a_bot_posts_through_its_own_adapter(plugin, monkeypatch, tmp_path) -> None:
+    bot = _bot_install(tmp_path, {})
+    parents_slack, bots_slack = object(), object()
+    runner = SimpleNamespace(
+        adapters={_SlackPlatform.SLACK: parents_slack},
+        _profile_adapters={_BOT: {_SlackPlatform.SLACK: bots_slack}},
+    )
+    monkeypatch.setattr(bot, "_runner", lambda: runner)
+    plugin._runner = lambda: runner
+
+    assert bot._adapter("slack") is bots_slack
+    assert plugin._adapter("slack") is parents_slack
+
+
+def test_another_profiles_session_is_never_a_room_session(plugin) -> None:
+    plugin.test_env = {"HERMES_SESSION_KEY": f"agent:{_BOT}:discord:group:111", "HERMES_SESSION_CHAT_ID": _DISCORD_ROOM}
+
+    assert plugin._in_room_session() is False

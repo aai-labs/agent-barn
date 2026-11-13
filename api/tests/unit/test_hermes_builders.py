@@ -766,19 +766,20 @@ def test_a_bot_profile_carries_slack_settings_in_extra():
         "thread_require_mention": False,
         "disable_dms": True,
         "allowed_channels": ["C1", "C2"],
+        "free_response_channels": [],
     }
 
 
 def test_a_bot_profile_carries_discord_mention_settings_in_extra():
     extra = bot_gateway_config({}, discord_settings={"require_mention": False})["platforms"]["discord"]["extra"]
 
-    assert extra == {"require_mention": False, "thread_require_mention": False}
+    assert extra == {"require_mention": False, "thread_require_mention": False, "free_response_channels": []}
 
 
 def test_a_bot_profile_requires_a_discord_mention_by_default():
     extra = bot_gateway_config({}, discord_settings={})["platforms"]["discord"]["extra"]
 
-    assert extra == {"require_mention": True, "thread_require_mention": True}
+    assert extra == {"require_mention": True, "thread_require_mention": True, "free_response_channels": []}
 
 
 def test_an_open_slack_group_policy_sets_no_channel_allowlist():
@@ -798,8 +799,13 @@ def test_a_bot_profile_carries_telegram_settings_in_extra():
         "require_mention": True,
         "allowed_chats": ["-100", "-200"],
         "group_allowed_chats": ["-100", "-200"],
+        "free_response_chats": [],
     }
-    assert open_groups["platforms"]["telegram"]["extra"] == {"require_mention": True, "group_allowed_chats": "*"}
+    assert open_groups["platforms"]["telegram"]["extra"] == {
+        "require_mention": True,
+        "group_allowed_chats": "*",
+        "free_response_chats": [],
+    }
 
 
 def _config_map_with(**fields):
@@ -1025,3 +1031,46 @@ def test_require_mention_off_and_listen_in_work_together() -> None:
     assert config["discord"]["thread_require_mention"] is False
     assert config["discord"]["free_response_channels"] == ["channel-1"]
     assert "agentbarn-listen-in" in config["plugins"]["enabled"]
+
+
+def test_a_failed_guard_empties_a_bots_own_rooms_rather_than_removing_them(tmp_path: Path) -> None:
+    config = {
+        **_LISTENING_CONFIG,
+        "platforms": {
+            "slack": {"extra": {"require_mention": True, "free_response_channels": ["C1"]}},
+            "telegram": {"extra": {"free_response_chats": ["-1001"]}},
+        },
+    }
+
+    result, _ = _listen_in_check(tmp_path, "cannot import name AIAgent", config)
+
+    assert result["platforms"]["slack"]["extra"] == {"require_mention": True, "free_response_channels": []}
+    assert result["platforms"]["telegram"]["extra"] == {"free_response_chats": []}
+    assert "free_response_channels" not in result["slack"]
+
+
+def test_a_bot_profile_holds_its_own_listen_in_rooms() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5",
+        "http://litellm:4000",
+        native_slack=True,
+        native_discord=True,
+        slack_listen_in=["C1"],
+        telegram_settings={"allowed_chat_ids": ["-1001"], "listen_in_chat_ids": ["-1001"]},
+    )
+
+    platforms = bot_gateway_config(config, slack_settings={}, telegram_settings={}, discord_settings={})["platforms"]
+
+    assert platforms["slack"]["extra"]["free_response_channels"] == ["C1"]
+    assert platforms["telegram"]["extra"]["free_response_chats"] == ["-1001"]
+    assert platforms["discord"]["extra"]["free_response_channels"] == []
+
+
+def test_a_bot_without_listen_in_never_inherits_the_parents_rooms() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True, native_discord=True)
+
+    platforms = bot_gateway_config(config, slack_settings={}, telegram_settings={}, discord_settings={})["platforms"]
+
+    assert platforms["slack"]["extra"]["free_response_channels"] == []
+    assert platforms["discord"]["extra"]["free_response_channels"] == []
+    assert platforms["telegram"]["extra"]["free_response_chats"] == []
