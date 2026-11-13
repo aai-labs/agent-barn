@@ -122,7 +122,7 @@ export function AgentCard({ agent, href }: AgentCardProps) {
             {formatModelName(model)}
           </div>
         )}
-        {agent.agentType === "hermes" && <BotCount parentAgentId={agent.id} />}
+        <BotCount parentAgentId={agent.id} />
       </div>
 
       <div className="mt-auto flex min-h-16 items-center justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>

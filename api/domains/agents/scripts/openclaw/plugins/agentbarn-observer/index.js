@@ -7,17 +7,54 @@
 // and sends only carry a session key, so each is attributed to the latest
 // inbound message observed on that session. Channel health is reported by
 // healthz-server.js, which already polls the gateway's health snapshot.
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 
 const FLUSH_MS = 2000;
 const MAX_BUFFER = 500;
 const MAX_TRACKED = 1000;
 
-const buffer = [];
-const messages = [];
+const outbox = new Map();
 const latestInbound = new Map(); // sessionKey -> correlationId
 const inboundRooms = new Map(); // sessionKey -> { channel_id, thread_id }
 let outboundSequence = 0;
+
+const SECRET_ROOT = process.env.BOT_SECRET_ROOT || "/run/agentbarn/bots";
+const MAIN_AGENT = "main";
+const identities = new Map();
+
+function agentOf(ctx, event) {
+  if (ctx && ctx.agentId) return ctx.agentId;
+  const sessionKey = (ctx && ctx.sessionKey) || (event && event.sessionKey) || "";
+  const scoped = /^agent:([^:]+):/.exec(sessionKey);
+  if (scoped) return scoped[1];
+  const accountId = (ctx && ctx.accountId) || (event && event.accountId);
+  if (accountId && accountId !== "default") return accountId;
+  return MAIN_AGENT;
+}
+
+function identityFor(agent) {
+  if (agent === MAIN_AGENT) {
+    return { agentId: process.env.AGENT_ID || "", key: process.env.INGEST_API_KEY || "" };
+  }
+  if (identities.has(agent)) return identities.get(agent);
+  try {
+    const agentId = fs.readFileSync(path.join(SECRET_ROOT, agent, "AGENT_ID"), "utf8");
+    const key = fs.readFileSync(path.join(SECRET_ROOT, agent, "INGEST_API_KEY"), "utf8");
+    if (agentId !== agent || !key) return null;
+    const identity = { agentId, key };
+    identities.set(agent, identity);
+    return identity;
+  } catch {
+    return null;
+  }
+}
+
+function pending(agent) {
+  if (!outbox.has(agent)) outbox.set(agent, { events: [], messages: [] });
+  return outbox.get(agent);
+}
 
 function nativeChannels() {
   return new Set((process.env.AGENTBARN_NATIVE_CHANNELS || "").split(",").filter(Boolean));
@@ -27,7 +64,8 @@ function productPlatform(channelId) {
   return channelId === "msteams" ? "teams" : channelId;
 }
 
-function emit(stage, platform, correlationId, errorCode) {
+function emit(agent, stage, platform, correlationId, errorCode) {
+  const buffer = pending(agent).events;
   if (buffer.length >= MAX_BUFFER) buffer.shift();
   buffer.push({
     stage,
@@ -38,7 +76,8 @@ function emit(stage, platform, correlationId, errorCode) {
   });
 }
 
-function emitMessage(message) {
+function emitMessage(agent, message) {
+  const messages = pending(agent).messages;
   if (messages.length >= MAX_BUFFER) messages.shift();
   messages.push({ ...message, occurred_at: new Date().toISOString() });
 }
@@ -65,9 +104,20 @@ function bareChannel(location) {
   return String(location).replace(/^(channel|user):/, "");
 }
 
-function flush(url, apiKey) {
-  if (buffer.length === 0 && messages.length === 0) return;
-  const body = JSON.stringify({ events: buffer.splice(0), messages: messages.splice(0) });
+function flush(ingestUrl) {
+  for (const [agent, box] of outbox) {
+    if (box.events.length === 0 && box.messages.length === 0) continue;
+    const body = JSON.stringify({ events: box.events.splice(0), messages: box.messages.splice(0) });
+    const identity = identityFor(agent);
+    if (!identity) {
+      console.error("[agentbarn-observer] dropped events for an agent without an identity");
+      continue;
+    }
+    post(`${ingestUrl}/agents/${identity.agentId}/communication-events`, identity.key, body);
+  }
+}
+
+function post(url, apiKey, body) {
   const request = http.request(url, {
     method: "POST",
     headers: {
@@ -98,13 +148,14 @@ export default {
       if (!native.has(ctx.channelId) || !messageId) return;
       const platform = productPlatform(ctx.channelId);
       const correlationId = `${platform}:${messageId}`;
-      emit("provider_observed", platform, correlationId);
+      const agent = agentOf(ctx, event);
+      emit(agent, "provider_observed", platform, correlationId);
       const sessionKey = ctx.sessionKey || event.sessionKey;
       const content = event.content || event.text;
       const location = channelId(event, ctx);
       const threadId = event.threadId || ctx.threadId || null;
       if (sessionKey && content && location) {
-        emitMessage({
+        emitMessage(agent, {
           platform,
           provider_message_id: String(messageId),
           session_key: sessionKey,
@@ -126,13 +177,13 @@ export default {
     // Cron, heartbeat, and API runs have no inbound message to report against.
     api.on("before_agent_run", (_event, ctx) => {
       const correlationId = correlated(ctx.sessionKey);
-      if (correlationId) emit("agent_claimed", correlationId.split(":", 1)[0], correlationId);
+      if (correlationId) emit(agentOf(ctx), "agent_claimed", correlationId.split(":", 1)[0], correlationId);
     });
 
     api.on("agent_end", (event, ctx) => {
       const correlationId = correlated(ctx.sessionKey);
       if (correlationId) {
-        emit("model_completed", correlationId.split(":", 1)[0], correlationId, event.success ? null : "model_failed");
+        emit(agentOf(ctx, event), "model_completed", correlationId.split(":", 1)[0], correlationId, event.success ? null : "model_failed");
       }
     });
 
@@ -140,8 +191,9 @@ export default {
       if (!native.has(ctx.channelId)) return;
       const correlationId = correlated(ctx.sessionKey || event.sessionKey);
       const platform = productPlatform(ctx.channelId);
-      if (event.success) emit("provider_delivered", platform, correlationId);
-      else emit("provider_delivery_attempted", platform, correlationId, "send_failed");
+      const agent = agentOf(ctx, event);
+      if (event.success) emit(agent, "provider_delivered", platform, correlationId);
+      else emit(agent, "provider_delivery_attempted", platform, correlationId, "send_failed");
       const sessionKey = ctx.sessionKey || event.sessionKey;
       const content = event.content || event.text;
       const location = channelId(event, ctx);
@@ -150,7 +202,7 @@ export default {
         const target = bareChannel(location);
         const inbound = inboundRooms.get(sessionKey);
         const sameRoom = inbound && inbound.channel_id.toLowerCase() === target.toLowerCase();
-        emitMessage({
+        emitMessage(agent, {
           platform,
           provider_message_id: String(event.messageId || `outbound:${sessionKey}:${outboundSequence}`),
           session_key: sessionKey,
@@ -163,7 +215,6 @@ export default {
       }
     });
 
-    const url = `${INGEST_URL}/agents/${AGENT_ID}/communication-events`;
-    setInterval(() => flush(url, INGEST_API_KEY), FLUSH_MS);
+    setInterval(() => flush(INGEST_URL), FLUSH_MS);
   },
 };

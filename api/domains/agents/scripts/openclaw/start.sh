@@ -19,6 +19,13 @@ mkdir -p "$OBSERVER_DIR"
 cp /app/config/agentbarn-observer-index.js "$OBSERVER_DIR/index.js"
 cp /app/config/agentbarn-observer-package.json "$OBSERVER_DIR/package.json"
 cp /app/config/agentbarn-observer-plugin.json "$OBSERVER_DIR/openclaw.plugin.json"
+if [ -f /app/config/bots.json ]; then
+  BOT_ENV_DIR="/home/node/.openclaw/local-plugins/agentbarn-bot-env"
+  mkdir -p "$BOT_ENV_DIR"
+  cp /app/config/agentbarn-bot-env-index.js "$BOT_ENV_DIR/index.js"
+  cp /app/config/agentbarn-bot-env-package.json "$BOT_ENV_DIR/package.json"
+  cp /app/config/agentbarn-bot-env-plugin.json "$BOT_ENV_DIR/openclaw.plugin.json"
+fi
 TASKS_DIR="/home/node/.openclaw/local-plugins/agentbarn-tasks"
 mkdir -p "$TASKS_DIR"
 cp /app/config/agentbarn-tasks-index.js "$TASKS_DIR/index.js"
@@ -54,10 +61,17 @@ fi
 if [ -f /app/config/gog-setup.sh ]; then
   sh /app/config/gog-setup.sh || exit $?
 fi
+if [ -f /app/config/bots.json ]; then
+  python3 /app/config/bot-setup.py
+fi
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   python3 /app/config/memory-gateway-ready.py || true
 fi
 python3 /app/config/file-sync.py --once || true
 python3 /app/config/file-sync.py &
 touch "$AGENT_RUNTIME_SETUP_READY_FILE"
+if [ -f /app/config/bots.json ]; then
+  python3 /app/config/bot-setup.py --launch
+  python3 /app/config/bot-setup.py --clean-jobs &
+fi
 exec openclaw gateway --allow-unconfigured

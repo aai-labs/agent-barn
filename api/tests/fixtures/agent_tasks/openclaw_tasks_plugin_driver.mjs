@@ -1,7 +1,8 @@
 // Drives the OpenClaw agentbarn-tasks plugin through the plugin API it registers with.
 //
 // Usage: node openclaw_tasks_plugin_driver.mjs <plugin-index.js> <steps.json>
-// Each step is {"hook": name, "event": {...}, "ctx": {...}} or {"tool": {...params}}.
+// Each step is {"hook": name, "event": {...}, "ctx": {...}} or {"tool": {...params}, "ctx": {...}};
+// a tool registered as a factory is built with the step's ctx, as the gateway builds it for each run.
 // Prints one JSON line: {"hooks": [...], "tools": [...], "results": [...]}, one result per step.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -15,8 +16,8 @@ plugin.register({
   on(name, handler) {
     hooks.set(name, handler);
   },
-  registerTool(tool) {
-    tools.set(tool.name, tool);
+  registerTool(tool, options) {
+    tools.set(options?.name ?? tool.name, typeof tool === "function" ? tool : () => tool);
   },
 });
 
@@ -24,7 +25,7 @@ const results = [];
 let call = 0;
 for (const step of JSON.parse(readFileSync(stepsPath, "utf8"))) {
   if (step.tool) {
-    const tool = tools.get("agentbarn_task");
+    const tool = tools.get("agentbarn_task")(step.ctx ?? {});
     results.push(await tool.execute(`call-${call++}`, step.tool));
   } else {
     const handler = hooks.get(step.hook);
@@ -37,6 +38,6 @@ for (const step of JSON.parse(readFileSync(stepsPath, "utf8"))) {
 }
 console.log(JSON.stringify({
   hooks: [...hooks.keys()].sort(),
-  tools: [...tools.values()].map(({ name, parameters }) => ({ name, parameters })),
+  tools: [...tools.values()].map((build) => build({})).map(({ name, parameters }) => ({ name, parameters })),
   results,
 }));

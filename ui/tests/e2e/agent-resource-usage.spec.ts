@@ -40,11 +40,17 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
     await dataSupportPage.resourceUsage.interceptAgentResourceUsage();
   });
 
-  test("closes the Health sections, after Activity and Costs", async () => {
+  test("sits in the pod-wide Agent sections, after Logs and File sync and after Health", async () => {
     await agentDetailPage.gotoResourceUsage();
 
     await expect(agentDetailPage.resourceUsageTab()).toBeVisible();
-    expect((await agentDetailPage.tabLabels()).slice(-3)).toEqual(["Activity", "Costs", "Resource usage"]);
+    const labels = await agentDetailPage.tabLabels();
+    expect(labels.slice(labels.indexOf("Logs"), labels.indexOf("Resource usage") + 1)).toEqual([
+      "Logs",
+      "File sync",
+      "Resource usage",
+    ]);
+    expect(labels.indexOf("Costs")).toBeLessThan(labels.indexOf("Logs"));
   });
 
   test("shows current usage against the container's limits", async ({ page }) => {

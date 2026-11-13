@@ -1,4 +1,7 @@
+import copy
 import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -20,7 +23,7 @@ from .artifacts import (
     artifact_command_mount,
     artifact_command_volume,
 )
-from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids, bot_mounts, bot_volumes
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_PLUGIN_PATH,
@@ -36,6 +39,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_BOT_ENV = _SCRIPTS / "plugins" / "agentbarn-bot-env"
 _TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
 _LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 
@@ -47,6 +51,16 @@ OPENCLAW_GATEWAY_PORT = 18789
 # The agent workspace on the persistent volume; OpenClaw attaches local files from here.
 # The OpenClaw config, the legacy-migration script, and the file-delivery policy all use it.
 OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
+OPENCLAW_STATE_DIR = "/home/node/.openclaw"
+MAIN_AGENT_ID = "main"
+MULTI_AGENT_RUNTIME_MODEL = "openclaw/main"
+BOT_KEY_DIR = "/tmp/agentbarn-keys"
+DEFAULT_ACCOUNT_ID = "default"
+_BOT_TOKEN_NAMES = {
+    "slack": {"botToken": "SLACK_BOT_TOKEN", "appToken": "SLACK_APP_TOKEN"},
+    "telegram": {"botToken": "TELEGRAM_BOT_TOKEN"},
+    "discord": {"token": "DISCORD_BOT_TOKEN"},
+}
 
 LISTEN_IN_SYSTEM_PROMPT = (
     "You are listening in on this room. Most messages here are not meant for you. "
@@ -85,6 +99,11 @@ COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runt
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
+BOT_SETUP_PY: str = (_SCRIPTS / "bot-setup.py").read_text()
+BOT_RUN_PY: str = (_SCRIPTS / "bot-run.py").read_text()
+BOT_ENV_INDEX_JS: str = (_BOT_ENV / "index.js").read_text()
+BOT_ENV_PACKAGE_JSON: str = (_BOT_ENV / "package.json").read_text()
+BOT_ENV_PLUGIN_JSON: str = (_BOT_ENV / "openclaw.plugin.json").read_text()
 
 
 def _openclaw_config_core(
@@ -168,6 +187,7 @@ def _openclaw_config_core(
 
 
 _OBSERVER_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-observer"
+_BOT_ENV_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-bot-env"
 _LISTEN_IN_PLUGIN_PATH = "/home/node/.openclaw/local-plugins/agentbarn-listen-in"
 _NO_HOME_CHANNEL_TARGET = "channel:__agentbarn_no_home_channel__"
 
@@ -246,15 +266,174 @@ def build_openclaw_gateway_config(
             plugins["entries"][key] = {"enabled": True}
         plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
     if unmentioned == "room_event":
-        plugins = config["plugins"]
-        plugins["allow"].append("agentbarn-listen-in")
-        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
-        plugins["entries"]["agentbarn-listen-in"] = {
-            "enabled": True,
-            "hooks": {"allowConversationAccess": True},
-            "config": {"slackRooms": _listen_in_rooms(channels)["slack"]},
-        }
+        _load_listen_in(config["plugins"], {"slackRooms": _listen_in_rooms(channels)["slack"]})
     return config
+
+
+def _load_listen_in(plugins: dict, guard_config: dict) -> None:
+    if "agentbarn-listen-in" not in plugins["allow"]:
+        plugins["allow"].append("agentbarn-listen-in")
+    if _LISTEN_IN_PLUGIN_PATH not in plugins["load"]["paths"]:
+        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
+    plugins["entries"]["agentbarn-listen-in"] = {
+        "enabled": True,
+        "hooks": {"allowConversationAccess": True},
+        "config": guard_config,
+    }
+
+
+@dataclass(frozen=True)
+class OpenClawBot:
+    id: UUID
+    slot: int
+    overlay: dict
+
+
+def bot_workspace_dir(bot_id: UUID) -> str:
+    return f"{OPENCLAW_STATE_DIR}/workspace-{bot_id}"
+
+
+def _bot_provider(slot: int) -> str:
+    return f"litellm-bot-{slot}"
+
+
+def _bot_secret_ref(slot: int, name: str) -> dict:
+    return {"source": "file", "provider": f"bot{slot}", "id": f"/{name}"}
+
+
+def _without_enabled(channel: dict) -> dict:
+    return {key: copy.deepcopy(value) for key, value in channel.items() if key != "enabled"}
+
+
+def _bot_account(bot: OpenClawBot, platform: str) -> dict:
+    account = _without_enabled(bot.overlay["channels"][platform])
+    for key, name in _BOT_TOKEN_NAMES.get(platform, {}).items():
+        account[key] = _bot_secret_ref(bot.slot, name)
+    return account
+
+
+def _bot_agent_entry(bot: OpenClawBot) -> dict:
+    model_name = bot.overlay["agents"]["defaults"]["model"]["primary"].partition("/")[2]
+    return {
+        "workspace": bot_workspace_dir(bot.id),
+        "agentDir": f"{OPENCLAW_STATE_DIR}/agents/{bot.id}/agent",
+        "model": {"primary": f"{_bot_provider(bot.slot)}/{model_name}"},
+    }
+
+
+def _bot_model_provider(bot: OpenClawBot) -> dict:
+    provider = bot.overlay["agents"]["defaults"]["model"]["primary"].partition("/")[0]
+    own = bot.overlay["models"]["providers"][provider]
+    return {
+        "baseUrl": own["baseUrl"],
+        "api": "openai-completions",
+        "auth": "api-key",
+        "apiKey": _bot_secret_ref(bot.slot, "LITELLM_API_KEY"),
+        "models": copy.deepcopy(own["models"]),
+    }
+
+
+def _route(agent_id: str, platform: str, account_id: str | None = None) -> dict:
+    match = {"channel": platform} if account_id is None else {"channel": platform, "accountId": account_id}
+    return {"type": "route", "agentId": agent_id, "match": match}
+
+
+def _platforms(first: Sequence[str], bots: Sequence[OpenClawBot]) -> list[str]:
+    platforms = list(first)
+    for bot in bots:
+        platforms += [platform for platform in bot.overlay["channels"] if platform not in platforms]
+    return platforms
+
+
+def _multi_agent_channels(parent_channels: dict, bots: Sequence[OpenClawBot]) -> tuple[dict, list[dict]]:
+    channels: dict = {}
+    bindings: list[dict] = []
+    for platform in _platforms(list(parent_channels), bots):
+        bot_accounts = {str(bot.id): _bot_account(bot, platform) for bot in bots if platform in bot.overlay["channels"]}
+        if not bot_accounts:
+            channels[platform] = copy.deepcopy(parent_channels[platform])
+            bindings.append(_route(MAIN_AGENT_ID, platform))
+            continue
+        channel: dict = {"enabled": True}
+        accounts: dict = {}
+        if platform in parent_channels:
+            channel["defaultAccount"] = DEFAULT_ACCOUNT_ID
+            accounts[DEFAULT_ACCOUNT_ID] = _without_enabled(parent_channels[platform])
+            bindings.append(_route(MAIN_AGENT_ID, platform, DEFAULT_ACCOUNT_ID))
+        channel["accounts"] = {**accounts, **bot_accounts}
+        channels[platform] = channel
+    for bot in bots:
+        bindings += [_route(str(bot.id), platform, str(bot.id)) for platform in bot.overlay["channels"]]
+    return channels, bindings
+
+
+def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot], parent_env_names: Sequence[str] = ()) -> dict:
+    if not bots:
+        return parent
+    config = copy.deepcopy(parent)
+    agents = config["agents"]
+    agents["ownership"] = "explicit"
+    agents["defaults"]["systemAgent"] = {"agentId": MAIN_AGENT_ID}
+    agents["entries"] = {MAIN_AGENT_ID: {"workspace": OPENCLAW_WORKSPACE_DIR}}
+    secret_providers: dict = {}
+    for bot in bots:
+        agents["entries"][str(bot.id)] = _bot_agent_entry(bot)
+        config["models"]["providers"][_bot_provider(bot.slot)] = _bot_model_provider(bot)
+        secret_providers[f"bot{bot.slot}"] = {"source": "file", "path": f"{BOT_KEY_DIR}/{bot.id}.json", "mode": "json"}
+    config["secrets"] = {"providers": secret_providers}
+
+    config["channels"], config["bindings"] = _multi_agent_channels(parent["channels"], bots)
+    every_channel_set = [parent["channels"], *(bot.overlay["channels"] for bot in bots)]
+    for bot in bots:
+        unmentioned = bot.overlay["messages"]["groupChat"]["unmentionedInbound"]
+        agents["entries"][str(bot.id)]["groupChat"] = {"unmentionedInbound": unmentioned}
+
+    plugins = config["plugins"]
+    if any(any(_listen_in_rooms(channels).values()) for channels in every_channel_set):
+        _load_listen_in(
+            plugins,
+            {
+                "slackRooms": _listen_in_rooms(parent["channels"])["slack"],
+                "agentSlackRooms": {str(bot.id): _listen_in_rooms(bot.overlay["channels"])["slack"] for bot in bots},
+            },
+        )
+    if config["channels"]:
+        for key in [*config["channels"], "agentbarn-observer"]:
+            if key not in plugins["allow"]:
+                plugins["allow"].append(key)
+        for key in config["channels"]:
+            plugins["entries"].setdefault(key, {"enabled": True})
+        plugins["entries"].setdefault(
+            "agentbarn-observer", {"enabled": True, "hooks": {"allowConversationAccess": True}}
+        )
+        if _OBSERVER_PLUGIN_PATH not in plugins["load"]["paths"]:
+            plugins["load"]["paths"].append(_OBSERVER_PLUGIN_PATH)
+    plugins["allow"].append("agentbarn-bot-env")
+    plugins["load"]["paths"].append(_BOT_ENV_PLUGIN_PATH)
+    platforms = {
+        MAIN_AGENT_ID: list(parent["channels"]),
+        **{str(bot.id): list(bot.overlay["channels"]) for bot in bots},
+    }
+    plugins["entries"]["agentbarn-bot-env"] = {
+        "enabled": True,
+        "config": {"parentNames": sorted(parent_env_names), "platforms": platforms},
+    }
+    plugins["entries"]["active-memory"]["config"]["agents"] = [MAIN_AGENT_ID, *(str(bot.id) for bot in bots)]
+    hindsight = plugins["entries"]["hindsight-openclaw"]
+    if hindsight["enabled"]:
+        hindsight["config"]["ignoreSessionPatterns"] = [f"agent:{bot.id}:**" for bot in bots]
+    config["tools"]["agentToAgent"] = {"enabled": False}
+    return config
+
+
+def multi_agent_runtime_env(parent_env: Mapping[str, str], bots: Sequence[OpenClawBot]) -> dict[str, str]:
+    if not bots:
+        return {}
+    env = {"RUNTIME_MODEL": MULTI_AGENT_RUNTIME_MODEL, "RUNTIME_SESSION_PREFIX": f"agent:{MAIN_AGENT_ID}:"}
+    parent_platforms = [name for name in parent_env.get("AGENTBARN_NATIVE_CHANNELS", "").split(",") if name]
+    if platforms := _platforms(parent_platforms, bots):
+        env["AGENTBARN_NATIVE_CHANNELS"] = ",".join(platforms)
+    return env
 
 
 def native_slack_channel(settings: dict, home_channel: ConversationLocation | None = None) -> dict:
@@ -472,6 +651,7 @@ def build_config_map(
     skills_json: str | None = None,
     memory_enabled: bool = False,
     artifacts_enabled: bool = False,
+    bots_manifest: str | None = None,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
@@ -529,6 +709,13 @@ def build_config_map(
         data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
+    if bots_manifest is not None:
+        data["bots.json"] = bots_manifest
+        data["bot-setup.py"] = BOT_SETUP_PY
+        data["bot-run.py"] = BOT_RUN_PY
+        data["agentbarn-bot-env-index.js"] = BOT_ENV_INDEX_JS
+        data["agentbarn-bot-env-package.json"] = BOT_ENV_PACKAGE_JSON
+        data["agentbarn-bot-env-plugin.json"] = BOT_ENV_PLUGIN_JSON
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -575,6 +762,7 @@ def build_deployment(
     image_pull_secret: str = "",
     *,
     resources: client.V1ResourceRequirements,
+    bot_ids: Sequence[UUID] = (),
 ) -> client.V1Deployment:
     """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
 
@@ -650,6 +838,7 @@ def build_deployment(
                                     name="data",
                                     mount_path="/home/node/.openclaw",
                                 ),
+                                *bot_mounts(bot_ids),
                             ],
                         )
                     ],
@@ -665,6 +854,7 @@ def build_deployment(
                             name="data",
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=name),
                         ),
+                        *bot_volumes(bot_ids),
                     ],
                 ),
             ),

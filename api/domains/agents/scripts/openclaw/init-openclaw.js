@@ -13,7 +13,18 @@ const REPLACE_PATHS = [
   ['channels'],
   ['bindings'],
   ['agents', 'defaults', 'heartbeat'],
+  ['agents', 'entries'],
   ['plugins', 'entries', 'hindsight-openclaw'],
+];
+
+const BOT_ONLY_PATHS = [
+  ['agents', 'ownership'],
+  ['agents', 'defaults', 'systemAgent'],
+  ['agents', 'entries'],
+];
+const BOT_KEYED = [
+  { parts: ['models', 'providers'], pattern: /^litellm-bot-\d+$/ },
+  { parts: ['secrets', 'providers'], pattern: /^bot\d+$/ },
 ];
 
 function getPath(obj, parts) {
@@ -117,6 +128,24 @@ if (plugins) {
 for (const parts of REPLACE_PATHS) {
   const overlayVal = getPath(overlay, parts);
   if (overlayVal !== undefined) setPath(merged, parts, overlayVal);
+}
+
+for (const parts of BOT_ONLY_PATHS) {
+  if (getPath(overlay, parts) !== undefined) continue;
+  const parent = getPath(merged, parts.slice(0, -1));
+  if (parent && typeof parent === 'object') delete parent[parts[parts.length - 1]];
+}
+for (const { parts, pattern } of BOT_KEYED) {
+  const current = getPath(merged, parts);
+  if (!current || typeof current !== 'object') continue;
+  const wanted = getPath(overlay, parts) || {};
+  for (const key of Object.keys(current)) {
+    if (pattern.test(key) && !(key in wanted)) delete current[key];
+  }
+}
+if (merged.secrets && merged.secrets.providers && Object.keys(merged.secrets.providers).length === 0) {
+  delete merged.secrets.providers;
+  if (Object.keys(merged.secrets).length === 0) delete merged.secrets;
 }
 
 fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });

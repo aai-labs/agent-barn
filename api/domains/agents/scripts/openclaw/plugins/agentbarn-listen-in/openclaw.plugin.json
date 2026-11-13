@@ -6,6 +6,12 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": { "slackRooms": { "type": "array", "items": { "type": "string" } } }
+    "properties": {
+      "slackRooms": { "type": "array", "items": { "type": "string" } },
+      "agentSlackRooms": {
+        "type": "object",
+        "additionalProperties": { "type": "array", "items": { "type": "string" } }
+      }
+    }
   }
 }

@@ -37,6 +37,7 @@ RUNTIME_KIND = os.environ.get("RUNTIME_KIND", "")
 RUNTIME_API_KEY = os.environ.get("RUNTIME_API_KEY", "")
 RUNTIME_API_URL = os.environ.get("RUNTIME_API_URL", "").rstrip("/")
 RUNTIME_MODEL = os.environ.get("RUNTIME_MODEL", "")
+RUNTIME_SESSION_PREFIX = os.environ.get("RUNTIME_SESSION_PREFIX", "")
 RECEIPT_PATH = Path(os.environ.get("AGENT_TRIGGER_RECEIPT_PATH", "/tmp/agent-trigger-receipts.sqlite3"))
 MAX_BODY_BYTES = 128 * 1024
 PLATFORMS = {"slack", "discord", "telegram", "teams"}
@@ -174,11 +175,19 @@ def _openclaw_find(name: str) -> str | None:
     return None if existing is None else _job_id(existing, "OpenClaw")
 
 
+def _openclaw_owner() -> list[str]:
+    runtime, _, agent = RUNTIME_MODEL.partition("/")
+    if runtime != "openclaw" or agent in ("", "default"):
+        return []
+    return ["--agent", agent, "--account", "default" if agent == "main" else agent]
+
+
 def _openclaw_create(name: str, prompt: str, platform: str) -> str:
     channel = "msteams" if platform == "teams" else platform
     created = _openclaw_json(
         [
             "create",
+            *_openclaw_owner(),
             "--at",
             _run_at(),
             "--message",
@@ -295,7 +304,7 @@ def _runtime_headers(session_id: str) -> dict[str, str]:
         "Authorization": f"Bearer {RUNTIME_API_KEY}",
         "Content-Type": "application/json",
         "X-Hermes-Session-Key": session_id,
-        "X-OpenClaw-Session-Key": session_id,
+        "X-OpenClaw-Session-Key": f"{RUNTIME_SESSION_PREFIX}{session_id}",
     }
 
 

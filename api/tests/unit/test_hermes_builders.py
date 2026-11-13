@@ -27,10 +27,9 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
+from api.domains.agents.builders.common import BOT_CONFIG_ROOT, BOT_SECRET_ROOT
 from api.domains.agents.builders.hermes import (
-    BOT_CONFIG_ROOT,
     BOT_ENV_DIR,
-    BOT_SECRET_ROOT,
     HERMES_BOOT_RUN_PY,
     HERMES_BOOTLOADER_FOOTER,
     HERMES_DEFAULT_MAX_TURNS,

@@ -146,6 +146,24 @@ checks listen-in per profile: a Bot's own room list beats the process-wide
 its own adapter, keys them in its own profile and posts through its own app, and the
 startup check empties a Bot's own rooms rather than removing them.
 
+`../../api/runtime_tests/test_openclaw_bots.py` is the OpenClaw equivalent of `hermes_bots_driver.py` and runs with
+the other OpenClaw runtime contracts (`OPENCLAW_TEST_IMAGE=<image> make test-api-runtime
+RUNTIME=openclaw`), offline. It renders a Parent Agent's gateway config with two Bots
+through the builders and proves the pinned image accepts it: the config validates, each
+Bot is its own agent with its own workspace, model provider and Telegram account, and
+every Bot key reference resolves, with a missing key unresolved for that Bot only. It
+also runs the real `init-openclaw.js` and `bot-setup.py` through a first Bot, a Bot whose
+Secret is missing, and the last Bot's removal. It must pass on every OpenClaw upgrade.
+`../../api/tests/unit/test_openclaw_bot_setup.py` covers the same scripts on temp
+directories; its two tests that start Bot helpers skip on Windows. The image contract also
+loads the `agentbarn-bot-env` plugin through the pinned loader and hook runner beside a
+second plugin that rewrites `exec`, and proves each agent gets its own values, an
+unknown agent's command is refused, and a message is pinned to the agent's own account
+and refused on another platform or account. `../../api/tests/unit/test_openclaw_bot_env_plugin.py`
+covers the plugin's rules under Node. The contract also proves that a Bot's own listen-in rooms, with per-agent room events and
+the guard's per-Bot Slack rooms, keep the config valid. Its check scripts install every Agent Barn
+plugin the config loads, including `agentbarn-tasks` and `agentbarn-listen-in`.
+
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
 doing so ran every commit on a PR branch twice. A branch without a pull request

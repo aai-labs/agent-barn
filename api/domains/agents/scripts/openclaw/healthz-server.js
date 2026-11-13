@@ -1,4 +1,5 @@
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
@@ -11,6 +12,11 @@ const CGROUP_ROOT = process.env.HEALTHZ_CGROUP_ROOT || '/sys/fs/cgroup';
 const SETUP_READY_FILE = process.env.AGENT_RUNTIME_SETUP_READY_FILE || '/tmp/agentbarn-runtime-setup-ready';
 const CACHE_TTL_MS = 10_000;
 const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
+const HEALTH_COMMAND = JSON.parse(process.env.HEALTHZ_HEALTH_COMMAND || '["openclaw", "health", "--json"]');
+const BOT_SECRET_ROOT = process.env.BOT_SECRET_ROOT || '/run/agentbarn/bots';
+const BOT_ACTIVE_FILE = process.env.BOT_ACTIVE_FILE || '/tmp/agentbarn-active-bots.json';
+const MAIN_AGENT = 'main';
+const DEFAULT_ACCOUNT = 'default';
 
 let cache = null;
 let proxyServer = null;
@@ -52,11 +58,18 @@ const LLM_ERROR_MARKER = process.env.AGENTBARN_LLM_ERROR_MARKER || '/tmp/agentba
 
 // Best effort: a failed write costs the person chatting a precise reason, never the
 // response itself.
-function recordTerminalLlmError(code) {
+function llmErrorMarker(authorization) {
+  if (!process.env.RUNTIME_SESSION_PREFIX) return LLM_ERROR_MARKER;
+  const key = String(authorization || '').replace(/^Bearer\s+/i, '').trim();
+  return `${LLM_ERROR_MARKER}.${crypto.createHash('sha256').update(key).digest('hex').slice(0, 16)}`;
+}
+
+function recordTerminalLlmError(code, authorization) {
   try {
-    const tmp = `${LLM_ERROR_MARKER}.tmp`;
+    const marker = llmErrorMarker(authorization);
+    const tmp = `${marker}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify({ code, at: Date.now() / 1000 }));
-    fs.renameSync(tmp, LLM_ERROR_MARKER);
+    fs.renameSync(tmp, marker);
   } catch {
     // Ignored on purpose; see above.
   }
@@ -130,28 +143,58 @@ function channelStage(snapshot) {
   return snapshot.restartPending ? 'connection_degraded' : 'connection_error';
 }
 
+function identityFor(agent) {
+  if (agent === MAIN_AGENT) return { agentId: process.env.AGENT_ID || '', key: process.env.INGEST_API_KEY || '' };
+  try {
+    const agentId = fs.readFileSync(path.join(BOT_SECRET_ROOT, agent, 'AGENT_ID'), 'utf8');
+    const key = fs.readFileSync(path.join(BOT_SECRET_ROOT, agent, 'INGEST_API_KEY'), 'utf8');
+    return agentId === agent && key ? { agentId, key } : null;
+  } catch {
+    return null;
+  }
+}
+
+function accountSnapshots(platform, channel) {
+  if (!channel) return [];
+  if (!channel.accounts || typeof channel.accounts !== 'object') return [[MAIN_AGENT, channel]];
+  return Object.entries(channel.accounts).map(([account, snapshot]) => [
+    account === DEFAULT_ACCOUNT ? MAIN_AGENT : account,
+    snapshot,
+  ]);
+}
+
 function reportChannelHealth(channels) {
   const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
   if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
-  const events = [];
+  const byAgent = new Map();
   for (const platform of NATIVE_CHANNELS) {
-    const stage = channelStage(channels[platform]);
-    if (!stage || lastChannelStage[platform] === stage) continue;
-    lastChannelStage[platform] = stage;
-    events.push({
-      stage,
-      platform: productPlatform(platform),
-      occurred_at: new Date().toISOString(),
-      ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
-    });
+    for (const [agent, snapshot] of accountSnapshots(platform, channels[platform])) {
+      const stage = channelStage(snapshot);
+      const key = `${agent}:${platform}`;
+      if (!stage || lastChannelStage[key] === stage) continue;
+      lastChannelStage[key] = stage;
+      if (!byAgent.has(agent)) byAgent.set(agent, []);
+      byAgent.get(agent).push({
+        stage,
+        platform: productPlatform(platform),
+        occurred_at: new Date().toISOString(),
+        ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
+      });
+    }
   }
-  if (events.length === 0) return;
+  for (const [agent, events] of byAgent) {
+    const identity = identityFor(agent);
+    if (identity) postChannelEvents(INGEST_URL, identity, events);
+  }
+}
+
+function postChannelEvents(ingestUrl, identity, events) {
   const body = JSON.stringify({ events });
-  const req = http.request(`${INGEST_URL}/agents/${AGENT_ID}/communication-events`, {
+  const req = http.request(`${ingestUrl}/agents/${identity.agentId}/communication-events`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${INGEST_API_KEY}`,
+      Authorization: `Bearer ${identity.key}`,
       'Content-Length': Buffer.byteLength(body),
     },
     timeout: 10_000,
@@ -166,7 +209,7 @@ function reportChannelHealth(channels) {
 function refresh() {
   if (refreshing) return;
   refreshing = true;
-  execFile('openclaw', ['health', '--json'], { timeout: 15_000 }, (err, stdout) => {
+  execFile(HEALTH_COMMAND[0], HEALTH_COMMAND.slice(1), { timeout: 15_000 }, (err, stdout) => {
     refreshing = false;
     if (err) {
       cache = { ok: false, everConnected: false, reason: err.message };
@@ -293,6 +336,14 @@ function healthzResult() {
   return [503, { status: 'starting', reason: cache.reason }];
 }
 
+function withServedBots(body) {
+  try {
+    return { ...body, served_bots: JSON.parse(fs.readFileSync(BOT_ACTIVE_FILE, 'utf8')).map((entry) => entry.id) };
+  } catch {
+    return body;
+  }
+}
+
 function sendJson(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -311,7 +362,7 @@ const server = http.createServer((req, res) => {
     res.end(metricsText() + resourceMetricsText());
   } else if (req.url === '/healthz') {
     const [code, body] = healthzResult();
-    sendJson(res, code, body);
+    sendJson(res, code, withServedBots(body));
   } else {
     res.writeHead(404);
     res.end();
@@ -376,7 +427,7 @@ if (LITELLM_PROXY_TARGET) {
           // chatting would never hear back at all.
           const status = budget ? BUDGET_EXHAUSTED_STATUS : upstreamRes.statusCode;
           if (budget) {
-            recordTerminalLlmError(SPENT_CODE);
+            recordTerminalLlmError(SPENT_CODE, clientReq.headers.authorization);
             const completion = spendLimitCompletion(clientReq.url, requestBody());
             if (completion) {
               clientRes.writeHead(200, {
