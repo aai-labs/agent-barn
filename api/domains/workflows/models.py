@@ -10,7 +10,9 @@ from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
 
-Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+# Counted in Unicode code points; a step's goal and its folded output share this limit.
+TEXT_LIMIT = 4000
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TEXT_LIMIT)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 

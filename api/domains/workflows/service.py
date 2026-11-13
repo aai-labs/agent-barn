@@ -12,6 +12,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.workflows.models import (
+    TEXT_LIMIT,
     Workflow,
     WorkflowCapabilitiesRead,
     WorkflowCreate,
@@ -36,8 +37,6 @@ from api.domains.workflows.repository import (
 )
 from api.infrastructure.shared.models import PaginatedItems
 
-_GOAL_LIMIT = 4000
-
 
 def fold_step_outputs(draft: WorkflowDraft) -> WorkflowDraft:
     """A step's expected output is part of its goal; fold the earlier separate field into it."""
@@ -45,10 +44,10 @@ def fold_step_outputs(draft: WorkflowDraft) -> WorkflowDraft:
     for index, step in enumerate(draft.steps, start=1):
         if step.artifact_description is not None:
             goal = f"{step.goal}\n\nOutput: {step.artifact_description}"
-            if len(goal) > _GOAL_LIMIT:
+            if len(goal) > TEXT_LIMIT:
                 raise HTTPException(
                     422,
-                    f"Step {index}: the goal and its output description together exceed {_GOAL_LIMIT} characters; "
+                    f"Step {index}: the goal and its output description together exceed {TEXT_LIMIT} characters; "
                     "shorten the goal",
                 )
             step = step.model_copy(update={"goal": goal, "artifact_description": None})
