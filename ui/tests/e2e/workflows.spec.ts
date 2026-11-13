@@ -114,17 +114,32 @@ test.describe("WF01 Organization workflow authoring", () => {
     await expect(workflows.card(NAME)).toBeVisible();
   });
 
-  test("reorder, remove, undo and save an immutable plan", async ({ page }) => {
+  test("reorder, confirm removal and save an immutable plan", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     await workflows.create("Summarize weekly pipeline changes");
     await workflows.buildExample();
     await workflows.step(1).getByRole("button", { name: "Move step 1 down" }).click();
     await expect(workflows.stepInstructions(1)).toHaveValue("Summarize changes and risks");
+    // A step with a prompt asks first; cancelling keeps it.
     await workflows.step(2).getByRole("button", { name: "Remove step 2" }).click();
-    await expect(workflows.step(2)).toHaveCount(0);
-    await workflows.editor().getByRole("button", { name: "Undo removal" }).click();
+    const confirm = page.getByRole("dialog", { name: "Remove step 2?" });
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirm).toHaveCount(0);
     await expect(workflows.stepInstructions(2)).toHaveValue("Read this week's pipeline");
+    await workflows.addStep();
+    await workflows.addStep();
+    await workflows.stepInstructions(3).fill("Drop this step");
+    await workflows.step(3).getByRole("button", { name: "Remove step 3" }).click();
+    await page
+      .getByRole("dialog", { name: "Remove step 3?" })
+      .getByRole("button", { name: "Remove step" })
+      .click();
+    // An empty step goes at once, without asking.
+    await workflows.step(3).getByRole("button", { name: "Remove step 3" }).click();
+    await expect(page.getByRole("dialog", { name: /^Remove step/ })).toHaveCount(0);
+    await expect(workflows.step(3)).toHaveCount(0);
+    await expect(workflows.editor()).not.toContainText("Undo removal");
     await workflows.addStep();
     await workflows.stepInstructions(3).fill("Review the report for clarity");
     await workflows.save();
@@ -155,17 +170,21 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(second.name).toMatch(/^Review every open pull request .*request…$/);
   });
 
-  test("removing every step disables saving until one is restored", async ({ page }) => {
+  test("removing every step disables saving until one is added", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     await workflows.create("A report");
     await workflows.name().fill("Solo plan");
     await workflows.stepInstructions(1).fill("Only step");
     await workflows.step(1).getByRole("button", { name: "Remove step 1" }).click();
+    await page
+      .getByRole("dialog", { name: "Remove step 1?" })
+      .getByRole("button", { name: "Remove step" })
+      .click();
     await expect(workflows.saveButton()).toBeDisabled();
     await expect(workflows.editor()).toContainText("needs at least one step");
-    await workflows.editor().getByRole("button", { name: "Undo removal" }).click();
-    await expect(workflows.stepInstructions(1)).toHaveValue("Only step");
+    await workflows.addStep();
+    await workflows.stepInstructions(1).fill("Only step");
     await expect(workflows.saveButton()).toBeEnabled();
   });
 

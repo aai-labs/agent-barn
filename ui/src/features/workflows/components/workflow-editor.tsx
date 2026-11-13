@@ -1,7 +1,9 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
-import { useCallback, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
+
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 
@@ -144,13 +146,12 @@ export function WorkflowEditor({
     onBlur: () => touch(id),
     error: errorFor(id),
   });
-  const focusUndo = useCallback((node: HTMLButtonElement | null) => {
-    node?.focus();
-  }, []);
-  const [removed, setRemoved] = useState<{
-    step: WorkflowStep;
-    index: number;
-  } | null>(null);
+  // A step with a prompt is removed only after confirmation; an empty one goes at once.
+  const [removing, setRemoving] = useState<{ step: WorkflowStep; index: number } | null>(
+    null,
+  );
+  const removeStep = (id: string) =>
+    onChange({ ...draft, steps: draft.steps.filter((item) => item.id !== id) });
   const updateStep = (id: string, patch: Partial<WorkflowStep>) =>
     onChange({
       ...draft,
@@ -236,30 +237,6 @@ export function WorkflowEditor({
             {count(draft.steps.length, "step")}
           </span>
         </div>
-        {removed && (
-          <div
-            role="status"
-            className="mb-2 rounded-xl p-3 text-sm"
-            style={{ background: "var(--accent-soft)" }}
-          >
-            Removed {removed.step.name || "Untitled step"}.{" "}
-            <button
-              key={removed.step.id}
-              ref={focusUndo}
-              type="button"
-              className="af-btn af-btn-sm"
-              disabled={draft.steps.length >= 50}
-              onClick={() => {
-                const steps = [...draft.steps];
-                steps.splice(Math.min(removed.index, steps.length), 0, removed.step);
-                onChange({ ...draft, steps });
-                setRemoved(null);
-              }}
-            >
-              Undo removal
-            </button>
-          </div>
-        )}
         {draft.steps.length === 0 && (
           <p className="rounded-xl border border-dashed border-[var(--line-strong)] p-5 text-center text-sm text-[var(--ink-3)]">
             A workflow needs at least one step before it can be saved.
@@ -315,13 +292,11 @@ export function WorkflowEditor({
                   type="button"
                   className="af-btn af-btn-icon af-btn-sm mt-0.5 shrink-0"
                   aria-label={`Remove step ${index + 1}`}
-                  onClick={() => {
-                    setRemoved({ step, index });
-                    onChange({
-                      ...draft,
-                      steps: draft.steps.filter((item) => item.id !== step.id),
-                    });
-                  }}
+                  onClick={() =>
+                    step.goal.trim()
+                      ? setRemoving({ step, index })
+                      : removeStep(step.id)
+                  }
                 >
                   <Trash2 size={15} />
                 </button>
@@ -343,6 +318,20 @@ export function WorkflowEditor({
           <Plus size={14} /> Add step
         </button>
       </div>
+
+      <ConfirmationDialog
+        open={removing !== null}
+        onOpenChange={(open) => !open && setRemoving(null)}
+        title={`Remove step ${(removing?.index ?? 0) + 1}?`}
+        description="Its prompt is deleted from this draft. Saved versions and past runs keep it."
+        confirmLabel="Remove step"
+        variant="destructive"
+        icon={<Trash2 size={18} />}
+        onConfirm={() => {
+          if (removing) removeStep(removing.step.id);
+          setRemoving(null);
+        }}
+      />
 
       <div data-section="inputs">
         <WorkflowInputsEditor
