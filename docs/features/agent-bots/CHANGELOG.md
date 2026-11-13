@@ -16,8 +16,8 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
-- In transition: OpenClaw listen-in acts as the Parent Agent for every Bot until its slice lands.
-- Next: OpenClaw listen-in per agent. Then the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in and the organization Tasks page); OpenClaw with real Slack, Telegram and Discord apps.
+- In transition: nothing.
+- Next: the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in and the organization Tasks page); OpenClaw with real Slack, Telegram and Discord apps.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,17 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-13 — AF-445 — OpenClaw listen-in per agent
+
+- Delivered:
+  - `multi_agent_gateway_config` gives each Bot's entry its own `groupChat.unmentionedInbound`, from its own overlay, and leaves the Parent Agent's `messages.groupChat.unmentionedInbound` as its own rooms set it. Verified in the pinned core and the pinned `@openclaw/slack` that Slack, Discord and Telegram resolve it for the routed agent.
+  - When any agent has a listen-in room, it loads the `agentbarn-listen-in` guard once, with `slackRooms` from the Parent Agent and `agentSlackRooms` per Bot. The plugin manifest's schema accepts `agentSlackRooms`.
+  - The guard takes a turn's agent from `ctx.agentId`, else `agent:<id>:` in the session key. It reads Slack history for a Bot only in that Bot's own rooms and with `SLACK_BOT_TOKEN` from `/run/agentbarn/bots/<id>`, when that Secret's `AGENT_ID` matches, and otherwise reads nothing.
+- Changed:
+  - Superseded the AF-445 rule that any Bot's listen-in room turned room events on for the whole gateway. With per-agent room events, Discord auto-threading stops only for an agent that listens in, as each agent's own config already sets, and the per-Agent Require @mention refusal stays correct.
+  - The OpenClaw Bots image contract's check scripts now install `agentbarn-tasks` and `agentbarn-listen-in`. Since the AF-425 merge, every config loads the Tasks plugin, and its validation failed without it.
+- Follow-up: the end-to-end runs.
 
 ### 2026-11-13 — AF-445 — OpenClaw Tasks per agent
 

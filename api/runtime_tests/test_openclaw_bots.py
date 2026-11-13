@@ -7,7 +7,12 @@ from uuid import UUID
 import pytest
 from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_entries
 
-from api.domains.agents.builders import build_openclaw_gateway_config, native_telegram_channel
+from api.domains.agents.builders import (
+    build_openclaw_gateway_config,
+    native_discord_channel,
+    native_slack_channel,
+    native_telegram_channel,
+)
 from api.domains.agents.builders.openclaw import OpenClawBot, multi_agent_gateway_config
 from api.runtime_tests.memory_helpers import selected_image
 
@@ -125,6 +130,28 @@ def test_a_parent_with_bots_runs_each_bot_as_its_own_agent(openclaw_image: str, 
     assert_that(agents[str(BOT_B)], has_entries(model="litellm-bot-2/gpt-5-nano", bindings=0))
     assert_that(result["audit"]["resolution"]["refsChecked"], equal_to(3))
     assert_that(_unresolved(result["audit"]), equal_to([]))
+
+
+def test_a_bots_own_listen_in_rooms_keep_the_config_valid(openclaw_image: str, tmp_path: Path):
+    slack = native_slack_channel({"group_policy": "allowlist", "channel_ids": ["C2"], "listen_in_channel_ids": ["C2"]})
+    discord = native_discord_channel({"allowed_user_ids": ["D1"], "allowed_channel_ids": ["111"]})
+    bots = [
+        OpenClawBot(BOT_A, 1, build_openclaw_gateway_config("litellm/gpt-5-mini", PROXY, {"slack": slack})),
+        OpenClawBot(BOT_B, 2, build_openclaw_gateway_config("litellm/gpt-5-nano", PROXY, {"discord": discord})),
+    ]
+    config = multi_agent_gateway_config(_parent(), bots)
+
+    result = _check(openclaw_image, tmp_path, config, _keys(BOT_A, BOT_B))
+
+    assert_that(result["validate"], has_entries(valid=True))
+    assert_that(
+        [warning["path"] for warning in result["validate"]["warnings"]],
+        equal_to(["plugins.entries.slack", "plugins.entries.discord"]),
+    )
+    assert_that(
+        config["plugins"]["entries"]["agentbarn-listen-in"]["config"]["agentSlackRooms"],
+        has_entries(**{str(BOT_A): ["C2"]}),
+    )
 
 
 def test_a_bot_whose_key_file_is_missing_is_the_only_one_unresolved(openclaw_image: str, tmp_path: Path):

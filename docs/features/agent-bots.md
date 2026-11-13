@@ -54,6 +54,7 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 - Bots support Slack, Telegram, Discord and Web Chat. Microsoft Teams and Agent Barn Telegram are refused on Bots.
 - A Bot's scheduled jobs and webhook results are delivered from the Bot's own account on its own platform. On OpenClaw, the trigger server creates each job owned by its agent and pinned to that agent's account, `default` for the Parent Agent.
 - On OpenClaw, when an agent's message or scheduled job names a platform, it is sent from that agent's own account there. It is refused when the agent has no account of its own on that platform or names another agent's account, so no agent posts through another's app or bot. A reply to the current conversation needs no platform and is left as it is.
+- On OpenClaw, a Bot can listen in its own rooms. Room events are set per agent, so only the Bot's own unmentioned messages in its rooms become room events, and the gateway's one listen-in guard reads the Bot's own rooms and its Slack history with the Bot's own app; see [runtime and deployment](../architecture/runtime-and-deployment.md).
 - On Hermes, a Bot can listen in its own rooms. Its profile gets its own copy of the listen-in guard and its own startup check, the guard reads only the Bot's rooms, classifies only messages on the Bot's own apps and posts through them, and each Bot always carries its own room list in its platform settings, empty when it has none, so it never falls back to the Parent Agent's process-wide rooms.
 
 ## How a pod serves Bots

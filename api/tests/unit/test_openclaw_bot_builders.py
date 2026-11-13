@@ -104,11 +104,13 @@ def test_bots_make_the_gateway_multi_agent_with_main_as_the_parent():
             "workspace": f"{STATE}/workspace-{BOT_A}",
             "agentDir": f"{STATE}/agents/{BOT_A}/agent",
             "model": {"primary": "litellm-bot-1/gpt-5-mini"},
+            "groupChat": {"unmentionedInbound": "user_request"},
         },
         str(BOT_B): {
             "workspace": f"{STATE}/workspace-{BOT_B}",
             "agentDir": f"{STATE}/agents/{BOT_B}/agent",
             "model": {"primary": "litellm-bot-2/gpt-5-nano"},
+            "groupChat": {"unmentionedInbound": "user_request"},
         },
     }
     assert agents["defaults"]["model"] == {"primary": "litellm/gpt-5"}
@@ -235,13 +237,77 @@ def test_every_agent_gets_active_memory_and_no_agent_can_message_another():
     assert config["tools"]["agentToAgent"] == {"enabled": False}
 
 
-def test_a_bots_listen_in_room_lets_room_events_through():
+def _slack_listening(room):
+    return native_slack_channel({"group_policy": "allowlist", "channel_ids": [room], "listen_in_channel_ids": [room]})
+
+
+def test_a_bots_listen_in_room_turns_on_room_events_for_that_bot_only():
     listening = native_telegram_channel({"allowed_chat_ids": ["-300"], "listen_in_chat_ids": ["-300"]})
     assert listening["groups"]["-300"]["systemPrompt"] == LISTEN_IN_SYSTEM_PROMPT
+    bots = [_bot(BOT_A, 1, {"telegram": listening}), _bot(BOT_B, 2, {"discord": native_discord_channel({})})]
 
-    config = multi_agent_gateway_config(_parent({}), [_bot(BOT_A, 1, {"telegram": listening})])
+    config = multi_agent_gateway_config(_parent({}), bots)
+
+    assert config["agents"]["entries"][str(BOT_A)]["groupChat"] == {"unmentionedInbound": "room_event"}
+    assert config["agents"]["entries"][str(BOT_B)]["groupChat"] == {"unmentionedInbound": "user_request"}
+    assert config["messages"]["groupChat"]["unmentionedInbound"] == "user_request"
+    assert "groupChat" not in config["agents"]["entries"]["main"]
+
+
+def test_the_parents_listen_in_rooms_do_not_turn_on_room_events_for_its_bots():
+    config = multi_agent_gateway_config(_parent({"slack": _slack_listening("C1")}), _bots())
 
     assert config["messages"]["groupChat"]["unmentionedInbound"] == "room_event"
+    for bot_id in (BOT_A, BOT_B):
+        assert config["agents"]["entries"][str(bot_id)]["groupChat"] == {"unmentionedInbound": "user_request"}
+
+
+def _guard(config):
+    return config["plugins"]["entries"].get("agentbarn-listen-in")
+
+
+def test_a_bots_own_listen_in_room_loads_the_guard_with_the_bots_rooms():
+    config = multi_agent_gateway_config(_parent(), [_bot(BOT_A, 1, {"slack": _slack_listening("C2")})])
+
+    assert config["plugins"]["allow"].count("agentbarn-listen-in") == 1
+    assert config["plugins"]["load"]["paths"].count(f"{STATE}/local-plugins/agentbarn-listen-in") == 1
+    assert _guard(config) == {
+        "enabled": True,
+        "hooks": {"allowConversationAccess": True},
+        "config": {"slackRooms": [], "agentSlackRooms": {str(BOT_A): ["C2"]}},
+    }
+
+
+def test_the_guard_keeps_the_parents_and_each_bots_slack_rooms_apart():
+    parent = _parent({"slack": _slack_listening("C1")})
+    bots = [_bot(BOT_A, 1, {"slack": _slack_listening("C2")}), _bot(BOT_B, 2, {"discord": native_discord_channel({})})]
+
+    config = multi_agent_gateway_config(parent, bots)
+
+    assert config["plugins"]["allow"].count("agentbarn-listen-in") == 1
+    assert config["plugins"]["load"]["paths"].count(f"{STATE}/local-plugins/agentbarn-listen-in") == 1
+    assert _guard(config)["config"] == {"slackRooms": ["C1"], "agentSlackRooms": {str(BOT_A): ["C2"], str(BOT_B): []}}
+
+
+def test_a_pod_with_bots_and_no_listen_in_rooms_loads_no_guard():
+    config = multi_agent_gateway_config(_parent(), _bots())
+
+    assert "agentbarn-listen-in" not in config["plugins"]["allow"]
+    assert _guard(config) is None
+
+
+def test_only_an_agent_that_listens_in_stops_auto_threading_its_other_discord_channels():
+    parent = _parent({"discord": native_discord_channel({"allowed_user_ids": ["D0"], "allowed_channel_ids": ["111"]})})
+    listening = native_discord_channel(
+        {"allowed_user_ids": ["D1"], "allowed_channel_ids": ["222", "333"], "listen_in_channel_ids": ["333"]}
+    )
+
+    config = multi_agent_gateway_config(parent, [_bot(BOT_A, 1, {"discord": listening})])
+
+    accounts = config["channels"]["discord"]["accounts"]
+    assert accounts["default"]["guilds"]["*"]["channels"]["111"]["autoThread"] is True
+    assert accounts[str(BOT_A)]["guilds"]["*"]["channels"]["222"]["autoThread"] is False
+    assert accounts[str(BOT_A)]["guilds"]["*"]["channels"]["333"]["autoThread"] is True
 
 
 def test_a_parent_with_bots_is_reached_as_main_and_installs_every_platform():

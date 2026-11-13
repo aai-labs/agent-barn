@@ -1,7 +1,7 @@
 set -eu
 state=/home/node/.openclaw
 mkdir -p "$state/local-plugins"
-cp -r /plugins/telemetry-push /plugins/agentbarn-observer /plugins/agentbarn-bot-env "$state/local-plugins/"
+cp -r /plugins/telemetry-push /plugins/agentbarn-observer /plugins/agentbarn-bot-env /plugins/agentbarn-tasks /plugins/agentbarn-listen-in "$state/local-plugins/"
 chmod -R go-w "$state/local-plugins"
 cp /scripts/init-openclaw.js /scripts/bot-setup.py /app/config/
 export TELEGRAM_BOT_TOKEN=1:parent LITELLM_API_KEY=parent MEMORY_URL=http://127.0.0.1:9 MEMORY_API_KEY=parent

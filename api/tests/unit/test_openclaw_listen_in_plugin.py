@@ -160,16 +160,24 @@ def _prompt(session: str = _SLACK_SESSION) -> dict:
     return {"hook": "before_prompt_build", "event": {"prompt": "hello"}, "ctx": {"sessionKey": session}}
 
 
-def _with_slack(steps: list[dict], tmp_path: Path, slack: dict | None = None, token: str | None = "xoxb-1") -> dict:
+def _with_slack(
+    steps: list[dict],
+    tmp_path: Path,
+    slack: dict | None = None,
+    token: str | None = "xoxb-1",
+    plugin_config: dict | None = None,
+    **extra_env: str,
+) -> dict:
     node = shutil.which("node")
     assert node is not None, "node is required to exercise the OpenClaw plugin"
     steps_path = tmp_path / "steps.json"
     steps_path.write_text(json.dumps(steps))
     setup_path = tmp_path / "setup.json"
-    setup_path.write_text(json.dumps({"pluginConfig": {"slackRooms": [_ROOM]}, "slack": slack or {}}))
+    setup_path.write_text(json.dumps({"pluginConfig": plugin_config or {"slackRooms": [_ROOM]}, "slack": slack or {}}))
     env = {key: value for key, value in os.environ.items() if key != "SLACK_BOT_TOKEN"}
     if token:
         env["SLACK_BOT_TOKEN"] = token
+    env.update(extra_env)
     done = subprocess.run(
         [node, str(_DRIVER), str(_PLUGIN / "index.js"), str(steps_path), str(setup_path)],
         capture_output=True,
@@ -290,3 +298,83 @@ def test_an_empty_channel_adds_nothing(tmp_path: Path) -> None:
     done = _with_slack([_prompt()], tmp_path, _history())
 
     assert_that(done["results"], equal_to([None]))
+
+
+_BOT = "0000000b-0000-4000-8000-00000000000b"
+_BOT_ROOM = "C0BOTROOM1"
+_BOTS_CONFIG = {"slackRooms": [_ROOM], "agentSlackRooms": {_BOT: [_BOT_ROOM]}}
+
+
+def _bot_secret(tmp_path: Path, **values: str) -> str:
+    directory = tmp_path / "bots" / _BOT
+    directory.mkdir(parents=True)
+    for name, value in {"AGENT_ID": _BOT, "SLACK_BOT_TOKEN": "xoxb-bot", **values}.items():
+        (directory / name).write_text(value)
+    return str(tmp_path / "bots")
+
+
+def _bot_prompt(room: str = _BOT_ROOM, agent: str | None = _BOT) -> dict:
+    session = f"agent:{_BOT}:slack:channel:{room.lower()}:thread:{_ROOT_TS}"
+    return {
+        "hook": "before_prompt_build",
+        "event": {"prompt": "hello"},
+        "ctx": {"sessionKey": session, "agentId": agent},
+    }
+
+
+@pytest.mark.parametrize("agent", [_BOT, None])
+def test_a_bots_slack_room_is_read_with_the_bots_own_app(agent: str | None, tmp_path: Path) -> None:
+    done = _with_slack(
+        [_bot_prompt(agent=agent)],
+        tmp_path,
+        _history({"user": "U1", "text": "hello"}),
+        plugin_config=_BOTS_CONFIG,
+        BOT_SECRET_ROOT=_bot_secret(tmp_path),
+    )
+
+    assert "Ana: hello" in done["results"][0]["prependContext"]
+    request = next(item for item in done["requests"] if item["method"] == "conversations.history")
+    assert_that(request["params"], has_entries(channel=_BOT_ROOM))
+    assert_that(request["authorization"], equal_to("Bearer xoxb-bot"))
+
+
+def test_the_parents_rooms_are_not_a_bots_rooms(tmp_path: Path) -> None:
+    done = _with_slack(
+        [_bot_prompt(room=_ROOM)],
+        tmp_path,
+        _history({"user": "U1", "text": "hello"}),
+        plugin_config=_BOTS_CONFIG,
+        BOT_SECRET_ROOT=_bot_secret(tmp_path),
+    )
+
+    assert_that((done["results"], done["requests"]), equal_to(([None], [])))
+
+
+def test_a_bots_rooms_are_not_the_parents_rooms(tmp_path: Path) -> None:
+    session = f"agent:main:slack:channel:{_BOT_ROOM.lower()}:thread:{_ROOT_TS}"
+    done = _with_slack(
+        [_prompt(session)],
+        tmp_path,
+        _history({"user": "U1", "text": "hello"}),
+        plugin_config=_BOTS_CONFIG,
+        BOT_SECRET_ROOT=_bot_secret(tmp_path),
+    )
+
+    assert_that((done["results"], done["requests"]), equal_to(([None], [])))
+
+
+@pytest.mark.parametrize(
+    "secret", [None, {"SLACK_BOT_TOKEN": ""}, {"AGENT_ID": "main"}], ids=["missing", "no_token", "another_agent"]
+)
+def test_a_bot_without_its_own_slack_token_never_reads_with_the_parents(secret: dict | None, tmp_path: Path) -> None:
+    root = _bot_secret(tmp_path, **secret) if secret is not None else str(tmp_path / "bots")
+
+    done = _with_slack(
+        [_bot_prompt()],
+        tmp_path,
+        _history({"user": "U1", "text": "hello"}),
+        plugin_config=_BOTS_CONFIG,
+        BOT_SECRET_ROOT=root,
+    )
+
+    assert_that((done["results"], done["requests"]), equal_to(([None], [])))

@@ -266,15 +266,20 @@ def build_openclaw_gateway_config(
             plugins["entries"][key] = {"enabled": True}
         plugins["entries"]["agentbarn-observer"] = {"enabled": True, "hooks": {"allowConversationAccess": True}}
     if unmentioned == "room_event":
-        plugins = config["plugins"]
-        plugins["allow"].append("agentbarn-listen-in")
-        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
-        plugins["entries"]["agentbarn-listen-in"] = {
-            "enabled": True,
-            "hooks": {"allowConversationAccess": True},
-            "config": {"slackRooms": _listen_in_rooms(channels)["slack"]},
-        }
+        _load_listen_in(config["plugins"], {"slackRooms": _listen_in_rooms(channels)["slack"]})
     return config
+
+
+def _load_listen_in(plugins: dict, guard_config: dict) -> None:
+    if "agentbarn-listen-in" not in plugins["allow"]:
+        plugins["allow"].append("agentbarn-listen-in")
+    if _LISTEN_IN_PLUGIN_PATH not in plugins["load"]["paths"]:
+        plugins["load"]["paths"].append(_LISTEN_IN_PLUGIN_PATH)
+    plugins["entries"]["agentbarn-listen-in"] = {
+        "enabled": True,
+        "hooks": {"allowConversationAccess": True},
+        "config": guard_config,
+    }
 
 
 @dataclass(frozen=True)
@@ -379,10 +384,19 @@ def multi_agent_gateway_config(parent: dict, bots: Sequence[OpenClawBot], parent
 
     config["channels"], config["bindings"] = _multi_agent_channels(parent["channels"], bots)
     every_channel_set = [parent["channels"], *(bot.overlay["channels"] for bot in bots)]
-    if any(any(_listen_in_rooms(channels).values()) for channels in every_channel_set):
-        config["messages"]["groupChat"]["unmentionedInbound"] = "room_event"
+    for bot in bots:
+        unmentioned = bot.overlay["messages"]["groupChat"]["unmentionedInbound"]
+        agents["entries"][str(bot.id)]["groupChat"] = {"unmentionedInbound": unmentioned}
 
     plugins = config["plugins"]
+    if any(any(_listen_in_rooms(channels).values()) for channels in every_channel_set):
+        _load_listen_in(
+            plugins,
+            {
+                "slackRooms": _listen_in_rooms(parent["channels"])["slack"],
+                "agentSlackRooms": {str(bot.id): _listen_in_rooms(bot.overlay["channels"])["slack"] for bot in bots},
+            },
+        )
     if config["channels"]:
         for key in [*config["channels"], "agentbarn-observer"]:
             if key not in plugins["allow"]:

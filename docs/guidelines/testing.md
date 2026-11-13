@@ -160,7 +160,9 @@ loads the `agentbarn-bot-env` plugin through the pinned loader and hook runner b
 second plugin that rewrites `exec`, and proves each agent gets its own values, an
 unknown agent's command is refused, and a message is pinned to the agent's own account
 and refused on another platform or account. `../../api/tests/unit/test_openclaw_bot_env_plugin.py`
-covers the plugin's rules under Node.
+covers the plugin's rules under Node. The contract also proves that a Bot's own listen-in rooms, with per-agent room events and
+the guard's per-Bot Slack rooms, keep the config valid. Its check scripts install every Agent Barn
+plugin the config loads, including `agentbarn-tasks` and `agentbarn-listen-in`.
 
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
