@@ -103,7 +103,12 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(support.savePaths[0]).toMatch(new RegExp(`/organizations/${TEST_ORG_ID}/workflows$`));
     expect(support.saveRequests[0]).toMatchObject({ default_agent_id: MOCK_AGENT_ID });
     const draft = draftOf(support.saveRequests[0]);
-    expect(draft.steps.map((step) => step.name)).toEqual(["Read pipeline", "Prepare summary"]);
+    // Each step's name follows its prompt; the editor has no separate name field.
+    expect(draft.steps.map((step) => step.name)).toEqual([
+      "Read this week's pipeline",
+      "Summarize changes and risks",
+    ]);
+    await expect(workflows.editor().getByLabel(/^Step \d+ name$/)).toHaveCount(0);
     expect(draft.steps.every((step) => step.artifact_description === null)).toBe(true);
     await workflows.backToList();
     await expect(workflows.card(NAME)).toBeVisible();
@@ -115,22 +120,39 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.create("Summarize weekly pipeline changes");
     await workflows.buildExample();
     await workflows.step(1).getByRole("button", { name: "Move step 1 down" }).click();
-    await expect(workflows.stepName(1)).toHaveValue("Prepare summary");
+    await expect(workflows.stepInstructions(1)).toHaveValue("Summarize changes and risks");
     await workflows.step(2).getByRole("button", { name: "Remove step 2" }).click();
     await expect(workflows.step(2)).toHaveCount(0);
     await workflows.editor().getByRole("button", { name: "Undo removal" }).click();
     await expect(workflows.stepInstructions(2)).toHaveValue("Read this week's pipeline");
     await workflows.addStep();
-    await workflows.stepName(3).fill("Review report");
     await workflows.stepInstructions(3).fill("Review the report for clarity");
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
     expect(support.saveRequests).toHaveLength(1);
     expect(draftOf(support.saveRequests[0]).steps.map((step) => step.name)).toEqual([
-      "Prepare summary",
-      "Read pipeline",
-      "Review report",
+      "Summarize changes and risks",
+      "Read this week's pipeline",
+      "Review the report for clarity",
     ]);
+  });
+
+  test("a step is only its prompt; its saved name is the prompt's first line, shortened", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.create("A report");
+    await workflows.name().fill("Prompt-only plan");
+    await workflows.stepInstructions(1).fill("Check   the folder\nthen report what you found");
+    await workflows.addStep();
+    const long = `Review ${"every open pull request ".repeat(6)}and summarize`;
+    await workflows.stepInstructions(2).fill(long);
+    await workflows.save();
+    await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
+    const [first, second] = draftOf(support.saveRequests[0]).steps;
+    expect(first.name).toBe("Check the folder");
+    expect(first.goal).toBe("Check   the folder\nthen report what you found");
+    expect(second.name.length).toBeLessThanOrEqual(80);
+    expect(second.name).toMatch(/^Review every open pull request .*request…$/);
   });
 
   test("removing every step disables saving until one is restored", async ({ page }) => {
@@ -138,12 +160,12 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.goto();
     await workflows.create("A report");
     await workflows.name().fill("Solo plan");
-    await workflows.stepName(1).fill("Only step");
+    await workflows.stepInstructions(1).fill("Only step");
     await workflows.step(1).getByRole("button", { name: "Remove step 1" }).click();
     await expect(workflows.saveButton()).toBeDisabled();
     await expect(workflows.editor()).toContainText("needs at least one step");
     await workflows.editor().getByRole("button", { name: "Undo removal" }).click();
-    await expect(workflows.stepName(1)).toHaveValue("Only step");
+    await expect(workflows.stepInstructions(1)).toHaveValue("Only step");
     await expect(workflows.saveButton()).toBeEnabled();
   });
 
@@ -209,7 +231,7 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.cardAction(NAME, "Duplicate");
     await expect(workflows.editor()).toContainText("Duplicate workflow");
     await expect(workflows.name()).toHaveValue(`${NAME} (copy)`);
-    await expect(workflows.stepName(2)).toHaveValue("Prepare summary");
+    await expect(workflows.stepInstructions(2)).toHaveValue("Summarize changes and risks");
     await workflows.save();
     expect(support.savePaths[0]).toMatch(/\/workflows$/);
     expect(draftOf(support.saveRequests[0]).name).toBe(`${NAME} (copy)`);
@@ -347,7 +369,7 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(support.saveRequests).toHaveLength(0);
     await workflows.name().fill("Named plan");
     await workflows.save();
-    await expect(workflows.error()).toContainText("Step 1 · Name: Enter a name");
+    await expect(workflows.error()).not.toContainText("Step 1 · Name");
     await expect(workflows.error()).toContainText(
       "Step 1 · What should the agent do?: Enter a description",
     );

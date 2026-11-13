@@ -36,6 +36,20 @@ export function inputKeyFromLabel(label: string): string {
   return key;
 }
 
+const STEP_NAME_MAX = 80;
+
+/**
+ * Derives a step's short name from its prompt, for run lists and the step timeline:
+ * the first line with its whitespace collapsed, cut at a word near 80 characters.
+ */
+export function stepNameFromGoal(goal: string): string {
+  const line = (goal.trim().split("\n")[0] ?? "").replace(/\s+/g, " ").trim();
+  if (line.length <= STEP_NAME_MAX) return line;
+  const cut = line.slice(0, STEP_NAME_MAX - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > STEP_NAME_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 const SHOWN_MAX = 200;
 const shown = (value: string | null) => {
   const text = value ?? "none";
