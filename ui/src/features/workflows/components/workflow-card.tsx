@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Copy, History, MoreHorizontal, Pencil, Play, Workflow } from "lucide-react";
+import { Archive, Copy, ExternalLink, MoreHorizontal, Pencil, Play, Workflow } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -28,6 +28,10 @@ export type WorkflowCardActions = {
  * it, and how many runs they can see. Its name opens it; the menu edits, copies or archives
  * it, and Run starts it, on the default Agent unless another is chosen.
  */
+/** Roomy, single-line menu rows with muted icons, as in the card design. */
+const menuItem =
+  "gap-3 whitespace-nowrap rounded-lg px-3 py-2 text-[15px] text-[var(--ink)] [&_svg]:text-[var(--ink-3)]";
+
 export function WorkflowCard({
   workflow,
   canCreate,
@@ -82,25 +86,29 @@ export function WorkflowCard({
               <MoreHorizontal size={16} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent
+            align="end"
+            sideOffset={6}
+            className="w-auto min-w-48 rounded-xl p-1.5"
+          >
             {workflow.allowedActions.includes("save_version") && (
-              <DropdownMenuItem onSelect={onEdit}>
-                <Pencil size={15} /> Edit
+              <DropdownMenuItem className={menuItem} onSelect={onEdit}>
+                <Pencil strokeWidth={1.75} /> Edit
               </DropdownMenuItem>
             )}
             {canCreate && (
-              <DropdownMenuItem onSelect={onDuplicate}>
-                <Copy size={15} /> Duplicate
+              <DropdownMenuItem className={menuItem} onSelect={onDuplicate}>
+                <Copy strokeWidth={1.75} /> Duplicate
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onSelect={onOpenLatestRun}>
-              <History size={15} /> Open latest run
+            <DropdownMenuItem className={menuItem} onSelect={onOpenLatestRun}>
+              <ExternalLink strokeWidth={1.75} /> Open latest run
             </DropdownMenuItem>
             {workflow.allowedActions.includes("archive") && (
               <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onSelect={onArchive}>
-                  <Archive size={15} /> Archive
+                <DropdownMenuSeparator className="mx-0 my-1.5" />
+                <DropdownMenuItem className={menuItem} onSelect={onArchive}>
+                  <Archive strokeWidth={1.75} /> Archive
                 </DropdownMenuItem>
               </>
             )}
