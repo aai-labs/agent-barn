@@ -131,6 +131,16 @@ class Config(BaseSettings):
     memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
     # Used until a Platform Administrator chooses a Playbook Extraction model.
     playbook_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    # Decision models by the name Platform Administrators and callers pick them by. The
+    # slug lives here, so moving to a new model version is a configuration change.
+    decision_models: dict[str, str] = Field(
+        default_factory=lambda: {
+            "jev": "openrouter/typesafe/jev-1.14",
+            "openai": "openrouter/openai/gpt-6-luna-decisions",
+        }
+    )
+    # Used until a Platform Administrator chooses a decision model.
+    decision_default_model: str = "jev"
     memory_litellm_active_key_hash: str = ""
 
     hindsight_base_url: str = ""
@@ -261,6 +271,12 @@ class Config(BaseSettings):
         """
         if not self.api_external_url and self.environment == "local":
             self.api_external_url = f"http://localhost:{self.api_port}"
+        return self
+
+    @model_validator(mode="after")
+    def decision_default_is_configured(self) -> Self:
+        if self.decision_default_model not in self.decision_models:
+            raise ValueError("DECISION_DEFAULT_MODEL must name an entry of DECISION_MODELS")
         return self
 
     @model_validator(mode="after")

@@ -331,6 +331,13 @@ and Helm deployments use the default. The worker calls LiteLLM directly for thes
 Deployment and Compose service receive `LITELLM_BASE_URL` like the API, and the Compose worker also
 receives `MEMORY_VIEW_BASE_URL` to read long-term memories (Helm supplies it through the API Secret).
 
+The decision model is chosen at Platform Settings by name. `DECISION_MODELS` (JSON, name to LiteLLM
+slug) lists the choices and `DECISION_DEFAULT_MODEL` (`jev` when unset) applies until then; the API
+refuses to start if the default names no entry. Compose reads both from `.env`, and Helm deployments
+use the defaults. Decision calls use LiteLLM's System One route, which needs LiteLLM v1.104.3 or later.
+Data-collection and zero-data-retention preferences for these calls are set on the OpenRouter account;
+see [`../features/decisions.md`](../features/decisions.md#data-retention).
+
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
 default and Hindsight startup model. When using charts directly, set API

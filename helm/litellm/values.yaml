@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/berriai/litellm
-  tag: v1.96.2
+  tag: v1.108.6
   pullPolicy: IfNotPresent
 
 replicaCount: 1

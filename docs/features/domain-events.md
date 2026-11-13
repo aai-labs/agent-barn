@@ -111,6 +111,8 @@ File Sync adds `agent.file_sync.enabled` and `agent.file_sync.disabled`, handled
 
 Playbooks add the Platform-scoped `platform.playbook_model.changed` event, carrying previous/current model IDs and display snapshots, and the Organization-scoped `playbook.extraction.requested` event, both projected by `security_audit.projection`. It commits with the queued run; its Subject is the source Agent whose transcripts the run reads, and its payload carries IDs, the target Skill name, the window length, the session bound, and display snapshots, never transcript or playbook content. See [`Playbooks`](playbooks.md).
 
+Decisions add the Platform-scoped `platform.decision_model.changed` event, carrying the previous/current decision model names and display snapshots, projected by `security_audit.projection`. See [`Decisions`](decisions.md).
+
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 
 - `communication.connection.health.changed` — emitted when a Connection's observed provider health changes.

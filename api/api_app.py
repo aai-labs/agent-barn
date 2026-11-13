@@ -53,6 +53,7 @@ from api.domains.conversations.routes import conversations_router
 from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.custom_api.routes import custom_api_router
+from api.domains.decisions.routes import platform_decisions_router
 from api.domains.discovery.routes import router as discovery_router
 from api.domains.environment_health.routes import platform_environment_health_router
 from api.domains.events.routes import event_delivery_monitor_router
@@ -199,6 +200,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(tasks_router)
     subapi.include_router(playbook_extractions_router)
     subapi.include_router(platform_playbooks_router)
+    subapi.include_router(platform_decisions_router)
     subapi.include_router(integrations_router)
     subapi.include_router(sharepoint_sign_in_router)
     subapi.include_router(microsoft_callback_router)

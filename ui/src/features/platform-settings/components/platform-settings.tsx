@@ -1,12 +1,13 @@
 "use client";
 
-import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, Sparkles, Workflow } from "lucide-react";
+import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, Scale, Sparkles, Workflow } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { AgentSizesSettings } from "@/features/agent-sizes/components/agent-sizes-settings";
 import { PlatformBillingSettings } from "@/features/billing/components/platform-billing-settings";
+import { PlatformDecisionSettings } from "@/features/decisions/components/platform-decision-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformOrganizationSettings } from "@/features/organizations/components/platform-organization-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
@@ -37,6 +38,11 @@ export const PLATFORM_SETTINGS_SECTIONS = {
     label: "Playbooks",
     Icon: BookOpenCheck,
     description: "How playbooks are extracted from an Agent's conversations, for every Organization.",
+  },
+  decisions: {
+    label: "Decisions",
+    Icon: Scale,
+    description: "The model that answers the platform's questions about Agents, for every Organization.",
   },
   trials: {
     label: "Signup & trials",
@@ -74,6 +80,7 @@ export function PlatformSettings() {
         {active === "organizations" && <PlatformOrganizationSettings />}
         {active === "workflows" && <PlatformWorkflowSettings />}
         {active === "playbooks" && <PlatformPlaybookSettings />}
+        {active === "decisions" && <PlatformDecisionSettings />}
         {active === "trials" && <PlatformTrialSettings />}
         {active === "billing" && <PlatformBillingSettings />}
       </SettingsPageLayout>

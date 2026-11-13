@@ -204,6 +204,10 @@ class LiteLLMClient:
             info = response.json()["info"]
             if not isinstance(info, dict):
                 raise TypeError("Unexpected key info shape")
+            # Newer LiteLLM releases (v1.108.6; v1.96.2 returned 404) answer for a deleted
+            # key from their deleted-key table. The key no longer works, so it is absent.
+            if info.get("deleted_at") or info.get("status") == "deleted":
+                raise LiteLLMKeyNotFound("LiteLLM does not recognise this Agent key")
             return info
         except LiteLLMKeyNotFound:
             raise
