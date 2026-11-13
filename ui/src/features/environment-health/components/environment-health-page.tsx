@@ -185,8 +185,8 @@ function HealthSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-busy="true">
       <Skeleton className="h-[76px] w-full rounded-xl" />
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}>
-        {Array.from({ length: 6 }, (_, index) => (
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {Array.from({ length: 8 }, (_, index) => (
           <Skeleton key={index} className="h-[98px] rounded-xl" />
         ))}
       </div>
