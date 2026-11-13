@@ -11,7 +11,7 @@ A **Bot** is a full Agent created from its **Parent Agent**'s page. It has its o
 - A Bot belongs to its Parent Agent's Organization, and its parent link never changes.
 - At most 5 Bots per Parent Agent. Each Bot counts toward the Organization's Agent limit, so an Organization limited to one Agent cannot add Bots.
 - The Parent Agent is the first bot: it keeps its own profile, Template and Connections.
-- Bots appear only inside their Parent Agent. Home and Agent lists show Parent Agents; a Bot keeps its own Agent id and URL.
+- Bots appear only inside their Parent Agent. Home and Agent lists show Parent Agents; a Bot keeps its own Agent id and URL. `GET /organizations/{organization_id}/agents?include_bots=true` also returns the Bots the caller can read, each with its `parent_agent_id`; the Organization Tasks page uses it to name and filter by Bots.
 
 ## Lifecycle
 

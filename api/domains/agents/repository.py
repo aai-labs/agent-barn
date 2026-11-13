@@ -577,12 +577,13 @@ class AgentRepository:
         very Agents the ranking is meant to find.
         """
         with Session(self.delegate.engine) as session:
-            visibility = (
-                *agent_scope_predicates(authorization_scope),
-                col(Agent.parent_agent_id).is_(None)
-                if agent_filter.parent_agent_id is None
-                else col(Agent.parent_agent_id) == agent_filter.parent_agent_id,
-            )
+            if agent_filter.parent_agent_id is not None:
+                parent_filter = (col(Agent.parent_agent_id) == agent_filter.parent_agent_id,)
+            elif agent_filter.include_bots:
+                parent_filter = ()
+            else:
+                parent_filter = (col(Agent.parent_agent_id).is_(None),)
+            visibility = (*agent_scope_predicates(authorization_scope), *parent_filter)
             query = select(Agent).where(*visibility)
             count_query = select(func.count()).select_from(Agent).where(*visibility)
 

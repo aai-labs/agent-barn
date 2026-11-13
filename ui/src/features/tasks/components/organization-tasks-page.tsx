@@ -5,6 +5,7 @@ import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
+import type { Agent } from "@/features/agents/schemas";
 import { canAgent } from "@/features/agents/utils";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
@@ -29,6 +30,22 @@ import { TaskViewToggle } from "./task-view-toggle";
 
 const EMPTY = "Your Agents haven't recorded any tasks yet.";
 
+function withBotsAfterTheirParents(agents: Agent[]): Agent[] {
+  const parents = agents.filter((agent) => !agent.parentAgentId);
+  const placed = parents.flatMap((parent) => [parent, ...agents.filter((agent) => agent.parentAgentId === parent.id)]);
+  return [...placed, ...agents.filter((agent) => !placed.includes(agent))];
+}
+
+function agentLabels(agents: Agent[]): Map<string, string> {
+  const names = new Map(agents.map((agent) => [agent.id, agent.name]));
+  return new Map(
+    agents.map((agent) => {
+      const parent = agent.parentAgentId ? names.get(agent.parentAgentId) : undefined;
+      return [agent.id, parent ? `${agent.name} · ${parent}` : agent.name];
+    }),
+  );
+}
+
 /** Tasks across every Agent whose Tasks the viewer can see. */
 export function OrganizationTasksPage() {
   const [filters, setFilters] = useQueryStates(
@@ -43,9 +60,9 @@ export function OrganizationTasksPage() {
   );
   const [openTask, setOpenTask] = useOpenTask();
   const { selectedOrganization } = useOrganizationContext();
-  const { agents, error: agentsError, refetch: refetchAgents } = useAllAgents();
-  const taskAgents = agents.filter((agent) => canAgent(agent, "task.read"));
-  const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
+  const { agents, error: agentsError, refetch: refetchAgents } = useAllAgents({ includeBots: true });
+  const taskAgents = withBotsAfterTheirParents(agents).filter((agent) => canAgent(agent, "task.read"));
+  const agentNames = agentLabels(agents);
   const agentFilter = isUuid(filters.agent) ? filters.agent : null;
   const scope = { kind: "organization", agentId: agentFilter } as const;
   const dates = taskWindow(filters.from, filters.to);
@@ -70,7 +87,7 @@ export function OrganizationTasksPage() {
             label="Agent"
             allLabel="All agents"
             value={agentFilter}
-            options={taskAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
+            options={taskAgents.map((agent) => ({ value: agent.id, label: agentNames.get(agent.id) ?? agent.name }))}
             onChange={(agent) => void setFilters({ agent })}
           />
           <DateRangePicker

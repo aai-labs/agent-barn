@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: after the 2026-11-13 staging merge, make the rest of staging's in-pod pieces work per Bot: Bots on the organization Tasks page. Then the full end-to-end run in local k3d on a fresh API image.
+- Next: the full end-to-end run in local k3d on a fresh API image, including the staging merge's per-Bot work: transcripts, Tasks, listen-in and the organization Tasks page.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-13 — AF-425 — Bots on the organization Tasks page
+
+- Delivered: `GET /organizations/{organization_id}/agents` takes `include_bots` (default false). With it, the list also returns the Bots the caller can read, through the same visibility rule, so a Bot readable only through its Parent Agent's grants is included. The Organization Tasks page asks for it: Bots appear in the Agent filter right after their Parent Agent as "Bot · Parent Agent", their Tasks show that name, and the Task dialog links to the Bot.
+- Changed: no other caller passes `include_bots`, so Home, Agent lists, onboarding and resource usage still leave Bots out. `operations-v1.json` is unchanged because it lists no query parameters.
+- Follow-up: the end-to-end run.
 
 ### 2026-11-13 — AF-425 — Listen-in per Bot
 

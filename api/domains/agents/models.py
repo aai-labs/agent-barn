@@ -1778,6 +1778,7 @@ class AgentRead(PydanticBaseModel):
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
     parent_agent_id: UUID | None = None
+    include_bots: bool = False
 
 
 class PlatformAgentIdentity(NamedTuple):
@@ -1874,8 +1875,9 @@ class AgentHealthRead(PydanticBaseModel):
 
 def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
+    include_bots: bool = Query(default=False),
 ) -> AgentFilter:
-    return AgentFilter(status=status)
+    return AgentFilter(status=status, include_bots=include_bots)
 
 
 class AgentLogsRead(PydanticBaseModel):
