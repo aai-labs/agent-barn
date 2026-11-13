@@ -35,13 +35,14 @@ function draftSchema(authoring: boolean) {
       .default(["reasoning"]),
   });
   const input = z.object({
-    // Label first: a blank label reports "Enter a name" rather than its derived key.
+    // Description first: the label derives from it and the key from the label, so a
+    // blank description reports "Enter a description" rather than either.
+    description: text,
     label: name,
     // Derived from the label by inputKeyFromLabel; kept for saved snapshots.
     key: authoring
-      ? z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/, "Edit the input label")
+      ? z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/, "Edit the input description")
       : z.string(),
-    description: text,
     type: z.enum(["text", "number", "boolean", "file"]).default("text"),
     required: z.boolean().default(true),
   });
@@ -72,8 +73,8 @@ export const WorkflowDraftSchema = draftSchema(true).superRefine((draft, ctx) =>
     else if (key)
       ctx.addIssue({
         code: "custom",
-        path: ["inputs", index, "label"],
-        message: `Matches input ${first + 1} once case, accents and punctuation are ignored; use a distinct label`,
+        path: ["inputs", index, "description"],
+        message: `Matches input ${first + 1} once case, accents and punctuation are ignored; start it differently`,
       });
   });
 });

@@ -24,6 +24,7 @@ import { useWorkflowRunActions } from "../hooks/use-workflow-runs";
 import { useWorkflow } from "../hooks/use-workflows";
 import type { WorkflowInputValue, WorkflowRun } from "../run-schemas";
 import type { Workflow, WorkflowVersion } from "../schemas";
+import { inputHelp } from "../utils";
 import { WorkflowFileInput } from "./workflow-file-input";
 
 function RunForm({
@@ -230,7 +231,9 @@ function RunForm({
                   {input.label}
                   {input.required ? " (required)" : " (optional)"}
                 </Label>
-                <p className="text-sm text-[var(--ink-3)]">{input.description}</p>
+                {inputHelp(input) && (
+                  <p className="text-sm text-[var(--ink-3)]">{inputHelp(input)}</p>
+                )}
                 {input.type === "file" ? (
                   agentId ? (
                     <WorkflowFileInput

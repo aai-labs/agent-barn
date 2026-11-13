@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { type WorkflowVersion } from "../schemas";
+import { inputHelp } from "../utils";
 import { WorkflowOutline } from "./workflow-outline";
 
 export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
@@ -91,9 +92,11 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
                       {input.type} · {input.required ? "Required" : "Optional"}
                     </span>
                   </div>
-                  <p className="mt-2 whitespace-pre-wrap text-sm">
-                    {input.description}
-                  </p>
+                  {inputHelp(input) && (
+                    <p className="mt-2 whitespace-pre-wrap text-sm">
+                      {inputHelp(input)}
+                    </p>
+                  )}
                 </div>
               ))
             ) : (

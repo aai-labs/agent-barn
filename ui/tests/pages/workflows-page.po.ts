@@ -53,7 +53,6 @@ export class WorkflowsPage {
     }
     for (const [index, input] of workflowDraft.inputs.entries()) {
       await this.addInput();
-      await this.editor().getByLabel(`Input ${index + 1} label`).fill(input.label);
       await this.editor()
         .getByLabel(`Input ${index + 1} description`)
         .fill(input.description);

@@ -14,7 +14,7 @@ const NAME = workflowDraft.name;
 type SavedDraft = {
   name: string;
   steps: { name: string; goal: string; artifact_description: string | null }[];
-  inputs: { key: string; label: string; type: string }[];
+  inputs: { key: string; label: string; description: string; type: string }[];
 };
 const draftOf = (request: Record<string, unknown>) => request.draft as SavedDraft;
 
@@ -349,13 +349,14 @@ test.describe("WF01 Organization workflow authoring", () => {
     ]);
   });
 
-  test("input keys follow labels and file inputs save", async ({ page }) => {
+  test("an input is one description; its label and key follow it, and file inputs save", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     await workflows.create("Prepare a report");
     await workflows.buildExample();
     await expect(workflows.editor().getByLabel("Input 1 key")).toHaveCount(0);
-    await workflows.editor().getByLabel("Input 1 label").fill("  Sales   Region  ");
+    await expect(workflows.editor().getByLabel("Input 1 label")).toHaveCount(0);
+    await workflows.editor().getByLabel("Input 1 description").fill("  Sales   Region  ");
     await workflows.useFileInput();
     await expect(
       workflows.editor().getByRole("radio", { name: "File", exact: true }),
@@ -366,54 +367,60 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
     expect(draftOf(support.saveRequests[0]).inputs[0]).toMatchObject({
+      label: "Sales Region",
       key: "sales-region",
       type: "file",
       required: false,
     });
   });
 
-  test("similar labels name the colliding input, and distinct ones save", async ({ page }) => {
+  test("similar descriptions name the colliding input, and distinct ones save", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     await workflows.create("Prepare a report");
     await workflows.buildExample();
     await workflows.addInput();
-    await workflows.editor().getByLabel("Input 2 label").fill("Reporting-period!");
-    await workflows.editor().getByLabel("Input 2 description").fill("The report owner");
+    await workflows.editor().getByLabel("Input 2 description").fill("Period: to summarize!");
     await workflows.save();
     await expect(workflows.error()).toContainText(
-      "Input 2 · Label: Matches input 1 once case, accents and punctuation are ignored",
+      "Input 2 · Description: Matches input 1 once case, accents and punctuation are ignored",
     );
-    await expect(workflows.editor().getByLabel("Input 2 label")).toHaveValue("Reporting-period!");
+    await expect(workflows.editor().getByLabel("Input 2 description")).toHaveValue(
+      "Period: to summarize!",
+    );
     expect(support.saveRequests).toHaveLength(0);
-    await workflows.editor().getByLabel("Input 2 label").fill("2nd owner's e-mail (Café)");
+    await workflows.editor().getByLabel("Input 2 description").fill("2nd owner's e-mail (Café)");
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
     expect(draftOf(support.saveRequests[0]).inputs.map((input) => input.key)).toEqual([
-      "reporting-period",
+      "period-to-summarize",
       "input-2nd-owners-e-mail-cafe",
     ]);
   });
 
-  test("long and non-Latin input labels retain distinct valid internal keys", async ({ page }) => {
+  test("long and non-Latin input descriptions retain short labels and distinct valid keys", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();
     await workflows.create("Prepare a report");
     await workflows.buildExample();
-    const labels = [`${"a".repeat(190)} first`, `${"a".repeat(190)} second`, "客户名称", "客户地区"];
-    for (const [index, label] of labels.entries()) {
+    const descriptions = [
+      `First${" word".repeat(40)}`,
+      `Second${" word".repeat(40)}`,
+      "客户名称",
+      "客户地区",
+    ];
+    for (const [index, description] of descriptions.entries()) {
       if (index) await workflows.addInput();
-      await workflows.editor().getByLabel(`Input ${index + 1} label`).fill(label);
-      await workflows
-        .editor()
-        .getByLabel(`Input ${index + 1} description`)
-        .fill(`Information for input ${index + 1}`);
+      await workflows.editor().getByLabel(`Input ${index + 1} description`).fill(description);
     }
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
     const inputs = draftOf(support.saveRequests[0]).inputs;
-    expect(inputs.map((input) => input.label)).toEqual(labels);
-    expect(new Set(inputs.map((input) => input.key)).size).toBe(labels.length);
+    expect(inputs.map((input) => input.description)).toEqual(descriptions);
+    expect(inputs[0].label).toMatch(/^First word .*word…$/);
+    expect(inputs.every((input) => input.label.length <= 80)).toBe(true);
+    expect(inputs.slice(2).map((input) => input.label)).toEqual(["客户名称", "客户地区"]);
+    expect(new Set(inputs.map((input) => input.key)).size).toBe(descriptions.length);
     for (const input of inputs) expect(input.key).toMatch(/^[a-z][a-z0-9_-]{0,63}$/);
   });
 
