@@ -15,9 +15,13 @@
 // user's request.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { join as joinPath, resolve as resolvePath } from "node:path";
 
 const TOOL = "agentbarn_task";
+const MAIN_AGENT = "main";
+const SECRET_ROOT = process.env.BOT_SECRET_ROOT || "/run/agentbarn/bots";
+const AGENT_NAME = /^[A-Za-z0-9-]+$/;
+const IDENTITY_NAMES = ["AGENT_ID", "INGEST_URL", "INGEST_API_KEY", "ARTIFACT_URL", "ARTIFACT_API_KEY", "ARTIFACT_MAX_BYTES"];
 const STATUSES = ["open", "in_progress", "done", "failed"];
 const WORK_THRESHOLD = 3;
 // OpenClaw's file-writing tools. A run that produces a file is worth a Task however short it is.
@@ -110,8 +114,8 @@ const PARAMETERS = {
 
 // runId -> what the run did: tool call ids, files written and attached, reminders sent
 const runs = new Map();
-// The Task lines shown each turn, and when they were read (null: read again)
-let taskListCache = { at: null, lines: [] };
+const taskListCache = new Map();
+const identities = new Map();
 // sessionKey -> its current runId; tool_result_persist is not told which run a result belongs to.
 const currentRun = new Map();
 // sessionKey -> the reminder its next turn starts with
@@ -126,8 +130,8 @@ function remember(map, key, value) {
   while (map.size > SESSIONS_KEPT) map.delete(map.keys().next().value);
 }
 
-const forgetTaskList = () => {
-  taskListCache = { at: null, lines: [] };
+const forgetTaskList = (agent) => {
+  taskListCache.delete(agent);
 };
 
 // A long word that reads like a key: mixed case with digits, or a long hex string (not a UUID).
@@ -145,17 +149,50 @@ const sideRun = (sessionKey) =>
   (sessionKey.endsWith(":boot") || sessionKey.startsWith("subagent:") || sessionKey.includes(":subagent:"));
 
 const command = () => process.env.AGENTBARN_TASK_COMMAND || "/usr/local/bin/agentbarn-task";
-const workspace = () => `${process.env.HOME}/.openclaw/workspace`;
+
+function agentOf(ctx) {
+  if (ctx?.agentId) return ctx.agentId;
+  const scoped = /^agent:([^:]+):/.exec(ctx?.sessionKey ?? "");
+  return scoped ? scoped[1] : MAIN_AGENT;
+}
+
+const workspace = (agent) =>
+  `${process.env.HOME}/.openclaw/${agent === MAIN_AGENT ? "workspace" : `workspace-${agent}`}`;
+
+function identity(agent) {
+  if (agent === MAIN_AGENT) return {};
+  if (identities.has(agent)) return identities.get(agent);
+  if (!AGENT_NAME.test(agent)) return null;
+  const values = {};
+  for (const name of IDENTITY_NAMES) {
+    try {
+      values[name] = fs.readFileSync(joinPath(SECRET_ROOT, agent, name), "utf8");
+    } catch {
+      values[name] = "";
+    }
+  }
+  if (values.AGENT_ID !== agent || !values.INGEST_URL || !values.INGEST_API_KEY) return null;
+  values.ARTIFACT_UPLOAD_ROOTS = workspace(agent);
+  identities.set(agent, values);
+  return values;
+}
+
+const maxBytes = (agent) => Number((identity(agent) ?? {}).ARTIFACT_MAX_BYTES ?? process.env.ARTIFACT_MAX_BYTES) || Infinity;
 
 const UNAVAILABLE = "Agent Barn Tasks are unavailable right now, so the change was not confirmed.";
 
-function run(argv, stdin = "", timeoutMs = COMMAND_TIMEOUT_MS) {
+function run(agent, argv, stdin = "", timeoutMs = COMMAND_TIMEOUT_MS) {
   return new Promise((resolve) => {
+    const own = identity(agent);
+    if (own === null) {
+      resolve({ ok: false, output: UNAVAILABLE });
+      return;
+    }
     let stdout = "";
     let stderr = "";
     let child;
     try {
-      child = spawn(command(), argv, { cwd: workspace() });
+      child = spawn(command(), argv, { cwd: workspace(agent), env: { ...process.env, ...own } });
     } catch {
       resolve({ ok: false, output: UNAVAILABLE });
       return;
@@ -229,12 +266,12 @@ function argvFor(params) {
 
 const textResult = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }], details: value });
 
-async function executeTool(_toolCallId, params) {
+async function executeTool(agent, _toolCallId, params) {
   const built = argvFor(params && typeof params === "object" ? params : {});
   if (typeof built === "string") return textResult({ error: built });
   const [argv, stdin] = built;
-  const { ok, output } = await run(argv, stdin);
-  if (!["list", "show"].includes(argv[0])) forgetTaskList();
+  const { ok, output } = await run(agent, argv, stdin);
+  if (!["list", "show"].includes(argv[0])) forgetTaskList(agent);
   if (!ok) return textResult({ error: output });
   try {
     return textResult(JSON.parse(output));
@@ -324,7 +361,7 @@ function track(event, ctx) {
       work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
       // taskId -> the last status the Agent set this run
       statuses: new Map(),
-      attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
+      attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "", agent: agentOf(ctx),
     };
     remember(runs, runId, state);
   }
@@ -350,7 +387,7 @@ async function attachAutomatically(state) {
   const unattached = unattachedFiles(state);
   if (state.taskIds.size !== 1) return unattached.map(([name]) => name);
   const [taskId] = state.taskIds;
-  const limit = Number(process.env.ARTIFACT_MAX_BYTES) || Infinity;
+  const limit = maxBytes(state.agent);
   const names = unattached.map(([name]) => name);
   const notAttached = [];
   for (const [name, path] of unattached) {
@@ -367,7 +404,7 @@ async function attachAutomatically(state) {
     // A newer copy replaces the Task's file of the same name, unless this run wrote two files of
     // that name in different folders: then both are kept.
     const replace = names.filter((other) => other === name).length === 1 ? ["--replace"] : [];
-    const { ok } = await run(["attach", taskId, path, ...replace]);
+    const { ok } = await run(state.agent, ["attach", taskId, path, ...replace]);
     if (!ok) notAttached.push(name);
   }
   return notAttached;
@@ -376,8 +413,8 @@ async function attachAutomatically(state) {
 // Move each Task the Agent left in_progress this run to `status`; a status it chose itself stays.
 async function settleInProgress(state, status) {
   const inProgress = [...state.statuses].filter(([, current]) => current === "in_progress").map(([id]) => id).sort();
-  for (const taskId of inProgress) await run(["status", taskId, status]);
-  if (inProgress.length) forgetTaskList();
+  for (const taskId of inProgress) await run(state.agent, ["status", taskId, status]);
+  if (inProgress.length) forgetTaskList(state.agent);
 }
 
 // Record a Task for work the Agent left unrecorded. Returns the files it could not attach.
@@ -387,8 +424,8 @@ async function recordAutomatically(sessionKey, state) {
   if (title.length > AUTOMATIC_TITLE_CHARS) title = `${title.slice(0, AUTOMATIC_TITLE_CHARS - 1).trimEnd()}…`;
   const argv = ["create", `--title=${title}`, "--status=done", "--origin=automatic"];
   if (request) argv.push(`--description=${request.slice(0, AUTOMATIC_DESCRIPTION_CHARS)}`);
-  const { ok, output } = await run(argv);
-  forgetTaskList();
+  const { ok, output } = await run(state.agent, argv);
+  forgetTaskList(state.agent);
   let taskId;
   try {
     taskId = ok ? JSON.parse(output).id : undefined;
@@ -426,11 +463,13 @@ function taskLines(output) {
   return lines;
 }
 
-async function openTaskLines() {
-  if (taskListCache.at !== null && Date.now() - taskListCache.at < OPEN_TASKS_TTL_MS) return taskListCache.lines;
-  const { ok, output } = await run(["list", `--page-size=${LIST_PAGE_SIZE}`], "", LIST_TIMEOUT_MS);
-  taskListCache = { at: Date.now(), lines: ok ? taskLines(output) : [] };
-  return taskListCache.lines;
+async function openTaskLines(agent) {
+  const cached = taskListCache.get(agent);
+  if (cached && Date.now() - cached.at < OPEN_TASKS_TTL_MS) return cached.lines;
+  const { ok, output } = await run(agent, ["list", `--page-size=${LIST_PAGE_SIZE}`], "", LIST_TIMEOUT_MS);
+  const lines = ok ? taskLines(output) : [];
+  remember(taskListCache, agent, { at: Date.now(), lines });
+  return lines;
 }
 
 export default {
@@ -441,7 +480,7 @@ export default {
     const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
     if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
 
-    api.registerTool({
+    api.registerTool((ctx) => ({
       name: TOOL,
       label: "Agent Barn Task",
       description:
@@ -451,8 +490,8 @@ export default {
         "other file that is part of the result yourself. Set `failed` (with a body saying why) or `open` (waiting on " +
         "the user) yourself.",
       parameters: PARAMETERS,
-      execute: executeTool,
-    });
+      execute: (toolCallId, params) => executeTool(agentOf(ctx), toolCallId, params),
+    }), { name: TOOL });
 
     api.on("after_tool_call", (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
@@ -471,12 +510,12 @@ export default {
         if (event.toolCallId) state.work.add(event.toolCallId);
         if (FILE_TOOLS.has(event.toolName) && !failed(event)) {
           state.wroteFiles = true;
-          for (const path of writtenPaths(event)) state.written.add(resolvePath(workspace(), path));
+          for (const path of writtenPaths(event)) state.written.add(resolvePath(workspace(state.agent), path));
         }
         const published = failed(event) ? [] : publishedPaths(event.params);
         if (published.length) {
           state.wroteFiles = true;
-          for (const path of published) state.written.add(resolvePath(workspace(), path));
+          for (const path of published) state.written.add(resolvePath(workspace(state.agent), path));
         }
       }
     });
@@ -540,7 +579,7 @@ export default {
         }
         if (!smallTalk(event.prompt)) parts.push(REQUEST_LINE);
       }
-      const lines = await openTaskLines();
+      const lines = await openTaskLines(agentOf(ctx));
       if (lines.length) {
         parts.push(
           `Your open and latest finished Tasks:\n${lines.join("\n")}\nIf the request continues one of these, ` +

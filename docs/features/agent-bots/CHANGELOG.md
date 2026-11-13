@@ -16,8 +16,8 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
-- In transition: OpenClaw Tasks and listen-in act as the Parent Agent for every Bot until the two slices named in the AF-425 merge entry land.
-- Next: OpenClaw Tasks per agent, then OpenClaw listen-in per agent. Then the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in and the organization Tasks page); OpenClaw with real Slack, Telegram and Discord apps.
+- In transition: OpenClaw listen-in acts as the Parent Agent for every Bot until its slice lands.
+- Next: OpenClaw listen-in per agent. Then the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in and the organization Tasks page); OpenClaw with real Slack, Telegram and Discord apps.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,16 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-13 — AF-445 — OpenClaw Tasks per agent
+
+- Delivered: the OpenClaw `agentbarn-tasks` plugin registers its tool as a factory and takes each call's agent from `ctx.agentId`, else `agent:<id>:` in the session key, else `main`.
+  - `main` runs `agentbarn-task` as before, with the gateway's environment in `workspace`.
+  - A Bot runs it with `AGENT_ID`, `INGEST_URL`, `INGEST_API_KEY`, `ARTIFACT_URL`, `ARTIFACT_API_KEY` and `ARTIFACT_MAX_BYTES` from `/run/agentbarn/bots/<id>`, in `workspace-<id>`, with `ARTIFACT_UPLOAD_ROOTS` set to that workspace. Its written files resolve against that workspace, and its file size limit is its own.
+  - A Bot whose Secret is missing, names another agent or has no ingest URL or key runs nothing.
+  - The open-Tasks list is cached per agent.
+- Changed: verified in the pinned 2026.8.2 core that each run's plugin tool context names the session's agent and that the real loader registers the factory as `agentbarn_task`; a Bot's call through it ran with the Bot's identity and workspace, and an unknown agent's was refused. The unit driver builds factory tools with each step's context.
+- Follow-up: OpenClaw listen-in per agent.
 
 ### 2026-11-13 — AF-445 — AF-425 merge (Agent Tasks, listen-in, workflow approvals)
 
