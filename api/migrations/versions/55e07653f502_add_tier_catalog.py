@@ -1,7 +1,7 @@
 """Add the Tier catalog, put Organizations on a Tier, and suspend what a Tier leaves out
 
 Revision ID: 55e07653f502
-Revises: c8e41f7a2d96
+Revises: d1a390e7b2c4
 Create Date: 2026-11-08
 
 A platform-managed catalog of what an Organization may use and what it pays. Five rows are
@@ -37,7 +37,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.
 revision: str = "55e07653f502"
-down_revision: str | Sequence[str] | None = "c8e41f7a2d96"
+down_revision: str | Sequence[str] | None = "d1a390e7b2c4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

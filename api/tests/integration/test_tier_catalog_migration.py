@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from api.domains.tiers.models import SEED_TIERS
 
-PRE_MIGRATION_REVISION = "c8e41f7a2d96"
+PRE_MIGRATION_REVISION = "d1a390e7b2c4"
 TIER_CATALOG_REVISION = "55e07653f502"
 FREE_REPLACES_TRIAL_REVISION = "86bca32c95be"
 SUBSCRIPTIONS_REVISION = "38de1199ae19"
