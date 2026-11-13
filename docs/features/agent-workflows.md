@@ -193,6 +193,11 @@ current default still persists that explicit choice.
 
 ## UI and configuration
 
+The UI described in this specification is delivered by the AF-439 UI slice
+([PR #368](https://github.com/aai-labs/agent-barn/pull/368)), which follows the
+API slice; the [change log](agent-workflows/CHANGELOG.md#current-state) records
+the state between the two.
+
 Workflows are managed on the Organization's Workflows page,
 `/dashboard/{orgId}/workflows`, reached from the Organization navigation. It has
 two tabs. **Runs** lists runs waiting on an approval, then active and
