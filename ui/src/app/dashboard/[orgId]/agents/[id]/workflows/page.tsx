@@ -14,7 +14,8 @@ export default async function Page({
     "workflow",
     "workflowView",
     "workflowRun",
-    "workflowRunPage",
+    "workflowsTab",
+    "agentRunPage",
     "workflowPage",
     "workflowVersionPage",
   ]) {

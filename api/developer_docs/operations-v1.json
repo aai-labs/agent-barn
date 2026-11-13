@@ -1331,6 +1331,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
+    "decide_approval_organizations__organization_id__agents__agent_id__workflow_runs__run_id__approvals__request_id__decision_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
     "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
   ],
