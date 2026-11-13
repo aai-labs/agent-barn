@@ -10,10 +10,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import { type WorkflowSummary } from "../schemas";
+import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 
-const count = (value: number, noun: string) =>
-  `${value} ${value === 1 ? noun : `${noun}s`}`;
+import { type WorkflowSummary } from "../schemas";
 
 export type WorkflowCardActions = {
   onOpen: () => void;
@@ -25,8 +24,9 @@ export type WorkflowCardActions = {
 };
 
 /**
- * A saved workflow in the Organization's grid. Its name opens it; the menu edits, copies
- * or archives it, and Run starts it on an Agent chosen then.
+ * A saved workflow in the Organization's grid: its default Agent, when the viewer can read
+ * it, and how many runs they can see. Its name opens it; the menu edits, copies or archives
+ * it, and Run starts it, on the default Agent unless another is chosen.
  */
 export function WorkflowCard({
   workflow,
@@ -51,7 +51,7 @@ export function WorkflowCard({
       className="af-card flex h-full w-full flex-col p-6"
     >
       <div className="mb-4 flex w-full items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent-ink)]">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--bg-soft)] text-[var(--ink-2)]">
           <Workflow size={19} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
@@ -107,20 +107,30 @@ export function WorkflowCard({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <p className="mb-5 line-clamp-3 break-words text-sm leading-relaxed text-[var(--ink-3)]">
+      <p className="mb-5 line-clamp-3 break-words text-sm leading-relaxed text-[var(--ink-2)]">
         {version.description}
       </p>
       <div className="mt-auto flex w-full items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
-        <p className="min-w-0 text-xs text-[var(--ink-3)]">
-          <span className="block truncate">
-            {workflow.createdBy?.name
-              ? `Created by ${workflow.createdBy.name}`
-              : "Creator no longer a member"}
+        <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--ink-3)]">
+          {workflow.defaultAgentId && workflow.defaultAgentName ? (
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <AgentAvatar
+                agent={{ id: workflow.defaultAgentId, name: workflow.defaultAgentName }}
+                size="xs"
+              />
+              <span className="truncate text-[var(--ink-2)]">{workflow.defaultAgentName}</span>
+            </span>
+          ) : (
+            <span>Unassigned</span>
+          )}
+          <span aria-hidden="true">·</span>
+          <span className="shrink-0">
+            <span className="font-semibold tabular-nums text-[var(--ink-2)]">
+              {workflow.runCount}
+            </span>{" "}
+            {workflow.runCount === 1 ? "run" : "runs"}
           </span>
-          <span className="block">
-            {count(version.stepCount, "step")} · {count(version.inputCount, "input")}
-          </span>
-        </p>
+        </div>
         <button
           type="button"
           className="af-btn af-btn-primary af-btn-sm shrink-0"
@@ -128,7 +138,8 @@ export function WorkflowCard({
           disabled={!canRun || Boolean(workflow.archivedAt)}
           onClick={onRun}
         >
-          <Play size={13} aria-hidden="true" /> Run
+          <Play size={13} aria-hidden="true" />
+          {workflow.defaultAgentId ? "Run" : "Assign & run"}
         </button>
       </div>
     </article>

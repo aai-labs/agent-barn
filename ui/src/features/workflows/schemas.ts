@@ -102,6 +102,10 @@ export const WorkflowSchema = z.object({
   executionAvailable: z.boolean(),
 });
 export const WorkflowSummarySchema = WorkflowSchema.extend({
+  /** The default Agent's name, when the viewer can read that Agent. */
+  defaultAgentName: z.string().nullable().optional(),
+  /** Runs of this workflow the viewer can read. */
+  runCount: z.number().int().nonnegative().default(0),
   version: z.object({
     id: z.uuid(),
     number: z.number().int().positive(),

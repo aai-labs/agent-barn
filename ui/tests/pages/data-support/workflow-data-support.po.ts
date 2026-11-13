@@ -19,6 +19,8 @@ export class WorkflowDataSupport {
   listQueries: string[] = [];
   /** The Agent runs start with by default. */
   defaultAgentId: string | null = null;
+  /** Runs the viewer can read of the primary workflow, as its card counts them. */
+  runCount = 0;
   conflictSave = false;
   /** Description another user saved before the conflicting save. */
   conflictDescription: string | null = null;
@@ -207,7 +209,7 @@ export class WorkflowDataSupport {
           .filter(
             (item) => archived === null || String(Boolean(item.archived_at)) === archived,
           )
-          .map(workflowSummary);
+          .map((item) => workflowSummary(item, item === workflow ? this.runCount : 0));
         await route.fulfill({
           json: {
             items: items.slice(offset, offset + pageSize),
