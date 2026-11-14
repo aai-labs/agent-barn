@@ -104,14 +104,19 @@ export function useLatestWorkflowRun() {
  * Runs with a request awaiting a decision: the approvals inbox and its badge. With an
  * Agent, only that Agent's runs; without one, every Agent the viewer can read.
  */
-export function useAwaitingApprovals(agentId?: string, enabled = true) {
+export function useAwaitingApprovals(
+  agentId?: string,
+  enabled = true,
+  /** How often to check; a badge away from the inbox can check less often. */
+  interval = 10_000,
+) {
   const scope = useRunScope();
   return useQuery({
     queryKey: [...scope.key, "awaiting-decision", agentId ?? "all"],
     enabled: scope.enabled && enabled,
     refetchOnWindowFocus: true,
     // A live request closes within minutes, so the inbox checks often.
-    refetchInterval: (query) => (query.state.error ? false : 10_000),
+    refetchInterval: (query) => (query.state.error ? false : interval),
     queryFn: async () =>
       (
         await api.get<WorkflowRunList>(

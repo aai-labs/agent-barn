@@ -1,3 +1,5 @@
+import { type KeyboardEvent } from "react";
+
 import { type WorkflowDraft } from "./schemas";
 
 const KEY_MAX = 64;
@@ -44,8 +46,10 @@ const SHORT_MAX = 80;
  */
 function shortTitle(text: string): string {
   const line = (text.trim().split("\n")[0] ?? "").replace(/\s+/g, " ").trim();
-  if (line.length <= SHORT_MAX) return line;
-  const cut = line.slice(0, SHORT_MAX - 1);
+  // Code points, as the API counts them, so a cut never splits an emoji in two.
+  const points = [...line];
+  if (points.length <= SHORT_MAX) return line;
+  const cut = points.slice(0, SHORT_MAX - 1).join("");
   const space = cut.lastIndexOf(" ");
   return `${(space > SHORT_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
@@ -110,4 +114,29 @@ export function foldStepOutputs(draft: WorkflowDraft): WorkflowDraft {
         : { ...step, artifactDescription: null },
     ),
   };
+}
+
+const RADIO_STEP: Record<string, number> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
+/**
+ * Arrow keys in a `role="radiogroup"` of buttons: focus moves to the next enabled radio
+ * and chooses it, wrapping at the ends, as native radio buttons do.
+ */
+export function onRadioGroupKeyDown(event: KeyboardEvent<HTMLElement>) {
+  const step = RADIO_STEP[event.key];
+  if (!step) return;
+  const radios = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]:not(:disabled)'),
+  ];
+  const index = radios.findIndex((radio) => radio === document.activeElement);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = radios[(index + step + radios.length) % radios.length];
+  next.focus();
+  next.click();
 }

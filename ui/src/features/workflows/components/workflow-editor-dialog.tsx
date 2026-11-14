@@ -74,7 +74,7 @@ function EditorForm({
   // Any Agent the author can see may be the default; it only preselects "Run as".
   const { agents } = useAgents();
   const detail = useWorkflow(editing ? source.id : "");
-  const [initial] = useState<WorkflowDraft>(() => {
+  const [initial, setInitial] = useState<WorkflowDraft>(() => {
     if (!source) return emptyDraft("");
     const folded = foldStepOutputs(structuredClone(source.version.draft));
     return target.mode === "duplicate"
@@ -115,6 +115,7 @@ function EditorForm({
       reveal(issues[0].section);
       return;
     }
+    let version: number | null = null;
     try {
       let saved: Workflow | null = null;
       if (!editing) {
@@ -133,6 +134,10 @@ function EditorForm({
           });
           current = saved.revision;
           setRevision(current);
+          // The plan is saved: a retry of what follows must not save it again.
+          version = saved.version.number;
+          setInitial(draft);
+          setBase(saved.version.draft);
         }
         if (agentChanged)
           saved = await actions.setDefaultAgent.mutateAsync({
@@ -146,10 +151,13 @@ function EditorForm({
     } catch (failure) {
       const issues = workflowApiProblems(failure, draft);
       setProblems(issues);
+      const message = issues.length
+        ? "Review these fields before saving. Your edits are retained."
+        : errorMessage(failure);
       setError(
-        issues.length
-          ? "Review these fields before saving. Your edits are retained."
-          : errorMessage(failure),
+        version === null
+          ? message
+          : `Version ${version} was saved, but the default agent was not changed. ${message}`,
       );
       setConflict(failure instanceof ApiError && failure.status === 409);
       if (issues.length) reveal(issues[0].section);

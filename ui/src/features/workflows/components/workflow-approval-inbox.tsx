@@ -47,7 +47,10 @@ export function WorkflowApprovalInbox({
           {title}
         </h2>
         <span className="text-xs text-[var(--ink-3)]">
-          {runs.data!.total} {runs.data!.total === 1 ? "run" : "runs"}
+          {/* The inbox reads one page; say so when more are waiting than it lists. */}
+          {runs.data!.total > items.length
+            ? `${items.length} of ${runs.data!.total} runs`
+            : `${items.length} ${items.length === 1 ? "run" : "runs"}`}
         </span>
       </div>
       <ul>

@@ -355,6 +355,22 @@ test.describe("WF02 run progress and text results", () => {
     await expect(page.getByLabel("Approval required")).toBeVisible();
   });
 
+  test("an approval the viewer cannot decide is listed without counting as waiting on them", async ({
+    page,
+  }) => {
+    support.viewer = true;
+    support.state = "AWAITING_APPROVAL";
+    support.approval = approvalRequest("PARKED");
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await expect(
+      page.getByLabel("Waiting on approval").getByText("rm -rf ./out && ./deploy.sh --prod"),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Workflows/ }).getByLabel(/waiting on you/),
+    ).toHaveCount(0);
+  });
+
   test("the Organization's Workflows page lists approvals across Agents with their Agent", async ({ page }) => {
     support.state = "AWAITING_APPROVAL";
     support.approval = approvalRequest("PARKED");
@@ -927,6 +943,11 @@ test.describe("WF02 run progress and text results", () => {
     await expect(page).toHaveURL(new RegExp(`/workflows\\?.*agent=${MOCK_AGENT_ID}`));
     await page.getByRole("button", { name: "Run Weekly pipeline report" }).click();
     await expect(runs.runAs("Maya")).toBeChecked();
+    // The link named the Agent for this run only: once it starts, the default returns.
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await expect(page).not.toHaveURL(/agent=/);
   });
 
   test("with no default the dialog waits for an Agent, and files follow the Agent chosen", async ({
@@ -950,6 +971,37 @@ test.describe("WF02 run progress and text results", () => {
     await expect(
       page.getByRole("combobox", { name: "Select file for Reporting period" }),
     ).not.toContainText("pipeline.csv");
+    // The dropped file is gone from the run too, not only from the picker.
+    await runs.start();
+    await expect(runs.dialog().getByRole("alert")).toContainText("Reporting period is required");
+    expect(support.starts).toHaveLength(0);
+  });
+
+  test("the Agent cannot change while a file uploads", async ({ page }) => {
+    await twoAgents(page);
+    support.fileInputs = true;
+    await support.intercept(OTHER_AGENT_ID);
+    let release = () => {};
+    support.uploadGate = new Promise((resolve) => (release = resolve));
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await runs.chooseAgent("Maya");
+    await runs.uploadFile("Reporting period", Buffer.from("product,quantity\n"));
+    await expect(runs.runAs("Rex")).toBeDisabled();
+    release();
+    await expect(page.getByRole("button", { name: "Remove uploaded.csv", exact: true })).toBeVisible();
+    await expect(runs.runAs("Rex")).toBeEnabled();
+  });
+
+  test("a workflow's runs open on their first page, whatever page the landing list was on", async ({
+    page,
+  }) => {
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding("?workflowsTab=workflows&workflowRunPage=3");
+    await new WorkflowsPage(page).open("Weekly pipeline report");
+    await expect(page).toHaveURL(new RegExp(`workflow=${WORKFLOW_ID}`));
+    await expect(page).not.toHaveURL(/workflowRunPage/);
   });
 
   test("the Organization lists runs across Agents; an Agent's tab lists only its own", async ({

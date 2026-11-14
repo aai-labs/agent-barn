@@ -14,6 +14,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 
+import { onRadioGroupKeyDown } from "../utils";
+
 export type AgentChoice = { id: string; name: string };
 
 /** Agent pills shown before the rest collapse into a searchable "+N more". */
@@ -52,14 +54,24 @@ export function AgentPillPicker({
   const chosen = agents.find((agent) => agent.id === value);
   const shown = chosen && !first.includes(chosen) ? [...first, chosen] : first;
   const hidden = agents.length - shown.length;
+  // One tab stop, as for native radios: the checked pill, else the first.
+  const checked = (noneLabel && value === null) || shown.some((agent) => agent.id === value);
+  const tabIndex = (selected: boolean, first: boolean) =>
+    selected || (!checked && first) ? 0 : -1;
   return (
     <div className="flex flex-wrap gap-2">
-      <div role="radiogroup" aria-labelledby={labelledBy} className="flex flex-wrap gap-2">
+      <div
+        role="radiogroup"
+        aria-labelledby={labelledBy}
+        className="flex flex-wrap gap-2"
+        onKeyDown={onRadioGroupKeyDown}
+      >
         {noneLabel && (
           <button
             type="button"
             role="radio"
             aria-checked={value === null}
+            tabIndex={tabIndex(value === null, true)}
             disabled={disabled}
             className={pill(value === null)}
             onClick={() => onChange(null)}
@@ -67,12 +79,13 @@ export function AgentPillPicker({
             {noneLabel}
           </button>
         )}
-        {shown.map((agent) => (
+        {shown.map((agent, index) => (
           <button
             key={agent.id}
             type="button"
             role="radio"
             aria-checked={value === agent.id}
+            tabIndex={tabIndex(value === agent.id, !noneLabel && index === 0)}
             disabled={disabled}
             className={`${pill(value === agent.id)} pl-1.5`}
             onClick={() => onChange(agent.id)}

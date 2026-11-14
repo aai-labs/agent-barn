@@ -2,7 +2,7 @@
 
 import { Archive, Copy, MoreHorizontal, PlayCircle, Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -63,7 +63,10 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
   const [recentPage, setRecentPage] = useQueryState("workflowRunPage", workflowPageParser);
   const [versionPage, setVersionPage] = useQueryState("workflowVersionPage", workflowPageParser);
   // The Agent a link asked to run as, such as "Run a workflow" on an Agent's page.
-  const [preferredAgent] = useQueryState("agent", parseAsString.withDefault(""));
+  const [preferredAgent, setPreferredAgent] = useQueryState(
+    "agent",
+    parseAsString.withDefault(""),
+  );
   const capabilities = useWorkflowCapabilities();
   const detail = useWorkflow(selected);
   const actions = useWorkflowActions();
@@ -91,6 +94,8 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
   };
   const openWorkflow = (id: string) => {
     setHistoric(null);
+    // The workflow's own runs start on their first page, not the landing list's.
+    void setRecentPage(1);
     void setVersionPage(1);
     void setView("overview");
     void setRunId("");
@@ -98,6 +103,7 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
   };
   const toLanding = (tab: "runs" | "workflows") => {
     setHistoric(null);
+    if (selected) void setRecentPage(1);
     void setView(null);
     void setRunId("");
     void setSelected("");
@@ -127,18 +133,10 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
         onRetry={() => void capabilities.refetch()}
       />
     );
-  if (selected && detail.error)
-    return (
-      <AppErrorState
-        error={detail.error}
-        title="We couldn’t load this workflow"
-        onRetry={() => void detail.refetch()}
-      />
-    );
-
   const current = historic ?? detail.data?.version;
+  // Keyed, so every view below renders the same dialogs and an open one keeps its state.
   const dialogs = (
-    <>
+    <Fragment key="dialogs">
       {editor && (
         <WorkflowEditorDialog
           target={editor}
@@ -157,7 +155,11 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
           version={running.version}
           preferredAgentId={preferredAgent || undefined}
           onClose={() => setRunning(null)}
-          onStarted={(run) => openRun(run.id)}
+          onStarted={(run) => {
+            // The link's Agent was for this run; later runs start from each workflow's default.
+            void setPreferredAgent(null);
+            openRun(run.id);
+          }}
         />
       )}
       <ConfirmationDialog
@@ -186,8 +188,21 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
           setArchiving(null);
         }}
       />
-    </>
+    </Fragment>
   );
+
+  // The dialogs stay mounted, so an open draft outlives a failed read of its workflow.
+  if (selected && detail.error)
+    return (
+      <div style={{ color: "var(--ink)" }}>
+        <AppErrorState
+          error={detail.error}
+          title="We couldn’t load this workflow"
+          onRetry={() => void detail.refetch()}
+        />
+        {dialogs}
+      </div>
+    );
 
   if (runId)
     return (

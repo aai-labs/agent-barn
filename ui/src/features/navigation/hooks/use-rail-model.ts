@@ -52,7 +52,8 @@ export function useRailModel(): RailModel {
   // installation offers them. The badge counts the approval requests the viewer may decide.
   const inOrganization = Boolean(selectedOrganization) && !isPlatformView;
   const workflows = useWorkflowCapabilities(inOrganization).data?.authoring === true;
-  const awaiting = useAwaitingApprovals(undefined, inOrganization && workflows);
+  // The rail is on every page, so its badge checks less often than the inbox itself.
+  const awaiting = useAwaitingApprovals(undefined, inOrganization && workflows, 30_000);
 
   if (isPlatformView) {
     return {

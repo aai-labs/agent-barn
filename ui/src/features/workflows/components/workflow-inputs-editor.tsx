@@ -5,7 +5,11 @@ import { Plus, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { type WorkflowDraft } from "../schemas";
-import { inputKeyFromLabel, inputLabelFromDescription } from "../utils";
+import {
+  inputKeyFromLabel,
+  inputLabelFromDescription,
+  onRadioGroupKeyDown,
+} from "../utils";
 import { inputField } from "../validation";
 
 type WorkflowInput = WorkflowDraft["inputs"][number];
@@ -74,6 +78,7 @@ export function WorkflowInputsEditor({
                 role="radiogroup"
                 aria-label={`Input ${index + 1} type`}
                 className="inline-flex rounded-lg bg-[var(--bg-soft)] p-0.5"
+                onKeyDown={onRadioGroupKeyDown}
               >
                 {TYPES.map((type) => {
                   const selected = item.type === type.value;
@@ -83,6 +88,7 @@ export function WorkflowInputsEditor({
                       type="button"
                       role="radio"
                       aria-checked={selected}
+                      tabIndex={selected ? 0 : -1}
                       onClick={() => update(index, { type: type.value })}
                       className={`h-7 rounded-md px-3 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-color)] ${
                         selected
