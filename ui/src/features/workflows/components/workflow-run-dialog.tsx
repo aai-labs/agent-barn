@@ -172,7 +172,8 @@ function RunForm({
               agents={runnable}
               value={agentId}
               onChange={(id) => id && chooseAgent(id)}
-              disabled={pending}
+              // An upload belongs to the Agent it started on, so the choice waits for it.
+              disabled={pending || uploading}
             />
           )}
         </div>

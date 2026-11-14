@@ -193,9 +193,13 @@ test.describe("WF01 Organization workflow authoring", () => {
     await workflows.addStep();
     const long = `Review ${"every open pull request ".repeat(6)}and summarize`;
     await workflows.stepInstructions(2).fill(long);
+    await workflows.addStep();
+    // An emoji is two UTF-16 units; the cut lands after it, never inside it.
+    await workflows.stepInstructions(3).fill(`${"x".repeat(78)}😀 and the rest of a long line`);
     await workflows.save();
     await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
-    const [first, second] = draftOf(support.saveRequests[0]).steps;
+    const [first, second, third] = draftOf(support.saveRequests[0]).steps;
+    expect(third.name).toBe(`${"x".repeat(78)}😀…`);
     expect(first.name).toBe("Check the folder");
     expect(first.goal).toBe("Check   the folder\nthen report what you found");
     expect(second.name.length).toBeLessThanOrEqual(80);
@@ -454,6 +458,60 @@ test.describe("WF01 Organization workflow authoring", () => {
     );
     await expect(workflows.name()).toHaveValue("Named plan");
     expect(support.saveRequests).toHaveLength(0);
+  });
+
+  test("a retry after the version saved changes only the default Agent", async ({ page }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(TEST_ORG_ID, WORKFLOW_ID);
+    await workflows.edit();
+    await workflows.name().fill("Renamed report");
+    await workflows.defaultAgent("Maya").click();
+    support.failUpdate = true;
+    await workflows.save();
+    await expect(workflows.error()).toContainText(
+      "Version 2 was saved, but the default agent was not changed.",
+    );
+    await workflows.save();
+    await expect(workflows.editor()).toHaveCount(0);
+    // One version, not a second identical one; the default goes out again on its revision.
+    expect(support.saveRequests).toHaveLength(1);
+    expect(support.updateRequests).toEqual([
+      { expected_revision: 2, default_agent_id: MOCK_AGENT_ID },
+      { expected_revision: 2, default_agent_id: MOCK_AGENT_ID },
+    ]);
+  });
+
+  test("a failed read of the workflow keeps the open draft", async ({ page }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(TEST_ORG_ID, WORKFLOW_ID);
+    await workflows.edit();
+    await workflows.name().fill("My edited report");
+    // The refused save rereads the workflow, and that read fails.
+    support.conflictSave = true;
+    support.failDetail = true;
+    await workflows.save();
+    await expect(page.getByText("We couldn’t load this workflow")).toBeVisible();
+    await expect(workflows.name()).toHaveValue("My edited report");
+  });
+
+  test("arrow keys move through an input's types and the default Agent pills", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.create("A report");
+    await workflows.addInput();
+    const types = workflows.editor().getByRole("radiogroup", { name: "Input 1 type" });
+    await types.getByRole("radio", { name: "Text", exact: true }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(types.getByRole("radio", { name: "File", exact: true })).toBeChecked();
+    await expect(types.getByRole("radio", { name: "File", exact: true })).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(types.getByRole("radio", { name: "Yes / no", exact: true })).toBeChecked();
+    await workflows.defaultAgent("No default").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(workflows.defaultAgent("Maya")).toBeChecked();
   });
 
   test("validation and save conflicts retain edits and recover explicitly", async ({ page }) => {

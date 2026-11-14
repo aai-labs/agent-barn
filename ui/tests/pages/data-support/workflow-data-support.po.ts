@@ -25,6 +25,10 @@ export class WorkflowDataSupport {
   /** Description another user saved before the conflicting save. */
   conflictDescription: string | null = null;
   failCapabilities = false;
+  /** The next default-Agent change fails, after any version it follows has saved. */
+  failUpdate = false;
+  /** Reads of one workflow fail, as an outage would. */
+  failDetail = false;
   forbidSave = false;
   saveAllowed = true;
   validationSaveErrors: { loc: (string | number)[]; msg: string }[] | null =
@@ -124,6 +128,11 @@ export class WorkflowDataSupport {
       if (route.request().method() === "PATCH") {
         const body = route.request().postDataJSON();
         this.updateRequests.push(body);
+        if (this.failUpdate) {
+          this.failUpdate = false;
+          await route.fulfill({ status: 500, json: { detail: "Default agent unavailable" } });
+          return;
+        }
         workflow = {
           ...workflow,
           revision: workflow.revision + 1,
@@ -221,6 +230,10 @@ export class WorkflowDataSupport {
         return;
       }
       this.reads.detail++;
+      if (this.failDetail) {
+        await route.fulfill({ status: 500, json: { detail: "Workflow unavailable" } });
+        return;
+      }
       await route.fulfill({
         json: {
           ...workflow,

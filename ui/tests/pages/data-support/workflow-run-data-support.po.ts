@@ -16,6 +16,8 @@ export class WorkflowRunDataSupport {
   storageLimit = 26214400;
   provisionRequests = 0;
   failUpload = false;
+  /** Holds an upload open until it resolves, to act while a file is still uploading. */
+  uploadGate: Promise<void> | null = null;
   uploadedBytes: Buffer | null = null;
   uploaded = { ...artifactFixture };
   starts: Record<string, unknown>[] = [];
@@ -66,6 +68,7 @@ export class WorkflowRunDataSupport {
     });
     await this.page.route(`${filesBase}/*/content`, async route => {
       this.uploadedBytes = route.request().postDataBuffer();
+      await this.uploadGate;
       await route.fulfill({ status: this.failUpload ? 503 : 200, json: this.failUpload ? { detail: "Storage unavailable" } : this.uploaded });
     });
     const fixture = workflowFixture(this.defaultAgentId);
