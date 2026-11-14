@@ -8,21 +8,19 @@ import { WorkflowPager } from "./workflow-pager";
 
 /** Immutable versions, newest first; mounted only while the history tab is open. */
 export function WorkflowHistory({
-  agentId,
   workflowId,
   currentNumber,
   page,
   onPageChange,
   onView,
 }: {
-  agentId: string;
   workflowId: string;
   currentNumber: number;
   page: number;
   onPageChange: (page: number) => void;
   onView: (version: WorkflowVersion) => void;
 }) {
-  const versions = useWorkflowVersions(agentId, workflowId, page);
+  const versions = useWorkflowVersions(workflowId, page);
   return (
     <section className="af-card p-5">
       <h2 className="text-lg font-semibold mb-4">Version history</h2>

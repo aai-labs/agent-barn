@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { type WorkflowVersion } from "../schemas";
+import { inputHelp } from "../utils";
 import { WorkflowOutline } from "./workflow-outline";
 
 export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
@@ -58,13 +59,15 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
                   </p>
                 </div>
               )}
-              <div>
-                <h3 className="mb-2 text-sm font-semibold">Preserved output</h3>
-                <p className="whitespace-pre-wrap text-sm leading-6">
-                  {step.artifactDescription ??
-                    "No output is planned for this step."}
-                </p>
-              </div>
+              {/* Only versions saved before a step's output became part of its instructions. */}
+              {step.artifactDescription && (
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">Output</h3>
+                  <p className="whitespace-pre-wrap text-sm leading-6">
+                    {step.artifactDescription}
+                  </p>
+                </div>
+              )}
             </>
           ) : selected === "details" ? (
             <>
@@ -89,9 +92,11 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
                       {input.type} · {input.required ? "Required" : "Optional"}
                     </span>
                   </div>
-                  <p className="mt-2 whitespace-pre-wrap text-sm">
-                    {input.description}
-                  </p>
+                  {inputHelp(input) && (
+                    <p className="mt-2 whitespace-pre-wrap text-sm">
+                      {inputHelp(input)}
+                    </p>
+                  )}
                 </div>
               ))
             ) : (
@@ -107,8 +112,8 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
           )}
         </div>
         <footer className="border-t border-[var(--line)] px-6 py-4 text-xs text-[var(--ink-3)]">
-          This is a saved plan. Saved versions retain their steps and outputs;
-          execution is unavailable.
+          This is a saved version. Saved versions never change; a run keeps
+          the version it was started with.
         </footer>
       </section>
     </div>

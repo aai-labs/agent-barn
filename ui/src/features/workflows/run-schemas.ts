@@ -33,6 +33,13 @@ export const WorkflowRunSchema = z.object({
   versionId: z.uuid(),
   versionNumber: z.number(),
   name: z.string(),
+  /** The run's own title, when the person starting it gave one. */
+  title: z.string().nullable().optional(),
+  /** The Agent that runs every step of this run. */
+  agentId: z.uuid(),
+  agentName: z.string(),
+  /** The Agent was deleted: the run stays readable, with nothing left to do on it. */
+  agentArchived: z.boolean(),
   initiatingUserId: z.uuid().nullable(),
   inputs: z.record(
     z.string(),
@@ -124,6 +131,10 @@ export const isRunTerminal = (state: string) =>
   ["SUCCEEDED", "FAILED", "CANCELLED"].includes(state);
 export const isRunProgressing = (state: string) =>
   ["QUEUED", "RUNNING", "CANCELLING"].includes(state);
+
+/** What a run is called in lists: its own title, else its workflow's name. */
+export const runTitle = (run: Pick<WorkflowRun, "title" | "name">) =>
+  run.title?.trim() || run.name;
 
 /** The request a person can still decide: live while the session holds it, parked once it stopped. */
 export const pendingApproval = (run: WorkflowRun) =>

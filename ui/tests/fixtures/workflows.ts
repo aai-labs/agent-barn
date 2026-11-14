@@ -32,10 +32,17 @@ export const workflowDraft = {
   ],
   review_destination: "web",
 };
-export function workflowFixture(agentId: string, viewer = false) {
+export const WORKFLOW_CREATOR = {
+  membership_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  user_id: null as string | null,
+  name: "Dana Creator",
+};
+/** A saved Organization workflow; `defaultAgentId` is the Agent its runs start with. */
+export function workflowFixture(defaultAgentId: string | null = null, viewer = false) {
   return {
     id: WORKFLOW_ID,
-    agent_id: agentId,
+    created_by: WORKFLOW_CREATOR as typeof WORKFLOW_CREATOR | null,
+    default_agent_id: defaultAgentId,
     revision: 1,
     archived_at: null as string | null,
     version: {
@@ -51,10 +58,12 @@ export function workflowFixture(agentId: string, viewer = false) {
 }
 
 /** The list endpoint's card projection of a definition fixture. */
-export function workflowSummary(workflow: ReturnType<typeof workflowFixture>) {
+export function workflowSummary(workflow: ReturnType<typeof workflowFixture>, runCount = 0) {
   const { draft, ...version } = workflow.version;
   return {
     ...workflow,
+    default_agent_name: workflow.default_agent_id ? "Maya" : null,
+    run_count: runCount,
     version: {
       ...version,
       name: draft.name,
@@ -66,9 +75,9 @@ export function workflowSummary(workflow: ReturnType<typeof workflowFixture>) {
 }
 
 /** Other definitions preceding the primary workflow in a multi-page list. */
-export function workflowPaginationFixtures(agentId: string) {
+export function workflowPaginationFixtures() {
   return ["Account briefs", "Lead review"].map((name, index) => {
-    const workflow = workflowFixture(agentId);
+    const workflow = workflowFixture();
     workflow.id = `${String(index + 1).padStart(8, "0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
     workflow.version.id = `${String(index + 1).padStart(8, "0")}-eeee-4eee-8eee-eeeeeeeeeeee`;
     workflow.version.draft.name = name;

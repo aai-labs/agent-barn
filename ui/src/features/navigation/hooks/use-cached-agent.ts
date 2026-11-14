@@ -49,14 +49,13 @@ export function useCachedAgentHealth(agentId: string): AgentHealth | undefined {
 }
 
 /**
- * Whether the platform offers workflow authoring to the Agent, as the Agent page has read
- * it. Unknown (false) until the page has asked, so Workflows joins the panel when the page
- * shows it.
+ * Whether this installation offers workflows, as a page has read it for the Organization.
+ * Unknown (false) until one has asked, so Workflows joins the panel when the page shows it.
  */
-export function useCachedWorkflowAuthoring(agentId: string | undefined): boolean {
+export function useCachedWorkflowAuthoring(): boolean {
   const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
   const data = useCachedData<WorkflowCapabilities>(
-    workflowKeys.capabilities({ organizationId, agentId: agentId ?? "" }),
+    workflowKeys.capabilities({ organizationId }),
   );
-  return Boolean(agentId) && data?.authoring === true;
+  return data?.authoring === true;
 }

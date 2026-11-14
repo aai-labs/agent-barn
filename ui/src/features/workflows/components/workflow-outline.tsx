@@ -1,6 +1,6 @@
 "use client";
 
-import { FileOutput, Info, ListFilter, Plus } from "lucide-react";
+import { FileOutput, Info, ListFilter } from "lucide-react";
 import { type ReactNode } from "react";
 
 import { type WorkflowStep } from "../schemas";
@@ -9,12 +9,10 @@ export function WorkflowOutline({
   steps,
   selected,
   onSelect,
-  onAdd,
 }: {
   steps: WorkflowStep[];
   selected: string;
   onSelect: (section: string) => void;
-  onAdd?: () => void;
 }) {
   const sectionButton = (id: string, label: string, icon: ReactNode) => (
     <button
@@ -76,25 +74,13 @@ export function WorkflowOutline({
                   {step.name || "Untitled step"}
                 </span>
                 <span className="mt-1 hidden text-xs text-[var(--ink-3)] lg:block">
-                  {step.artifactDescription !== null
-                    ? "Output planned"
-                    : "Workflow step"}
+                  Workflow step
                 </span>
               </span>
             </button>
           </li>
         ))}
       </ol>
-      {onAdd && (
-        <button
-          type="button"
-          className="af-btn af-btn-ghost af-btn-sm mt-2"
-          disabled={steps.length >= 50}
-          onClick={onAdd}
-        >
-          <Plus size={14} /> Add a step
-        </button>
-      )}
       <div className="mt-5 flex flex-wrap gap-1 border-t border-[var(--line)] pt-3 lg:flex-col">
         {sectionButton("inputs", "Required inputs", <ListFilter size={15} />)}
         {sectionButton("outputs", "Review destination", <FileOutput size={15} />)}

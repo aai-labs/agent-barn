@@ -13,11 +13,9 @@ export type WorkflowProblem = {
 
 const fieldLabels: Record<string, string> = {
   name: "Name",
-  goal: "What should the Agent do?",
+  goal: "What should the agent do?",
   completionCriteria: "When is this step complete?",
   completion_criteria: "When is this step complete?",
-  artifactDescription: "Output from this step (optional)",
-  artifact_description: "Output from this step (optional)",
   requiredCapabilities: "Required capabilities",
   required_capabilities: "Required capabilities",
   label: "Label",
@@ -37,9 +35,16 @@ export const inputField = (index: number, field: string) =>
 function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
   const start = path.findIndex((part) => part !== "body" && part !== "draft");
   const [scope, index, rawField] = path.slice(Math.max(0, start));
-  // Input keys are derived from labels and never shown, so their problems belong to the label.
+  // Input labels and keys derive from descriptions, and step names from prompts; none
+  // is edited directly, so their problems belong to the field they come from.
   const field =
-    rawField === "key" ? "label" : rawField ? camel(String(rawField)) : "";
+    scope === "inputs" && (rawField === "key" || rawField === "label")
+      ? "description"
+      : scope === "steps" && rawField === "name"
+        ? "goal"
+        : rawField
+          ? camel(String(rawField))
+          : "";
   if (scope === "steps" && typeof index === "number") {
     const step = draft.steps[index];
     return {
@@ -57,14 +62,14 @@ function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
           message,
           field: field ? inputField(index, field) : undefined,
         }
-      : { section: "inputs", label: "Required inputs", message };
+      : { section: "inputs", label: "Inputs", message };
   }
   if (scope === "reviewDestination" || scope === "review_destination")
     return { section: "outputs", label: "Review destination", message };
   if (scope === "name" || scope === "description")
     return {
       section: "details",
-      label: scope === "name" ? "Workflow name" : "Description (optional)",
+      label: scope === "name" ? "Name" : "What does it do?",
       message,
       field: scope,
     };
@@ -127,8 +132,8 @@ export function workflowApiProblems(
       item.loc.at(-1) === "inputs" && item.msg.match(duplicateInputs);
     if (duplicate) {
       issues.push({
-        path: ["inputs", Number(duplicate[2]) - 1, "label"],
-        message: `Matches input ${duplicate[1]}; use a distinct label`,
+        path: ["inputs", Number(duplicate[2]) - 1, "description"],
+        message: `Matches input ${duplicate[1]}; start it differently`,
       });
       continue;
     }
@@ -136,7 +141,7 @@ export function workflowApiProblems(
       path: item.loc,
       message:
         item.loc.includes("inputs") && item.loc.at(-1) === "key"
-          ? "Edit the input label"
+          ? "Edit the input description"
           : item.msg,
     });
   }

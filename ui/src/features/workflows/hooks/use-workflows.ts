@@ -2,10 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
-import { agentsKey } from "@/features/agents/utils";
 import { ApiError } from "@/shared/api/error/errors";
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
@@ -29,12 +27,14 @@ import {
  */
 const WORKFLOW_STALE_TIME = 30_000;
 
-type WorkflowScope = { organizationId: string; agentId: string };
+type WorkflowScope = { organizationId: string };
+/** Which saved workflows a list shows: active ones, the viewer's own, or archived ones. */
+export type WorkflowListFilter = "all" | "mine" | "archived";
 export const workflowsKey = createQueryKeyStructure("workflows");
 export const workflowKeys = {
   lists: (scope: WorkflowScope) => workflowsKey.listScope(scope),
-  list: (scope: WorkflowScope, page: number) =>
-    workflowsKey.list({ ...scope, page }),
+  list: (scope: WorkflowScope, page: number, filter: WorkflowListFilter) =>
+    workflowsKey.list({ scope, filters: { page, filter } }),
   /** Prefix of a definition and its version history. */
   detail: (scope: WorkflowScope, workflowId: string) =>
     [...workflowsKey.details(), scope, workflowId] as const,
@@ -46,33 +46,46 @@ export const workflowKeys = {
     [...workflowsKey.all, "capabilities", scope] as const,
 };
 
-function useScope(agentId: string) {
+/** Workflows belong to the Organization, so its id alone scopes every read and key. */
+function useScope() {
   const organizationId =
     useOrganizationContext().selectedOrganization?.id ?? "";
   return {
-    key: { organizationId, agentId },
-    base: `${useOrganizationApiBase()}/agents/${agentId}`,
-    enabled: Boolean(organizationId && agentId),
+    key: { organizationId },
+    // Not useOrganizationApiBase, which throws: navigation also asks with no Organization.
+    base: `/api/v1/organizations/${organizationId}`,
+    enabled: Boolean(organizationId),
   };
 }
 
+const FILTER_QUERY: Record<WorkflowListFilter, string> = {
+  all: "archived=false",
+  mine: "archived=false&created_by_me=true",
+  archived: "archived=true",
+};
+
 /** Saved definitions as card summaries; pass `enabled` only while the list is visible. */
-export function useWorkflows(agentId: string, page: number, enabled = true) {
-  const scope = useScope(agentId);
+export function useWorkflows(
+  page: number,
+  filter: WorkflowListFilter = "all",
+  enabled = true,
+) {
+  const scope = useScope();
   return useQuery({
-    queryKey: workflowKeys.list(scope.key, page),
+    queryKey: workflowKeys.list(scope.key, page, filter),
     enabled: scope.enabled && enabled,
     staleTime: WORKFLOW_STALE_TIME,
     queryFn: async () =>
       (
-        await api.get<WorkflowList>(`${scope.base}/workflows?page=${page}`, {
-          schema: WorkflowListSchema,
-        })
+        await api.get<WorkflowList>(
+          `${scope.base}/workflows?page=${page}&${FILTER_QUERY[filter]}`,
+          { schema: WorkflowListSchema },
+        )
       ).data,
   });
 }
-export function useWorkflow(agentId: string, workflowId: string) {
-  const scope = useScope(agentId);
+export function useWorkflow(workflowId: string) {
+  const scope = useScope();
   return useQuery({
     queryKey: workflowKeys.detail(scope.key, workflowId),
     enabled: scope.enabled && Boolean(workflowId),
@@ -85,12 +98,8 @@ export function useWorkflow(agentId: string, workflowId: string) {
       ).data,
   });
 }
-export function useWorkflowVersions(
-  agentId: string,
-  workflowId: string,
-  page: number,
-) {
-  const scope = useScope(agentId);
+export function useWorkflowVersions(workflowId: string, page: number) {
+  const scope = useScope();
   return useQuery({
     queryKey: workflowKeys.versionPage(scope.key, workflowId, page),
     enabled: scope.enabled && Boolean(workflowId),
@@ -104,8 +113,9 @@ export function useWorkflowVersions(
       ).data,
   });
 }
-export function useWorkflowCapabilities(agentId: string, enabled = true) {
-  const scope = useScope(agentId);
+/** Whether this installation offers workflows; every Member of the Organization may ask. */
+export function useWorkflowCapabilities(enabled = true) {
+  const scope = useScope();
   return useQuery({
     queryKey: workflowKeys.capabilities(scope.key),
     enabled: scope.enabled && enabled,
@@ -119,19 +129,16 @@ export function useWorkflowCapabilities(agentId: string, enabled = true) {
       ).data,
   });
 }
-export function useWorkflowActions(agentId: string) {
-  const scope = useScope(agentId);
+export function useWorkflowActions() {
+  const scope = useScope();
   const client = useQueryClient();
   const invalidateLists = () =>
     client.invalidateQueries({ queryKey: workflowKeys.lists(scope.key) });
-  // Lost access, archive or another save means cached reads may be wrong.
+  // Lost authority, archive or another save means cached reads may be wrong.
   const refreshAfterFailure = (error: unknown, workflowId?: string) => {
     if (!(error instanceof ApiError) || ![403, 404, 409].includes(error.status))
       return;
     void invalidateLists();
-    // Save authority comes from the Agent's own permissions; refetch them.
-    if (error.status === 403)
-      void client.invalidateQueries({ queryKey: agentsKey.detail(agentId) });
     void client.invalidateQueries({
       queryKey: workflowKeys.capabilities(scope.key),
     });
@@ -140,40 +147,65 @@ export function useWorkflowActions(agentId: string) {
         queryKey: workflowKeys.detail(scope.key, workflowId),
       });
   };
+  // The response is the server's current definition, revision and allowed
+  // actions for this actor, so it seeds the detail instead of a second read.
+  const seed = async (workflow: Workflow) => {
+    client.setQueryData(workflowKeys.detail(scope.key, workflow.id), workflow);
+    await Promise.all([
+      invalidateLists(),
+      client.invalidateQueries({
+        queryKey: workflowKeys.versions(scope.key, workflow.id),
+      }),
+    ]);
+  };
+  /** Creates a workflow, or saves a new version of an existing one. */
   const save = useMutation({
     mutationFn: async ({
       draft,
       workflowId,
       revision,
+      defaultAgentId = null,
     }: {
       draft: WorkflowDraft;
       workflowId?: string;
       revision?: number;
+      /** Only read when creating; an existing workflow changes it with `setDefaultAgent`. */
+      defaultAgentId?: string | null;
     }) => {
       return (
         await api.post<Workflow>(
           workflowId
             ? `${scope.base}/workflows/${workflowId}/versions`
             : `${scope.base}/workflows`,
-          workflowId ? { draft, expectedRevision: revision } : draft,
+          workflowId
+            ? { draft, expectedRevision: revision }
+            : { draft, defaultAgentId },
           { schema: WorkflowSchema },
         )
       ).data;
     },
-    // The response is the server's current definition, revision and allowed
-    // actions for this actor, so it seeds the detail instead of a second read.
-    onSuccess: async (workflow) => {
-      client.setQueryData(
-        workflowKeys.detail(scope.key, workflow.id),
-        workflow,
-      );
-      await Promise.all([
-        invalidateLists(),
-        client.invalidateQueries({
-          queryKey: workflowKeys.versions(scope.key, workflow.id),
-        }),
-      ]);
-    },
+    onSuccess: seed,
+    onError: (error, { workflowId }) => refreshAfterFailure(error, workflowId),
+  });
+  /** Changes which Agent a run starts with by default, without saving a new version. */
+  const setDefaultAgent = useMutation({
+    mutationFn: async ({
+      workflowId,
+      revision,
+      defaultAgentId,
+    }: {
+      workflowId: string;
+      revision: number;
+      defaultAgentId: string | null;
+    }) =>
+      (
+        await api.patch<Workflow>(
+          `${scope.base}/workflows/${workflowId}`,
+          { expectedRevision: revision, defaultAgentId },
+          { schema: WorkflowSchema },
+        )
+      ).data,
+    onSuccess: seed,
     onError: (error, { workflowId }) => refreshAfterFailure(error, workflowId),
   });
   const archive = useMutation({
@@ -198,5 +230,5 @@ export function useWorkflowActions(agentId: string) {
       ]),
     onError: (error, { workflowId }) => refreshAfterFailure(error, workflowId),
   });
-  return { save, archive };
+  return { save, setDefaultAgent, archive };
 }
