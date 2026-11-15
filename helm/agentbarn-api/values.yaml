@@ -233,9 +233,10 @@ costs:
 
 tierSweep:
   enabled: true
-  # Every five minutes: ends subscription periods that have run out and applies Tier Holds
-  # whose choosing time is up. A run that finds nothing due does nothing.
-  schedule: "*/5 * * * *"
+  # Every five minutes, on minutes ending in 4 and 9 so no minute starts more than three
+  # CronJobs: ends subscription periods that have run out and applies Tier Holds whose
+  # choosing time is up. A run that finds nothing due does nothing.
+  schedule: "4-59/5 * * * *"
 
 businessValue:
   backfill:
