@@ -48,8 +48,14 @@ class OrganizationPlans(ABC):
         """The trial's credit, Agent limit and whether it is offered, read in the caller's
         transaction. `for_update` locks them until it ends."""
 
+
+class TrialTermsEditor(ABC):
+    """Changing the trial's credit and Agent limit, which are its plan's. Apart from
+    `OrganizationPlans`, which Agents and sign-up read through: the edit reaches the plan's
+    catalog and its holds, which in turn reach Agents."""
+
     @abstractmethod
-    def change_trial_terms(self, changes: Mapping[str, float | int], context: CurrentUserContext) -> None:
+    def change(self, changes: Mapping[str, float | int], context: CurrentUserContext) -> None:
         """Change the trial's `credit_usd` or `agent_limit` as a change to its plan: audited
         as one, and holding what a lower Agent limit no longer covers. Raises the plan's own
         refusal (an HTTPException) when it can't take the values."""

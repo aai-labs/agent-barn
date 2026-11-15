@@ -34,9 +34,10 @@ from api.domains.restore_points.service import RestorePointService
 from api.domains.subscriptions.plans import TierPlans
 from api.domains.sync_provider.plugins.providers import shipped_plugins
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.tiers.trial_terms import FreeTierTrialTerms
 from api.domains.tiers.usage_policy import TierUsagePolicy
 from api.domains.usage.guard import UsageGuard
-from api.domains.usage.plans import OrganizationPlans
+from api.domains.usage.plans import OrganizationPlans, TrialTermsEditor
 from api.domains.workflows.controller import WorkflowControllerHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
@@ -75,6 +76,12 @@ class AppModule(Module):
     def provide_organization_plans(self, plans: TierPlans) -> OrganizationPlans:
         # A new Organization's plan and the trial's terms come from the Tier catalog.
         return plans
+
+    @provider
+    @singleton
+    def provide_trial_terms_editor(self, terms: FreeTierTrialTerms) -> TrialTermsEditor:
+        # The trial's terms are the Free Tier's, edited through the catalog.
+        return terms
 
     @provider
     @singleton

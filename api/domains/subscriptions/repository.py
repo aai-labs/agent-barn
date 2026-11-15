@@ -123,6 +123,9 @@ class SubscriptionRepository:
             yield
             return
         with self.delegate.engine.connect() as connection, connection.begin():
+            # The transaction stays idle while the block calls the provider or Kubernetes; a
+            # database-wide idle timeout must not end it, and the lock with it, meanwhile.
+            connection.execute(text("SET LOCAL idle_in_transaction_session_timeout = 0"))
             connection.execute(
                 text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"subscription:{organization_id}"}
             )

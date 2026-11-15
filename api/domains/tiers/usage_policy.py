@@ -144,10 +144,10 @@ _RULES: dict[UsageAction, _Rule] = {
 @singleton
 @dataclass
 class TierUsagePolicy(UsageGuard):
-    repository: TierRepository
-
     """No Tier is unrestricted: the Organization is platform-managed. Any Tier, the none Tier
     included, allows what its catalog row does, by each action's rule in `_RULES`."""
+
+    repository: TierRepository
 
     def allows(self, organization_id: UUID, action: UsageAction, subject: UsageSubject | None = None) -> bool:
         tier = self.repository.for_organization(organization_id)

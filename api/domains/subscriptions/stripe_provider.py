@@ -72,7 +72,7 @@ class StripeSubscriptionProvider:
         )
         return ProviderStart(activate_now=False, redirect_url=url)
 
-    def renews_itself(self) -> bool:
+    def renewed_by_agent_barn(self) -> bool:
         return False
 
     def cancel_at_period_end(self, subscription: OrganizationSubscription, cancel: bool) -> None:

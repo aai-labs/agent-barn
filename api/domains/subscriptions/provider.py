@@ -27,7 +27,7 @@ class SubscriptionProvider(Protocol):
 
     def begin(self, buyer: Buyer, tier: Tier) -> ProviderStart: ...
 
-    def renews_itself(self) -> bool:
+    def renewed_by_agent_barn(self) -> bool:
         """True when Agent Barn renews each period; False when the provider reports renewals."""
         ...
 
@@ -72,7 +72,7 @@ class MockSubscriptionProvider:
     def begin(self, buyer: Buyer, tier: Tier) -> ProviderStart:
         return ProviderStart(activate_now=True, provider_subscription_id=f"mock_{uuid4().hex}")
 
-    def renews_itself(self) -> bool:
+    def renewed_by_agent_barn(self) -> bool:
         return True
 
     def cancel_at_period_end(self, subscription: OrganizationSubscription, cancel: bool) -> None:

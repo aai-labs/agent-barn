@@ -264,7 +264,7 @@ class SubscriptionService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="This organization has no subscription."
                 )
-            if not self._provider_for(live).renews_itself():
+            if not self._provider_for(live).renewed_by_agent_barn():
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Only demo subscriptions can end their period early; a payment provider renews this one.",
@@ -304,7 +304,7 @@ class SubscriptionService:
             except Exception:
                 logger.exception("Could not finish activating subscription %s", subscription.id)
         for subscription in self.repository.due(now):
-            if not self._provider_for(subscription).renews_itself():
+            if not self._provider_for(subscription).renewed_by_agent_barn():
                 # The provider reports renewals and endings itself.
                 continue
             try:
@@ -394,7 +394,7 @@ class SubscriptionService:
         """A period ran out: expire what's left of its allowance, then renew or end."""
         self._expire_allowance(subscription, actor)
         provider = self._provider_for(subscription)
-        if subscription.cancel_at_period_end or not provider.renews_itself():
+        if subscription.cancel_at_period_end or not provider.renewed_by_agent_barn():
             self.end(subscription, actor)
             return
         if subscription.scheduled_tier_id is not None:

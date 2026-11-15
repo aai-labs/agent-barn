@@ -1,16 +1,12 @@
-from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal
 from uuid import UUID
 
-from injector import ProviderOf, inject, singleton
+from injector import inject, singleton
 from sqlmodel import Session, col, select
 
-from api.domains.auth.models import CurrentUserContext
 from api.domains.subscriptions.provider import SubscriptionProviders
-from api.domains.tiers.models import FREE_TIER_KEY, NONE_TIER_KEY, Tier, TierUpdate
+from api.domains.tiers.models import FREE_TIER_KEY, NONE_TIER_KEY, Tier
 from api.domains.tiers.repository import TierRepository
-from api.domains.tiers.service import TierService
 from api.domains.usage.models import TierActivation
 from api.domains.usage.plans import OrganizationPlans, TrialTerms
 
@@ -23,8 +19,6 @@ class TierPlans(OrganizationPlans):
     way starts on none while a paid Tier can be bought."""
 
     repository: TierRepository
-    # Resolved when used: the catalog's holds reach Agents, which ask the trial's terms here.
-    catalog: ProviderOf[TierService]
     subscription_providers: SubscriptionProviders
 
     def offered_keys(self) -> set[str]:
@@ -46,18 +40,6 @@ class TierPlans(OrganizationPlans):
         if free is None:
             return None
         return TrialTerms(credit_usd=free.one_time_credit_usd, agent_limit=free.agent_limit, offered=free.enabled)
-
-    def change_trial_terms(self, changes: Mapping[str, float | int], context: CurrentUserContext) -> None:
-        """An edit of the Free Tier in the catalog, as if made there."""
-        update: dict[str, object] = {}
-        if "credit_usd" in changes:
-            update["one_time_credit_usd"] = Decimal(str(changes["credit_usd"]))
-        if "agent_limit" in changes:
-            update["agent_limit"] = changes["agent_limit"]
-        if update:
-            self.catalog.get().update_tier(
-                self.repository.system_tier_id(FREE_TIER_KEY), TierUpdate.model_validate(update), context
-            )
 
     @staticmethod
     def _free(session: Session, *, for_update: bool) -> Tier | None:

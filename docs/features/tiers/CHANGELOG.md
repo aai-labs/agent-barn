@@ -8,7 +8,7 @@ Related context: [Tiers](../tiers.md), [Credit](../credit.md), [Trial onboarding
 
 - Delivered:
   - the Tier catalog and its Platform Settings section, and the payment grace period setting;
-  - an Organization's Tier, assigned by a Platform Administrator or kept by a subscription; Organizations that were never trials are on none and behave as before;
+  - an Organization's Tier, assigned by a Platform Administrator or kept by a subscription; Organizations that were never trials have no Tier and behave as before;
   - the Tier's Agent Limit as a layer beneath the Organization's own;
   - Tier Entitlement checks after authorization at every gate point, and the web app hiding what a Tier leaves out;
   - Tier Holds, applied as soon as coverage drops; Owners and Admins swap held Agents and re-enable held items under Settings → Tier;
@@ -66,8 +66,10 @@ Related context: [Tiers](../tiers.md), [Credit](../credit.md), [Trial onboarding
   - the tiers and subscriptions packages no longer import each other: Tier assignment and `TierPlans` moved to the subscriptions domain;
   - assigning the Tier an Organization is already on, as the platform's choice, records the change of who chose it;
   - an upgrade's allowance top-up is prorated like its price: the difference in monthly usage for the share of the period left, rather than the new Tier's whole allowance;
-  - schema: the seven Tier migrations are squashed into three (`55e07653f502`, `86bca32c95be`, `38de1199ae19`); `organization_subscription.activated_at` is new. The revisions the entries below name no longer exist;
-  - docs: `tiers.md`.
+  - schema: the seven Tier migrations are squashed into three (`55e07653f502`, `86bca32c95be`, `38de1199ae19`); `organization_subscription.activated_at` is new. The revisions the entries below name no longer exist, so a local or preview database that ran the old seven needs a reset (or its Tier tables dropped) before `make migrate`;
+  - the trial settings save through `TrialTermsEditor` and `TrialSettingsUpdateService`, apart from what Agents read, so the subscriptions domain no longer resolves the Tier catalog lazily; `SubscriptionProvider.renews_itself` is `renewed_by_agent_barn`;
+  - Stripe: releasing a schedule and cancelling a subscription check their status instead of Stripe's error text; the refund, cancel and release calls were run once against Stripe test mode;
+  - docs: `tiers.md`, `operations.md`.
 
 ### 2026-11-10 — Tiers — Stripe subscriptions (PR pending)
 

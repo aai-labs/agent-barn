@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+from uuid import UUID
 
 from injector import inject, singleton
 
@@ -48,6 +49,21 @@ def subscription_reference(event_type: str, data: dict[str, Any]) -> str | None:
     return None
 
 
+def _organization_named(event_type: str, data: dict[str, Any]) -> UUID | None:
+    """The Organization an event's own metadata names, so a subscription not seen yet
+    needn't be read from Stripe just to know whose lock to take. None when it names none."""
+    if event_type.startswith("invoice."):
+        details = (data.get("parent") or {}).get("subscription_details") or {}
+        metadata = details.get("metadata") or {}
+    else:
+        metadata = data.get("metadata") or {}
+    value = metadata.get("organization_id")
+    try:
+        return UUID(value) if value else None
+    except ValueError:
+        return None
+
+
 def _id(value: Any) -> str | None:
     return value.get("id") if isinstance(value, dict) else value
 
@@ -67,13 +83,24 @@ class StripeSubscriptionSync:
         if reference is None:
             return
         local = self.repository.by_provider_reference(SubscriptionProviderKey.STRIPE.value, reference)
-        organization_id = local.organization_id if local else self.stripe.subscription(reference).organization_id
+        organization_id = (
+            local.organization_id
+            if local
+            else _organization_named(event_type, data) or self.stripe.subscription(reference).organization_id
+        )
         if organization_id is None:
             logger.info("Ignoring Stripe subscription %s: it isn't for an Agent Barn Organization", reference)
             return
         with self.repository.organization_lock(organization_id):
-            # Read again under the lock: what Stripe has now, after any change made meanwhile.
-            self.apply(self.stripe.subscription(reference))
+            # Read under the lock: what Stripe has now, after any change made meanwhile.
+            state = self.stripe.subscription(reference)
+            if local is None and state.organization_id not in (None, organization_id):
+                # The event named another Organization than the subscription does; the
+                # subscription's own is the one whose lock its changes need.
+                with self.repository.organization_lock(state.organization_id):
+                    self.apply(state)
+                return
+            self.apply(state)
 
     def apply(self, state: StripeSubscriptionState) -> None:
         tier = self._tier(state.price.lookup_key)

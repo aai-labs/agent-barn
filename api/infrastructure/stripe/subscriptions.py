@@ -234,11 +234,10 @@ class StripeSubscriptions:
     def release_schedule(self, schedule_id: str) -> None:
         """Drop a scheduled change; the subscription carries on as it is."""
         try:
-            self._stripe().v1.subscription_schedules.release(schedule_id)
-        except stripe.InvalidRequestError as exc:
-            # Already released or completed: nothing is scheduled any more.
-            if "release" not in str(exc).lower() and "status" not in str(exc).lower():
-                raise PaymentProviderUnavailable(str(exc)) from exc
+            schedule = self._stripe().v1.subscription_schedules.retrieve(schedule_id)
+            # Released, completed or cancelled already: nothing is scheduled any more.
+            if schedule.status in ("not_started", "active"):
+                self._stripe().v1.subscription_schedules.release(schedule_id)
         except stripe.StripeError as exc:
             raise PaymentProviderUnavailable(str(exc)) from exc
 
@@ -250,11 +249,9 @@ class StripeSubscriptions:
 
     def cancel_now(self, subscription_id: str) -> None:
         try:
-            self._stripe().v1.subscriptions.cancel(subscription_id)
-        except stripe.InvalidRequestError as exc:
-            # Already cancelled.
-            if exc.code != "resource_missing" and "canceled" not in str(exc).lower():
-                raise PaymentProviderUnavailable(str(exc)) from exc
+            subscription = self._stripe().v1.subscriptions.retrieve(subscription_id)
+            if subscription.status not in ("canceled", "incomplete_expired"):
+                self._stripe().v1.subscriptions.cancel(subscription_id)
         except stripe.StripeError as exc:
             raise PaymentProviderUnavailable(str(exc)) from exc
 

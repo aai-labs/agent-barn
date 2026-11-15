@@ -616,6 +616,11 @@ the LiteLLM master key to push credit. Locally, `./run.sh` runs it as Compose's
 A Platform Administrator can end a demo subscription's period immediately from the Platform
 Organization page (**End period now**).
 
+Each change to an Organization's subscription holds a transaction-level advisory lock on a
+connection of its own for as long as it calls Stripe or stops Agents, so a transaction-pooling
+proxy is fine; the transaction turns `idle_in_transaction_session_timeout` off for itself, and
+a database-wide setting doesn't end it.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
