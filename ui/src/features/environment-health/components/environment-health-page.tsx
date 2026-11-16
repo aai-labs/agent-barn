@@ -127,7 +127,12 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
         unhealthyTotal={health.totals.unhealthyRuntimes}
         monitoringState={states.prometheus}
       />
-      <ScheduledPanel cronJobs={health.cronJobs} backups={health.backups} state={states.cron_jobs} />
+      <ScheduledPanel
+        cronJobs={health.cronJobs}
+        backups={health.backups}
+        state={states.cron_jobs}
+        runsState={states.jobs}
+      />
       <WorkloadsPanel
         workloads={health.workloads}
         issuesTotal={health.totals.podIssues}

@@ -341,6 +341,36 @@ test.describe("Platform environment health (platform_admin)", () => {
     await expect(healthPage.section("scheduled")).toContainText("not permitted for the service account");
   });
 
+  test("says when whether each scheduled job last worked cannot be read", async () => {
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    await data.environmentHealth.interceptEnvironmentHealth({
+      body: mockEnvironmentHealth({
+        sources: [
+          { source: "pods", state: "available" },
+          { source: "cron_jobs", state: "available" },
+          { source: "jobs", state: "unavailable" },
+        ],
+        cron_jobs: [
+          {
+            name: "agentbarn-cost-sync",
+            schedule: "6-59/15 * * * *",
+            state: "ok",
+            running: false,
+            last_scheduled_at: minutesAgo(3),
+            last_successful_at: minutesAgo(30),
+            last_failed_at: null,
+          },
+        ],
+      }),
+    });
+
+    await healthPage.goto();
+
+    await expect(healthPage.section("scheduled")).toContainText(
+      "Whether each job's latest run worked could not be read",
+    );
+  });
+
   test("breaks storage down by owner and lists the orphaned claim", async () => {
     await data.environmentHealth.interceptEnvironmentHealth();
 
