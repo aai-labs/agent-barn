@@ -8,10 +8,16 @@ Related context: [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent
 
 - Delivered: the API can add, update and delete LiteLLM model routes by a fixed route id. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: the OpenRouter key still comes only from `OPENROUTER_API_KEY`; nothing registers a database route yet.
-- Next: slice 1, PR 4 — the `llm_provider_connection` table and its seeded `openrouter` row.
+- Next: slice 1, PR 5 — the OpenRouter key status for Platform Administrators.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 4
+
+- Delivered: table `llm_provider_connection` (migration `22b93965859f`), seeded with the `openrouter` connection and no key. Nothing reads or writes it yet.
+- Changed: the database refuses a slug that is taken (deleted connections included), malformed, or contains a slash; an unknown provider type or key source; and a key without its last four characters and source, or the reverse. The test reset re-seeds the row.
+- Follow-up: PR 5 reads the row to report the key status.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 3
 
