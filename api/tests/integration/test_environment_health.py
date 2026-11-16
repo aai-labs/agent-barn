@@ -7,6 +7,7 @@ what each scenario says; the rules for reading their objects are covered field b
 """
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4, uuid7
@@ -936,6 +937,39 @@ def test_a_failed_runtime_query_keeps_the_firing_alerts():
         assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
         assert_that([a["name"] for a in body["alerts"]], contains_exactly("APIDown"))
         assert_that(body["level"], equal_to("critical"))
+
+
+def test_the_cluster_is_read_all_at_once_not_one_source_after_another():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-together@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        reads = [
+            "list_pods",
+            "list_deployments",
+            "list_stateful_sets",
+            "list_replica_sets",
+            "list_pvcs",
+            "list_services",
+            "list_cron_jobs",
+            "list_namespace_jobs",
+            "list_resource_quotas",
+            "list_warning_events",
+        ]
+        # Each read answers only once every read has started: one after another, the first
+        # waits out the barrier and every source reads as unavailable.
+        barrier = threading.Barrier(len(reads), timeout=10)
+
+        def together(*_args, **_kwargs):
+            barrier.wait()
+            return []
+
+        for method in reads:
+            getattr(k8s, method).side_effect = together
+
+        body = _get(context).json()
+
+        sources = _sources(body)
+        assert_that({sources[source] for source in sources if source != "prometheus"}, equal_to({"available"}))
 
 
 def test_a_lost_volume_makes_the_overall_health_a_warning():
