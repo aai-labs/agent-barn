@@ -109,6 +109,20 @@ fixture now copies its inputs into root-owned server files and retains
 the fix and returned `owner-fixture-success` afterwards. Both actual runtime
 SSH contracts passed again (2 tests); the production signing code is unchanged.
 
+The same CI API run also found two stale contract expectations: the reviewed v1
+inventory omitted the seven new SSH operations, and the ConfigMap scanner treated
+the token-guarded relay as mandatory for SSH-disabled Agents. These expectations
+and the public API resource guide were updated at
+`c1b1200b08e6f1369045d666f2c1f8662b7776ff`. The focused regression run passed
+47 checks; API lint, format, and type checks passed again. Repository CI must
+still rerun before merge; this is not a claim that the full suite passed locally.
+
+```bash
+PYTEST_XDIST_AUTO_NUM_WORKERS=2 REDIS_URL=redis://127.0.0.1:1/0 \
+PYTEST_ADDOPTS='-k "test_ssh or runtime_config_map_contract or public_api_contract" --tb=short --show-capture=no -q' \
+make test-api
+```
+
 ## Automated verification at the tested commit
 
 ```bash
