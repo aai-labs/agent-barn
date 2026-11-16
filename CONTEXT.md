@@ -427,6 +427,14 @@ _Avoid_: event, activity, tool call
 The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value that an Organization may override. A write without an Outcome Type, or with one no longer in the catalogue, is unclassified and never valued. A classified write is valued only when it succeeded. With `UNKNOWN` status it is unverified, and with `ERROR` status it is failed.
 _Avoid_: action type, category
 
+**Anomaly**:
+Something an Agent did that was unusual for that Agent: a rate well above its normal (model tokens or calls, tool calls, failed tool calls, writes), an hourly cap passed, or the first use of a tool, integration, integration action or destination in its baseline window. A rate Anomaly lasts while the deviation does; a first use is a single moment. Recorded only for Organizations that turned anomaly detection on. See [`anomaly-detection.md`](docs/features/anomaly-detection.md).
+_Avoid_: alert, incident, event
+
+**Baseline window**:
+The 14 days before the hour an anomaly check judges, from which an Agent's normal is learned: the median and spread of each rate over its active hours, and what it used. It slides with every check.
+_Avoid_: training period, history
+
 **Request**:
 One piece of work asked of an Agent: an inbound Conversation Message, from a person on any Platform or through Web Chat, or a Webhook Invocation. Scheduled runs are not Requests, though their Tool Calls and spend still count toward an Agent's per-Request figures. See [`business-value.md`](docs/features/business-value.md#organization-activity).
 _Avoid_: Task, job, conversation

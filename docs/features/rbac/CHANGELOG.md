@@ -13,6 +13,13 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Changes
 
+### 2026-11-16 — [AF-453](https://aai-labs.atlassian.net/browse/AF-453) — PR pending — anomaly detection Permissions
+
+- Delivered: `anomaly.read` and `anomaly.manage`, Organization-scoped Permissions granted to Owners and Admins, gating the anomaly detection opt-in, an Agent's Anomalies and learned normal, and its override.
+- Changed: the Permission catalogue gains two rows, inserted by the AF-453 migration with the immutability trigger lifted for those statements only; no Agent Access Role carries them, so a Member who owns an Agent does not see its Anomalies. The anomaly check joins the background-work exception.
+- Verified: migration round-trip (rows present, removed on downgrade), the exact Organization Role matrix, and integration tests for Owner, Admin, Member, a Member who owns the Agent and a Member without access.
+- Follow-up: none.
+
 ### 2026-09-23 — [AF-337](https://aai-labs.atlassian.net/browse/AF-337) — PR pending — spend limit management Permission
 
 - Delivered: `llm_budget.manage`, an Organization-scoped Permission granted to Owners and Admins, gating the Organization's own spend limit, its default Agent spend limit and each Agent's own limit. Reading an Agent's limit uses the Agent's `cost.read`.

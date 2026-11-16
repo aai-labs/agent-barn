@@ -65,6 +65,8 @@ Agent Memory adds `agent.memory.manage` to the locked Agent Owner role, allowing
 
 Agent Tasks add `task.read` to every locked Agent Access Role, so anyone who can view an Agent can read its Tasks, Task Notes and Task Files; it is reported in `allowed_actions` and kept by read-only Personal API Keys. Tasks are written only by their Agent, so no human write Permission exists.
 
+[Anomaly detection](../anomaly-detection.md#authorization) uses the Organization Permissions `anomaly.read` (see an Agent's Anomalies and normal, and whether detection is on) and `anomaly.manage` (turn detection on or off, change an Agent's sensitivity and hourly caps), held only by Owners and Admins. No Agent Access Role carries them: watching Agents is oversight of the Organization, so a Member who created or owns an Agent does not see its Anomalies. The Agent routes resolve the Agent through `AgentAuthorization.require_visible` first (`404` when concealed), then check the Organization grant (`403`).
+
 ## Agent Access
 
 An Agent remains owned by its Organization. Agent Creator is immutable provenance; authority comes from implicit Organization governance or explicit Agent Access.
@@ -146,7 +148,7 @@ Agent Barn Telegram traffic has no user Membership either. Two callers reach it:
 
 These paths are not the background work described below: product users trigger them, so they keep explicit authority checks against the linking Membership rather than running unscoped.
 
-Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified`, and the Sync Engine's `FileSyncRepository` reads and writes run unscoped. The Sync Engine's methods take the Organization and connection from persisted connection rows, never from a caller. The exception holds only while all three of these do:
+Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified`, the Sync Engine's `FileSyncRepository` reads and writes, and the anomaly check (`AnomalyCheckService` with `AnomalyRepository`, and the hourly and stored-since reads it takes from `ToolCallService`, `CostService`, `BusinessValueService` and `AgentService.live_agent_ids`) run unscoped. The Sync Engine's methods take the Organization and connection from persisted connection rows, never from a caller. The exception holds only while all three of these do:
 
 - the method is never reachable from a router
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged
