@@ -4,6 +4,7 @@ from hamcrest import assert_that, close_to, equal_to, has_properties, is_, none
 from api.domains.anomalies.detection import (
     MIN_ACTIVE_DAYS,
     RATE_FLOORS,
+    RateBaseline,
     RateSignal,
     Sensitivity,
     error_rate,
@@ -12,6 +13,13 @@ from api.domains.anomalies.detection import (
     has_enough_history,
     rate_baseline,
 )
+
+
+def _baseline(hourly_values: list[float]) -> RateBaseline:
+    baseline = rate_baseline(hourly_values)
+    if baseline is None:
+        raise AssertionError("expected a baseline for active hours")
+    return baseline
 
 
 def test_baseline_is_the_median_and_scaled_mad_of_active_hours():
@@ -25,7 +33,7 @@ def test_an_agent_with_no_active_hours_has_no_baseline():
 
 
 def test_a_spike_well_above_the_usual_rate_is_flagged():
-    baseline = rate_baseline([100, 110, 90, 105, 95, 100])
+    baseline = _baseline([100, 110, 90, 105, 95, 100])
 
     verdict = evaluate_rate(RateSignal.TOOL_CALLS_PER_HOUR, 400, baseline, Sensitivity.NORMAL)
 
@@ -33,7 +41,7 @@ def test_a_spike_well_above_the_usual_rate_is_flagged():
 
 
 def test_ordinary_variation_is_not_flagged():
-    baseline = rate_baseline([100, 110, 90, 105, 95, 100])
+    baseline = _baseline([100, 110, 90, 105, 95, 100])
 
     verdict = evaluate_rate(RateSignal.TOOL_CALLS_PER_HOUR, 115, baseline, Sensitivity.NORMAL)
 
@@ -42,7 +50,7 @@ def test_ordinary_variation_is_not_flagged():
 
 def test_tiny_numbers_never_flag_even_when_the_baseline_is_zero():
     # An agent that is mostly idle: median 0, MAD 0.
-    baseline = rate_baseline([0, 0, 0, 0, 1])
+    baseline = _baseline([0, 0, 0, 0, 1])
     floor = RATE_FLOORS[RateSignal.TOOL_CALLS_PER_HOUR].min_value
 
     verdict = evaluate_rate(RateSignal.TOOL_CALLS_PER_HOUR, floor - 1, baseline, Sensitivity.HIGH)
@@ -51,7 +59,7 @@ def test_tiny_numbers_never_flag_even_when_the_baseline_is_zero():
 
 
 def test_a_perfectly_steady_agent_still_tolerates_small_changes():
-    baseline = rate_baseline([200] * 20)
+    baseline = _baseline([200] * 20)
 
     verdict = evaluate_rate(RateSignal.LLM_CALLS_PER_HOUR, 220, baseline, Sensitivity.NORMAL)
 
@@ -64,7 +72,7 @@ def test_a_perfectly_steady_agent_still_tolerates_small_changes():
 )
 def test_sensitivity_sets_how_far_above_usual_counts(sensitivity: Sensitivity, flagged: bool):
     # median 100, spread 14.826 -> high flags above ~137, normal ~152, low ~174
-    baseline = rate_baseline([90, 100, 110, 90, 100, 110, 100])
+    baseline = _baseline([90, 100, 110, 90, 100, 110, 100])
 
     verdict = evaluate_rate(RateSignal.TOOL_CALLS_PER_HOUR, 145, baseline, sensitivity)
 
@@ -72,7 +80,7 @@ def test_sensitivity_sets_how_far_above_usual_counts(sensitivity: Sensitivity, f
 
 
 def test_the_threshold_is_reported_with_the_verdict():
-    baseline = rate_baseline([90, 100, 110, 90, 100, 110, 100])
+    baseline = _baseline([90, 100, 110, 90, 100, 110, 100])
 
     verdict = evaluate_rate(RateSignal.TOOL_CALLS_PER_HOUR, 100, baseline, Sensitivity.NORMAL)
 
@@ -88,7 +96,7 @@ def test_error_rate_is_errors_over_calls():
 
 
 def test_an_error_rate_jump_is_flagged():
-    baseline = rate_baseline([0.0, 0.05, 0.1, 0.0, 0.05])
+    baseline = _baseline([0.0, 0.05, 0.1, 0.0, 0.05])
 
     verdict = evaluate_rate(RateSignal.TOOL_ERROR_RATE, 0.8, baseline, Sensitivity.NORMAL)
 
@@ -96,7 +104,7 @@ def test_an_error_rate_jump_is_flagged():
 
 
 def test_an_error_rate_below_its_floor_is_not_flagged():
-    baseline = rate_baseline([0.0, 0.0, 0.0, 0.0])
+    baseline = _baseline([0.0, 0.0, 0.0, 0.0])
     floor = RATE_FLOORS[RateSignal.TOOL_ERROR_RATE].min_value
 
     verdict = evaluate_rate(RateSignal.TOOL_ERROR_RATE, floor - 0.01, baseline, Sensitivity.HIGH)

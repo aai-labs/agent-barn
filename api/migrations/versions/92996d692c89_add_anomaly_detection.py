@@ -23,6 +23,7 @@ from uuid import UUID
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.schema import SchemaItem
 
 revision: str = "92996d692c89"
 down_revision: str | Sequence[str] | None = "b7e2c41d9a63"
@@ -71,7 +72,7 @@ def _base_columns() -> list[sa.Column]:
     ]
 
 
-def _agent_columns(table: str) -> list[sa.SchemaItem]:
+def _agent_columns(table: str) -> list[SchemaItem]:
     return [
         *_base_columns(),
         sa.Column("agent_id", sa.Uuid(), nullable=False),

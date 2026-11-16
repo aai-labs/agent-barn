@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from hamcrest import assert_that, contains_exactly, contains_inanyorder, empty, equal_to, has_length, has_properties
+from hamcrest import assert_that, contains_exactly, empty, equal_to, has_length, has_properties
 from sqlmodel import Session, col, select
 
 from api.domains.anomalies.models import (
@@ -398,12 +398,10 @@ def test_first_use_of_an_action_on_a_known_integration_is_recorded():
         _learned_then(context, _action(context.agent, NOW + timedelta(minutes=1), verb="delete", is_write=True))
 
         assert_that(
-            (
-                _anomalies(context, AnomalySignal.NEW_INTEGRATION_ACTION),
-                _anomalies(context, AnomalySignal.NEW_INTEGRATION),
-            ),
-            contains_exactly(contains_exactly(has_properties(subject="crm delete")), empty()),
+            _anomalies(context, AnomalySignal.NEW_INTEGRATION_ACTION),
+            contains_exactly(has_properties(subject="crm delete")),
         )
+        assert_that(_anomalies(context, AnomalySignal.NEW_INTEGRATION), empty())
 
 
 def test_first_use_of_an_integration_is_recorded_once_not_also_as_an_action():
@@ -412,7 +410,7 @@ def test_first_use_of_an_integration_is_recorded_once_not_also_as_an_action():
 
         assert_that(
             [(anomaly.signal, anomaly.subject) for anomaly in _anomalies(context)],
-            contains_inanyorder((AnomalySignal.NEW_INTEGRATION.value, "erp")),
+            equal_to([(AnomalySignal.NEW_INTEGRATION.value, "erp")]),
         )
 
 
