@@ -1,12 +1,13 @@
 "use client";
 
-import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, Layers, Sparkles, Workflow } from "lucide-react";
+import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, KeyRound, Layers, Sparkles, Workflow } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { AgentSizesSettings } from "@/features/agent-sizes/components/agent-sizes-settings";
 import { PlatformBillingSettings } from "@/features/billing/components/platform-billing-settings";
+import { PlatformLlmProviderSettings } from "@/features/llm-providers/components/platform-llm-provider-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformOrganizationSettings } from "@/features/organizations/components/platform-organization-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
@@ -18,6 +19,11 @@ export const PLATFORM_SETTINGS_SECTIONS = {
     label: "Agent Memory",
     Icon: Brain,
     description: "Long-term memory settings shared by every Agent and Organization.",
+  },
+  "llm-providers": {
+    label: "LLM providers",
+    Icon: KeyRound,
+    description: "The provider accounts Agents reach models through, for every Organization.",
   },
   "agent-sizes": {
     label: "Agent sizes",
@@ -76,6 +82,7 @@ export function PlatformSettings() {
         description={section.description}
       >
         {active === "agent-memory" && <PlatformMemorySettings />}
+        {active === "llm-providers" && <PlatformLlmProviderSettings />}
         {active === "agent-sizes" && <AgentSizesSettings />}
         {active === "organizations" && <PlatformOrganizationSettings />}
         {active === "workflows" && <PlatformWorkflowSettings />}

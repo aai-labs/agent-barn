@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/berriai/litellm
-  tag: v1.96.2
+  tag: v1.101.6
   pullPolicy: IfNotPresent
 
 replicaCount: 1
@@ -9,7 +9,14 @@ replicaCount: 1
 #   LITELLM_MASTER_KEY, OPENROUTER_API_KEY, DATABASE_URL
 secretName: litellm
 
+# Name of the k8s Secret containing LITELLM_SALT_KEY. Kept apart from
+# secretName because the API reads that Secret and must never see the salt.
+saltSecretName: litellm-salt
+
 masterKey: ""
+# Encrypts the provider keys LiteLLM stores in its database. Set once and never
+# change it: stored routes cannot be decrypted under a different value.
+saltKey: ""
 openrouterApiKey: ""
 databaseUrl: ""
 

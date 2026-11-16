@@ -16,6 +16,7 @@ from api.domains.costs.models import (
 )
 from api.domains.costs.repository import CostRepository
 from api.domains.costs.service import build_cost_summary, build_monthly_costs, daily_burn_rate
+from api.domains.llm_providers.lookup import OpenRouterKeyLookup
 from api.domains.platform_admin.models import StatsWindow
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -38,6 +39,7 @@ class PlatformCostService:
 
     repository: CostRepository
     openrouter: OpenRouterClient
+    keys: OpenRouterKeyLookup
 
     def get_summary(self, window: StatsWindow, filters: CostFilter) -> PlatformCostSummaryRead:
         base = build_cost_summary(self.repository, window, filters)
@@ -45,7 +47,7 @@ class PlatformCostService:
         organizations = self.repository.spend_by_organization(window, filters)
 
         daily_burn = daily_burn_rate(base.total_spend, window.start, window.end)
-        credits = self.openrouter.get_credits()
+        credits = self.openrouter.get_credits(self.keys.api_key())
 
         return PlatformCostSummaryRead(
             **base.model_dump(),

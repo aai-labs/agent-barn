@@ -169,8 +169,10 @@ AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # derives it from API_PORT; deployments default to the in-cluster API service.
 # WORKFLOW_RUNTIME_BASE_URL=
 
-# OpenRouter API key used to fetch the model catalogue for the picker. Optional —
-# the public catalogue endpoint works unauthenticated.
+# Optional. OpenRouter API key LiteLLM routes with, and the API uses for the credit
+# balance (cost page and metrics) and to look up costs LiteLLM missed, until a
+# Platform Administrator saves a key in Platform Admin settings. The model
+# catalogue is fetched without it.
 OPENROUTER_API_KEY=
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
 # e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
@@ -180,10 +182,13 @@ AGENT_MODEL_ALLOWLIST=
 # Only needed to run agents locally (`./run.sh` sets this up for you).
 # See README → "Local Kubernetes (k3d) dev environment".
 
-# Stable admin key for the local LiteLLM proxy, e.g. sk-$(openssl rand -hex 16).
-# LiteLLM encrypts the virtual keys it stores with this value, so changing it
-# between runs breaks agents created under the old key. Set once and leave it.
+# Admin key for the local LiteLLM proxy, e.g. sk-$(openssl rand -hex 16).
+# The API reads it from the litellm Secret that docker/k3d/k3d-up.sh seeds.
 LITELLM_MASTER_KEY=
+# Encrypts the provider keys LiteLLM stores in its database, e.g.
+# $(openssl rand -hex 32). A different value cannot decrypt them. Set once and
+# never change it.
+LITELLM_SALT_KEY=
 
 # Full image refs the agent pods request. Each tag must equal the matching
 # openclaw-base/VERSION and hermes-base/VERSION; docker/k3d/k3d-load-images.sh
