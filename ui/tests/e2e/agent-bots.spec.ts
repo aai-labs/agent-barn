@@ -310,6 +310,42 @@ test.describe("Bot pages", () => {
     expect(onBot).toEqual([]);
   });
 
+  test("Apply & Restart on a bot in error restarts its running parent", async ({ page }) => {
+    const erroredSales = { ...sales, status: "ERROR" };
+    const { data } = await setUp(page, running);
+    await data.agents.interceptGetAgentRequest({ agentId: SALES_ID, body: erroredSales });
+    await data.agents.interceptGetAgentConfigurationRequest({ agentId: SALES_ID });
+    await data.agents.interceptStopAgentRequest({ body: { ...running, status: "STOPPED" } });
+    await data.agents.interceptStartAgentRequest({ body: running });
+    await data.agents.interceptUpdateAgentRequest({ agentId: SALES_ID, body: erroredSales });
+    await goto(page, SALES_ID, "/configuration?section=profile");
+    const stop = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/stop`);
+    const start = page.waitForRequest(`**/agents/${MOCK_AGENT_ID}/start`);
+
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Agent name").fill("Sales desk");
+    const footer = page.locator('section[aria-label="Profile"] footer');
+    await footer.getByRole("button", { name: "Apply & Restart", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
+
+    await stop;
+    await start;
+  });
+
+  test("a bot in error under a stopped parent applies without a restart", async ({ page }) => {
+    const erroredSales = { ...sales, status: "ERROR" };
+    const { data } = await setUp(page, { ...parent, status: "ERROR" });
+    await data.agents.interceptGetAgentRequest({ agentId: SALES_ID, body: erroredSales });
+    await data.agents.interceptGetAgentConfigurationRequest({ agentId: SALES_ID });
+    await data.agents.interceptUpdateAgentRequest({ agentId: SALES_ID, body: erroredSales });
+    await goto(page, SALES_ID, "/configuration?section=profile");
+
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(
+      page.locator('section[aria-label="Profile"] footer').getByRole("button", { name: "Apply", exact: true }),
+    ).toBeVisible();
+  });
+
   test("saving credentials on a running bot restarts its parent", async ({ page }) => {
     const { data } = await setUp(page, running);
     await data.agents.interceptGetAgentRequest({

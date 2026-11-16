@@ -52,7 +52,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const [customDrafts, setCustomDrafts] = useState<ConnectionDraft[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
   const updateAgent = useUpdateAgent();
-  const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const { applyAndRestart, restarts } = useAgentApplyAndRestart(agent);
   const isolation = useIntegrationIsolation(agent.id);
   const startAgent = useStartAgent();
   const [drafts, setDrafts] = useState<IntegrationDraft[]>(() => setupDrafts(agent));
@@ -78,7 +78,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const hasChanges = hasCustomChanges || hasCredentialChanges || changedPolicies.length > 0 || restartRequired || (failed && (drafts.length > 0 || customDrafts.length > 0));
   const pending = saving || updateAgent.isPending || isolation.isPending || startAgent.isPending || customApi.connectionMutation.isPending || customApi.batchMutation.isPending;
   const canRestart = agent.allowedActions.includes("agent.lifecycle.manage");
-  const restart = restartRequired || agent.status === "RUNNING" || (failed && (drafts.length > 0 || customDrafts.length > 0));
+  const restart = restartRequired || restarts || (failed && (drafts.length > 0 || customDrafts.length > 0));
 
   function beginEditing() {
     if (customApi.isLoadingConnections || customApi.connectionsError) return;

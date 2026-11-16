@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-16 — AF-425 — Apply & Restart on an errored Bot
+
+- Fixed: the settings sections decided whether to restart from the Bot's own status. A Bot in ERROR under a RUNNING Parent Agent got a plain Apply, so it stayed in error after its settings were fixed, and the credentials section sent `restart: false`, which the server refuses for a running pod. `useAgentApplyAndRestart` now returns `restarts`, true for a running Agent or a Bot in error whose Parent Agent runs, and every settings section uses it for its label and its restart.
+- Changed: a new, stopped Bot under a running Parent Agent still applies without a restart; it is served at the next restart.
+- Follow-up: the end-to-end run.
+
 ### 2026-11-16 — AF-425 — Bot access needs read on the Parent Agent
 
 - Fixed: the rule that a Bot is shared only with Members who can read its Parent Agent was checked only when access was granted. Removing a Member's Parent Agent grant, or putting the Parent Agent back to Restricted, left the Bot visible through its own grant or General Access. `agent_scope_predicates` and `find_agent_permissions` now give a scoped Membership nothing on a Bot unless it can read the Parent Agent. Organization Owners and Admins are unaffected.

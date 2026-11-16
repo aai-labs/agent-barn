@@ -1,6 +1,6 @@
 "use client";
 
-import { useFetchAgent } from "./use-agent";
+import { useAgent, useFetchAgent } from "./use-agent";
 import { useStartAgent } from "./use-start-agent";
 import { useStopAgent } from "./use-stop-agent";
 import type { Agent } from "../schemas";
@@ -11,12 +11,14 @@ export function useAgentApplyAndRestart(
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
   const fetchAgent = useFetchAgent();
+  const { agent: parent } = useAgent(agent.parentAgentId ?? "");
   const podId = agent.parentAgentId ?? agent.id;
+  const restarts = agent.status === "RUNNING" || (agent.status === "ERROR" && parent?.status === "RUNNING");
 
   async function applyAndRestart(
     apply: (stoppedAgent: Pick<Agent, "id" | "status" | "updatedAt">) => Promise<void>,
   ) {
-    if (agent.status !== "RUNNING") {
+    if (!restarts) {
       await apply(agent);
       return;
     }
@@ -32,6 +34,7 @@ export function useAgentApplyAndRestart(
 
   return {
     applyAndRestart,
+    restarts,
     isPending: stopAgent.isPending || startAgent.isPending,
   };
 }
