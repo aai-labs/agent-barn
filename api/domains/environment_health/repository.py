@@ -26,21 +26,27 @@ _KSM = 'job="kube-state-metrics"'
 
 
 def restart_history_query(window_days: int) -> str:
-    """Each pod's restarts over the window, and whether any container in it was OOM-killed.
+    """Each pod's restarts over the window, and whether a container in it was OOM-killed in it.
 
-    Two halves tagged by `signal` so `or` keeps both for the same pod. The restart counter
-    survives a container's restarts but not the pod, so a pod replaced in the window starts
-    again from zero; that is the pod the page lists, so its own count is the right one.
+    Two halves tagged by `signal` so `or` keeps both for the same pod. Both are by `uid` as
+    well as name, so a StatefulSet pod replaced under the same name does not inherit the old
+    pod's restarts.
+
+    The termination-reason gauge stays at 1 for as long as a container's last end was an OOM
+    kill, however long ago, so on its own it is not "this week". It counts only for a
+    container that also restarted within the window.
     """
     window = f"{window_days}d"
-    restarts = f"sum by (pod) (increase(kube_pod_container_status_restarts_total{{{_KSM}}}[{window}])) > 0"
+    restarted = f"increase(kube_pod_container_status_restarts_total{{{_KSM}}}[{window}]) > 0"
+    restarts = f"sum by (pod, uid) ({restarted})"
     oom = (
-        "max by (pod) (max_over_time("
-        f'kube_pod_container_status_last_terminated_reason{{{_KSM}, reason="OOMKilled"}}[{window}])) > 0'
+        f"max by (pod, uid) (({restarted}) * on (namespace, pod, uid, container) group_left "
+        "max by (namespace, pod, uid, container) (max_over_time("
+        f'kube_pod_container_status_last_terminated_reason{{{_KSM}, reason="OOMKilled"}}[{window}])))'
     )
     return (
         f'label_replace({restarts}, "signal", "restarts", "", "")'
-        f' or label_replace({oom}, "signal", "oom_killed", "", "")'
+        f' or label_replace({oom} > 0, "signal", "oom_killed", "", "")'
     )
 
 

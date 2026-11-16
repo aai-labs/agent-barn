@@ -460,10 +460,11 @@ class PodRestarts(NamedTuple):
 
 
 def pod_restarts(samples: Iterable[PrometheusSample]) -> dict[str, PodRestarts]:
-    """Restart history by pod name, from the two tagged halves of the restart query.
+    """Restart history by pod uid, from the two tagged halves of the restart query.
 
-    Only a pod name and two numbers are kept. A sample whose pod is not a valid object name,
-    or whose tag is neither half, is dropped.
+    Keyed by the pod's uid, or by its name when the sample carries no valid uid (an older
+    kube-state-metrics). Only that key and two numbers are kept. A sample whose pod is not a
+    valid object name, or whose tag is neither half, is dropped.
     """
     restarts: dict[str, int] = {}
     oom_killed: set[str] = set()
@@ -472,15 +473,23 @@ def pod_restarts(samples: Iterable[PrometheusSample]) -> dict[str, PodRestarts]:
         signal = sample.labels.get("signal")
         if name is None:
             continue
+        uid = _uuid(sample.labels.get("uid"))
+        key = str(uid) if uid else name
         if signal == "restarts":
             # `increase()` extrapolates, so a count of 15 can come back as 14.97.
-            restarts[name] = round(sample.value)
+            restarts[key] = restarts.get(key, 0) + round(sample.value)
         elif signal == "oom_killed" and sample.value > 0:
-            oom_killed.add(name)
+            oom_killed.add(key)
     return {
-        name: PodRestarts(restarts=restarts.get(name, 0), oom_killed=name in oom_killed)
-        for name in restarts.keys() | oom_killed
+        key: PodRestarts(restarts=restarts.get(key, 0), oom_killed=key in oom_killed)
+        for key in restarts.keys() | oom_killed
     }
+
+
+def _restart_history(pod: V1Pod, restarts: Mapping[str, PodRestarts]) -> PodRestarts | None:
+    """The pod's history by its uid, or by its name when the history is keyed by name."""
+    uid = pod.metadata.uid
+    return (restarts.get(uid) if uid else None) or restarts.get(pod.metadata.name or "")
 
 
 def agent_pod_readiness(pods: Sequence[V1Pod]) -> dict[UUID, bool]:
@@ -562,7 +571,7 @@ def workloads(
         starting = created is not None and now - created < STARTUP_GRACE
         # A restart with no recorded time is treated as recent: unknown is not "long ago".
         recently_restarted = last_restart_at is None or now - last_restart_at <= RECENT_RESTART_WINDOW
-        history = restarts.get(pod.metadata.name) if restarts is not None else None
+        history = _restart_history(pod, restarts) if restarts is not None else None
         if history is not None:
             repeatedly_restarting = history.restarts >= REPEATED_RESTARTS
         else:
