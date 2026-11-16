@@ -210,3 +210,5 @@ def test_the_instructions_say_how_to_keep_a_task_in_progress_across_turns():
     instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
     assert "set it `in_progress` with `keep: true`" in instructions
     assert "A note alone does not keep it in progress" in instructions
+    assert "A new request gets its own Task, even while another is in progress" in instructions
+    assert "set `done` without `keep`" in instructions

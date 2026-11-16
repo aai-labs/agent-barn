@@ -558,9 +558,10 @@ export default {
       const lines = await openTaskLines();
       if (lines.length) {
         parts.push(
-          `Your open and latest finished Tasks:\n${lines.join("\n")}\nIf the request continues one of these, ` +
-            "keep using it with the agentbarn_task tool rather than creating another: set it to in_progress, with " +
-            "keep: true if the work still continues after this turn.",
+          `Your open and latest finished Tasks:\n${lines.join("\n")}\nKeep using one of these only when the ` +
+            "request is the same piece of work: set it to in_progress with the agentbarn_task tool, with keep: true " +
+            "if the work still continues after this turn. A new request gets its own Task, even while another is " +
+            "in progress.",
         );
       }
       const reminder = nextTurnReminders.get(ctx.sessionKey ?? "");

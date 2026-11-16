@@ -686,8 +686,9 @@ def _on_pre_llm_call(session_id="", turn_id="", user_message="", parent_session_
         parts.append(
             "[Agent Barn] Your open and latest finished Tasks:\n"
             + "\n".join(lines)
-            + "\nIf the request continues one of these, keep using it with the agentbarn_task tool rather than "
-            "creating another: set it to in_progress, with keep: true if the work still continues after this turn."
+            + "\nKeep using one of these only when the request is the same piece of work: set it to in_progress "
+            "with the agentbarn_task tool, with keep: true if the work still continues after this turn. A new "
+            "request gets its own Task, even while another is in progress."
         )
     with _lock:
         reminder = _next_turn_reminders.pop(session_id, None)

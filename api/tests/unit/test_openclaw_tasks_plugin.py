@@ -277,6 +277,8 @@ def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     assert_that(context, contains_string("task-1 [in_progress] Reconcile invoices"))
     assert_that(context, contains_string("task-2 [open] Draft summary"))
     assert_that(context, contains_string("task-3 [done] Old work"))
+    assert_that(context, contains_string("only when the request is the same piece of work"))
+    assert_that(context, contains_string("A new request gets its own Task, even while another is in progress"))
 
 
 def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path):
