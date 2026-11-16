@@ -79,6 +79,13 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-16 — AF-445 — `agentbarn-bot-env` names the agent from its session and pins a Bot's unrouted posts
+
+- Fixed: both `agentbarn-bot-env` hooks refused every command and message when the hook context had no `agentId`, which OpenClaw 2026.8.2 treats as optional, so the Parent Agent's own calls failed too. They now take the agent from `agent:<id>:` in the session key, as the other plugins do, and refuse only when neither names one. They never fall back to the Parent Agent.
+- Fixed: a Bot's message, or scheduled job delivery, with no platform, `last` or `current` went out unpinned. With no turn account, as in a scheduled run or Web Chat, OpenClaw then picked the platform's default account, which is the Parent Agent's. A Bot's route is now always pinned to its own account, and OpenClaw refuses that account on a platform where the Bot has none. The Parent Agent's unrouted posts are unchanged.
+- Changed: none for scheduled jobs that name another agent. Verified in the pinned 2026.8.2 core that the cron tool sets a session's job to the calling agent and refuses another, and that the gateway checks add, update, remove and run against the caller's agent.
+- Follow-up: remove every multi-agent setting with the last Bot.
+
 ### 2026-11-16 — AF-445 — AF-425 merge (review fixes, tiers)
 
 - Merged: `AF-425-hermes-multi-persona-feat`, bringing its review fixes, tier holds on Bots and staging's tiers, subscriptions and usage.

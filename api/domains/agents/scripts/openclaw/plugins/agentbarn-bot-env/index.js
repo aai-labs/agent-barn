@@ -8,6 +8,7 @@ const CODE_MODE_EXEC = "code_mode_exec";
 const DEFAULT_ACCOUNT = "default";
 const UNROUTED_CHANNELS = new Set(["", "last", "current"]);
 const SCHEDULER_WRITES = new Set(["add", "update"]);
+const SESSION_AGENT = /^agent:([^:]+):/;
 const SHARED = new Set(["FIRECRAWL_API_KEY", "FIRECRAWL_API_URL", "LITELLM_BASE_URL", "LITELLM_PROXY_TARGET", "LLM_PROXY_PORT"]);
 
 function readSecret(agentId) {
@@ -35,6 +36,11 @@ function botEnv(agentId, parentNames) {
   return env;
 }
 
+function agentOf(ctx) {
+  if (ctx?.agentId) return ctx.agentId;
+  return SESSION_AGENT.exec(ctx?.sessionKey ?? "")?.[1];
+}
+
 function ownAccount(agentId) {
   return agentId === MAIN ? DEFAULT_ACCOUNT : agentId;
 }
@@ -44,8 +50,10 @@ function pinRoute(route, agentId, platforms) {
   const own = ownAccount(agentId);
   if (route.accountId && route.accountId !== own) return { refused: "another agent's account" };
   const channel = String(route.channel || "").trim().toLowerCase();
-  if (UNROUTED_CHANNELS.has(channel)) return { route };
-  if (!platforms.includes(channel)) return { refused: `no account of its own on ${channel}` };
+  if (UNROUTED_CHANNELS.has(channel) && agentId === MAIN) return { route };
+  if (!UNROUTED_CHANNELS.has(channel) && !platforms.includes(channel)) {
+    return { refused: `no account of its own on ${channel}` };
+  }
   return { route: { ...route, accountId: own }, changed: route.accountId !== own };
 }
 
@@ -93,7 +101,7 @@ export default {
       "before_tool_call",
       (event, ctx) => {
         if (event.toolName !== "exec") return undefined;
-        const agentId = ctx?.agentId;
+        const agentId = agentOf(ctx);
         if (!agentId) throw new Error("agentbarn-bot-env: no agent for this command");
         if (event.toolKind === CODE_MODE_EXEC) {
           if (agentId === MAIN) return undefined;
@@ -108,7 +116,7 @@ export default {
     api.on(
       "before_tool_call",
       (event, ctx) => {
-        const agentId = ctx?.agentId;
+        const agentId = agentOf(ctx);
         if (!agentId) throw new Error("agentbarn-bot-env: no agent for this message");
         const platforms = Array.isArray(platformsByAgent[agentId]) ? platformsByAgent[agentId] : [];
         const params = event.params || {};

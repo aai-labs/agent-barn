@@ -134,6 +134,17 @@ def test_a_command_with_no_known_agent_or_a_bad_secret_is_refused(tmp_path, agen
     assert "error" in outcome
 
 
+def test_the_agent_comes_from_the_session_key_when_the_hook_names_none(tmp_path):
+    calls = [
+        {"event": {"toolName": "exec", "params": {"command": "echo hi"}}, "ctx": {"sessionKey": key}}
+        for key in (f"agent:{BOT_A}:main", "agent:main:telegram:direct:1")
+    ]
+    bot, parent = _run(tmp_path, calls)["results"]
+
+    assert _env(bot)["AGENT_ID"] == BOT_A
+    assert _env(parent) == PARENT_ENV
+
+
 def test_code_mode_is_refused_for_a_bot_and_left_alone_for_the_parent(tmp_path):
     results = _run(tmp_path, [_exec(BOT_A, toolKind="code_mode_exec"), _exec("main", toolKind="code_mode_exec")])[
         "results"
@@ -180,8 +191,16 @@ def test_a_message_on_a_platform_the_agent_is_on_is_sent_from_its_own_account(tm
     assert _params(results[1])["accountId"] == "default"
 
 
-def test_a_message_without_a_channel_replies_where_the_conversation_is(tmp_path):
-    outcome = _run(tmp_path, [_tool(BOT_A, "message", {"action": "send", "message": "hi"})])["results"][0]
+def test_a_bots_message_without_a_channel_is_still_sent_from_its_own_account(tmp_path):
+    params = {"action": "send", "target": "channel:C123", "message": "hi"}
+    outcome = _run(tmp_path, [_tool(BOT_A, "message", params)])["results"][0]
+
+    assert _params(outcome) == {**params, "accountId": BOT_A}
+
+
+def test_the_parents_message_without_a_channel_is_left_alone(tmp_path):
+    params = {"action": "send", "target": "channel:C123", "message": "hi"}
+    outcome = _run(tmp_path, [_tool("main", "message", params)])["results"][0]
 
     assert outcome == {"result": None}
 
@@ -240,18 +259,17 @@ def test_a_scheduled_job_cannot_deliver_from_another_agents_account(tmp_path, jo
     assert _blocked(outcome)
 
 
-def test_scheduler_reads_and_a_job_without_a_channel_are_left_alone(tmp_path):
-    results = _run(
-        tmp_path,
-        [
-            _tool(BOT_A, "automations", {"action": "list"}),
-            _tool(
-                BOT_A, "automations", {"action": "add", "job": {"delivery": {"mode": "announce", "channel": "last"}}}
-            ),
-        ],
-    )["results"]
+def test_scheduler_reads_are_left_alone(tmp_path):
+    outcome = _run(tmp_path, [_tool(BOT_A, "automations", {"action": "list"})])["results"][0]
 
-    assert results == [{"result": None}, {"result": None}]
+    assert outcome == {"result": None}
+
+
+def test_a_bots_job_without_a_channel_still_delivers_from_its_own_account(tmp_path):
+    job = {"delivery": {"mode": "announce", "channel": "last"}}
+    outcome = _run(tmp_path, [_tool(BOT_A, "automations", {"action": "add", "job": job})])["results"][0]
+
+    assert _params(outcome)["job"]["delivery"] == {"mode": "announce", "channel": "last", "accountId": BOT_A}
 
 
 def test_a_message_from_no_known_agent_is_refused(tmp_path):
