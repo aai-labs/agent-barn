@@ -26,6 +26,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.repository import OutboxMessageRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import Pagination
 
 
 @dataclass(frozen=True)
@@ -293,6 +294,22 @@ class AnomalyRepository:
         with Session(self.delegate.engine) as session:
             session.exec(statement)  # type: ignore[call-overload]
             session.commit()
+
+    def list_anomalies(self, agent_id: UUID, pagination: Pagination) -> tuple[list[AgentAnomaly], int]:
+        """One Agent's Anomalies, most recently started first. The caller has already
+        authorized the Agent."""
+        with Session(self.delegate.engine) as session:
+            total = session.exec(
+                select(sa.func.count()).select_from(AgentAnomaly).where(col(AgentAnomaly.agent_id) == agent_id)
+            ).one()
+            items = session.exec(
+                select(AgentAnomaly)
+                .where(col(AgentAnomaly.agent_id) == agent_id)
+                .order_by(col(AgentAnomaly.started_at).desc(), col(AgentAnomaly.id).desc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
+            ).all()
+            return list(items), int(total)
 
     def seen_since(self, agent_id: UUID, since: datetime) -> list[AgentActivitySeen]:
         with Session(self.delegate.engine) as session:
