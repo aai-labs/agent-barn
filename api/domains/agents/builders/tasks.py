@@ -37,6 +37,11 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
   ones and the latest finished ones). If the request continues one, keep using
   it (set a finished one back to `in_progress`); otherwise `create` one with a
   short title.
+- If the work continues in a later turn and is not waiting on the user (for
+  example a job spread over several messages), set it `in_progress` with
+  `keep: true` so it stays in progress after this turn. When you work on it again,
+  set it `in_progress` again, with `keep: true` until the work is finished, and
+  set `done` when it is. A note alone does not keep it in progress.
 - The Task you worked on is marked `done` when your turn ends. Files you write
   with your file-writing tool, and files you publish with `agentbarn-artifacts`,
   are attached to it for you. A file you produce another way, such as by running

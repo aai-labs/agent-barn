@@ -204,3 +204,9 @@ def test_the_instructions_leave_closing_and_attaching_to_the_plugin():
     assert "is marked `done` when your turn ends" in instructions
     assert "Files you write with your file-writing tool, and files you publish with" in instructions
     assert "attach it yourself if it is part of the result" in instructions
+
+
+def test_the_instructions_say_how_to_keep_a_task_in_progress_across_turns():
+    instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
+    assert "set it `in_progress` with `keep: true`" in instructions
+    assert "A note alone does not keep it in progress" in instructions
