@@ -160,6 +160,10 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**LLM Provider Connection**:
+A model provider account Agent Barn reaches models through, with the key it uses, kept by Platform Administrators for every Organization. Agents never hold its key; they reach it through the model proxy with their own keys.
+_Avoid_: provider key, LLM credential, model provider setting
+
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend

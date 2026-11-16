@@ -2,16 +2,22 @@
 
 Status: Active
 Epic: AF-447
-Related context: [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent-settings.md), [`../../guidelines/operations.md`](../../guidelines/operations.md)
+Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md`](../../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md), [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent-settings.md), [`../../guidelines/operations.md`](../../guidelines/operations.md)
 
 ## Current state
 
-- Delivered: a Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
+- Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- Next: slice 1, PR 11 — the feature doc, `docs/INDEX.md`, the `CONTEXT.md` term and the ADR.
+- Next: the slice 1 demo on local k3d with read-only LiteLLM checks (route order, persistence across a LiteLLM restart, `/model/info` never returning the key), then slice 2, other provider connections.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 11
+
+- Delivered: slice 1 is complete. [`llm-providers.md`](../llm-providers.md) documents the LLM Provider Connection, its invariants, the LiteLLM routes, the API and UI, and the move off `OPENROUTER_API_KEY`; the [ADR](../../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md) records why provider keys are platform data synced to LiteLLM.
+- Changed: `docs/INDEX.md` routes the feature doc and this change log; `CONTEXT.md` defines LLM Provider Connection.
+- Follow-up: the k3d demo and read-only LiteLLM checks listed under Current state.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 10
 
