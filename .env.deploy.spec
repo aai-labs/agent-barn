@@ -68,7 +68,9 @@ LITELLM_MASTER_KEY=
 # cannot decrypt them, so set it once and never change it. Generate with:
 #   openssl rand -hex 32
 LITELLM_SALT_KEY=
-# Real key from your OpenRouter dashboard (sk-or-...), not generated locally.
+# Optional. Real key from your OpenRouter dashboard (sk-or-...), not generated
+# locally. Used until a Platform Administrator saves a key in Platform Admin
+# settings; leave it empty once one is saved.
 OPENROUTER_API_KEY=
 
 # ── API secrets ──────────────────────────────────────────────────────────────

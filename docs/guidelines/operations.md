@@ -85,6 +85,19 @@ LiteLLM's model store is on (`store_model_in_db: true`), so model routes the API
 - Never change it. LiteLLM cannot decrypt stored provider keys under a different value. If it was changed, restore the previous value; otherwise every stored provider key must be saved again so LiteLLM re-encrypts it.
 - The config-file OpenRouter route (`OPENROUTER_API_KEY`) stays at `order: 2` and is rendered only while that key is set. LiteLLM sends requests to the lowest-order healthy route, so a healthy database route at `order: 1` is used instead.
 
+### OpenRouter key
+
+The OpenRouter key is saved by a Platform Administrator in Platform Admin settings. `OPENROUTER_API_KEY` is optional: while it is set, LiteLLM keeps a config-file route with it and the API falls back to it until a key is saved. A new environment leaves it unset and has no OpenRouter key until one is saved.
+
+Moving an environment off the GitHub secret needs a Platform Administrator of that environment and someone who can edit the repository's Actions secrets:
+
+1. Deploy as usual with the secret still set. Agents keep using it through LiteLLM's config-file route.
+2. The Platform Administrator opens Platform Admin settings at `/dashboard/platform/settings` on the environment's web app (`STAGING_WEB_APP_URL` for staging, `WEB_APP_URL` for k3s, https://cloud.agentbarn.dev/dashboard/platform/settings for public), pastes the key under OpenRouter and saves. OpenRouter checks the key and LiteLLM switches to it at once; the page then shows its last four characters.
+3. Once staging and k3s both show a saved key, delete `OPENROUTER_API_KEY` at https://github.com/aai-labs/agent-barn/settings/secrets/actions. Both environments read that one secret. Once public shows a saved key, delete `PUBLIC_OPENROUTER_API_KEY` there too.
+4. The next deploy of each environment renders LiteLLM without the config-file route, and the page no longer reports the environment key as configured.
+
+Deleting a secret before step 2 leaves LiteLLM with no OpenRouter route, so every Agent call fails until a Platform Administrator saves a key. Locally, `OPENROUTER_API_KEY` in `.env` is optional and works the same way.
+
 ## Public signup configuration
 
 Configure public self-signup in **Platform settings → Signup & trials**. Sign-up grants the
@@ -721,7 +734,7 @@ kubeconfig portably with
 | `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
 | `PUBLIC_MONITORING_WEB_PASSWORD` | Basic auth on Prometheus/Alertmanager; 12+ alphanumeric (`openssl rand -hex 16`) |
 | `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
-| `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
+| `PUBLIC_OPENROUTER_API_KEY` | Optional. Only until a Platform Administrator saves the key; see [OpenRouter key](#openrouter-key). Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |

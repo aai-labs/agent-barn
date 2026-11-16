@@ -169,9 +169,10 @@ AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # derives it from API_PORT; deployments default to the in-cluster API service.
 # WORKFLOW_RUNTIME_BASE_URL=
 
-# OpenRouter API key the API uses for the credit balance (cost page and metrics)
-# and to look up costs LiteLLM missed, until a Platform Administrator saves a key
-# in Platform Admin settings. The model catalogue is fetched without it.
+# Optional. OpenRouter API key LiteLLM routes with, and the API uses for the credit
+# balance (cost page and metrics) and to look up costs LiteLLM missed, until a
+# Platform Administrator saves a key in Platform Admin settings. The model
+# catalogue is fetched without it.
 OPENROUTER_API_KEY=
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker offers,
 # e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.

@@ -7,11 +7,17 @@ Related context: [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent
 ## Current state
 
 - Delivered: a Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
-- In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Deployment still requires `OPENROUTER_API_KEY`.
-- Next: slice 1, PR 9 — making `OPENROUTER_API_KEY` optional in deployment and documenting how each environment's key is moved.
+- In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
+- Next: slice 1, PR 10 — the OpenRouter section in Platform Admin settings.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 9
+
+- Delivered: `OPENROUTER_API_KEY` is optional. Helmfile, the LiteLLM chart's Secret, `run.sh`, `k3d-up.sh` and the public deploy no longer require it; without it LiteLLM renders no config-file route.
+- Changed: `operations.md` gains an OpenRouter key section with the order for moving each environment's key into Platform Admin settings before its secret is deleted; `.env.spec`, `.env.deploy.spec` and the README call the key optional. The API chart's values comment, the `OpenRouterCreditsUnknown` alert and the platform Costs page's credits warning point to the key saved in Platform Admin settings instead of only `OPENROUTER_API_KEY`.
+- Follow-up: PR 10 adds the OpenRouter section to Platform Admin settings.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 8
 

@@ -6,9 +6,10 @@
 #      .k3d/kubeconfig-internal.yaml (the API container, via host.docker.internal)
 #
 # Required in .env (auto-sourced):
-#   OPENROUTER_API_KEY   — passed to litellm
 #   LITELLM_MASTER_KEY   — litellm admin key; must be a stable value (required)
 #   LITELLM_SALT_KEY     — encrypts provider keys litellm stores; never change it (required)
+# Optional in .env:
+#   OPENROUTER_API_KEY   — passed to litellm; used until a key is saved in Platform Admin settings
 #
 # Ports on localhost:
 #   7070  — LiteLLM proxy
@@ -51,7 +52,6 @@ step()   { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
 
 step "Checking dependencies"
 command -v docker >/dev/null 2>&1 || red "docker not found"
-[[ -n "${OPENROUTER_API_KEY:-}" ]] || red "OPENROUTER_API_KEY is not set — add it to .env"
 # Compose passes the master key to LiteLLM and the litellm Secret seeded below
 # passes it to the API, so both must read the same value from .env.
 [[ -n "${LITELLM_MASTER_KEY:-}" ]] || red "LITELLM_MASTER_KEY is not set — add a stable value to .env, e.g. LITELLM_MASTER_KEY=sk-\$(openssl rand -hex 16)"

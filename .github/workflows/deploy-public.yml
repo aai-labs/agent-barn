@@ -99,7 +99,7 @@ jobs:
             PUBLIC_SECRET_SIGNING_KEY PUBLIC_PLATFORM_ADMIN_CREDENTIALS \
             PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY PUBLIC_GRAFANA_ADMIN_PASSWORD \
             PUBLIC_MONITORING_WEB_PASSWORD \
-            PUBLIC_FIRECRAWL_API_KEY PUBLIC_OPENROUTER_API_KEY \
+            PUBLIC_FIRECRAWL_API_KEY \
             PUBLIC_SLACK_ALERTS_WEBHOOK_URL; do
             if [ -z "${!name:-}" ]; then
               missing+=("secret $name")
