@@ -634,6 +634,15 @@ def _backdate(context, agent, age: timedelta) -> None:
         session.commit()
 
 
+def _soft_delete(context, agent) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        row = session.get(Agent, agent.id)
+        assert row is not None
+        row.deleted_at = datetime.now(UTC)
+        session.add(row)
+        session.commit()
+
+
 def _scheduled(context, agent, status: RestorePointStatus, age: timedelta, origin=RestorePointOrigin.SCHEDULED):
     context.injector.get(RestorePointRepository).save(
         AgentRestorePoint(
@@ -677,6 +686,20 @@ def test_failing_and_overdue_scheduled_backups_are_counted_and_named_by_agent():
         # Eve's last good backup is two days old and nothing has been tried since.
         _scheduled(context, eve, RestorePointStatus.READY, timedelta(days=2))
         # Cy is stopped, so it is not backed up on a schedule; Dee is new and has not had its turn.
+        # A failure before Cy was stopped is not a running Agent's backup failing.
+        _scheduled(context, cy, RestorePointStatus.FAILED, timedelta(hours=3))
+        # Fay failed and then backed up; Gus failed and was then deleted.
+        there_is_an_agent(name="Fay", status=AgentStatus.RUNNING)(context)
+        fay = context.agent
+        there_is_an_agent(name="Gus", status=AgentStatus.RUNNING)(context)
+        gus = context.agent
+        for agent in (fay, gus):
+            _backdate(context, agent, timedelta(days=3))
+        _scheduled(context, fay, RestorePointStatus.FAILED, timedelta(hours=3))
+        _scheduled(context, fay, RestorePointStatus.READY, timedelta(hours=1))
+        _scheduled(context, gus, RestorePointStatus.READY, timedelta(hours=5))
+        _scheduled(context, gus, RestorePointStatus.FAILED, timedelta(hours=2))
+        _soft_delete(context, gus)
 
         body = _get(context).json()
 
