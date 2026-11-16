@@ -869,6 +869,80 @@ def test_a_cluster_failure_on_one_bot_fails_only_that_bot():
         assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
 
 
+def _last_secret_call(k8s, name):
+    calls = [
+        call_name
+        for call_name, args, _ in k8s.method_calls
+        if (call_name == "create_secret" and args[1].metadata.name == name)
+        or (call_name == "delete_secret" and args[0] == name)
+    ]
+    return calls[-1]
+
+
+def test_a_parent_that_fails_to_start_fails_its_bots_and_revokes_their_keys():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        k8s = _k8s(context)
+        k8s.create_deployment.side_effect = RuntimeError("cluster said no")
+        gateway = context.injector.get(AgentService).credential_gateway
+
+        with patch.object(gateway, "revoke_for_agent", wraps=gateway.revoke_for_agent) as revoke:
+            response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR), response.text)
+        parent = _stored(context, context.parent.id)
+        assert_that(parent.status, equal_to(AgentStatus.ERROR))
+        for bot in context.bots:
+            stored = _stored(context, bot.id)
+            assert_that(
+                (stored.status, stored.last_error_code),
+                equal_to((AgentStatus.ERROR, parent.last_error_code)),
+            )
+            assert_that(_last_secret_call(k8s, f"agent-{bot.id}"), equal_to("delete_secret"))
+        assert_that(
+            {call.args[0] for call in revoke.call_args_list},
+            equal_to({context.parent.id, *[bot.id for bot in context.bots]}),
+        )
+
+
+def test_a_bot_failing_alone_leaves_the_other_bots_running():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        context.injector.get(AgentService)._record_provisioning_failure(
+            _stored(context, context.bot.id), RuntimeError("Agent runtime exited")
+        )
+
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.STOPPED))
+
+
+def test_a_parents_stale_workload_goes_before_any_bot_is_assembled():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        service = context.injector.get(AgentService)
+        order = []
+        _k8s(context).delete_deployment.side_effect = lambda name, ns: order.append(name)
+        assemble = service._assemble_agent
+
+        def recording(agent, **kwargs):
+            order.append(f"assemble-{agent.id}")
+            return assemble(agent, **kwargs)
+
+        with patch.object(service, "_assemble_agent", side_effect=recording):
+            response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(
+            order.index(f"agent-{context.parent.id}") < order.index(f"assemble-{context.bot.id}"),
+            equal_to(True),
+        )
+
+
+def test_starting_a_running_parent_is_refused_and_removes_nothing():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(_k8s(context).delete_deployment.called, equal_to(False))
+        assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
 def _connect(context, agent, platform):
     context.postgres_delegate.save(
         CommunicationConnection(

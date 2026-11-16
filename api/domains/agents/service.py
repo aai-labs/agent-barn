@@ -2505,6 +2505,11 @@ class AgentService:
             # A database fault is one of the things that lands here, and it would
             # raise again on this write. The caller still gets the classified cause.
             logger.exception("Could not record the provisioning failure for agent %s", agent.id)
+        if agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
+            try:
+                self._fail_bots(agent)
+            except Exception:
+                logger.exception("Could not fail the bots of agent %s", agent.id)
         return HTTPException(
             status_code=_PROVISIONING_FAILURE_STATUS.get(
                 normalized.category,
@@ -2532,6 +2537,17 @@ class AgentService:
         removed_providers: Collection[SecretProvider] = (),
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
+        ns = self.config.k8s_namespace
+        name = f"agent-{agent.id}"
+        if not preflight and agent.parent_agent_id is None:
+            if agent.status == AgentStatus.RUNNING:
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent.id} is already running",
+                )
+            # Reconcile stale workloads before rotating any machine authorization.
+            self.k8s.delete_deployment(name, ns)
+            self.k8s.wait_for_termination(name, ns)
         assembled_bots: list[tuple[Agent, _AssembledAgent]] = []
         deleted_bots: list[Agent] = []
         if not preflight and agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
@@ -2555,8 +2571,6 @@ class AgentService:
         if preflight:
             return assembled.previous_status
         assert assembled.runtime is not None
-        ns = self.config.k8s_namespace
-        name = f"agent-{agent.id}"
 
         # Failures here are recorded and normalized by _start_agent_unchecked, which
         # wraps this whole method rather than only the cluster calls.
@@ -2637,11 +2651,6 @@ class AgentService:
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
-        if agent.status == AgentStatus.RUNNING and not preflight and agent.parent_agent_id is None:
-            raise AgentProvisioningPrecondition(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Agent {agent_id} is already running",
-            )
 
         previous_status = agent.status.value
         template = self.template_repository.get_pinned_template(agent)
@@ -2654,7 +2663,6 @@ class AgentService:
         rendered = render_template(template, agent.name)
         ns = self.config.k8s_namespace
 
-        name = f"agent-{agent.id}"
         litellm_key = (
             decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
             if agent.litellm_key_encrypted
@@ -2813,10 +2821,6 @@ class AgentService:
 
         # aai-cli integration secrets — all agent types.
         if not preflight:
-            # Reconcile stale workloads before rotating any machine authorization.
-            if agent.parent_agent_id is None:
-                self.k8s.delete_deployment(name, ns)
-                self.k8s.wait_for_termination(name, ns)
             previous_runtime = self.integrations.runtime(agent.id)
             previous_sharepoint = previous_runtime.bindings.get("sharepoint", {}) if previous_runtime else {}
             desired_sharepoint = self.integrations.policies(agent.id).get(SecretProvider.SHAREPOINT, False)
@@ -3420,6 +3424,24 @@ class AgentService:
             bot.running_model = ""
             bot.running_resources = None
             bot.running_config_digest = ""
+            self.repository.save(bot)
+
+    def _fail_bots(self, parent: Agent) -> None:
+        ns = self.config.k8s_namespace
+        for bot in [*self.repository.find_deleted_bots(parent.id), *self.repository.find_live_bots(parent.id)]:
+            try:
+                self.k8s.delete_config_map(f"agent-{bot.id}", ns)
+                self.k8s.delete_secret(f"agent-{bot.id}", ns)
+            except Exception:
+                logger.exception("Could not remove the runtime material of bot %s", bot.id)
+            self.credential_gateway.revoke_for_agent(bot.id, bot.organization_id)
+            if bot.deleted_at is not None:
+                continue
+            self.integrations.set_state(bot.id, "failed")
+            bot.status = AgentStatus.ERROR
+            bot.last_error = parent.last_error
+            bot.last_error_code = parent.last_error_code
+            bot.last_error_detail = parent.last_error_detail
             self.repository.save(bot)
 
     # --- Managed updates (MDP-47 / AF-201) ----------------------------------

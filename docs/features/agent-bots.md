@@ -18,7 +18,7 @@ A **Bot** is a full Agent created from its **Parent Agent**'s page. It has its o
 The pod belongs to the Parent Agent.
 
 - Start, stop, restart, Agent Size, image updates and Restore Points act on the Parent Agent and are refused on a Bot. There is no way to stop one Bot.
-- A Bot's status mirrors its Parent Agent's, except that a Bot whose own setup fails is in error while the others run.
+- A Bot's status mirrors its Parent Agent's, except that a Bot whose own setup fails is in error while the others run. When the Parent Agent fails to start or its runtime exits, its Bots go into error with it and their runtime keys are revoked.
 - Changing a Bot restarts the Parent Agent and all its Bots (Apply & Restart).
 - Deleting a Bot takes effect at the Parent Agent's next restart. Deleting the Parent Agent deletes its Bots.
 - Every start issues each Bot fresh runtime keys. The LiteLLM key is created once per Agent and kept across starts.

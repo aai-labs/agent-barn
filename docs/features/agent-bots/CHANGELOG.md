@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-16 — AF-425 — A Parent Agent's failure fails its Bots
+
+- Fixed: a failed start or an observed runtime exit put only the Parent Agent in ERROR and revoked only its gateway tokens. Its Bots kept their status and their fresh tokens, and their Secrets stayed in the cluster. Now the Parent Agent's failure also removes its Bots' Secrets and ConfigMaps, revokes their tokens, deleted Bots' included, and puts each live Bot in ERROR with the Parent Agent's error.
+- Fixed: a start assembled each Bot, beginning its integration generation and issuing its gateway tokens, before the Parent Agent removed a stale Deployment. The already-running refusal and the stale Deployment removal now come first.
+- Follow-up: refuse `${` in a Bot pod's values.
+
 ### 2026-11-13 — AF-425 — Listen-in test type checking
 
 - Fixed: the listen-in test adapter declares its nullable owner profile, so the per-Bot ingress test passes type checking. Runtime behavior is unchanged.
