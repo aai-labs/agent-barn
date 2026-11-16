@@ -16,10 +16,12 @@ from api.domains.business_value.models import (
     ActivityTotalsRead,
     AgentActivityRead,
     AgentValueRead,
+    HourlyWrites,
     OrganizationActivityRead,
     OrganizationValueRead,
     OutcomeMinutesRead,
     OutcomeTypeValueRead,
+    StoredBusinessAction,
     ValueSeriesPoint,
     ValueSettingsRead,
     ValueSettingsUpdate,
@@ -176,6 +178,20 @@ class BusinessValueService:
     permission_policy: PermissionPolicy
     organization_lookup: OrganizationLookupService
     event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def hourly_writes(self, agent_id: UUID, since: datetime, until: datetime) -> list[HourlyWrites]:
+        """An Agent's writes and deletes per UTC hour, for the scheduled anomaly check.
+        Background work: no caller and no authorization scope, and no router reaches it."""
+        return self.business_action_repository.hourly_writes(agent_id, since, until)
+
+    def business_actions_stored_between(
+        self, agent_id: UUID, *, after: datetime | None, until: datetime, occurred_since: datetime | None = None
+    ) -> list[StoredBusinessAction]:
+        """An Agent's Business Actions stored after a cursor, for the scheduled anomaly
+        check. Background work, like `hourly_writes`."""
+        return self.business_action_repository.stored_between(
+            agent_id, after=after, until=until, occurred_since=occurred_since
+        )
 
     def get_settings(self, organization_id: UUID, context: CurrentUserContext) -> ValueSettingsRead:
         self._require_read(organization_id, context)

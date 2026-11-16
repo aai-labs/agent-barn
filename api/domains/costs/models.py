@@ -1,4 +1,5 @@
 import enum
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -32,6 +33,15 @@ class CostRecordSource(str, enum.Enum):
 
 
 COST_RECORD_STATUS_SUCCESS = "success"
+
+
+@dataclass(frozen=True)
+class HourlyLlmUsage:
+    """One UTC hour of an Agent's own LLM calls and tokens, by when they ran."""
+
+    hour: datetime
+    calls: int
+    tokens: int
 
 
 class CostSyncState(SQLModel, table=True):
