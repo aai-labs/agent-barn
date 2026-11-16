@@ -7,7 +7,7 @@ from injector import inject, singleton
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.tool_calls.models import ToolCallFilter, ToolCallRead
+from api.domains.tool_calls.models import HourlyToolActivity, StoredToolCall, ToolCallFilter, ToolCallRead
 from api.domains.tool_calls.repository import ToolCallRepository
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -31,6 +31,29 @@ class ToolCallService:
             context, agent, PermissionKey.ACTIVITY_READ
         )
         return self.repository.find_by_agent(agent_id, tool_call_filter, pagination, activity_scope)
+
+    def hourly_tool_activity(self, agent_id: UUID, since: datetime, until: datetime) -> list[HourlyToolActivity]:
+        """An Agent's tool calls and errors per UTC hour, for the scheduled anomaly check.
+
+        Background work: no caller and no authorization scope, and no router reaches it.
+        """
+        return self.repository.hourly_activity(agent_id, since, until)
+
+    def tool_calls_stored_between(
+        self,
+        agent_id: UUID,
+        *,
+        after: datetime | None,
+        until: datetime,
+        argument_keys: tuple[str, ...],
+        occurred_since: datetime | None = None,
+    ) -> list[StoredToolCall]:
+        """An Agent's tool calls stored after a cursor, with only the argument keys asked
+        for, for the scheduled anomaly check. Background work, like `hourly_tool_activity`.
+        """
+        return self.repository.stored_between(
+            agent_id, after=after, until=until, argument_keys=argument_keys, occurred_since=occurred_since
+        )
 
     def platform_daily_active_agent_ids(
         self, window_start: datetime, window_end: datetime, **kwargs

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
@@ -193,3 +194,22 @@ class OrganizationValueRead(PydanticBaseModel):
     series: list[ValueSeriesPoint]
     agents: list[AgentValueRead]
     top_outcome_types: list[OutcomeTypeValueRead]
+
+
+@dataclass(frozen=True)
+class HourlyWrites:
+    """One UTC hour of an Agent's writes and deletes, by when they ran."""
+
+    hour: datetime
+    writes: int
+
+
+@dataclass(frozen=True)
+class StoredBusinessAction:
+    """A Business Action as anomaly detection reads it: when it was stored and ran, and
+    which integration and verb it used."""
+
+    stored_at: datetime
+    occurred_at: datetime
+    integration: str
+    verb: str
