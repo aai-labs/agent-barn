@@ -107,7 +107,9 @@ def test_a_retried_report_is_the_same_request_with_only_the_time_left() -> None:
         assert_that(retried["id"], equal_to(first["id"]))
         assert 230 <= retried["live_seconds"] <= 240
         assert_that(len(_run(context, row.run_id)["approvals"]), equal_to(1))
-        assert_that(_status(context, row, token, first["id"]).json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, first["id"]).json(), equal_to({"state": "APPROVED", "decided_in": "web"})
+        )
 
 
 def test_the_live_window_counts_from_when_the_runtime_raised_the_request() -> None:
@@ -134,7 +136,9 @@ def test_a_live_approval_is_released_once_and_recorded_with_its_decider() -> Non
         decided = _decide(context, row.run_id, request_id, "approve")
         assert_that(decided.status_code, equal_to(200), decided.text)
         assert_that(decided.json()["approval"]["decided_by_user_id"], equal_to(str(context.user.id)))
-        assert_that(_status(context, row, token, request_id).json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, request_id).json(), equal_to({"state": "APPROVED", "decided_in": "web"})
+        )
         assert_that(_status(context, row, token, request_id, "/released").status_code, equal_to(204))
         assert_that(_run(context, row.run_id)["approval"]["state"], equal_to("RELEASED"))
         assert_that(_decide(context, row.run_id, request_id, "approve").status_code, equal_to(409))
@@ -175,7 +179,10 @@ def test_a_decision_that_arrives_before_the_window_closes_wins_the_park() -> Non
         _repository, row, token = _started(context)
         request_id = _raise(context, row, token)
         _decide(context, row.run_id, request_id, "approve")
-        assert_that(_status(context, row, token, request_id, "/park").json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, request_id, "/park").json(),
+            equal_to({"state": "APPROVED", "decided_in": "web"}),
+        )
         assert_that(_run(context, row.run_id)["state"], equal_to("RUNNING"))
 
 
@@ -464,7 +471,10 @@ def test_a_slack_approval_is_recorded_with_the_handle_and_released_by_the_step()
 
         assert_that((decided.status_code, decided.json()), equal_to((200, {"state": "APPROVED"})))
         # The step's poll sees it exactly as a web approval and releases the command once.
-        assert_that(_status(context, row, token, request_id).json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, request_id).json(),
+            equal_to({"state": "APPROVED", "decided_in": "slack", "decided_by_slack_handle": "ana"}),
+        )
         assert_that(_status(context, row, token, request_id, "/released").status_code, equal_to(204))
         approval = _run(context, row.run_id)["approvals"][0]
         assert_that(
@@ -535,3 +545,13 @@ def test_a_parked_request_is_decided_on_the_web_not_in_slack() -> None:
             equal_to((409, "This approval is closing; decide on the web")),
         )
         assert_that(_status(context, row, token, request_id, "/park").json(), equal_to({"state": "PARKED"}))
+
+
+def test_a_raised_request_links_to_its_run_on_the_web() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+
+        raised = _report(context, row, token)
+
+        expected = f"/dashboard/{context.organization.id}/workflows?workflowRun={row.run_id}"
+        assert raised["review_url"].endswith(expected), raised["review_url"]

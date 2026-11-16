@@ -529,6 +529,13 @@ carry verbatim guidance. A late Decision does not release the command; it
 continues the step's session with that context, and the Agent may ask again.
 _Avoid_: grant, verdict, allowlist entry
 
+**Approval DM User**:
+The one Slack user an Agent's Slack Connection names to receive a direct message
+for each live Workflow Approval Request its steps raise, and to Approve or Decline
+it there. Set by someone with `agent.update`; their Approval Decision is recorded
+with their Slack handle, not a product User.
+_Avoid_: Slack approver list, reviewer, linked Slack identity
+
 **Awaiting Approval**:
 The run state in which a step's session has been stopped with a Workflow Approval
 Request unanswered. Nothing runs while parked; a late Approval Decision continues

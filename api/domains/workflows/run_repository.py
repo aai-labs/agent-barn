@@ -701,6 +701,12 @@ class WorkflowRunRepository:
             session.commit()
             return request, delivery_ids
 
+    def organization_of(self, run_id: UUID) -> UUID:
+        """The Organization whose Workflows page shows the run."""
+        with Session(self.delegate.engine) as session:
+            run = session.get_one(WorkflowRun, run_id)
+            return session.get_one(Agent, run.agent_id).organization_id
+
     def _bound_request(
         self, session: Session, attempt_id: UUID, token: str, request_id: UUID
     ) -> tuple[WorkflowRun, WorkflowAttempt, WorkflowApprovalRequest]:

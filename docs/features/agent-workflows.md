@@ -532,7 +532,8 @@ each completed step's `summary`, shown under “What each step did”, and a
 completion card. The last step is excluded from the per-step card on success to
 avoid repeating its text. Run and selected-step file attachments are delivered
 through the shared [Agent artifact service](agent-artifacts.md) alongside summaries.
-Dedicated preview pages and approval notifications remain follow-ups.
+Dedicated preview pages remain a follow-up. Approval DMs in Slack are described under
+[Workflow approvals](#workflow-approvals-af-390).
 
 ## Workflow approvals (AF-390)
 
@@ -574,9 +575,10 @@ Hermes command approval; they never widen what its approval mode allows.
   attempt fails instead of continuing blind.
 - **Bounds.** The third decline in one step blocks the run (cancel only) and fences
   the session.
-- **Authority.** Deciding requires current `agent.update` on the run's Agent, checked at
-  decision time; the decider is recorded. Runtime callbacks use the attempt
-  capability and cannot decide. A late decision continues only while the Agent runs,
+- **Authority.** Deciding on the web requires current `agent.update` on the run's Agent,
+  checked at decision time; the decider is recorded. Runtime callbacks use the attempt
+  capability and cannot decide, except to report a click by the Agent's Approval DM
+  User (below). A late decision continues only while the Agent runs,
   the initiator keeps authority and the decider still holds `agent.update`; until then
   the run stays Awaiting Approval with the decision recorded. If the decider lost
   access, the request returns to `PARKED` for someone else to decide. Agent stops,
@@ -585,6 +587,32 @@ Hermes command approval; they never widen what its approval mode allows.
   it; cancellation, a reported failure and settlement lapse open requests in the same
   transaction, so a stopped run never waits in the inbox. A decided, lapsed or stale
   request returns 409.
+- **Slack approval DM (AF-393).** A Hermes Agent's Slack Connection may name one
+  Approval DM User (`approval_dm_user_id`, a Slack user ID). Someone with `agent.update`
+  sets it, since Connection changes need it; saving checks the user exists in the
+  workspace and is not a bot or deactivated, and OpenClaw Agents refuse it. When a step
+  raises a live request, the trigger server opens a DM with that user through the
+  Agent's own Slack bot and posts the verbatim command (truncated at 2,800 characters)
+  with Approve once, Decline and Open run. The `agentbarn-workflow-approvals` Hermes
+  plugin receives the clicks through Hermes's public `register_slack_action_handler`,
+  ignores any not from the Approval DM User in a DM, and hands the rest to the trigger
+  server, which only relays clicks on its own card to
+  `POST /workflow-runtime/v1/attempts/{id}/approvals/{request_id}/slack-decision`. The API
+  accepts it only for a `LIVE` request inside its window and only when the clicker is
+  still the Agent's Approval DM User on an enabled Slack Connection; otherwise it returns
+  409 and the card shows the reason. A Slack decision takes the same path and run lock
+  as a web decision, so the first one wins, and the step's poll releases or declines the
+  command exactly as for the web. A Slack Decline carries no guidance. Parked requests
+  are decided on the web only. When the request settles the card loses its buttons and
+  says how it ended ("Approved in Slack by @handle", "Declined on the web", or paused).
+  Slack delivery is best effort and never delays or blocks web review.
+- **Decision source.** Each decision records `decision_source` (`web` or `slack`); a
+  Slack decision also records the clicker's Slack user ID and the handle at click time,
+  and has no `decided_by_user_id`. Step history shows "@handle in Slack". A late
+  continuation of a Slack decision requires the clicker to still be the Approval DM
+  User, as a web decider must still hold `agent.update`. The runtime status read adds
+  `decided_in` and `decided_by_slack_handle`, and raising a request returns a
+  `review_url` to the run on the Organization Workflows page.
 - **Interruption.** An attempt that expires (restart, lost session) blocks the run as
   uncertain and lapses its open request, like any expired attempt: Hermes may have
   denied the command itself and carried on, so an ended session is no evidence that
@@ -604,6 +632,12 @@ Hermes command approval; they never widen what its approval mode allows.
 - **Inbox.** The Organization Workflows page's **Runs** tab leads with the runs
   waiting on approval across the Agents the viewer can read; an Agent's Workflows
   tab shows the same for that Agent alone. See [UI and configuration](#ui-and-configuration).
+
+Migration `f3a393c5d1e2` (AF-393) adds `decision_source`, `decided_by_slack_user_id` and
+`decided_by_slack_handle` to `workflow_approval_request` and marks every earlier decision
+as made on the web; its downgrade drops them. Slack approval DMs need the API change, an
+Agent update or restart (new trigger server, plugin and environment) and the Approval DM
+User set on the Slack Connection.
 
 Migration `d1a390e7b2c4` adds `workflow_approval_request`, a partial index on open
 (`LIVE`/`PARKED`) requests and the `AWAITING_APPROVAL` run state; downgrade blocks

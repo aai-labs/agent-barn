@@ -15,7 +15,7 @@ import re
 import urllib.request
 from uuid import UUID
 
-ACTIONS = re.compile(r"^agentbarn_workflow_approval_(approve|decline)$")
+ACTIONS = re.compile(r"^agentbarn_workflow_approval_(approve|decline|open)$")
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +40,9 @@ def register(ctx):
         user = body.get("user") or {}
         channel = (body.get("channel") or {}).get("id", "")
         match = ACTIONS.match(action.get("action_id", ""))
+        if match and match.group(1) == "open":
+            # The Open run link opens in the browser; Slack still reports the click.
+            return
         if not approver or not match or user.get("id") != approver or not channel.startswith("D"):
             logger.warning("[agentbarn] ignored workflow approval click from %s in %s", user.get("id"), channel)
             return
@@ -54,6 +57,10 @@ def register(ctx):
             "channel_id": channel,
             "message_ts": str((body.get("message") or {}).get("ts", "")),
         }
-        await asyncio.to_thread(_forward, request_id, payload)
+        try:
+            await asyncio.to_thread(_forward, request_id, payload)
+        except OSError as exc:
+            # 404 when the card is not one the trigger server is waiting on, e.g. after a restart.
+            logger.warning("[agentbarn] workflow approval click not delivered: %s", exc)
 
     ctx.register_slack_action_handler(ACTIONS, on_click)

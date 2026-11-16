@@ -761,3 +761,214 @@ def test_a_decision_that_wins_the_park_race_is_still_honoured(monkeypatch, trigg
     result, hermes, _ = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"}, live_seconds=0)
     assert result == "Deployed"
     assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
+
+
+def _slack_card(monkeypatch, trigger_server, *, fail: bool = False) -> list[tuple[str, dict]]:
+    """Fake Slack Web API for the approval DM; records every call."""
+    calls: list[tuple[str, dict]] = []
+
+    def slack(method, body):
+        calls.append((method, body))
+        if fail:
+            raise trigger_server.DispatchError("Slack conversations.open failed: user_not_found")
+        if method == "conversations.open":
+            return {"ok": True, "channel": {"id": "D1"}}
+        return {"ok": True, "ts": "1700000000.000100"}
+
+    monkeypatch.setattr(trigger_server, "_slack_api", slack)
+    monkeypatch.setattr(trigger_server, "RUNTIME_KIND", "hermes")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("AGENTBARN_SLACK_APPROVAL_USER", "U0APPROVER")
+    return calls
+
+
+def _decision_buttons(blocks: list[dict]) -> list[tuple[str, str]]:
+    return [
+        (element["action_id"], element["value"])
+        for block in blocks
+        for element in block.get("elements", [])
+        if "value" in element
+    ]
+
+
+def test_a_live_request_is_sent_to_the_approval_dm_and_settled_with_who_decided(monkeypatch, trigger_server) -> None:
+    calls = _slack_card(monkeypatch, trigger_server)
+    decision = {"state": "APPROVED", "decided_in": "slack", "decided_by_slack_handle": "ana"}
+
+    result, hermes, _ = _approval_step(monkeypatch, trigger_server, decision)
+
+    assert result == "Deployed"
+    assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
+    assert [method for method, _ in calls] == ["conversations.open", "chat.postMessage", "chat.update"]
+    assert calls[0][1] == {"users": "U0APPROVER"}
+    posted = calls[1][1]
+    assert posted["channel"] == "D1"
+    assert "rm -rf ./out" in posted["blocks"][1]["text"]["text"]
+    assert _decision_buttons(posted["blocks"]) == [
+        ("agentbarn_workflow_approval_approve", "r1"),
+        ("agentbarn_workflow_approval_decline", "r1"),
+    ]
+    settled = calls[2][1]
+    assert (settled["channel"], settled["ts"], settled["text"]) == (
+        "D1",
+        "1700000000.000100",
+        "Approved in Slack by @ana",
+    )
+    assert _decision_buttons(settled["blocks"]) == []
+    assert trigger_server._SLACK_CARDS == {}
+
+
+@pytest.mark.parametrize(
+    ("decision", "live_seconds", "note"),
+    [
+        ({"state": "DECLINED", "prompt": "Do not run it.", "decided_in": "web"}, 30, "Declined on the web"),
+        ({"state": "PARKED"}, 0, "Nobody decided in time, so the step paused. Decide on the web to continue it."),
+    ],
+)
+def test_the_card_says_how_the_request_ended(monkeypatch, trigger_server, decision, live_seconds, note) -> None:
+    calls = _slack_card(monkeypatch, trigger_server)
+    _approval_step(monkeypatch, trigger_server, decision, live_seconds=live_seconds)
+    assert calls[-1][0] == "chat.update"
+    assert calls[-1][1]["text"] == note
+
+
+def test_a_command_cannot_break_out_of_the_cards_code_block(trigger_server) -> None:
+    blocks = trigger_server._card_blocks("r1", "echo ```<@U1>``` && x" + "y" * 5000, "note", "", buttons=False)
+    text = blocks[1]["text"]["text"]
+    assert text.startswith("```") and text.endswith("…```")
+    assert text[3:-3].count("```") == 0
+    assert "<@U1>" not in text and "&lt;@U1&gt;" in text
+    assert len(text) < 3000
+
+
+def test_no_card_is_sent_without_an_approval_dm_user(monkeypatch, trigger_server) -> None:
+    calls = _slack_card(monkeypatch, trigger_server)
+    monkeypatch.setenv("AGENTBARN_SLACK_APPROVAL_USER", "")
+    result, _, _ = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"})
+    assert result == "Deployed"
+    assert calls == []
+
+
+def test_a_slack_failure_never_holds_up_the_step(monkeypatch, trigger_server) -> None:
+    calls = _slack_card(monkeypatch, trigger_server, fail=True)
+    result, hermes, _ = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"})
+    assert result == "Deployed"
+    assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
+    assert [method for method, _ in calls] == ["conversations.open"]
+
+
+def _card(trigger_server) -> None:
+    trigger_server._SLACK_CARDS["r1"] = {
+        "channel": "D1",
+        "ts": "1700000000.000100",
+        "command": "rm -rf ./out",
+        "review_url": "https://app.example/run",
+        "callback": ("token", "http://api/attempts/a"),
+    }
+
+
+def _click(**overrides) -> dict:
+    return {
+        "decision": "approve",
+        "slack_user_id": "U0APPROVER",
+        "slack_user_name": "ana",
+        "channel_id": "D1",
+        "message_ts": "1700000000.000100",
+        **overrides,
+    }
+
+
+def _relayed(monkeypatch, trigger_server, payload: dict, reply) -> tuple[bool, list]:
+    import threading
+
+    sent: list = []
+    done = threading.Event()
+
+    def record(url, token, body, *, method="POST"):
+        sent.append((url, token, body))
+        try:
+            return reply(url)
+        finally:
+            done.set()
+
+    monkeypatch.setattr(trigger_server, "_post_json", record)
+    relayed = trigger_server.relay_slack_decision("r1", payload)
+    if relayed:
+        assert done.wait(5)
+    return relayed, sent
+
+
+def test_a_click_on_the_card_is_reported_to_the_api_as_the_slack_user(monkeypatch, trigger_server) -> None:
+    _card(trigger_server)
+    relayed, sent = _relayed(monkeypatch, trigger_server, _click(), lambda url: {"state": "APPROVED"})
+    assert relayed
+    assert sent == [
+        (
+            "http://api/attempts/a/approvals/r1/slack-decision",
+            "token",
+            {"decision": "approve", "slack_user_id": "U0APPROVER", "slack_user_name": "ana"},
+        )
+    ]
+
+
+@pytest.mark.parametrize("overrides", [{"channel_id": "D2"}, {"message_ts": "1.0"}])
+def test_a_click_that_is_not_on_our_card_is_dropped(monkeypatch, trigger_server, overrides) -> None:
+    _card(trigger_server)
+    relayed, sent = _relayed(monkeypatch, trigger_server, _click(**overrides), lambda url: None)
+    assert not relayed
+    assert sent == []
+
+
+def test_a_click_the_api_refuses_settles_the_card_with_the_reason(monkeypatch, trigger_server) -> None:
+    import io
+    import json
+    import time
+    import urllib.error
+
+    calls = _slack_card(monkeypatch, trigger_server)
+    _card(trigger_server)
+
+    def refuse(url):
+        detail = json.dumps({"detail": "This command was already declined"}).encode()
+        raise urllib.error.HTTPError(url, 409, "Conflict", {}, io.BytesIO(detail))  # ty: ignore[invalid-argument-type]
+
+    relayed, _ = _relayed(monkeypatch, trigger_server, _click(), refuse)
+    assert relayed
+    deadline = time.monotonic() + 5
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert calls[-1][0] == "chat.update"
+    assert calls[-1][1]["text"] == "This command was already declined"
+
+
+def test_the_slack_decision_route_needs_the_trigger_key_and_a_known_card(monkeypatch, trigger_server) -> None:
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    monkeypatch.setattr(trigger_server, "TRIGGER_KEY", "trigger-key")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), trigger_server.TriggerHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    path = "/agent-triggers/v1/workflow-approvals/6f1c2c7e-6b1f-4d0a-9a43-2f8f0b9a1c11/slack-decision"
+
+    def post(key: str, body: dict) -> int:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}{path}",
+            data=json.dumps(body).encode(),
+            method="POST",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    try:
+        assert post("wrong", _click()) == 401
+        assert post("trigger-key", {"decision": "maybe"}) == 400
+        assert post("trigger-key", _click()) == 404
+    finally:
+        server.shutdown()

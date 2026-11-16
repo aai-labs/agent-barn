@@ -86,11 +86,23 @@ class WorkflowRuntimeService:
         self.dispatcher.enqueue_immediate(delivery_ids)
         # A retried report gets the time actually left, never a fresh window.
         remaining = (request.live_until - datetime.now(UTC)).total_seconds()
-        return {"id": str(request.id), "live_seconds": max(remaining, 0)}
+        organization_id = self.repository.organization_of(request.run_id)
+        return {
+            "id": str(request.id),
+            "live_seconds": max(remaining, 0),
+            # Where a person reviews it on the web; the Slack approval DM links here.
+            "review_url": f"{self.config.web_app_url.rstrip('/')}/dashboard/{organization_id}/workflows"
+            f"?workflowRun={request.run_id}",
+        }
 
     def approval_status(self, attempt_id: UUID, token: str, request_id: UUID) -> dict:
         request = self.repository.approval_status(attempt_id, token, request_id)
         status: dict = {"state": request.state}
+        if request.decision_source:
+            # Lets the runtime say on the Slack card where and by whom it was decided.
+            status["decided_in"] = request.decision_source
+            if request.decided_by_slack_handle:
+                status["decided_by_slack_handle"] = request.decided_by_slack_handle
         if request.state == "DECLINED":
             status["prompt"] = continuation_prompt(request.state, request.command, request.guidance)
         return status

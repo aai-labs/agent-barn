@@ -101,6 +101,7 @@ def check() -> None:
             ("other user", "agentbarn_workflow_approval_approve", "UOTHER", "D2", REQUEST_ID, 0),
             ("approver in a channel", "agentbarn_workflow_approval_approve", APPROVER, "C1", REQUEST_ID, 0),
             ("malformed request id", "agentbarn_workflow_approval_approve", APPROVER, "D1", "not-a-uuid", 0),
+            ("open run link", "agentbarn_workflow_approval_open", APPROVER, "D1", "", 0),
         ]
         for label, action_id, user, channel, value, expected in cases:
             status, forwarded = await click(action_id, user, channel, value)

@@ -11,10 +11,20 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Verification: complete API suite **6,578 passed**, complete UI suite **1,053 passed / 5 skipped**, Kubernetes client **19 passed**, Hermes/OpenClaw runtime suites **16 / 12 passed**, both artifact byte workflows and the persistent deployment/browser contract passed. Quality, migration/chart/monitoring checks and API/production UI builds passed. [Artifact evidence](../agent-artifacts/EVIDENCE.md#pr-preparation-and-complete-verification--2026-10-29) records the final results, harness corrections, screenshot provenance and live-acceptance limits.
 - [PR #365](https://github.com/aai-labs/agent-barn/pull/365) (AF-390, merged into staging): Hermes step commands are approved live or after the session parks; late decisions resume the step's own session. Checked on local k3d with a real Hermes Agent (live approve, park and late approve).
 - In transition: [PR #367](https://github.com/aai-labs/agent-barn/pull/367) (AF-439, API slice) moves workflows to the Organization and removes the `/agents/{agent_id}/…` workflow routes. The UI still calls those routes until [PR #368](https://github.com/aai-labs/agent-barn/pull/368), so the Workflows screens do not work between the two slices; both must reach staging together through the `AF-439-organization-workflows` integration branch. The feature specification's UI sections describe the state after #368.
-- Next: the AF-439 UI slice ([PR #368](https://github.com/aai-labs/agent-barn/pull/368)), then OpenClaw approvals ([AF-444](https://aai-labs.atlassian.net/browse/AF-444)) and out-of-app approval notifications ([AF-393](https://aai-labs.atlassian.net/browse/AF-393)). Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
+- In progress: [AF-393](https://aai-labs.atlassian.net/browse/AF-393) on branch `AF-393-slack-approval-dm`, Slack approval DMs for Hermes steps, built on the AF-439 tip.
+- Next: the AF-439 UI slice ([PR #368](https://github.com/aai-labs/agent-barn/pull/368)), then AF-393. OpenClaw command approvals ([AF-444](https://aai-labs.atlassian.net/browse/AF-444)) are app-wide runtime work outside this epic. Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
 - Blockers: live model/session execution on both runtimes, truthful OpenClaw stop/quiescence and run-read-policy acceptance remain open. Deployment/provisioning is separate operational work. Explicit recovery/reconciliation is not exposed by this slice.
 
 ## Changes
+
+### 2026-11-16 — AF-393 — Slack approval DM (unreleased)
+
+- Added: one Approval DM User per Hermes Agent's Slack Connection (`approval_dm_user_id`). Each live Workflow Approval Request is sent to them as a Slack DM with Approve once, Decline and Open run; their click is recorded as the decision, with their Slack handle, and released or declined by the step exactly as a web decision. Parked requests, decline guidance and every other recipient stay on the web.
+- API: `POST /workflow-runtime/v1/attempts/{id}/approvals/{request_id}/slack-decision` (runtime capability; live requests only; clicker must still be the Approval DM User). Approval reads add `decision_source` and `decided_by_slack_handle`; the runtime status read adds `decided_in`/`decided_by_slack_handle`; raising a request returns `review_url`. Web and Slack decisions share one code path under the run lock.
+- Runtime: new Hermes plugin `agentbarn-workflow-approvals` (public `register_slack_action_handler`), new trigger server route for its clicks, `AGENTBARN_SLACK_APPROVAL_USER` in the pod environment. Pinned-image contract: `api/tests/fixtures/hermes_workflow_approval_driver.py`, run by `hermes-base/test-image.sh`.
+- Migration: `f3a393c5d1e2` after `e4b439a1c7d2`; earlier decisions become `web`.
+- Known limit: the Agent's terminal can read `AGENT_TRIGGER_KEY`, so a misbehaving Agent could report a Slack decision as the Approval DM User. Tracked in [AF-452](https://aai-labs.atlassian.net/browse/AF-452), with the existing exposure of `RUNTIME_API_KEY`.
+- Not yet verified: posting, editing and clicking a card in a real Slack workspace.
 
 ### 2026-11-12 — AF-439 — [PR #367](https://github.com/aai-labs/agent-barn/pull/367) — Organization-owned workflows run by Agents (API)
 
