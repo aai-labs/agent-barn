@@ -1,0 +1,3 @@
+name: agentbarn-workflow-approvals
+version: "1.0"
+description: Forward workflow approval decisions made in the Slack approval DM to the trigger server

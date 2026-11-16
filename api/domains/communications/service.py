@@ -60,6 +60,9 @@ _OPENCLAW_MENTION_CONFLICT = (
     "On OpenClaw, Require @mention can't be off while the Agent has listen-in channels. "
     "Turn it on, or remove the listen-in channels."
 )
+_OPENCLAW_APPROVAL_DM = (
+    "Workflow approval DM needs a Hermes Agent: OpenClaw Agents don't raise command approvals yet. Leave it empty."
+)
 
 # A directory read talks to the provider, so a failure is usually the operator's
 # credentials or scopes rather than a bug. 401/403 are deliberately never used:
@@ -229,6 +232,7 @@ class CommunicationsService:
             agent_id=agent.id,
         )
         self._require_openclaw_mention_rule(agent, context, plugin.key, validated.settings, data.enabled)
+        self._require_hermes_for_approval_dm(agent, validated.settings)
         connection = CommunicationConnection(
             organization_id=agent.organization_id,
             agent_id=agent.id,
@@ -302,6 +306,7 @@ class CommunicationsService:
         self._require_openclaw_mention_rule(
             agent, context, connection.platform_key, validated.settings, enabled, replacing=connection.id
         )
+        self._require_hermes_for_approval_dm(agent, validated.settings)
         if data.display_name is not None:
             connection.display_name = data.display_name.strip()
         if data.enabled is not None:
@@ -616,6 +621,11 @@ class CommunicationsService:
         )
         if mention_off and listening:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_OPENCLAW_MENTION_CONFLICT)
+
+    @staticmethod
+    def _require_hermes_for_approval_dm(agent: Agent, settings: dict) -> None:
+        if agent.agent_type == AgentType.OPENCLAW and settings.get("approval_dm_user_id"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_OPENCLAW_APPROVAL_DM)
 
     @staticmethod
     def _validate(plugin, settings, credentials, *, organization_id, agent_id):

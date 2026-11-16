@@ -68,6 +68,7 @@ def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> N
         "agentbarn-tasks",
         "agentbarn-observer",
         "agentbarn-slack-access",
+        "agentbarn-workflow-approvals",
     ]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
     assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
@@ -102,6 +103,14 @@ def test_native_slack_env_ignores_listen_in_channels() -> None:
     assert native_slack_env({**settings, "listen_in_channel_ids": ["C1"]}, credentials) == native_slack_env(
         settings, credentials
     )
+
+
+def test_native_slack_env_names_the_workflow_approval_dm_user() -> None:
+    credentials = {"bot_token": "xoxb-1", "app_token": "xapp-1"}
+
+    assert native_slack_env({}, credentials)["AGENTBARN_SLACK_APPROVAL_USER"] == ""
+    env = native_slack_env({"approval_dm_user_id": "U0APPROVER"}, credentials)
+    assert env["AGENTBARN_SLACK_APPROVAL_USER"] == "U0APPROVER"
 
 
 def test_native_slack_env_maps_connection_policy() -> None:
@@ -422,12 +431,23 @@ def test_config_map_contains_runtime_adapter_and_scoped_slack_access_plugin() ->
 
     assert "communications-runtime-adapter.py" in config_map.data
     assert "agent-trigger-server.py" in config_map.data
+    # The trigger server imports it from /app/config for Slack approval DMs.
+    assert "agentbarn_approval_dm.py" in config_map.data
     # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
     assert "boot-run.py" in config_map.data
     assert "agentbarn_message.py" not in config_map.data
     assert "retire-messaging.py" in config_map.data
     assert "slack-access-plugin.yaml" in config_map.data
     assert "slack-access-init.py" in config_map.data
+    for key, target in (
+        ("workflow-approvals-plugin.yaml", "plugin.yaml"),
+        ("workflow-approvals-init.py", "__init__.py"),
+    ):
+        assert key in config_map.data
+        assert (
+            f"cp /app/config/{key} /opt/data/plugins/agentbarn-workflow-approvals/{target}"
+            in config_map.data["start.sh"]
+        )
     # OpenClaw's plugin has no business in a Hermes ConfigMap.
     assert "openclaw-messaging.js" not in config_map.data
     assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)

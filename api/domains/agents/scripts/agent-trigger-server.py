@@ -252,6 +252,7 @@ def dispatch(idempotency_key: str, payload: dict) -> str:
 
 WORKFLOW_STEPS_PATH = "/agent-triggers/v1/workflow-steps"
 _STEP_PATH = re.compile(r"^/agent-triggers/v1/workflow-steps/([0-9a-f-]{36})/stop$")
+_SLACK_DECISION_PATH = re.compile(r"^/agent-triggers/v1/workflow-approvals/([0-9a-f-]{36})/slack-decision$")
 _STEP_TIMEOUT_SECONDS = 900
 _APPROVAL_POLL_SECONDS = 2
 # The platform stores the verbatim command up to this size; a longer one is never shown truncated.
@@ -409,11 +410,26 @@ def _answer_hermes(run_id: str, session_id: str, choice: str) -> None:
     urllib.request.urlopen(answer, timeout=30).close()
 
 
+def _approval_dm():
+    """The Slack approval DM helper, shipped beside this script in Hermes ConfigMaps."""
+    if RUNTIME_KIND != "hermes":
+        return None
+    try:
+        import agentbarn_approval_dm
+    except ImportError:
+        _LOGGER.warning("agentbarn_approval_dm.py is missing; workflow approvals stay web-only")
+        return None
+    return agentbarn_approval_dm
+
+
 def _await_approval(
     attempt_id: str, callback: tuple[str, str], run_id: str, session_id: str, command: str, age: float = 0.0
 ) -> str | None:
     """Hold the live request until a person decides. Returns None once approved, or the decline prompt."""
     token, callback_url = callback
+    request_id: str | None = None
+    status: dict = {}
+    approval_dm = _approval_dm()
     try:
         raised = (
             _post_json(
@@ -425,6 +441,11 @@ def _await_approval(
         )
         request_url = f"{callback_url}/approvals/{raised['id']}"
         deadline = time.monotonic() + float(raised["live_seconds"])
+        request_id = str(raised["id"])
+        if approval_dm is not None:
+            approval_dm.post(
+                request_id, command, str(raised.get("review_url") or ""), float(raised["live_seconds"]), callback
+            )
         while True:
             with _STEPS_LOCK:
                 if _STEPS.get(attempt_id, {}).get("stopped"):
@@ -451,6 +472,9 @@ def _await_approval(
         # Never leave a held command behind: parked, fenced or failed, the session stops here.
         _stop_hermes(run_id, session_id)
         raise
+    finally:
+        if approval_dm is not None and request_id is not None:
+            approval_dm.settle(request_id, approval_dm.settled_note(status))
 
 
 def _stop_hermes(run_id: str, session_id: str) -> bool:
@@ -665,7 +689,8 @@ def stop_workflow_step(attempt_id: str) -> None:
 class TriggerHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         stop = _STEP_PATH.match(self.path)
-        if self.path not in ("/agent-triggers/v1/invocations", WORKFLOW_STEPS_PATH) and not stop:
+        slack_decision = _SLACK_DECISION_PATH.match(self.path)
+        if self.path not in ("/agent-triggers/v1/invocations", WORKFLOW_STEPS_PATH) and not (stop or slack_decision):
             self._respond(404, {"error": "not found"})
             return
         authorization = self.headers.get("Authorization", "")
@@ -675,6 +700,9 @@ class TriggerHandler(BaseHTTPRequestHandler):
         if stop:
             stop_workflow_step(stop.group(1))
             self._respond(202, {})
+            return
+        if slack_decision:
+            self._slack_decision(slack_decision.group(1))
             return
         if self.path == WORKFLOW_STEPS_PATH:
             self._workflow_step()
@@ -734,6 +762,25 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": str(exc)})
             return
         self._respond(202 if started else 409, {})
+
+    def _slack_decision(self, request_id: str) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._respond(413, {"error": "invalid body size"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict) or payload.get("decision") not in ("approve", "decline"):
+                raise ValueError("invalid decision")
+        except ValueError as exc:
+            self._respond(400, {"error": str(exc)})
+            return
+        approval_dm = _approval_dm()
+        relayed = approval_dm is not None and approval_dm.relay(request_id, payload, _post_json) is not None
+        self._respond(202 if relayed else 404, {})
 
     def log_message(self, format: str, *args: object) -> None:
         return

@@ -17,6 +17,8 @@ docker run --rm \
     uv run --frozen python tests/fixtures/hermes_telegram_access_driver.py "$image"
     # Slack channel admission must not inherit the DM sender allowlist.
     uv run --frozen python tests/fixtures/hermes_slack_access_driver.py "$image"
+    # Workflow approval DM clicks reach the trigger server through Hermes's public Slack action registry.
+    uv run --frozen python tests/fixtures/hermes_workflow_approval_driver.py "$image"
 )
 
 # Run telemetry-push against Hermes' real SessionStore. Unit-test fakes cannot

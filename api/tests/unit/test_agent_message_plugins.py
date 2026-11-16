@@ -44,6 +44,61 @@ def test_slack_listen_in_channels_must_be_allowed_channels():
     assert_that(SlackSettings().listen_in_channel_ids, equal_to([]))
 
 
+def test_slack_workflow_approval_dm_takes_one_user_id_or_nothing():
+    assert_that(SlackSettings().approval_dm_user_id, equal_to(""))
+    assert_that(SlackSettings(approval_dm_user_id="U0123ABC").approval_dm_user_id, equal_to("U0123ABC"))
+    for invalid in ("C0123ABC", "@someone", "U1,U2", "u0123abc"):
+        with pytest.raises(ValidationError):
+            SlackSettings(approval_dm_user_id=invalid)
+
+
+@pytest.mark.parametrize(
+    ("user", "error"),
+    [
+        ({"id": "U1", "deleted": True}, "active person"),
+        ({"id": "U1", "is_bot": True}, "active person"),
+    ],
+)
+def test_slack_rejects_an_approval_dm_user_who_cannot_decide(user, error):
+    plugin = SlackPlatformPlugin(SimpleNamespace(skip_slack_token_validation=False))
+    credentials = SlackCredentials(bot_token="xoxb-1", app_token="xapp-1")
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client:
+        client.return_value.validate_bot_token.return_value = (True, "")
+        client.return_value.validate_app_token.return_value = (True, "")
+        client.return_value.get_user.return_value = user
+        with pytest.raises(ValueError, match=error):
+            plugin.validate_external(SlackSettings(approval_dm_user_id="U1"), credentials)
+
+
+def test_slack_checks_the_approval_dm_user_only_when_one_is_set():
+    plugin = SlackPlatformPlugin(SimpleNamespace(skip_slack_token_validation=False))
+    credentials = SlackCredentials(bot_token="xoxb-1", app_token="xapp-1")
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client:
+        client.return_value.validate_bot_token.return_value = (True, "")
+        client.return_value.validate_app_token.return_value = (True, "")
+        client.return_value.get_bot_info.return_value = {"team": "Acme", "username": "agent"}
+        client.return_value.get_user.return_value = {"id": "U1", "deleted": False, "is_bot": False}
+
+        assert_that(plugin.validate_external(SlackSettings(), credentials), equal_to("Acme / @agent"))
+        client.return_value.get_user.assert_not_called()
+        plugin.validate_external(SlackSettings(approval_dm_user_id="U1"), credentials)
+        client.return_value.get_user.assert_called_once_with("U1")
+
+
+def test_slack_reports_an_unreachable_approval_dm_check_as_invalid_settings():
+    from api.infrastructure.slack.errors import SlackFetchError
+
+    plugin = SlackPlatformPlugin(SimpleNamespace(skip_slack_token_validation=False))
+    with patch("api.domains.communications.plugins.slack.SlackClient") as client:
+        client.return_value.validate_bot_token.return_value = (True, "")
+        client.return_value.validate_app_token.return_value = (True, "")
+        client.return_value.get_user.side_effect = SlackFetchError("users.info error: ratelimited")
+        with pytest.raises(ValueError, match="Could not check the Workflow approval DM user"):
+            plugin.validate_external(
+                SlackSettings(approval_dm_user_id="U1"), SlackCredentials(bot_token="b", app_token="a")
+            )
+
+
 def test_discord_listen_in_channels_must_be_allowed_channels():
     with pytest.raises(ValidationError, match="Listen-in channels"):
         DiscordSettings(allowed_channel_ids=["c1"], listen_in_channel_ids=["c2"])

@@ -45,6 +45,9 @@ cp /app/config/agentbarn-listen-in-init.py /opt/data/plugins/agentbarn-listen-in
 mkdir -p /opt/data/plugins/agentbarn-slack-access
 cp /app/config/slack-access-plugin.yaml /opt/data/plugins/agentbarn-slack-access/plugin.yaml
 cp /app/config/slack-access-init.py /opt/data/plugins/agentbarn-slack-access/__init__.py
+mkdir -p /opt/data/plugins/agentbarn-workflow-approvals
+cp /app/config/workflow-approvals-plugin.yaml /opt/data/plugins/agentbarn-workflow-approvals/plugin.yaml
+cp /app/config/workflow-approvals-init.py /opt/data/plugins/agentbarn-workflow-approvals/__init__.py
 python3 /app/config/listen-in-check.py /opt/data/config.yaml
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do

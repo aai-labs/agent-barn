@@ -447,6 +447,68 @@ function SchemaArrayInput({
   );
 }
 
+/** One raw platform ID, typed or picked from the directory; empty clears it. */
+function SchemaSingleIdInput({
+  label,
+  value,
+  onChange,
+  browse,
+}: {
+  label: string;
+  value: unknown;
+  onChange: (value: string) => void;
+  browse: ArrayBrowseSource;
+}) {
+  const [picking, setPicking] = useState(false);
+  const id = String(value ?? "");
+  const name = id ? browse.entries.find((entry) => entry.id === id)?.label : undefined;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <input
+          className="af-input min-w-0 flex-1"
+          aria-label={label}
+          spellCheck={false}
+          placeholder="Not set"
+          value={id}
+          onChange={(event) => onChange(event.target.value.trim())}
+        />
+        <button
+          type="button"
+          className="af-btn af-btn-sm flex-shrink-0"
+          aria-label={`Browse ${label}`}
+          disabled={Boolean(browse.disabledReason)}
+          onClick={() => { browse.onOpen?.(); setPicking(true); }}
+        >
+          <Search size={13} /> Browse
+        </button>
+        {id && (
+          <button type="button" className="af-btn af-btn-sm flex-shrink-0" onClick={() => onChange("")}>
+            Clear
+          </button>
+        )}
+      </div>
+      {name && <p className="m-0 text-xs font-normal" style={{ color: "var(--ink-3)" }}>{name}</p>}
+      {browse.disabledReason && (
+        <p className="m-0 text-xs font-normal" style={{ color: "var(--ink-4)" }}>{browse.disabledReason}</p>
+      )}
+      <DirectoryPickerDialog
+        open={picking}
+        onOpenChange={setPicking}
+        title={`Select ${browse.noun}`}
+        description="Search the connected directory and pick one. Only its ID is saved."
+        searchPlaceholder={`Search ${browse.noun}…`}
+        entries={browse.entries}
+        selected={id ? [id] : []}
+        isLoading={browse.isLoading}
+        error={browse.error}
+        multiple={false}
+        onConfirm={(ids) => onChange(ids[0] ?? "")}
+      />
+    </div>
+  );
+}
+
 function SchemaTextInput({
   label,
   property,
@@ -472,6 +534,9 @@ function SchemaTextInput({
         browse={browse}
       />
     );
+  }
+  if (browse && !secret) {
+    return <SchemaSingleIdInput label={label} value={value} onChange={onChange} browse={browse} />;
   }
 
   return (
@@ -768,6 +833,7 @@ export function AgentChannelSettings({
         channelIds: previewSource("channels", "channels", undefined, disabledReason),
         dmUserIds: previewSource("people", "users", undefined, disabledReason),
         listenInChannelIds: previewSource("channels", "channels", undefined, disabledReason),
+        approvalDmUserId: previewSource("people", "users", undefined, disabledReason),
       };
     }
     if (platform.key === "discord") {
@@ -794,6 +860,7 @@ export function AgentChannelSettings({
         channelIds: queryBrowse("channels", slackChannels),
         dmUserIds: queryBrowse("people", slackUsers),
         listenInChannelIds: queryBrowse("channels", slackChannels),
+        approvalDmUserId: queryBrowse("people", slackUsers),
       };
     }
     if (platformKey === "discord") {

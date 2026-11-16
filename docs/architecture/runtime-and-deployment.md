@@ -170,6 +170,16 @@ On Hermes a listen-in room is a `free_response_channels` (Slack, Discord) or `fr
 Listen-in changes the whole Hermes Agent, not only its rooms: a new message waits behind a running turn in every chat instead of interrupting it, with no acknowledgement, and Hermes' tool search is off. Verbose mode is off for a platform with listen-in rooms. Typing indicators and Discord reactions still show on listening turns, and provider failure notices still post in the room, so a broken Agent is noticed.
 
 
+Native Hermes Slack also ships the `agentbarn-workflow-approvals` plugin, enabled with
+`agentbarn-slack-access`. It registers Slack action handlers through Hermes's public
+plugin API and forwards Approve and Decline clicks on workflow approval DM cards to the
+local trigger server, only when they come from `AGENTBARN_SLACK_APPROVAL_USER` in a DM;
+it never answers Hermes itself. The trigger server posts and edits those cards with the
+pod's `SLACK_BOT_TOKEN` through `agentbarn_approval_dm.py`, which ships beside it in the
+Hermes ConfigMap only and never raises into a step. With no Approval DM User set, both do
+nothing. See
+[workflow approvals](../features/agent-workflows.md#workflow-approvals-af-390).
+
 Native Hermes Slack enforces channel and DM access independently through the
 `agentbarn-slack-access` runtime plugin. It scopes the gateway's authorization
 method before adapter attachment fetching and final dispatch: channel access

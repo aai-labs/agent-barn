@@ -208,11 +208,14 @@ export function StepApprovals({ run, stepIndex }: { run: WorkflowRun; stepIndex:
       <h5 className="text-sm font-semibold">Approvals in this step</h5>
       {decided.map((item) => {
         const result = outcome[item.state as keyof typeof outcome];
-        const who = item.decidedByUserId
-          ? item.decidedByUserId === user?.id
-            ? "You"
-            : "Another member"
-          : null;
+        const who =
+          item.decisionSource === "slack"
+            ? `${item.decidedBySlackHandle ? `@${item.decidedBySlackHandle}` : "The approval DM user"} in Slack`
+            : item.decidedByUserId
+              ? item.decidedByUserId === user?.id
+                ? "You"
+                : "Another member"
+              : null;
         return (
           <div key={item.id} className="space-y-2 border-b border-[var(--line)] pb-3 last:border-0">
             <p className="flex flex-wrap justify-between gap-2 text-xs">

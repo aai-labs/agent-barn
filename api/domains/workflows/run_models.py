@@ -125,6 +125,10 @@ class WorkflowApprovalRequest(BaseModel, table=True):
             "state IN ('LIVE','PARKED','APPROVED','DECLINED','RELEASED','LAPSED')",
             name="ck_workflow_approval_request_state",
         ),
+        sa.CheckConstraint(
+            "decision_source IS NULL OR decision_source IN ('web','slack')",
+            name="ck_workflow_approval_request_decision_source",
+        ),
         # Inbox and badge reads look only for requests still awaiting a decision.
         sa.Index(
             "ix_workflow_approval_request_open",
@@ -145,6 +149,11 @@ class WorkflowApprovalRequest(BaseModel, table=True):
     decided_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
     decided_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
     guidance: str | None = None
+    # "web" for a member's decision; "slack" for the Agent's configured approval DM user.
+    decision_source: str | None = None
+    decided_by_slack_user_id: str | None = None
+    # The Slack handle at click time; handles can change later.
+    decided_by_slack_handle: str | None = None
     # Set when a late decision's continuation attempt picks the session back up.
     continued_by_attempt_id: UUID | None = SqlField(
         default=None, foreign_key="workflow_attempt.id", ondelete="SET NULL"
@@ -186,6 +195,14 @@ class ApprovalDecisionCreate(StrictDTO):
     guidance: str | None = Field(default=None, max_length=4000)
 
 
+class SlackApprovalDecision(StrictDTO):
+    """A click on the approval DM card, reported by the step's runtime."""
+
+    decision: Literal["approve", "decline"]
+    slack_user_id: str = Field(pattern=r"^[UW][A-Z0-9]+$", max_length=32)
+    slack_user_name: str = Field(default="", max_length=255)
+
+
 class ApprovalRead(DTO):
     id: UUID
     step_index: int
@@ -196,6 +213,8 @@ class ApprovalRead(DTO):
     decided_by_user_id: UUID | None
     decided_at: datetime | None
     guidance: str | None
+    decision_source: Literal["web", "slack"] | None = None
+    decided_by_slack_handle: str | None = None
 
 
 class WorkflowHistoryRead(DTO):

@@ -107,7 +107,9 @@ def test_a_retried_report_is_the_same_request_with_only_the_time_left() -> None:
         assert_that(retried["id"], equal_to(first["id"]))
         assert 230 <= retried["live_seconds"] <= 240
         assert_that(len(_run(context, row.run_id)["approvals"]), equal_to(1))
-        assert_that(_status(context, row, token, first["id"]).json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, first["id"]).json(), equal_to({"state": "APPROVED", "decided_in": "web"})
+        )
 
 
 def test_the_live_window_counts_from_when_the_runtime_raised_the_request() -> None:
@@ -134,7 +136,9 @@ def test_a_live_approval_is_released_once_and_recorded_with_its_decider() -> Non
         decided = _decide(context, row.run_id, request_id, "approve")
         assert_that(decided.status_code, equal_to(200), decided.text)
         assert_that(decided.json()["approval"]["decided_by_user_id"], equal_to(str(context.user.id)))
-        assert_that(_status(context, row, token, request_id).json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, request_id).json(), equal_to({"state": "APPROVED", "decided_in": "web"})
+        )
         assert_that(_status(context, row, token, request_id, "/released").status_code, equal_to(204))
         assert_that(_run(context, row.run_id)["approval"]["state"], equal_to("RELEASED"))
         assert_that(_decide(context, row.run_id, request_id, "approve").status_code, equal_to(409))
@@ -175,7 +179,10 @@ def test_a_decision_that_arrives_before_the_window_closes_wins_the_park() -> Non
         _repository, row, token = _started(context)
         request_id = _raise(context, row, token)
         _decide(context, row.run_id, request_id, "approve")
-        assert_that(_status(context, row, token, request_id, "/park").json(), equal_to({"state": "APPROVED"}))
+        assert_that(
+            _status(context, row, token, request_id, "/park").json(),
+            equal_to({"state": "APPROVED", "decided_in": "web"}),
+        )
         assert_that(_run(context, row.run_id)["state"], equal_to("RUNNING"))
 
 
@@ -418,3 +425,135 @@ def test_retention_removes_approval_commands_and_guidance() -> None:
             stored_request = session.get_one(WorkflowApprovalRequest, request_id)
             assert COMMAND not in stored_request.command
             assert stored_request.command_sha256 == ""
+
+
+APPROVER = "U0APPROVER"
+
+
+def _slack_approver(context, user_id=APPROVER, *, enabled=True, retired=False):
+    """The run's Agent has a Slack Connection naming its Workflow approval DM user."""
+    from api.domains.communications.models import CommunicationConnection
+
+    with Session(context.postgres_delegate.engine) as session:
+        session.add(
+            CommunicationConnection(
+                organization_id=context.organization.id,
+                agent_id=context.agent.id,
+                platform_key="slack",
+                display_name="Slack",
+                enabled=enabled,
+                schema_version=2,
+                settings={"approval_dm_user_id": user_id},
+                credentials_encrypted="unused",
+                retired_at=datetime.now(UTC) if retired else None,
+            )
+        )
+        session.commit()
+
+
+def _slack(context, row, token, request_id, decision="approve", user=APPROVER, name="ana"):
+    return context.client.request(
+        **_runtime(
+            row,
+            token,
+            f"/{request_id}/slack-decision",
+            {"decision": decision, "slack_user_id": user, "slack_user_name": name},
+        )
+    )
+
+
+def test_a_slack_approval_is_recorded_with_the_handle_and_released_by_the_step() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        _slack_approver(context)
+        request_id = _raise(context, row, token)
+
+        decided = _slack(context, row, token, request_id, name="@ana")
+
+        assert_that((decided.status_code, decided.json()), equal_to((200, {"state": "APPROVED"})))
+        # The step's poll sees it exactly as a web approval and releases the command once.
+        assert_that(
+            _status(context, row, token, request_id).json(),
+            equal_to({"state": "APPROVED", "decided_in": "slack", "decided_by_slack_handle": "ana"}),
+        )
+        assert_that(_status(context, row, token, request_id, "/released").status_code, equal_to(204))
+        approval = _run(context, row.run_id)["approvals"][0]
+        assert_that(
+            (approval["state"], approval["decision_source"], approval["decided_by_slack_handle"]),
+            equal_to(("RELEASED", "slack", "ana")),
+        )
+        assert_that(approval["decided_by_user_id"], equal_to(None))
+
+
+def test_a_slack_decline_continues_the_session_like_a_web_decline_without_guidance() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        _slack_approver(context)
+        request_id = _raise(context, row, token)
+
+        assert_that(_slack(context, row, token, request_id, "decline").json(), equal_to({"state": "DECLINED"}))
+
+        status = _status(context, row, token, request_id).json()
+        assert_that(status["state"], equal_to("DECLINED"))
+        assert "Their guidance: none given" in status["prompt"]
+
+
+@pytest.mark.parametrize(
+    ("configured", "enabled", "retired", "clicker"),
+    [
+        pytest.param(APPROVER, True, False, "U0SOMEONEELSE", id="someone-else"),
+        pytest.param("", True, False, APPROVER, id="no-approval-dm-user"),
+        pytest.param(APPROVER, False, False, APPROVER, id="connection-disabled"),
+        pytest.param(APPROVER, True, True, APPROVER, id="connection-retired"),
+    ],
+)
+def test_only_the_current_approval_dm_user_can_decide_in_slack(configured, enabled, retired, clicker) -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        _slack_approver(context, configured, enabled=enabled, retired=retired)
+        request_id = _raise(context, row, token)
+
+        refused = _slack(context, row, token, request_id, user=clicker)
+
+        assert_that(refused.status_code, equal_to(409))
+        assert_that(_run(context, row.run_id)["approval"]["state"], equal_to("LIVE"))
+
+
+def test_a_slack_click_after_a_web_decision_changes_nothing() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        _slack_approver(context)
+        request_id = _raise(context, row, token)
+        assert_that(_decide(context, row.run_id, request_id, "decline").status_code, equal_to(200))
+
+        late = _slack(context, row, token, request_id, "approve")
+
+        assert_that((late.status_code, late.json()["detail"]), equal_to((409, "This command was already declined")))
+        approval = _run(context, row.run_id)["approvals"][0]
+        assert_that((approval["state"], approval["decision_source"]), equal_to(("DECLINED", "web")))
+
+
+def test_a_parked_request_is_decided_on_the_web_not_in_slack() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+        _slack_approver(context)
+        request_id = _raise(context, row, token)
+        _set(context, WorkflowApprovalRequest, request_id, live_until=datetime.now(UTC) - timedelta(seconds=1))
+
+        closing = _slack(context, row, token, request_id)
+
+        assert_that(
+            (closing.status_code, closing.json()["detail"]),
+            equal_to((409, "This approval is closing; decide on the web")),
+        )
+        assert_that(_status(context, row, token, request_id, "/park").json(), equal_to({"state": "PARKED"}))
+
+
+def test_a_raised_request_links_to_its_run_on_the_web() -> None:
+    with given(_RUN_GIVEN) as context:
+        _repository, row, token = _started(context)
+
+        raised = _report(context, row, token)
+
+        expected = f"/dashboard/{context.organization.id}/workflows?workflowRun={row.run_id}"
+        assert raised["review_url"].endswith(expected), raised["review_url"]
