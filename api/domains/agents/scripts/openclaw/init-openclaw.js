@@ -21,6 +21,8 @@ const BOT_ONLY_PATHS = [
   ['agents', 'ownership'],
   ['agents', 'defaults', 'systemAgent'],
   ['agents', 'entries'],
+  ['plugins', 'entries', 'agentbarn-bot-env'],
+  ['tools', 'agentToAgent'],
 ];
 const BOT_KEYED = [
   { parts: ['models', 'providers'], pattern: /^litellm-bot-\d+$/ },

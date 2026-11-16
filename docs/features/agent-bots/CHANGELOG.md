@@ -79,6 +79,11 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-16 — AF-445 — Remove every multi-agent setting with the last Bot
+
+- Fixed: `init-openclaw.js` deep-merges `plugins.entries` and never removed `tools.agentToAgent`, so after the last Bot was deleted the saved `openclaw.json` kept `plugins.entries["agentbarn-bot-env"]`, with its `parentNames` and `platforms`, and `tools.agentToAgent`, although the plugin was no longer loaded. OpenClaw only warned about the stale entry, but the Lifecycle section says these settings are removed. Both are now removed with the other Bot-only paths when the new config doesn't name them.
+- Follow-up: Home reads every Bot in one list.
+
 ### 2026-11-16 — AF-445 — `agentbarn-bot-env` names the agent from its session and pins a Bot's unrouted posts
 
 - Fixed: both `agentbarn-bot-env` hooks refused every command and message when the hook context had no `agentId`, which OpenClaw 2026.8.2 treats as optional, so the Parent Agent's own calls failed too. They now take the agent from `agent:<id>:` in the session key, as the other plugins do, and refuse only when neither names one. They never fall back to the Parent Agent.

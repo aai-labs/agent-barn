@@ -468,6 +468,8 @@ def test_removing_the_last_bot_returns_the_saved_config_to_one_agent(tmp_path):
     assert merged["secrets"]["providers"] == {"vault": {"source": "env"}}
     assert merged["channels"] == _overlay([])["channels"]
     assert merged["bindings"] == []
+    assert "agentbarn-bot-env" not in merged["plugins"]["entries"]
+    assert "agentToAgent" not in merged["tools"]
 
 
 def test_removing_one_bot_leaves_nothing_of_it_in_the_saved_config(tmp_path):
