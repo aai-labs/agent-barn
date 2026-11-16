@@ -4,6 +4,7 @@ import {
   History,
   KeyRound,
   MessageSquare,
+  PlugZap,
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
@@ -37,6 +38,7 @@ export type AgentConfigurationSectionKey =
   | "skills"
   | "memory"
   | "keys"
+  | "mcp"
   | "override"
   | "restore"
   | "spend"
@@ -85,6 +87,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     description: "Platform tokens and encrypted integration credentials.",
   },
   {
+    key: "mcp",
+    label: "MCP servers",
+    description: "MCP servers this Agent can call tools on: its own, and the organization's shared ones.",
+  },
+  {
     key: "override",
     label: "Agent-owned override",
     description: "Draft, edit, and publish a private template snapshot.",
@@ -114,6 +121,7 @@ export const AGENT_CONFIGURATION_ICONS = {
   skills: Sparkles,
   memory: Brain,
   keys: KeyRound,
+  mcp: PlugZap,
   override: SlidersHorizontal,
   restore: History,
   spend: Wallet,

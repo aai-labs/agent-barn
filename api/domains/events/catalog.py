@@ -93,6 +93,9 @@ ORGANIZATION_SUBSCRIPTION_ENDED = "organization.subscription.ended"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
+ORGANIZATION_MCP_SERVER_CREATED = "organization.mcp_server.created"
+ORGANIZATION_MCP_SERVER_UPDATED = "organization.mcp_server.updated"
+ORGANIZATION_MCP_SERVER_DELETED = "organization.mcp_server.deleted"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
@@ -967,6 +970,32 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationMcpServerChangedPayload(BaseModel):
+    """An MCP server created, changed or deleted, never with its credential.
+
+    The URL is reduced to its host because some servers carry a key in the path.
+    `changed_fields` names what an update changed (empty for a create or delete); the
+    other fields describe the server after the change, or before it for a delete.
+    `agent_id` is set for an Agent MCP Server, whose Event's subject is that Agent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    mcp_server_id: UUID
+    identifier: str
+    url_host: str
+    scope: str
+    enabled: bool
+    auth_type: str
+    changed_fields: list[str]
+    attachment_count: int
+    restricted: bool = False
+    agent_id: UUID | None = None
+    actor_display: str
+    subject_display: str
+
+
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     registry.register(
@@ -1000,6 +1029,9 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_SUBSCRIPTION_RENEWED, OrganizationSubscriptionPayload),
         (ORGANIZATION_SUBSCRIPTION_ENDED, OrganizationSubscriptionPayload),
         (ORGANIZATION_TRIAL_EXPIRED, OrganizationTrialExpiredPayload),
+        (ORGANIZATION_MCP_SERVER_CREATED, OrganizationMcpServerChangedPayload),
+        (ORGANIZATION_MCP_SERVER_UPDATED, OrganizationMcpServerChangedPayload),
+        (ORGANIZATION_MCP_SERVER_DELETED, OrganizationMcpServerChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(

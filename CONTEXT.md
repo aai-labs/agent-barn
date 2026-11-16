@@ -388,6 +388,30 @@ _Avoid_: credential
 The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
 _Avoid_: encryption toggle, Shared Credential setting
 
+**Organization MCP Server**:
+A remote MCP server an Organization registers once, with one Organization-owned credential, an MCP Server Scope, and an optional tool filter, so its Agents can call the server's tools through their runtime's MCP client. Owners and Admins manage it. Agents reach it only through the credential gateway, so the credential never enters a pod. It is not an Integration or Shared Credential: no Agent Secret is created. See the [ADR](docs/adr/2026-11-10-organization-mcp-servers-are-gateway-only.md).
+_Avoid_: connector, MCP integration, MCP credential
+
+**Agent MCP Credential**:
+An Agent's own credential for one Organization MCP Server: a token and headers for a token-based server, or the Agent's own OAuth sign-in. When present, the gateway uses it instead of the Organization's. Set by the Agent's editor; it changes whose account the Agent uses, not whether it may use the server.
+_Avoid_: override token, personal MCP server
+
+**Agent MCP Server**:
+A remote MCP server added for one Agent only, with its own credential, by that Agent's Owners and Editors. Like an Organization MCP Server it is reached only through the credential gateway. It is listed only on its Agent, and no Organization setting turns them off.
+_Avoid_: personal MCP server, private MCP server
+
+**Restricted MCP Server**:
+An Organization MCP Server that only Organization Owners and Admins may switch on or off for an Agent, or give an Agent its own credential for. An open one leaves both to the Agent's Owners and Editors.
+_Avoid_: gated server, locked server
+
+**MCP Server Scope**:
+Which Agents may use an Organization MCP Server: All Agents in the Organization, or Selected Agents, meaning only those with an MCP Server Attachment.
+_Avoid_: visibility, sharing
+
+**MCP Server Attachment**:
+One Agent's opt-in to a Selected Agents Organization MCP Server. It is kept when the server's scope changes, and it has no effect while the scope is All Agents.
+_Avoid_: binding, subscription
+
 **Sync Provider**:
 A storage service an Organization can connect so Agent Barn keeps an "Agent Barn" folder there, implemented as a Sync Provider Plugin. OneDrive is the first. See [Sync providers](docs/features/sync-provider/README.md).
 _Avoid_: storage integration, Platform
@@ -511,6 +535,8 @@ _Avoid_: webhook
 - An **Agent Template Override** tracks one **Override Source Version** from a Platform or Organization Template lineage. An **Agent Override Update** copies a newer source snapshot into the draft, replacing local override changes; publishing preserves earlier versions for rollback.
 - Each Agent Template Override Draft or Version exposes its **Override Author** to users with Agent visibility; published version provenance is immutable.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
+- An **Organization** has zero or more **Organization MCP Servers**. An Agent may use a server when the server is enabled and either its **MCP Server Scope** is All Agents, or the scope is Selected Agents and the Agent has an **MCP Server Attachment** to it.
+- An **Agent** has zero or more **Agent MCP Servers**, which it may use while they are enabled and its Organization allows them. Their identifiers never match an Organization MCP Server's.
 - Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
 - A **Domain Event** has one **Event Scope**. A committed Domain Event is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
 - A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.

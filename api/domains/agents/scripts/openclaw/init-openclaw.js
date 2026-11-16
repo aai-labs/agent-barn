@@ -14,6 +14,8 @@ const REPLACE_PATHS = [
   ['bindings'],
   ['agents', 'defaults', 'heartbeat'],
   ['plugins', 'entries', 'hindsight-openclaw'],
+  // Agent Barn owns the MCP server list: a server the Organization removed must go.
+  ['mcp', 'servers'],
 ];
 
 function getPath(obj, parts) {
