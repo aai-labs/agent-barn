@@ -9,6 +9,7 @@ export const EnvironmentSourceSchema = z.enum([
   "pods",
   "deployments",
   "stateful_sets",
+  "replica_sets",
   "volume_claims",
   "services",
   "cron_jobs",

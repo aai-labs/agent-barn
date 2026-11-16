@@ -343,6 +343,9 @@ class KubernetesClient:
     def list_stateful_sets(self, namespace: str) -> list[client.V1StatefulSet]:
         return self._apps_v1.list_namespaced_stateful_set(namespace, _request_timeout=10).items
 
+    def list_replica_sets(self, namespace: str) -> list[client.V1ReplicaSet]:
+        return self._apps_v1.list_namespaced_replica_set(namespace, _request_timeout=10).items
+
     def list_resource_quotas(self, namespace: str) -> list[client.V1ResourceQuota]:
         return self._core_v1.list_namespaced_resource_quota(namespace, _request_timeout=10).items
 

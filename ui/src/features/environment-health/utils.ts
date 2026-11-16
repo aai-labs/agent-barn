@@ -21,6 +21,7 @@ export const SOURCE_LABELS: Record<EnvironmentSource, string> = {
   pods: "Pods",
   deployments: "Deployments",
   stateful_sets: "StatefulSets",
+  replica_sets: "ReplicaSets",
   volume_claims: "Volume claims",
   services: "Services",
   cron_jobs: "Scheduled jobs",

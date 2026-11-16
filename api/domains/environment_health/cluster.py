@@ -8,6 +8,7 @@ database; the `org-id`, `agent_name` and `org_name` labels are never trusted.
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import NamedTuple
@@ -18,8 +19,11 @@ from kubernetes.client import (
     V1CronJob,
     V1Deployment,
     V1Job,
+    V1ObjectMeta,
+    V1OwnerReference,
     V1PersistentVolumeClaim,
     V1Pod,
+    V1ReplicaSet,
     V1ResourceQuota,
     V1Service,
     V1StatefulSet,
@@ -971,20 +975,105 @@ def _event_time(event: CoreV1Event) -> datetime | None:
     return event.last_timestamp or series_time or event.event_time or event.metadata.creation_timestamp
 
 
-def _owning_workload(kind: str | None, name: str | None, owners: Mapping[str, str]) -> tuple[str, str] | None:
-    """The Deployment, StatefulSet or CronJob a pod, ReplicaSet or Job belongs to, from its name.
+# The characters Kubernetes draws a pod's random suffix and a ReplicaSet's template hash from.
+_GENERATED = "[bcdfghjklmnpqrstvwxz2456789]"
+_POD_SUFFIX = re.compile(f"{_GENERATED}{{5}}")
+_TEMPLATE_HASH = re.compile(f"{_GENERATED}{{1,10}}")
 
-    Their names start with the owner's name and a hyphen. The Event does not carry the owner,
-    and a CronJob's old runs are deleted before their Events expire, so the name is all there
-    is. The longest matching owner wins, so `api-gateway` is not read as `api`.
+Workload = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class WorkloadOwners:
+    """Which workload each pod, ReplicaSet and Job in the namespace belongs to.
+
+    `known` comes from the objects' owner references. The name sets are for objects already
+    gone, whose Events outlive them: a CronJob deletes its old runs before their Events expire.
+    """
+
+    known: dict[Workload, Workload] = field(default_factory=dict)
+    deployments: frozenset[str] = frozenset()
+    stateful_sets: frozenset[str] = frozenset()
+    cron_jobs: frozenset[str] = frozenset()
+
+
+def _controller(metadata: V1ObjectMeta) -> V1OwnerReference | None:
+    owners = metadata.owner_references or []
+    return next((owner for owner in owners if owner.controller), owners[0] if owners else None)
+
+
+def workload_owners(
+    *,
+    deployments: Sequence[V1Deployment],
+    stateful_sets: Sequence[V1StatefulSet],
+    cron_jobs: Sequence[V1CronJob],
+    replica_sets: Sequence[V1ReplicaSet],
+    jobs: Sequence[V1Job],
+    pods: Sequence[V1Pod],
+) -> WorkloadOwners:
+    """The owner of each pod, ReplicaSet and Job, followed up to its Deployment, StatefulSet or CronJob.
+
+    A Job no CronJob started is its own workload, so the chart's one-off Jobs are never read
+    as the Deployment whose name they start with.
+    """
+    known: dict[Workload, Workload] = {}
+    for replica_set in replica_sets:
+        owner = _controller(replica_set.metadata)
+        if replica_set.metadata.name and owner and owner.kind == "Deployment" and owner.name:
+            known["ReplicaSet", replica_set.metadata.name] = ("Deployment", owner.name)
+    for job in jobs:
+        name = job.metadata.name
+        if name:
+            cron = _cron_owner(job)
+            known["Job", name] = ("CronJob", cron) if cron else ("Job", name)
+    owners = WorkloadOwners(
+        known=known,
+        deployments=frozenset(d.metadata.name for d in deployments if d.metadata.name),
+        stateful_sets=frozenset(s.metadata.name for s in stateful_sets if s.metadata.name),
+        cron_jobs=frozenset(c.metadata.name for c in cron_jobs if c.metadata.name),
+    )
+    for pod in pods:
+        owner = _controller(pod.metadata)
+        if not pod.metadata.name or owner is None or not owner.kind or not owner.name:
+            continue
+        workload = _owning_workload(owner.kind, owner.name, owners) or (owner.kind, owner.name)
+        known["Pod", pod.metadata.name] = workload
+    return owners
+
+
+def _cron_run(name: str, owners: WorkloadOwners) -> Workload | None:
+    """A CronJob's run is named `<cron job>-<scheduled minute>`."""
+    base, _, minute = name.rpartition("-")
+    return ("CronJob", base) if base in owners.cron_jobs and minute.isdigit() else None
+
+
+def _deployment_replica_set(name: str, owners: WorkloadOwners) -> Workload | None:
+    """A Deployment's ReplicaSet is named `<deployment>-<template hash>`."""
+    base, _, template_hash = name.rpartition("-")
+    return ("Deployment", base) if base in owners.deployments and _TEMPLATE_HASH.fullmatch(template_hash) else None
+
+
+def _owning_workload(kind: str | None, name: str | None, owners: WorkloadOwners) -> Workload | None:
+    """The Deployment, StatefulSet, CronJob or Job a pod, ReplicaSet or Job belongs to.
+
+    From its owner references when the object is still there. Otherwise from its name, read
+    only in the exact shape its controller gives it, so `api-gateway-…` is not read as `api`.
     """
     if kind not in {"Pod", "ReplicaSet", "Job"} or not name:
         return None
-    matches = [owner for owner in owners if name.startswith(f"{owner}-")]
-    if not matches:
+    known = owners.known.get((kind, name))
+    if known is not None:
+        return known
+    if kind == "ReplicaSet":
+        return _deployment_replica_set(name, owners)
+    if kind == "Job":
+        return _cron_run(name, owners)
+    base, _, suffix = name.rpartition("-")
+    if base in owners.stateful_sets and suffix.isdigit():
+        return "StatefulSet", base
+    if not _POD_SUFFIX.fullmatch(suffix):
         return None
-    owner = max(matches, key=len)
-    return owners[owner], owner
+    return owners.known.get(("Job", base)) or _cron_run(base, owners) or _deployment_replica_set(base, owners)
 
 
 def warning_events(
@@ -992,7 +1081,7 @@ def warning_events(
     identities: Mapping[UUID, PlatformAgentIdentity],
     now: datetime,
     *,
-    owners: Mapping[str, str] | None = None,
+    owners: WorkloadOwners | None = None,
 ) -> list[WarningEventRead]:
     """The namespace's recent Warning Events, newest first.
 
@@ -1003,8 +1092,8 @@ def warning_events(
     Kubernetes keeps one Event per distinct message, so one failing image pull leaves several
     Events that differ only in text this page never shows. Those read as one row: the same
     reason, object and detail, with their counts added up and the latest time kept. Events
-    about the pods, ReplicaSets or Jobs of a workload in `owners` (name to kind) are read as
-    about the workload, so a CronJob failing every run is one row, not one per run.
+    about a workload's pods, ReplicaSets or Jobs (see `workload_owners`) are read as about the
+    workload, so a CronJob failing every run is one row, not one per run.
     """
     rows: dict[tuple[str, str | None, str | None, str | None], WarningEventRead] = {}
     for event in events:
@@ -1022,7 +1111,7 @@ def warning_events(
         involved = event.involved_object
         kind = involved.kind if involved and involved.kind in _EVENT_OBJECT_KINDS else None
         name = _name(involved.name) if kind and involved else None
-        owner = _owning_workload(kind, name, owners or {})
+        owner = _owning_workload(kind, name, owners or WorkloadOwners())
         if owner is not None:
             kind, name = owner
         match = _AGENT_OBJECT.fullmatch(name or "")

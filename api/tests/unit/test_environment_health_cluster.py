@@ -36,6 +36,7 @@ from kubernetes.client import (
     V1PodCondition,
     V1PodStatus,
     V1PodTemplateSpec,
+    V1ReplicaSet,
     V1ResourceQuota,
     V1ResourceQuotaStatus,
     V1Service,
@@ -414,9 +415,7 @@ def test_restart_history_keeps_only_pod_ids_and_whole_counts():
 
 
 def test_a_replaced_pod_does_not_inherit_the_restarts_of_the_pod_it_replaced():
-    restarts = cluster.pod_restarts(
-        [PrometheusSample({"pod": "postgres-0", "uid": _UID_A, "signal": "restarts"}, 4.0)]
-    )
+    restarts = cluster.pod_restarts([PrometheusSample({"pod": "postgres-0", "uid": _UID_A, "signal": "restarts"}, 4.0)])
 
     replacement = cluster.workloads([_pod("postgres-0", uid=_UID_B)], {}, _NOW, restarts)
     original = cluster.workloads([_pod("postgres-0", uid=_UID_A, restarts=4)], {}, _NOW, restarts)
@@ -789,24 +788,47 @@ def test_events_are_newest_first():
     assert [row.last_seen for row in rows] == [_NOW, _NOW - timedelta(minutes=3), _NOW - timedelta(minutes=7)]
 
 
+def _owned(kind: str, name: str) -> list[V1OwnerReference]:
+    return [V1OwnerReference(api_version="apps/v1", kind=kind, name=name, uid="1", controller=True)]
+
+
 def test_events_about_a_workloads_runs_and_pods_read_as_one_row_for_the_workload():
     ada = _agent("Ada")
+    named = lambda name, owner=None: V1ObjectMeta(name=name, owner_references=owner)
+    owners = cluster.workload_owners(
+        deployments=[V1Deployment(metadata=named(n)) for n in ("agentbarn-api", "agentbarn-api-gateway", "hindsight")]
+        + [V1Deployment(metadata=named(f"agent-{ada.id}"))],
+        stateful_sets=[V1StatefulSet(metadata=named("postgres"))],
+        cron_jobs=[_cron("agentbarn-backup")],
+        replica_sets=[V1ReplicaSet(metadata=named("agentbarn-api-5c9f8d", _owned("Deployment", "agentbarn-api")))],
+        jobs=[
+            V1Job(metadata=named("agentbarn-backup-29909212", _owned("CronJob", "agentbarn-backup"))),
+            V1Job(metadata=named("agentbarn-api-migrate")),
+            V1Job(metadata=named("hindsight-litellm-key")),
+        ],
+        pods=[
+            V1Pod(metadata=named("agentbarn-api-5c9f8d-bcdfg", _owned("ReplicaSet", "agentbarn-api-5c9f8d"))),
+            V1Pod(metadata=named("agentbarn-api-migrate-x7k2p", _owned("Job", "agentbarn-api-migrate"))),
+        ],
+    )
     events = [
+        # A run of the CronJob that is gone, and one still kept.
         _event("BackoffLimitExceeded", "x", kind="Job", name="agentbarn-backup-29909210", age=timedelta(minutes=5)),
         _event("BackoffLimitExceeded", "x", kind="Job", name="agentbarn-backup-29909212", age=timedelta(minutes=3)),
-        _event("BackOff", "x", name="agentbarn-api-5c9f8d-abcde", count=4),
-        _event("BackOff", "x", name="agentbarn-api-gateway-7f-xyz12"),
-        _event("BackOff", "x", name="agentbarn-api-5c9f8d-fghij", count=2),
-        _event("Unhealthy", "x", name=f"agent-{ada.id}-7d9f-abcde"),
+        # A pod of the Deployment, one already replaced, and an old ReplicaSet of it.
+        _event("BackOff", "x", name="agentbarn-api-5c9f8d-bcdfg", count=4),
+        _event("BackOff", "x", name="agentbarn-api-5c9f8d-hjklm", count=2),
+        _event("BackOff", "x", kind="ReplicaSet", name="agentbarn-api-6b7c8"),
+        _event("BackOff", "x", name="agentbarn-api-gateway-7c6d8-xz2qb"),
+        # The release's own Jobs and their pods are not the Deployment they share a prefix with.
+        _event("BackOff", "x", name="agentbarn-api-migrate-x7k2p"),
+        _event("BackOff", "x", name="agentbarn-api-migrate-q2w4r"),
+        _event("BackoffLimitExceeded", "x", kind="Job", name="hindsight-litellm-key"),
+        _event("Unhealthy", "x", name="postgres-0"),
+        _event("Unhealthy", "x", name=f"agent-{ada.id}-7d9f-bcdfg"),
         # Not a run of anything listed: read as itself.
         _event("BackOff", "x", name="report-renderer-1"),
     ]
-    owners = {
-        "agentbarn-backup": "CronJob",
-        "agentbarn-api": "Deployment",
-        "agentbarn-api-gateway": "Deployment",
-        f"agent-{ada.id}": "Deployment",
-    }
 
     rows = cluster.warning_events(events, _identities(ada), _NOW, owners=owners)
 
@@ -815,12 +837,16 @@ def test_events_about_a_workloads_runs_and_pods_read_as_one_row_for_the_workload
         ("BackoffLimitExceeded", "CronJob", "agentbarn-backup"),
         ("BackOff", "Deployment", "agentbarn-api"),
         ("BackOff", "Deployment", "agentbarn-api-gateway"),
+        ("BackOff", "Job", "agentbarn-api-migrate"),
+        ("BackoffLimitExceeded", "Job", "hindsight-litellm-key"),
+        ("Unhealthy", "StatefulSet", "postgres"),
         ("Unhealthy", "Deployment", f"agent-{ada.id}"),
         ("BackOff", "Pod", "report-renderer-1"),
     }
     backups = by_object["BackoffLimitExceeded", "CronJob", "agentbarn-backup"]
     assert (backups.count, backups.last_seen) == (2, _NOW - timedelta(minutes=3))
-    assert by_object["BackOff", "Deployment", "agentbarn-api"].count == 6
+    assert by_object["BackOff", "Deployment", "agentbarn-api"].count == 7
+    assert by_object["BackOff", "Job", "agentbarn-api-migrate"].count == 2
     agent_row = by_object["Unhealthy", "Deployment", f"agent-{ada.id}"]
     assert agent_row.agent is not None and agent_row.agent.agent_name == "Ada"
 

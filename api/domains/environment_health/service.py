@@ -170,6 +170,7 @@ class EnvironmentHealthService:
         pods = read(EnvironmentSource.PODS, self.repository.pods)
         deployments = read(EnvironmentSource.DEPLOYMENTS, self.repository.deployments)
         stateful_sets = read(EnvironmentSource.STATEFUL_SETS, self.repository.stateful_sets)
+        replica_sets = read(EnvironmentSource.REPLICA_SETS, self.repository.replica_sets)
         claims = read(EnvironmentSource.VOLUME_CLAIMS, self.repository.volume_claims)
         kube_services = read(EnvironmentSource.SERVICES, self.repository.services)
         crons = read(EnvironmentSource.CRON_JOBS, self.repository.cron_jobs)
@@ -222,11 +223,14 @@ class EnvironmentHealthService:
         ceilings = self.resource_limits_service.get_limits()
         capacity = self._capacity(now, ceilings, quotas, claims, pods, kube_services)
         volumes = cluster.volume_allocation(claims or [], identities)
-        owners = {
-            **{workload.metadata.name: "Deployment" for workload in deployments or [] if workload.metadata.name},
-            **{workload.metadata.name: "StatefulSet" for workload in stateful_sets or [] if workload.metadata.name},
-            **{cron.metadata.name: "CronJob" for cron in crons or [] if cron.metadata.name},
-        }
+        owners = cluster.workload_owners(
+            deployments=deployments or [],
+            stateful_sets=stateful_sets or [],
+            cron_jobs=crons or [],
+            replica_sets=replica_sets or [],
+            jobs=jobs or [],
+            pods=pods or [],
+        )
         warnings = cluster.warning_events(events or [], identities, now, owners=owners)
         limit = cluster.LIST_LIMIT
 
