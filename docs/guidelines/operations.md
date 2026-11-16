@@ -782,6 +782,11 @@ Rules:
 
 Documentation-only changes do not change a service image and do not require a service image-tag change.
 
+For the human-facing release title, benefit summary, upgrade notes, and generated
+changelog, follow [release communication](repository-discovery.md#write-release-notes-for-users)
+and use [the release-note template](../../.github/RELEASE_NOTES_TEMPLATE.md).
+That editorial process does not change tag, image, or deployment rules.
+
 ## Monitoring stack
 
 `../../helm/monitoring/` (plain namespace-scoped Prometheus + Grafana + Alertmanager) deploys with the regular Helmfile sync. Operational notes:

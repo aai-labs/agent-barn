@@ -12,6 +12,9 @@ Use this index to load only the context required by the task. `../AGENTS.md` rem
 | Multi-ticket or multi-PR epic coordination             | [`guidelines/epics.md`](guidelines/epics.md)           |
 | Required main-Compose Garage storage, private buckets, artifact storage bootstrap, TLS, backup or recovery | [`guidelines/garage.md`](guidelines/garage.md) |
 | Local development, migrations, deployment, releases, or automated memory credential provisioning | [`guidelines/operations.md`](guidelines/operations.md) |
+| Local startup errors and runtime connectivity troubleshooting | [`guidelines/local-troubleshooting.md`](guidelines/local-troubleshooting.md) |
+| Repository About/topics, release-note presentation, and starter-task publication | [`guidelines/repository-discovery.md`](guidelines/repository-discovery.md) |
+| First Agent workflows and per-agent cost checks | [`use-cases.md`](use-cases.md) |
 
 ## System context
 
