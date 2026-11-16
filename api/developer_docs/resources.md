@@ -6,6 +6,17 @@ Templates and Skills live beneath `/organizations/{organization_id}/templates` a
 
 Shared Credentials live beneath `/organizations/{organization_id}/shared-credentials`; credentials are never returned as plaintext. Agent-specific Secrets and integration configuration are controlled by Agent Permissions. Google authorization and token exchange use `/integrations/google/...`; callback navigation remains a browser/provider flow. Communications Connections are managed beneath each Agent's `/connections` routes.
 
+Shared SSH keys use `/organizations/{organization_id}/ssh-credentials`: `GET`
+lists keys, `POST` generates or imports one, and `GET`, `PUT`, and `DELETE` at
+`/{key_id}` inspect, update, or delete it. Only public key metadata is returned.
+Agent assignments use `GET` and `PUT` at
+`/organizations/{organization_id}/agents/{agent_id}/ssh-credentials`. Updates
+require `expected_revision`; attaching to a running Agent requires explicit
+`restart: true`. Organization Owner/Admin manage keys; Agent attachment changes
+require both `agent.update` and `agent.secret.manage`, plus
+`agent.lifecycle.manage` for a restart. Consult [OpenAPI](/api/v1/openapi.json)
+for key source, server policy, revision, and assignment fields.
+
 Optional credential isolation uses `PUT /organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation`. Consult [OpenAPI](/api/v1/openapi.json) for request fields and recovery metadata. The response may describe a provisioned runtime awaiting readiness; consult the Agent's isolation metadata on subsequent reads.
 
 Custom API connections use `/organizations/{organization_id}/agents/{agent_id}/custom-api-connections`. `GET` lists named connections and `POST` creates one; `PATCH` and `DELETE` at `/{connection_id}` update or remove it. Creation accepts a connection name and generates its immutable identifier by lowercasing and replacing spaces with hyphens; callers cannot supply or edit the identifier. Each connection has an allowed public HTTPS base URL, authentication, additional headers, and an optional credential isolation setting. Credentials and secret header values are write-only; omit them on update to retain saved values. Reads require Agent visibility, while changes require both `agent.update` and `agent.secret.manage`.
