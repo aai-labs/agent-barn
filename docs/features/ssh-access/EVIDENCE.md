@@ -167,12 +167,26 @@ the running API. Existing dependency deprecation warnings were non-fatal.
 
 ## Review limits and delivery
 
+Staging integration (`bc6cf138`, 2026-11-16) retained both deployment-guide
+sections and moved the unreleased SSH migration after the new provider migration
+`22b93965859f`. The merged tree passed 157 selected SSH, provider, public API,
+runtime ConfigMap, OpenRouter, LiteLLM and event checks, plus 12 browser checks
+for SSH and Platform LLM providers. API lint/format/types, UI types/ESLint, the
+single migration-head check and SSH chart checks passed.
+
+```bash
+PYTEST_XDIST_AUTO_NUM_WORKERS=4 REDIS_URL=redis://127.0.0.1:1/0 \
+PYTEST_ADDOPTS='-k "ssh or runtime_config_map_contract or public_api_contract or llm_provider or openrouter_client or domain_events or litellm_client" --tb=short --show-capture=no -q' \
+make test-api
+(cd ui && pnpm exec playwright test tests/e2e/ssh.spec.ts tests/e2e/platform-llm-providers.spec.ts)
+```
+
 The ADR and current contracts live in [Shared SSH access](../ssh-access.md) and
 its linked documents; this file records observations only. Rollout order and
 rollback are in [operations](../../guidelines/operations.md#ssh-signing-deployment).
 The feature defaults off. The chart is 0.20.0; compatible runtime versions start
 at Hermes 0.2.12 and OpenClaw 0.7.9. Migration `a193d7f0c284` follows staging head
-`38de1199ae19`; no existing provider credentials are converted.
+`22b93965859f` after the staging update; no existing provider credentials are converted.
 
 Cluster-level ingress/network enforcement and paid provider/model execution are
 unverified here. The audit processor was invoked directly after real broker

@@ -110,7 +110,7 @@ export function OpenRouterCreditsWarning({ summary }: { summary: Credits }) {
         <AlertTitle>OpenRouter credits could not be read</AlertTitle>
         <AlertDescription>
           The balance shown on this page is unknown, not healthy. Check that
-          OPENROUTER_API_KEY is set and valid on the API.
+          a valid OpenRouter key is saved in Platform Admin settings.
         </AlertDescription>
       </Alert>
     );

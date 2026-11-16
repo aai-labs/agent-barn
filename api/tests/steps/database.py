@@ -16,6 +16,13 @@ from api.domains.auth.repository import (
     PasswordResetTokenRepository,
     RefreshTokenRepository,
 )
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    OPENROUTER_NAME,
+    OPENROUTER_SLUG,
+    LlmProviderConnection,
+    ProviderType,
+)
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.tiers.models import SEED_TIERS, Tier
@@ -96,6 +103,19 @@ def database_is_clean():
             conn.execute(
                 Tier.__table__.insert(),  # ty: ignore[unresolved-attribute]
                 [{**seed, "enabled": False, "created_at": now, "updated_at": now} for seed in SEED_TIERS],
+            )
+            # The LLM Provider Connections back to what the migration seeded: OpenRouter, no key.
+            conn.execute(text("DELETE FROM llm_provider_connection"))
+            conn.execute(
+                LlmProviderConnection.__table__.insert(),  # ty: ignore[unresolved-attribute]
+                {
+                    "id": OPENROUTER_CONNECTION_ID,
+                    "slug": OPENROUTER_SLUG,
+                    "name": OPENROUTER_NAME,
+                    "provider_type": ProviderType.OPENROUTER,
+                    "created_at": now,
+                    "updated_at": now,
+                },
             )
             conn.commit()
         delegate.delete_all(RefreshToken)

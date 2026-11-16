@@ -163,6 +163,7 @@ def test_retired_key_hash_still_attributes_delayed_billing_after_replacement(mon
             logs,
             MemoryGeneration(),
             "",
+            openrouter_api_key=lambda: "",
             memory_key_source=keys.hashes,
         )
         synchronizer.run_once()

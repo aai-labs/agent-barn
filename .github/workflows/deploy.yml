@@ -411,6 +411,7 @@ jobs:
           HINDSIGHT_API_KEY: ${{ secrets[format('{0}HINDSIGHT_API_KEY', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets[format('{0}MEMORY_RUNTIME_SERVICE_KEY', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           LITELLM_MASTER_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_MASTER_KEY || secrets.LITELLM_MASTER_KEY }}
+          LITELLM_SALT_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_SALT_KEY || secrets.LITELLM_SALT_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
