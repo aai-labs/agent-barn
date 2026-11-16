@@ -454,40 +454,56 @@ test.describe("Bot pages", () => {
 test.describe("Home with bots", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  const openHome = async (page: Page, bots: unknown[]) => {
-    const { data } = await setUp(page, parent, bots);
+  const openHome = async (page: Page, bots: unknown[], agent: typeof parent = parent) => {
+    const { data } = await setUp(page, agent, bots);
     await data.organizations.interceptGetOrganizationLlmBudget();
+    const everyone = [agent, ...bots];
+    const listsBots = (url: URL) => url.pathname.endsWith("/agents") && url.searchParams.get("include_bots") === "true";
+    await page.route(listsBots, async (route) => {
+      await route.fulfill({ json: { items: everyone, page: 1, page_size: 100, total: everyone.length } });
+    });
+    const botRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "GET" && /\/agents\/[^/]+\/bots$/.test(new URL(request.url()).pathname)) {
+        botRequests.push(request.url());
+      }
+    });
     await page.goto(`/dashboard/${TEST_ORG_ID}`);
-    return page.getByRole("link", { name: "View Front Desk" });
+    return { card: page.getByRole("link", { name: "View Front Desk" }), botRequests };
   };
 
   test("a parent's card counts its bots and flags one needing attention", async ({ page }) => {
-    const card = await openHome(page, [sales, { ...lawyer, status: "ERROR" }]);
+    const { card } = await openHome(page, [sales, { ...lawyer, status: "ERROR" }]);
 
     await expect(card).toContainText("2 bots");
     await expect(card).toContainText("1 needs attention");
   });
 
   test("one healthy bot reads in the singular with no flag", async ({ page }) => {
-    const card = await openHome(page, [sales]);
+    const { card } = await openHome(page, [sales]);
 
     await expect(card).toContainText("1 bot");
     await expect(card).not.toContainText("needs attention");
   });
 
   test("an OpenClaw parent's card counts its bots", async ({ page }) => {
-    const { data } = await setUp(page, openclawParent, openclawBots);
-    await data.organizations.interceptGetOrganizationLlmBudget();
-    await page.goto(`/dashboard/${TEST_ORG_ID}`);
+    const { card } = await openHome(page, openclawBots, openclawParent);
 
-    await expect(page.getByRole("link", { name: "View Front Desk" })).toContainText("2 bots");
+    await expect(card).toContainText("2 bots");
   });
 
   test("a parent with no bots shows no count", async ({ page }) => {
-    const card = await openHome(page, []);
+    const { card } = await openHome(page, []);
 
     await expect(card).toBeVisible();
     await expect(card).not.toContainText(/\d bots?/);
+  });
+
+  test("home reads every bot in one list rather than per card", async ({ page }) => {
+    const { card, botRequests } = await openHome(page, [sales, lawyer]);
+
+    await expect(card).toContainText("2 bots");
+    expect(botRequests).toEqual([]);
   });
 });
 

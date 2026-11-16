@@ -79,6 +79,12 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-16 — AF-445 — Home reads every Bot in one list
+
+- Fixed: once Bots came to OpenClaw, the Agent card's Bot count was no longer limited to Hermes, so Home sent one `/agents/{id}/bots` request per card, including for every Agent with no Bots. Home now reads the Agents list once with `include_bots=true`, one request per 100 Agents, groups the Bots by Parent Agent and passes each card its own. The list already shows a Bot only to someone who can read its Parent Agent.
+- Changed: if that list fails, the cards show no Bot count; the Agents still load from their own list.
+- Follow-up: the end-to-end runs.
+
 ### 2026-11-16 — AF-445 — Remove every multi-agent setting with the last Bot
 
 - Fixed: `init-openclaw.js` deep-merges `plugins.entries` and never removed `tools.agentToAgent`, so after the last Bot was deleted the saved `openclaw.json` kept `plugins.entries["agentbarn-bot-env"]`, with its `parentNames` and `platforms`, and `tools.agentToAgent`, although the plugin was no longer loaded. OpenClaw only warned about the stale entry, but the Lifecycle section says these settings are removed. Both are now removed with the other Bot-only paths when the new config doesn't name them.
