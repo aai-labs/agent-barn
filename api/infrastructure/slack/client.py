@@ -125,6 +125,14 @@ class SlackClient:
             raise SlackFetchError(f"conversations.info error: {body.get('error', 'unknown_error')}")
         return body["channel"]
 
+    def get_user(self, user_id: str) -> dict:
+        body = self._get("users.info", {"user": user_id})
+        if not body.get("ok") or not body.get("user"):
+            if body.get("error") == "user_not_found":
+                raise ValueError(f"Slack user {user_id} was not found in this workspace")
+            raise SlackFetchError(f"users.info error: {body.get('error', 'unknown_error')}")
+        return body["user"]
+
     def open_dm(self, user_id: str) -> str:
         body = self._post("conversations.open", {"users": user_id})
         channel_id = (body.get("channel") or {}).get("id")

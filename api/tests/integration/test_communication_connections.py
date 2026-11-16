@@ -902,6 +902,38 @@ def test_openclaw_refuses_turning_require_mention_off_while_listening_in() -> No
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
+def test_workflow_approval_dm_is_saved_on_a_hermes_agent() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        response = context.client.post(
+            _base(context),
+            json={**_slack_payload(), "settings": {"approval_dm_user_id": "U0APPROVER"}},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.json()["settings"]["approval_dm_user_id"], equal_to("U0APPROVER"))
+
+
+def test_openclaw_refuses_a_workflow_approval_dm() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        refused = client.post(
+            _base(context),
+            json={**_slack_payload(), "settings": {"approval_dm_user_id": "U0APPROVER"}},
+            headers=_auth(context),
+        )
+        created = client.post(_base(context), json=_slack_payload(), headers=_auth(context)).json()
+        updated = client.patch(
+            f"{_base(context)}/{created['id']}",
+            json={"revision": created["revision"], "settings": {"approval_dm_user_id": "U0APPROVER"}},
+            headers=_auth(context),
+        )
+
+        assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(refused.json()["detail"], contains_string("Workflow approval DM needs a Hermes Agent"))
+        assert_that(updated.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
 def test_openclaw_allows_require_mention_off_without_listen_in() -> None:
     with given(_GIVEN) as context:
         response = context.client.post(

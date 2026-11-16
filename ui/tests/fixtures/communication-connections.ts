@@ -49,6 +49,7 @@ export const mockCommunicationPlatforms = [
         channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
         listen_in_channel_ids: { title: "Listen-in channels", type: "array", items: { type: "string" } },
+        approval_dm_user_id: { title: "Workflow approval DM", type: "string" },
       },
     },
     credentials_schema: {

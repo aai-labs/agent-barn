@@ -50,8 +50,8 @@ def check() -> None:
     shutil.copytree("/plugin", home / "plugins" / "agentbarn-workflow-approvals")
     sys.path.insert(0, "/opt/hermes")
     from hermes_cli.plugins import discover_plugins, get_plugin_manager  # ty: ignore[unresolved-import]
-    from slack_bolt.async_app import AsyncApp
-    from slack_bolt.request.async_request import AsyncBoltRequest
+    from slack_bolt.async_app import AsyncApp  # ty: ignore[unresolved-import]
+    from slack_bolt.request.async_request import AsyncBoltRequest  # ty: ignore[unresolved-import]
 
     received: list[tuple[str, str, dict]] = []
 
@@ -62,7 +62,7 @@ def check() -> None:
             self.send_response(202)
             self.end_headers()
 
-        def log_message(self, *args) -> None:
+        def log_message(self, format, *args) -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 18082), Trigger)
@@ -71,7 +71,7 @@ def check() -> None:
     discover_plugins()
     handlers = get_plugin_manager().get_slack_action_handlers()
     assert [name for _, _, name in handlers] == ["agentbarn-workflow-approvals"], handlers
-    from slack_bolt.authorization import AuthorizeResult
+    from slack_bolt.authorization import AuthorizeResult  # ty: ignore[unresolved-import]
 
     async def authorize(**_) -> AuthorizeResult:
         # Offline stand-in for the auth.test call a real token triggers.
@@ -81,7 +81,7 @@ def check() -> None:
     for action_id, callback, _ in handlers:
         app.action(action_id)(callback)
 
-    async def click(action_id: str, user: str, channel: str, value: str = REQUEST_ID) -> int:
+    async def click(action_id: str, user: str, channel: str, value: str = REQUEST_ID) -> tuple[int, int]:
         before = len(received)
         body = {
             "type": "block_actions",

@@ -17,6 +17,7 @@ from api.domains.communications.plugins.base import (
     PlatformSettings,
 )
 from api.infrastructure.slack.client import SlackClient
+from api.infrastructure.slack.errors import SlackFetchError
 
 
 class SlackValidationConfig(Protocol):
@@ -73,6 +74,17 @@ class SlackSettings(NativeHomeDeliverySettings, PlatformSettings):
             "turn, even when the Agent stays silent. Under Allowlist, these must also be Allowed channels. "
             "On Hermes, Verbose mode is off for this platform and new messages wait for the running "
             "turn instead of interrupting it."
+        ),
+    )
+
+    approval_dm_user_id: str = Field(
+        default="",
+        pattern=r"^([UW][A-Z0-9]+)?$",
+        title="Workflow approval DM",
+        description=(
+            "Slack user ID that receives a direct message to approve or decline each command this Agent's workflow "
+            "steps flag for approval. Clicks from anyone else are ignored, and the decision is recorded with their "
+            "Slack handle. Leave empty to decide on the web only. Hermes Agents only."
         ),
     )
 
@@ -226,6 +238,14 @@ class SlackPlatformPlugin(PlatformPlugin):
         app_ok, app_reason = client.validate_app_token()
         if not app_ok:
             raise ValueError(app_reason)
+        assert isinstance(settings, SlackSettings)
+        if settings.approval_dm_user_id:
+            try:
+                user = client.get_user(settings.approval_dm_user_id)
+            except SlackFetchError as exc:
+                raise ValueError(f"Could not check the Workflow approval DM user: {exc}") from exc
+            if user.get("deleted") or user.get("is_bot"):
+                raise ValueError("Workflow approval DM must be an active person in this workspace")
         info = client.get_bot_info()
         team = info.get("team", "")
         username = info.get("username", "")

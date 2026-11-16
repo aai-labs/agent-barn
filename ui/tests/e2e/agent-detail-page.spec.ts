@@ -1218,6 +1218,24 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await expect(page.getByRole("button", { name: "Remove #general", exact: true })).toBeVisible();
   });
 
+  test("picks one Slack user for workflow approval DMs", async ({ page }) => {
+    await serveSavedSlackConnection(page);
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+    const field = page.getByLabel("Workflow approval DM", { exact: true });
+    await expect(field).toHaveValue("");
+
+    await agentDetailPage.browseDirectoryButton("Workflow approval DM").click();
+    await agentDetailPage.directoryPickerOption(/Aria/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
+    await expect(agentDetailPage.directoryPicker()).toBeHidden();
+    await expect(field).toHaveValue("user-one");
+    await expect(page.getByText("Aria", { exact: true })).toBeVisible();
+
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
+    expect((await update).postDataJSON()).toMatchObject({ settings: { approval_dm_user_id: "user-one" } });
+  });
+
   test("shows an actionable directory error without exposing server details", async ({ page }) => {
     await serveSavedSlackConnection(page);
     await page.route("**/directory/channels*", async (route) => {

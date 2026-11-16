@@ -132,9 +132,10 @@ Choose commands for the touched area. Full Kubernetes or browser suites are requ
 
 ### When CI runs
 
-The Hermes path filter explicitly includes `hermes_slack_access_driver.py`.
-Changes to that fixture alone select the Hermes image workflow and run the
-real-adapter admission, thread-context, and group-DM button contracts.
+The Hermes path filter explicitly includes `hermes_slack_access_driver.py` and
+`hermes_workflow_approval_driver.py`. Changes to either fixture alone select the
+Hermes image workflow and run the real-adapter admission, thread-context and
+group-DM button contracts, and the workflow approval DM click contract.
 
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:

@@ -38,6 +38,7 @@ _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 _TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
 _LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 _SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
+_WORKFLOW_APPROVALS = _SCRIPTS / "plugins" / "agentbarn-workflow-approvals"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
@@ -56,6 +57,8 @@ LISTEN_IN_PLUGIN_INIT: str = (_LISTEN_IN / "__init__.py").read_text()
 LISTEN_IN_CHECK_PY: str = (_SCRIPTS / "listen-in-check.py").read_text()
 SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
 SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
+WORKFLOW_APPROVALS_PLUGIN_YAML: str = (_WORKFLOW_APPROVALS / "plugin.yaml").read_text()
+WORKFLOW_APPROVALS_PLUGIN_INIT: str = (_WORKFLOW_APPROVALS / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -227,6 +230,8 @@ def build_hermes_gateway_config(
         plugins.append("agentbarn-observer")
     if native_slack:
         plugins.append("agentbarn-slack-access")
+        # Inert until the Connection names a Workflow approval DM user.
+        plugins.append("agentbarn-workflow-approvals")
     config = _hermes_config_core(
         model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
     )
@@ -334,6 +339,8 @@ def native_slack_env(
         "AGENTBARN_SLACK_DM_POLICY": settings.get("dm_policy", "off"),
         "AGENTBARN_SLACK_GROUP_POLICY": settings.get("group_policy", "allowlist"),
         "AGENTBARN_SLACK_DM_ALLOWED_USERS": ",".join(settings.get("dm_user_ids") or []),
+        # The workflow approval plugin and trigger server read this; empty means web-only.
+        "AGENTBARN_SLACK_APPROVAL_USER": settings.get("approval_dm_user_id") or "",
     }
     if settings.get("group_policy", "allowlist") == "allowlist":
         env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
@@ -492,6 +499,8 @@ def build_hermes_config_map(
         "listen-in-check.py": LISTEN_IN_CHECK_PY,
         "slack-access-plugin.yaml": SLACK_ACCESS_PLUGIN_YAML,
         "slack-access-init.py": SLACK_ACCESS_PLUGIN_INIT,
+        "workflow-approvals-plugin.yaml": WORKFLOW_APPROVALS_PLUGIN_YAML,
+        "workflow-approvals-init.py": WORKFLOW_APPROVALS_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
