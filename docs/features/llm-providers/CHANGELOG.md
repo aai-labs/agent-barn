@@ -8,10 +8,16 @@ Related context: [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent
 
 - Delivered: a Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- Next: slice 1, PR 10 — the OpenRouter section in Platform Admin settings.
+- Next: slice 1, PR 11 — the feature doc, `docs/INDEX.md`, the `CONTEXT.md` term and the ADR.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 10
+
+- Delivered: Platform Admin settings has an LLM providers section (`?section=llm-providers`) with an OpenRouter card. It shows the key's last four characters and who changed it when, or that no key is saved and whether Agents are using `OPENROUTER_API_KEY` meanwhile. "Save a key" or "Replace key" opens a dialog with a password field; a refused or failed save keeps the dialog open with the API's message, and an empty key is not sent. While a key is saved and `OPENROUTER_API_KEY` is still set, the card says the secret can be deleted once every environment sharing it has a saved key.
+- Changed: `ui/tests/e2e/platform-llm-providers.spec.ts` with its page object and data support; the navigation spec counts nine settings sections.
+- Follow-up: PR 11 adds the feature doc, the `docs/INDEX.md` route, the `CONTEXT.md` term and the ADR.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 9
 
