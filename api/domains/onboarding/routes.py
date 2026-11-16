@@ -7,7 +7,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.onboarding.models import OnboardingRead, TrialSettingsRead, TrialSettingsUpdate
 from api.domains.onboarding.service import OnboardingService
-from api.domains.onboarding.settings_service import TrialSettingsService
+from api.domains.onboarding.settings_service import TrialSettingsService, TrialSettingsUpdateService
 
 onboarding_router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 platform_trial_settings_router = APIRouter(prefix="/platform/settings/trial", tags=["platform-settings"])
@@ -25,7 +25,7 @@ def read_trial_settings(
 def update_trial_settings(
     data: TrialSettingsUpdate,
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
-    service: Annotated[TrialSettingsService, Injected(TrialSettingsService)],
+    service: Annotated[TrialSettingsUpdateService, Injected(TrialSettingsUpdateService)],
 ):
     return service.update(data, context)
 

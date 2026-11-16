@@ -27,6 +27,7 @@ from api.domains.playbooks.transport import PlaybookExtractionQueue
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
 from api.domains.skills.service import SkillService
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class PlaybookExtractionService:
     authorization: AgentAuthorization
     policy: PermissionPolicy
     skills: SkillService
+    usage: UsageGuard
     queue: PlaybookExtractionQueue
     event_delivery_dispatcher: EventDeliveryDispatcher
     sessions: PlaybookSessionReader
@@ -79,6 +81,7 @@ class PlaybookExtractionService:
         self, agent_id: UUID, data: PlaybookExtractionCreate, context: CurrentUserContext
     ) -> PlaybookExtractionRead:
         agent, _ = self._require_extractor(context, agent_id)
+        self.usage.check(agent.organization_id, UsageAction.CREATE_PLAYBOOK)
         self.repository.expire_abandoned(source_agent_id=agent.id)
         if data.skill_id is not None:
             skill_name = self.skills.require_playbook_target(agent.organization_id, data.skill_id).name

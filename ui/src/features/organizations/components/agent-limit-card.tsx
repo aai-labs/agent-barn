@@ -41,7 +41,7 @@ export function AgentLimitCard({ organization }: { organization: PlatformOrganiz
             Agents
           </h2>
           <p className="mb-0 mt-1 text-[13.5px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            {describe(organization.agentLimitInForce)} · {own == null ? "The default" : "Set for this organization"}
+            {describe(organization.agentLimitInForce)} · {own != null ? "Set for this organization" : organization.tier ? `The ${organization.tier.name} tier's` : "The default"}
           </p>
         </div>
         <button
@@ -102,7 +102,7 @@ export function AgentLimitCard({ organization }: { organization: PlatformOrganiz
             )}
           </div>
           <p id={hintId} className="m-0 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
-            Leave empty to use the default for {organization.isTrial ? "trials" : "organizations"}.
+            Leave empty to use {organization.tier ? `the ${organization.tier.name} tier's limit` : `the default for ${organization.isTrial ? "trials" : "organizations"}`}.
           </p>
           {invalid && (
             <p id={errorId} className="m-0 text-[0.8rem]" role="alert" style={{ color: "var(--err)" }}>

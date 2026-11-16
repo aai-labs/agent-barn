@@ -372,9 +372,29 @@ def test_a_platform_administrator_changes_the_billing_settings_and_it_is_audited
         )
 
 
+def test_a_past_due_subscription_keeps_its_tier_for_a_week_until_the_grace_period_is_changed():
+    with given(_setup(a_platform_administrator())) as context:
+        assert_that(context.client.get(SETTINGS, headers=auth(context)).json(), has_entries(payment_grace_days=7))
+
+        response = context.client.put(SETTINGS, json={"payment_grace_days": 14}, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json(), has_entries(payment_grace_days=14))
+        (event,) = events_named(context, "platform.billing_settings.changed")
+        assert_that(event.payload, has_entries(setting="payment_grace_days", previous=7, current=14))
+
+
 @pytest.mark.parametrize(
     "payload",
-    [{"min_purchase_usd": 600}, {"credit_rate": 0.5}, {"purchase_fee_percent": -1}, {"max_purchase_usd": None}],
+    [
+        {"min_purchase_usd": 600},
+        {"credit_rate": 0.5},
+        {"purchase_fee_percent": -1},
+        {"max_purchase_usd": None},
+        {"payment_grace_days": -1},
+        {"payment_grace_days": 61},
+        {"payment_grace_days": None},
+    ],
 )
 def test_impossible_billing_settings_are_refused(payload):
     with given(_setup(a_platform_administrator())) as context:
