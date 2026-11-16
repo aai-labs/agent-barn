@@ -74,6 +74,9 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.BILLING_MANAGE,
         # Choosing which Agents a Tier keeps.
         PermissionKey.TIER_HOLD_MANAGE,
+        # Seeing Agents' Anomalies and changing what counts as unusual.
+        PermissionKey.ANOMALY_READ,
+        PermissionKey.ANOMALY_MANAGE,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

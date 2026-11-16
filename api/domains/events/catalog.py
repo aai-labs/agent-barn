@@ -39,6 +39,7 @@ TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
+ORGANIZATION_ANOMALY_DETECTION_CHANGED = "organization.anomaly_detection.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_CREATED = "organization.created"
 ORGANIZATION_UPDATED = "organization.updated"
@@ -90,6 +91,7 @@ ORGANIZATION_SUBSCRIPTION_CHANGED = "organization.subscription.changed"
 ORGANIZATION_SUBSCRIPTION_RENEWED = "organization.subscription.renewed"
 ORGANIZATION_SUBSCRIPTION_ENDED = "organization.subscription.ended"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
+AGENT_ANOMALY_OVERRIDE_CHANGED = "agent.anomaly_override.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
 
@@ -589,6 +591,39 @@ class OrganizationModelAllowlistChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationAnomalyDetectionChangedPayload(BaseModel):
+    """Anomaly detection turned on or off for an Organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    enabled: bool
+    previous_enabled: bool
+    actor_display: str
+    subject_display: str
+
+
+class AgentAnomalyOverrideChangedPayload(BaseModel):
+    """An Agent's sensitivity and hard caps before and after; a None cap is no cap.
+
+    The LLM token cap is `max_llm_usage_per_hour`: payload keys naming tokens are
+    refused as possible secrets.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    sensitivity: str
+    previous_sensitivity: str
+    max_llm_usage_per_hour: int | None
+    previous_max_llm_usage_per_hour: int | None
+    max_llm_calls_per_hour: int | None
+    previous_max_llm_calls_per_hour: int | None
+    actor_display: str
+    subject_display: str
+
+
 class OrganizationAgentSettingsChangedPayload(BaseModel):
     """One changed Agent Setting, named by `setting`, with its before/after values.
 
@@ -976,6 +1011,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
+        (ORGANIZATION_ANOMALY_DETECTION_CHANGED, OrganizationAnomalyDetectionChangedPayload),
+        (AGENT_ANOMALY_OVERRIDE_CHANGED, AgentAnomalyOverrideChangedPayload),
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
