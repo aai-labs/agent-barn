@@ -162,7 +162,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   }
 
   return (
-    <>
+    <div className="space-y-8">
     <AgentConfigurationSection title="Integrations" description="Runtime integration credentials are separate from communication connection credentials. Secret values remain write-only and encrypted at rest."
       errorsShownInline
       canEdit={canEdit && !customApi.isLoadingConnections && !customApi.connectionsError} editing={editing} onEdit={beginEditing} onApply={applyChanges}
@@ -200,6 +200,6 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
       )}
     </AgentConfigurationSection>
     <AgentSshPanel key={agent.id} agent={agent} />
-    </>
+    </div>
   );
 }
