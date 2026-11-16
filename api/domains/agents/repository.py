@@ -359,6 +359,17 @@ class AgentRepository:
                 or 0
             )
 
+    def find_live_ids_by_org(self, org_id: UUID) -> list[UUID]:
+        """Ids of an Organization's non-deleted Agents, oldest first. Unscoped: for
+        background work only."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(Agent.id))
+                .where(col(Agent.organization_id) == org_id, col(Agent.deleted_at).is_(None))
+                .order_by(col(Agent.created_at))
+            )
+            return list(session.exec(query).all())
+
     def count_active_by_org(self, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
             count_query = (
