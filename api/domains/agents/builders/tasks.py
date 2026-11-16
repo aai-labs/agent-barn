@@ -38,11 +38,13 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
   same piece of work (set a finished one back to `in_progress`). A new request
   gets its own Task, even while another is in progress: `create` one with a
   short title.
-- If the work continues in a later turn and is not waiting on the user (for
-  example a job spread over several messages), set it `in_progress` with
-  `keep: true` so it stays in progress after this turn. When you work on it again,
-  set it `in_progress` again, with `keep: true` until the work is finished. When
-  it is finished, or the user says it is, set `done` without `keep`. A note alone
+- If the job the user asked for continues in a later turn and is not waiting on
+  them (for example it is spread over several messages, or they say more parts
+  will follow), set its Task `in_progress` with `keep: true`, including on the
+  turn you create it, so it stays in progress after this turn. When you work on
+  it again, set it `in_progress` with `keep: true` again until the whole job is
+  finished. Finishing one part of it is not finishing the job. When the whole job
+  is finished, or the user says it is, set `done` without `keep`. A note alone
   does not keep it in progress.
 - The Task you worked on is marked `done` when your turn ends. Files you write
   with your file-writing tool, and files you publish with `agentbarn-artifacts`,

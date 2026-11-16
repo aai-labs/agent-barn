@@ -107,8 +107,9 @@ const PARAMETERS = {
     keep: {
       type: "boolean",
       description:
-        "With create, or status in_progress: keep the Task in progress after this turn, because the work " +
-        "continues in a later turn. Without it the Task is marked done when the turn ends.",
+        "With create, or status in_progress: keep the Task in progress after this turn, because the job " +
+        "continues in a later turn (more parts or messages to come). Without it the Task is marked done when " +
+        "the turn ends.",
     },
     path: { type: "string", description: "The file to attach, absolute or relative to your workspace." },
     name: { type: "string", description: "The file's name as shown on the Task, for attach." },

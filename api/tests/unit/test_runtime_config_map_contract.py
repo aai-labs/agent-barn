@@ -212,3 +212,5 @@ def test_the_instructions_say_how_to_keep_a_task_in_progress_across_turns():
     assert "A note alone does not keep it in progress" in instructions
     assert "A new request gets its own Task, even while another is in progress" in instructions
     assert "set `done` without `keep`" in instructions
+    assert "Finishing one part of it is not finishing the job" in instructions
+    assert "including on the turn you create it" in instructions
