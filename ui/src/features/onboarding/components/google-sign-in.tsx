@@ -7,11 +7,12 @@ import { SIGN_IN_ERRORS } from "../schemas";
 import { StepAlert } from "./onboarding-shell";
 
 /** Starts Google sign-in. A full-page navigation: the API sends the browser on to Google. */
-export function GoogleSignInButton({ origin }: { origin: "signup" | "login" }) {
+export function GoogleSignInButton({ origin, tierKey }: { origin: "signup" | "login"; tierKey?: string }) {
   const [opening, setOpening] = useState(false);
+  const tier = tierKey ? `&tier=${encodeURIComponent(tierKey)}` : "";
   return (
     <a
-      href={`/api/v1/auth/google/start?origin=${origin}`}
+      href={`/api/v1/auth/google/start?origin=${origin}${tier}`}
       className="af-btn af-btn-lg w-full justify-center"
       aria-disabled={opening}
       onClick={() => setOpening(true)}

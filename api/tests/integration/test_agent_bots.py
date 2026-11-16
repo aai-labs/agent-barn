@@ -7,16 +7,19 @@ import pytest
 import yaml
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
+from sqlmodel import Session, select
 
 from api.core.config import Config as AppConfig
 from api.domains.agents.models import AgentStatus, AgentType, CommandApprovalMode, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
 from api.domains.communications.models import CommunicationConnection
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.integrations.runtime import RuntimeContext
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.templates.repository import TemplateRepository
+from api.domains.usage.models import SuspensionReason
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -43,6 +46,7 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 
 BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
+_SYSTEM = ActorIdentity(type=ActorIdentityType.SYSTEM, id="test")
 CREATE = {"name": "Sales", "template_key": "test-template"}
 FIRECRAWL_SECRET = {"provider": "firecrawl", "content": {"api_key": "fc-bot-fixture"}}
 RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
@@ -317,6 +321,44 @@ def test_general_access_on_a_bot_needs_general_access_on_its_parent():
 
         assert_that(refused.status_code, equal_to(status.HTTP_409_CONFLICT))
         assert_that(allowed.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_losing_the_parent_hides_a_bot_shared_on_its_own():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _grant(context, context.parent, AGENT_VIEWER_ROLE_ID)
+        _grant(context, context.bot, AGENT_EDITOR_ROLE_ID)
+        assert_that(_share(context, context.parent).status_code, equal_to(status.HTTP_200_OK))
+        _act_as_member(context)
+
+        assert_that(_get(context, f"/{context.bot.id}").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_names(_get(context, "?include_bots=true")), equal_to([]))
+        assert_that(_get(context, f"/{context.parent.id}/bots").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_a_restricted_parent_hides_a_bot_open_to_the_organization():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _share(context, context.parent, general_access_role_id=AGENT_VIEWER_ROLE_ID)
+        _share(context, context.bot, general_access_role_id=AGENT_EDITOR_ROLE_ID)
+        assert_that(_share(context, context.parent).status_code, equal_to(status.HTTP_200_OK))
+        _act_as_member(context)
+
+        assert_that(_get(context, f"/{context.bot.id}").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_names(_get(context, "?include_bots=true")), equal_to([]))
+
+
+def test_a_bot_open_to_the_organization_stays_visible_with_its_parent():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _share(context, context.parent, general_access_role_id=AGENT_VIEWER_ROLE_ID)
+        _share(context, context.bot, general_access_role_id=AGENT_EDITOR_ROLE_ID)
+        _act_as_member(context)
+
+        bot = _get(context, f"/{context.bot.id}")
+
+        assert_that(bot.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(bot.json()["allowed_actions"], has_item("agent.update"))
 
 
 def test_a_bots_lifecycle_lock_is_its_parents():
@@ -864,6 +906,43 @@ def test_a_multi_line_value_refuses_a_parent_with_bots_naming_only_the_key():
         assert_that(_k8s(context).create_deployment.called, equal_to(False))
 
 
+def test_an_interpolated_value_refuses_a_parent_with_bots_naming_only_the_key():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        config = context.injector.get(AppConfig)
+        config.agent_firecrawl_api_key = "fc-k3y${HOME}tail"
+        config.agent_firecrawl_base_url = "https://configured.firecrawl.example/v1"
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(response.text, contains_string("FIRECRAWL_API_KEY"))
+        assert_that("fc-k3y" in response.text, equal_to(False))
+        assert_that(_k8s(context).create_deployment.called, equal_to(False))
+
+
+def test_an_interpolated_value_on_a_bot_fails_only_that_bot():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        bad = context.bots[0]
+        context.postgres_delegate.save(
+            CommunicationConnection(
+                organization_id=bad.organization_id,
+                agent_id=bad.id,
+                platform_key="discord",
+                display_name="Bot Discord",
+                enabled=True,
+                schema_version=1,
+                settings={"allowed_user_ids": ["user-1"]},
+                credentials_encrypted=encrypt_token(json.dumps({"bot_token": "bot${X}discord"}), TEST_ENCRYPTION_KEY),
+            )
+        )
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+
+
 def test_a_parent_without_bots_ships_no_manifest():
     with given([*_GIVEN, _parent_with_bots()]) as context:
         _start(context)
@@ -934,6 +1013,165 @@ def test_a_cluster_failure_on_one_bot_fails_only_that_bot():
         assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
         assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
         assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def _last_secret_call(k8s, name):
+    calls = [
+        call_name
+        for call_name, args, _ in k8s.method_calls
+        if (call_name == "create_secret" and args[1].metadata.name == name)
+        or (call_name == "delete_secret" and args[0] == name)
+    ]
+    return calls[-1]
+
+
+def test_a_parent_that_fails_to_start_fails_its_bots_and_revokes_their_keys():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        k8s = _k8s(context)
+        k8s.create_deployment.side_effect = RuntimeError("cluster said no")
+        gateway = context.injector.get(AgentService).credential_gateway
+
+        with patch.object(gateway, "revoke_for_agent", wraps=gateway.revoke_for_agent) as revoke:
+            response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR), response.text)
+        parent = _stored(context, context.parent.id)
+        assert_that(parent.status, equal_to(AgentStatus.ERROR))
+        for bot in context.bots:
+            stored = _stored(context, bot.id)
+            assert_that(
+                (stored.status, stored.last_error_code),
+                equal_to((AgentStatus.ERROR, parent.last_error_code)),
+            )
+            assert_that(_last_secret_call(k8s, f"agent-{bot.id}"), equal_to("delete_secret"))
+        assert_that(
+            {call.args[0] for call in revoke.call_args_list},
+            equal_to({context.parent.id, *[bot.id for bot in context.bots]}),
+        )
+
+
+def test_a_bot_failing_alone_leaves_the_other_bots_running():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        context.injector.get(AgentService)._record_provisioning_failure(
+            _stored(context, context.bot.id), RuntimeError("Agent runtime exited")
+        )
+
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.STOPPED))
+
+
+def test_a_parents_stale_workload_goes_before_any_bot_is_assembled():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        service = context.injector.get(AgentService)
+        order = []
+        _k8s(context).delete_deployment.side_effect = lambda name, ns: order.append(name)
+        assemble = service._assemble_agent
+
+        def recording(agent, **kwargs):
+            order.append(f"assemble-{agent.id}")
+            return assemble(agent, **kwargs)
+
+        with patch.object(service, "_assemble_agent", side_effect=recording):
+            response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(
+            order.index(f"agent-{context.parent.id}") < order.index(f"assemble-{context.bot.id}"),
+            equal_to(True),
+        )
+
+
+def test_starting_a_running_parent_is_refused_and_removes_nothing():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(_k8s(context).delete_deployment.called, equal_to(False))
+        assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def _hold(context, agent):
+    repository = context.injector.get(AgentRepository)
+    stored = repository.get_by_id(agent.id)
+    stored.suspend(SuspensionReason.TIER, datetime.now(UTC))
+    repository.save(stored)
+
+
+def _served(context):
+    data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+    return [entry["id"] for entry in json.loads(data["bots.json"])["bots"]]
+
+
+def test_a_held_bot_is_not_served_at_its_parents_start():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        held, kept = context.bots
+        _hold(context, held)
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_served(context), equal_to([str(kept.id)]))
+        assert_that(f"agent-{held.id}" in _created(_k8s(context).create_secret), equal_to(False))
+        assert_that(_stored(context, held.id).status, equal_to(AgentStatus.STOPPED))
+        assert_that(_stored(context, kept.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_holding_a_running_bot_restarts_its_parent_without_it():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        held, kept = context.bots
+        _start(context)
+        _hold(context, held)
+        _k8s(context).reset_mock()
+
+        context.injector.get(AgentService).stop_suspended(held.id, _SYSTEM)
+
+        assert_that(list(_created(_k8s(context).create_deployment)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(_served(context), equal_to([str(kept.id)]))
+        assert_that(_stored(context, held.id).status, equal_to(AgentStatus.STOPPED))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_held_bot_under_a_stopped_parent_is_only_marked_stopped():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        stale = _stored(context, context.bot.id)
+        stale.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(stale)
+        _hold(context, context.bot)
+
+        context.injector.get(AgentService).stop_suspended(context.bot.id, _SYSTEM)
+
+        assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.STOPPED))
+        assert_that(_k8s(context).create_deployment.called, equal_to(False))
+
+
+def test_a_bots_held_connection_restarts_its_parent_and_never_gives_the_bot_a_pod():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _start(context)
+        _k8s(context).reset_mock()
+
+        context.injector.get(AgentService).restart_to_apply(context.bot.id, _SYSTEM)
+
+        k8s = _k8s(context)
+        assert_that(list(_created(k8s.create_deployment)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(list(_created(k8s.create_service)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(list(_created(k8s.create_pvc)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_bots_connection_held_during_its_parents_start_counts_for_the_parent():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        before = datetime.now(UTC)
+        _connect(context, context.bot, "slack")
+        repository = context.injector.get(AgentRepository)
+        assert_that(repository.native_connection_suspended_since(context.parent.id, before), equal_to(False))
+        with Session(context.postgres_delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(CommunicationConnection.agent_id == context.bot.id)
+            ).one()
+            connection.suspend(SuspensionReason.TIER, datetime.now(UTC))
+            session.add(connection)
+            session.commit()
+
+        assert_that(repository.native_connection_suspended_since(context.parent.id, before), equal_to(True))
 
 
 def _connect(context, agent, platform):

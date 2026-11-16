@@ -8,6 +8,7 @@ from injector import inject, singleton
 
 from api.domains.organizations.models import CreditGrantKind, CreditGrantRead, PlatformCreditGrantRead
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.usage.guard import UsageGuard
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -60,16 +61,20 @@ class RecordedCredit:
 
 @dataclass(frozen=True)
 class OrganizationAgentLimit:
-    """An Organization's own Agent limit, and whether a trial's default applies."""
+    """An Organization's own Agent limit, its Tier's, and whether a trial's default applies."""
 
     own: int | None
     is_trial: bool
+    # The Agent Limit of the Tier it is on; None without a Tier.
+    tier: int | None = None
 
     def in_force(self, *, trial_limit: Callable[[], int], default: Callable[[], int]) -> int:
-        """Its own limit, else the trial setting for a trial, else the platform's
-        default. Each default is read only when it is the one that applies."""
+        """Its own limit, else its Tier's, else the trial setting for a trial, else the
+        platform's default. Each default is read only when it is the one that applies."""
         if self.own is not None:
             return self.own
+        if self.tier is not None:
+            return self.tier
         return trial_limit() if self.is_trial else default()
 
 
@@ -85,6 +90,7 @@ class OrganizationLookupService:
     """
 
     repository: OrganizationRepository
+    usage: UsageGuard
 
     def get_name(self, organization_id: UUID) -> str:
         organization = self.repository.get(organization_id)
@@ -117,7 +123,11 @@ class OrganizationLookupService:
         organization = self.repository.get(organization_id)
         if organization is None:
             return None
-        return OrganizationAgentLimit(own=organization.agent_limit, is_trial=organization.is_trial)
+        return OrganizationAgentLimit(
+            own=organization.agent_limit,
+            is_trial=organization.is_trial,
+            tier=self.usage.summary(organization_id).agent_limit,
+        )
 
     def get_credit(self, organization_id: UUID) -> OrganizationCredit | None:
         """None when the Organization does not exist."""

@@ -79,6 +79,44 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-16 — AF-445 — AF-425 merge (review fixes, tiers)
+
+- Merged: `AF-425-hermes-multi-persona-feat`, bringing its review fixes, tier holds on Bots and staging's tiers, subscriptions and usage.
+- Changed: the conflicted files keep both sides. Migration `3e9d8fca9996` joins this branch's `d3c8e1f4a2b7` with AF-425's `7aca1d608723`.
+- Changed: a Parent Agent's failure now fails its Bots on OpenClaw too, removing their Secrets and ConfigMaps, revoking their tokens and putting each live Bot in ERROR. AF-425 had limited it to Hermes. Held Bots are left out of an OpenClaw gateway at start, as on Hermes. Tier holds, Bot access and Apply & Restart on an errored Bot needed no runtime change.
+- Follow-up: the end-to-end runs.
+
+### 2026-11-16 — AF-425 — Tier holds on Bots
+
+- Fixed: staging's tier holds acted on a Bot as if it had its own pod. Holding a running Bot marked it STOPPED and revoked its keys while its profile kept answering in the Parent Agent's pod. Holding one of a Bot's native Connections created a Deployment, Service and PVC for the Bot. The Parent Agent's next start served held Bots again.
+- Now `stop_suspended` and `restart_to_apply` act through the pod: a Bot's hold restarts its running Parent Agent, or only marks the Bot STOPPED when the Parent Agent isn't running, and a held Parent Agent is stopped rather than restarted. A start skips held Bots, which keep their profile data. `native_connection_suspended_since` also covers the Parent Agent's Bots, so a Bot Connection held during the start restarts it again.
+- Changed: nothing in the tiers domain.
+- Follow-up: the end-to-end run.
+
+### 2026-11-16 — AF-425 — Apply & Restart on an errored Bot
+
+- Fixed: the settings sections decided whether to restart from the Bot's own status. A Bot in ERROR under a RUNNING Parent Agent got a plain Apply, so it stayed in error after its settings were fixed, and the credentials section sent `restart: false`, which the server refuses for a running pod. `useAgentApplyAndRestart` now returns `restarts`, true for a running Agent or a Bot in error whose Parent Agent runs, and every settings section uses it for its label and its restart.
+- Changed: a new, stopped Bot under a running Parent Agent still applies without a restart; it is served at the next restart.
+- Follow-up: the end-to-end run.
+
+### 2026-11-16 — AF-425 — Bot access needs read on the Parent Agent
+
+- Fixed: the rule that a Bot is shared only with Members who can read its Parent Agent was checked only when access was granted. Removing a Member's Parent Agent grant, or putting the Parent Agent back to Restricted, left the Bot visible through its own grant or General Access. `agent_scope_predicates` and `find_agent_permissions` now give a scoped Membership nothing on a Bot unless it can read the Parent Agent. Organization Owners and Admins are unaffected.
+- Changed: the share endpoint keeps its grant-time refusal, which gives the clearer error.
+- Follow-up: Apply & Restart on an errored Bot.
+
+### 2026-11-16 — AF-425 — Refuse `${` in a Bot pod's values
+
+- Fixed: `bot-setup.py` leaves a value containing `${` out of a profile's `.env`, because Hermes loads that file with python-dotenv, which expands `${…}` even in single quotes. Nothing told the user, so a Parent Agent credential with `${` stopped reaching its terminal once it had a Bot. A start now refuses such a value the way it refuses a line break, naming only the key. On a Bot it puts that Bot in error.
+- Changed: `bot-setup.py` keeps its guard.
+- Follow-up: Bot access needs read on the Parent Agent.
+
+### 2026-11-16 — AF-425 — A Parent Agent's failure fails its Bots
+
+- Fixed: a failed start or an observed runtime exit put only the Parent Agent in ERROR and revoked only its gateway tokens. Its Bots kept their status and their fresh tokens, and their Secrets stayed in the cluster. Now the Parent Agent's failure also removes its Bots' Secrets and ConfigMaps, revokes their tokens, deleted Bots' included, and puts each live Bot in ERROR with the Parent Agent's error.
+- Fixed: a start assembled each Bot, beginning its integration generation and issuing its gateway tokens, before the Parent Agent removed a stale Deployment. The already-running refusal and the stale Deployment removal now come first.
+- Follow-up: refuse `${` in a Bot pod's values.
+
 ### 2026-11-13 — AF-445 — OpenClaw listen-in per agent
 
 - Delivered:

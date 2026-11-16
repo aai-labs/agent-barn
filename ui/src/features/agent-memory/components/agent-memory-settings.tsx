@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { SettingsSection } from "@/components/settings/settings-section";
 import type { Agent } from "@/features/agents/schemas";
 import { useAgentApplyAndRestart } from "@/features/agents/hooks/use-agent-apply-and-restart";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { useSetAgentMemory } from "../hooks/use-set-agent-memory";
 import { LONG_TERM_MEMORY_LABEL } from "../utils";
@@ -24,12 +26,16 @@ export function AgentMemorySettings({
   onEdit: () => void;
 }) {
   const setMemory = useSetAgentMemory(agent.id);
-  const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
-  const restartOnSave = agent.status === "RUNNING" && agent.allowedActions.includes("agent.lifecycle.manage");
+  const { applyAndRestart, restarts, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
+  const restartOnSave = restarts && agent.allowedActions.includes("agent.lifecycle.manage");
   const [applyError, setApplyError] = useState<unknown>(null);
   const [draft, setDraft] = useState(agent.memoryEnabled);
   const isDirty = draft !== agent.memoryEnabled;
   const error = applyError || setMemory.error;
+  // Without Agent Memory in the tier, memory can be turned off but not on.
+  const { tier, hasFeature } = useTierEntitlements();
+  const canTurnOn = hasFeature("agent_memory");
+  const mayEdit = canEdit && (agent.memoryEnabled || canTurnOn);
 
   async function applyChanges() {
     setApplyError(null);
@@ -62,7 +68,7 @@ export function AgentMemorySettings({
       <SettingsSection
         title={LONG_TERM_MEMORY_LABEL}
         description="Optional. Adds shared, searchable memory on top of the built-in memory."
-        canEdit={canEdit}
+        canEdit={mayEdit}
         editing={editing}
         onEdit={() => {
           setDraft(agent.memoryEnabled);
@@ -103,8 +109,9 @@ export function AgentMemorySettings({
           <p className="m-0 text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
             Optional. Adds shared, searchable memory on top of the built-in memory; it never replaces it.
           </p>
+          {!agent.memoryEnabled && !canTurnOn && <TierLockedNote tierName={tier?.name} what="long-term memory" />}
 
-          {editing && canEdit ? (
+          {editing && mayEdit ? (
             <Label className="flex items-start gap-2 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
               <Checkbox
                 className="mt-0.5"
@@ -127,7 +134,7 @@ export function AgentMemorySettings({
             <li>
               Turning it on applies the next time the Agent starts. Save and Restart applies changes to a running Agent.
             </li>
-            {agent.status === "RUNNING" && !agent.allowedActions.includes("agent.lifecycle.manage") && (
+            {restarts && !agent.allowedActions.includes("agent.lifecycle.manage") && (
               <li>You can save this setting; someone with lifecycle access must restart the Agent to activate it.</li>
             )}
             <li>

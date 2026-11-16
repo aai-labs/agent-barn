@@ -43,6 +43,7 @@ from api.domains.communications.models import (
     CommunicationDeliveryStatus,
     CommunicationPlatform,
 )
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
@@ -111,7 +112,26 @@ def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_d
         if authorization_scope.permission is None:
             raise ValueError("Explicit Agent visibility requires a Permission")
         permission_id = PERMISSION_ID_BY_KEY[authorization_scope.permission]
+        read_permission_id = PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ]
         parent = aliased(Agent)
+        parent_reads = [
+            exists().where(
+                col(AgentAccess.agent_id) == col(Agent.parent_agent_id),
+                col(AgentAccess.organization_id) == authorization_scope.organization_id,
+                col(AgentAccess.membership_id) == authorization_scope.membership_id,
+                col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+                col(AgentAccessRolePermission.permission_id) == read_permission_id,
+            )
+        ]
+        if authorization_scope.include_general_access:
+            parent_reads.append(
+                exists().where(
+                    col(parent.id) == col(Agent.parent_agent_id),
+                    col(AgentAccessRolePermission.role_id) == col(parent.general_access_role_id),
+                    col(AgentAccessRolePermission.permission_id) == read_permission_id,
+                )
+            )
+        predicates.append(or_(col(Agent.parent_agent_id).is_(None), *parent_reads))
         grants = [
             exists().where(
                 col(AgentAccess.agent_id).in_([col(Agent.id), col(Agent.parent_agent_id)]),
@@ -326,6 +346,52 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             return (
                 session.scalar(select(func.count()).select_from(Agent).where(col(Agent.organization_id) == org_id)) or 0
+            )
+
+    def native_connection_suspended_since(self, agent_id: UUID, since: datetime) -> bool:
+        """Whether one of the Agent's or its Bots' native Connections was suspended at or after `since`."""
+        with Session(self.delegate.engine) as session:
+            return (
+                session.exec(
+                    select(CommunicationConnection.id).where(
+                        col(CommunicationConnection.agent_id).in_(
+                            select(Agent.id).where(
+                                or_(col(Agent.id) == agent_id, col(Agent.parent_agent_id) == agent_id)
+                            )
+                        ),
+                        col(CommunicationConnection.platform_key).in_(NATIVE_PLATFORM_KEYS),
+                        col(CommunicationConnection.suspended_at) >= since,
+                    )
+                ).first()
+                is not None
+            )
+
+    def list_running_suspended(self) -> list[tuple[UUID, UUID]]:
+        """(Agent, Organization) for every live Agent still running though it is suspended."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, Agent.organization_id).where(
+                    col(Agent.deleted_at).is_(None),
+                    col(Agent.suspended_at).is_not(None),
+                    col(Agent.status) == AgentStatus.RUNNING,
+                )
+            ).all()
+            return [(agent_id, organization_id) for agent_id, organization_id in rows]
+
+    def count_toward_agent_limit(self, org_id: UUID) -> int:
+        """Live Agents that take a place in the Agent Limit: a suspended Agent doesn't."""
+        with Session(self.delegate.engine) as session:
+            return (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Agent)
+                    .where(
+                        col(Agent.organization_id) == org_id,
+                        col(Agent.deleted_at).is_(None),
+                        col(Agent.suspended_at).is_(None),
+                    )
+                )
+                or 0
             )
 
     def count_active_by_org(self, org_id: UUID) -> int:
@@ -710,7 +776,11 @@ class AgentRepository:
                 include_general_access=include_general_access,
             )
             for bot_id, parent_id in parents.items():
-                permissions.setdefault(bot_id, set()).update(inherited.get(parent_id, set()))
+                parent_permissions = inherited.get(parent_id, set())
+                if PermissionKey.AGENT_READ in parent_permissions:
+                    permissions.setdefault(bot_id, set()).update(parent_permissions)
+                else:
+                    permissions.pop(bot_id, None)
         return permissions
 
     def replace_access_settings(
@@ -961,7 +1031,11 @@ class AgentRepository:
                 live = session.scalar(
                     select(func.count())
                     .select_from(Agent)
-                    .where(col(Agent.organization_id) == agent.organization_id, col(Agent.deleted_at).is_(None))
+                    .where(
+                        col(Agent.organization_id) == agent.organization_id,
+                        col(Agent.deleted_at).is_(None),
+                        col(Agent.suspended_at).is_(None),
+                    )
                 )
                 if (live or 0) >= agent_limit:
                     raise AgentLimitReached(agent_limit)

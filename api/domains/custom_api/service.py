@@ -37,6 +37,7 @@ from api.domains.custom_api.request import (
 from api.domains.events import resolve_actor_identity
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
 
@@ -50,6 +51,7 @@ class CustomApiService:
     lifecycle: AgentService
     integrations: IntegrationRepository
     config: Config
+    usage: UsageGuard
 
     def _credentials(self, row: CustomApiConnection) -> dict:
         return json.loads(decrypt_token(row.credentials_encrypted, self.config.agent_token_encryption_key))
@@ -106,8 +108,10 @@ class CustomApiService:
     def apply_many(
         self, agent_id: UUID, data: CustomApiConnectionsApply, context: CurrentUserContext, *, preflight: bool = False
     ) -> list[CustomApiConnectionRead]:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
+        if data.creates:
+            self.usage.check(agent.organization_id, UsageAction.ADD_INTEGRATION)
         with self.agents.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
@@ -157,7 +161,8 @@ class CustomApiService:
     def create(
         self, agent_id: UUID, data: CustomApiConnectionCreate, context: CurrentUserContext
     ) -> CustomApiConnectionRead:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.usage.check(agent.organization_id, UsageAction.ADD_INTEGRATION)
         with self.agents.lifecycle_lock(agent_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")

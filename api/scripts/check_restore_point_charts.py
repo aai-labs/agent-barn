@@ -142,7 +142,7 @@ def check_cronjob_load(cronjobs: dict[str, dict[str, Any]]) -> None:
 def main() -> None:
     check_deploy_passthrough()
     cronjobs = {document["metadata"]["name"]: document for document in render() if document["kind"] == "CronJob"}
-    assert len(cronjobs) == 10, f"expected all 10 CronJobs to render, got {sorted(cronjobs)}"
+    assert len(cronjobs) == 11, f"expected all 11 CronJobs to render, got {sorted(cronjobs)}"
     check_cronjob_load(cronjobs)
     for name in ("restore-points-test-restore-point-schedule", "restore-points-test-restore-point-reconciliation"):
         spec = cronjobs[name]["spec"]

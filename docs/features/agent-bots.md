@@ -18,12 +18,14 @@ A **Bot** is a full Agent created from its **Parent Agent**'s page. It has its o
 The pod belongs to the Parent Agent.
 
 - Start, stop, restart, Agent Size, image updates and Restore Points act on the Parent Agent and are refused on a Bot. There is no way to stop one Bot.
-- A Bot's status mirrors its Parent Agent's, except that a Bot whose own setup fails is in error while the others run.
-- Changing a Bot restarts the Parent Agent and all its Bots (Apply & Restart).
+- A Bot's status mirrors its Parent Agent's, except that a Bot whose own setup fails is in error while the others run. When the Parent Agent fails to start or its runtime exits, its Bots go into error with it and their runtime keys are revoked.
+- Changing a Bot restarts the Parent Agent and all its Bots (Apply & Restart), also when the Bot is in error while its Parent Agent runs.
 - Deleting a Bot takes effect at the Parent Agent's next restart. Deleting the Parent Agent deletes its Bots.
+- A Bot on a tier hold is not served. Holding a running Bot, or switching off one of its Slack, Telegram or Discord Connections, restarts its Parent Agent without it. A held Bot keeps its data and is served again once released and the Parent Agent restarts.
 - Every start issues each Bot fresh runtime keys. The LiteLLM key is created once per Agent and kept across starts.
 - A Bot whose runtime material is missing at start is not served, and none of its helpers run. Nothing falls back to the Parent Agent's identity or keys.
 - On OpenClaw, a Parent Agent's sessions, scheduled jobs and memory carry over when its first Bot is added and when its last Bot is removed.
+- On Hermes, each profile's values are written to an environment file that Hermes expands `${…}` in, so a value with a line break or `${` can't be held. On the Parent Agent it refuses the start, naming only the key; on a Bot it puts that Bot in error.
 
 ## What Bots share
 
@@ -83,7 +85,7 @@ Each Bot keeps its own SOUL and instructions, sessions, model and LiteLLM key, s
 ## Access
 
 - A Bot's effective access is its own grants plus its Parent Agent's grants. Bot grants only add.
-- A Member can be given access to a Bot only if they can read its Parent Agent.
+- A Member can be given access to a Bot only if they can read its Parent Agent. A Member who can no longer read the Parent Agent, because their grant was removed or its General Access went back to Restricted, no longer sees its Bots, whatever the Bots' own grants and General Access say.
 - Creating a Bot needs `agent.create` in the Organization and `agent.update` on the Parent Agent. Restarting needs `agent.lifecycle.manage` on the Parent Agent.
 
 ## UI

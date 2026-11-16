@@ -72,7 +72,7 @@ An Agent remains owned by its Organization. Agent Creator is immutable provenanc
 - Organization Owner/Admin have implicit Agent Owner authority over every Agent in that Organization. No bulk Agent Access rows are required.
 - Creating an Agent atomically records creator provenance and grants the creator explicit Agent Owner access, including when the creator is currently Organization Owner/Admin.
 - An Organization Member without explicit Agent Access or applicable Agent General Access cannot see the Agent or any subordinate resource.
-- A Bot's effective Permissions are its own grants plus its Parent Agent's grants. A Membership may be granted access to a Bot only if it can read the Parent Agent. Creating a Bot needs `agent.create` in the Organization and `agent.update` on the Parent Agent; lifecycle needs `agent.lifecycle.manage` on the Parent Agent. Inside the pod a Bot is not a security boundary: Bot grants control what people see in Agent Barn, not what one Bot can reach of another's credentials. See [Agent Bots](../agent-bots.md).
+- A Bot's effective Permissions are its own grants plus its Parent Agent's grants. A Membership may be granted access to a Bot only if it can read the Parent Agent. Reads enforce it too: `agent_scope_predicates` and `find_agent_permissions` give a Bot nothing unless the Membership can read its Parent Agent. Creating a Bot needs `agent.create` in the Organization and `agent.update` on the Parent Agent; lifecycle needs `agent.lifecycle.manage` on the Parent Agent. Inside the pod a Bot is not a security boundary: Bot grants control what people see in Agent Barn, not what one Bot can reach of another's credentials. See [Agent Bots](../agent-bots.md).
 - One Membership has at most one explicit Agent Access Role per Agent.
 - Agent General Access is one Agent-scoped setting: Restricted (`NULL`) or All Organization Members with one Agent Access Role. New and migrated Agents default to Restricted.
 - Agent General Access applies dynamically to current and future accepted Organization Members. Pending and removed Memberships receive nothing from it.
@@ -84,6 +84,12 @@ An Agent remains owned by its Organization. Agent Creator is immutable provenanc
 - Assignment, Agent General Access, Membership, and Agent Access Role Permission changes take effect on the next request.
 
 Explicit Agent Access and Agent General Access scope the complete Agent aggregate: lifecycle, configuration, conversations, tool calls, activity, costs, logs, Skills, Agent Secrets, and platform/integration configuration. Secret plaintext is never returned.
+
+### Tier Entitlements
+
+An Organization's [Tier](../tiers.md#tier-entitlements) can refuse an action that authorization allowed. The check runs after the Permission checks above, against the Organization the authorized request already resolved, so a concealed or unauthorized resource still answers `404` or `403` as before and a Tier never reveals one. It is not a Permission, no role carries it, and it never widens access: it only refuses new or more use of a feature or Platform, with `403` `TIER_FEATURE_UNAVAILABLE`. An Organization without a Tier is never refused.
+
+Choosing which Agents stay on a [Tier Hold](../tiers.md#tier-holds) uses the Organization Permission `tier_hold.manage`, held only by Owners and Admins, like `agent.size.manage`: which Agents keep the Organization's places is its decision, not an Agent Owner's. Holding or releasing an Agent resolves it through `AgentAuthorization.require_action` with `agent.lifecycle.manage` first, so a concealed Agent is `404`, then checks the Organization grant. A held Connection, Agent Webhook or Agent Memory is released by enabling it through its own route and Permission, which the Tier Entitlement check then allows.
 
 ## Data-access enforcement
 

@@ -80,6 +80,14 @@ AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
 - `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
 - `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit, the amount paid and the reason (for example, the amount paid doesn't match the checkout we created), and names the Organization in `subject_display` (a Platform event carries no Organization id). Also emitted for a paid session that doesn't match a checkout we created.
 
+Tiers add, all projected by `security_audit.projection` (see [Tiers](tiers.md)):
+
+- `platform.tier.created` and `platform.tier.deleted` — emitted atomically when a Platform Administrator adds or deletes a Tier, carrying every value. Platform scope.
+- `platform.tier.changed` — emitted atomically for each setting of a Tier that moved, with its previous and current value; amounts are numbers. An unchanged save emits nothing. Platform scope.
+- `organization.tier.changed` — emitted atomically when a Platform Administrator puts an Organization on a Tier or takes it off any, with the Tier key before and after (`null` is no Tier) and `assigned_by_platform`. Organization scope; the actor is the administrator's Membership when they have one there, else their user. Not emitted when the Tier is unchanged.
+- `organization.subscription.started`, `.changed`, `.renewed` and `.ended` — emitted atomically with each step of a subscription ([Tiers](tiers.md#subscriptions)), carrying it as it stands after the step: Tier, provider, status, period end, whether it ends with the period, and for `.changed` what changed (`tier`, `cancel_scheduled`, `cancel_withdrawn`). The actor is the Owner, a Platform Administrator, or the system (`subscriptions`) for the Tier sweep. Organization scope.
+- `organization.tier_holds.changed` — emitted atomically when a Tier change holds what the Organization's Tier no longer covers (`reason: "tier"`), or an Owner or Admin holds or releases an Agent (`reason: "choice"`), with the held and released ids by kind. Organization scope. Not emitted when nothing moved. Re-enabling a held Connection, Webhook or Agent Memory goes through that resource's own route and is not recorded by this event.
+
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
 - `agent.updated` — emitted when `update_agent` changes a tracked scalar field (name, model, approval_mode, template pin); carries a generic `field_changes` diff and is not emitted when no tracked field actually changed.

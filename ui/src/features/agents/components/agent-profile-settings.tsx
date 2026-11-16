@@ -50,7 +50,7 @@ export function AgentProfileSettings({
     (Number.isInteger(parsedMaxTurns) && parsedMaxTurns >= MAX_TURNS_MIN && parsedMaxTurns <= MAX_TURNS_MAX);
   // Only an Agent on the default reports what the default is.
   const platformDefaultMaxTurns = agent.maxTurns === null ? agent.effectiveMaxTurns : null;
-  const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const { applyAndRestart, restarts } = useAgentApplyAndRestart(agent);
   const isBot = agent.parentAgentId !== null;
   const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Full access — no approval prompts";
   const isDirty =
@@ -93,7 +93,7 @@ export function AgentProfileSettings({
       onCancel={cancelChanges}
       onApplied={onEdit}
       applyDisabled={!isDirty || !maxTurnsValid || updateAgent.isPending}
-      restartOnApply={agent.status === "RUNNING"}
+      restartOnApply={restarts}
     >
       {editing && canEdit ? (
         <div className="flex max-w-xl flex-col gap-4">
