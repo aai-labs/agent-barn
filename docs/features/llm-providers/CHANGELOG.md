@@ -8,10 +8,16 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- Next: the slice 1 demo on local k3d with read-only LiteLLM checks (route order, persistence across a LiteLLM restart, `/model/info` never returning the key), then slice 2, other provider connections.
+- Next: the first CI run of the pinned-LiteLLM route contract test, the slice 1 demo on local k3d, then slice 2, other provider connections.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 12
+
+- Delivered: `test_openrouter_route_litellm_contract.py` saves keys through the API against the pinned LiteLLM image running the repository's `docker/litellm/config.yaml`, with a stub in place of OpenRouter that records the key each request carries. It checks that `OPENROUTER_API_KEY` serves until a key is saved, a saved key outranks it, a replacement applies at once, the saved route survives a LiteLLM restart, and `/model/info` returns none of the keys. OpenRouter's key check stays mocked and the route's `api_base` points at the stub.
+- Changed: `api/tests/helpers/litellm_model_store.py` starts that LiteLLM with its model store, salt key and own database, and restarts it.
+- Follow-up: the test has not run to completion yet; CI is its first run. It uses host networking like the existing LiteLLM contract helper, which Docker Desktop on Windows does not provide.
 
 ### 2026-11-16 — AF-447 — slice 1, key display follow-up
 
