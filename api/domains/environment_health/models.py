@@ -25,6 +25,7 @@ class EnvironmentSource(str, enum.Enum):
     PODS = "pods"
     DEPLOYMENTS = "deployments"
     STATEFUL_SETS = "stateful_sets"
+    REPLICA_SETS = "replica_sets"
     VOLUME_CLAIMS = "volume_claims"
     SERVICES = "services"
     CRON_JOBS = "cron_jobs"

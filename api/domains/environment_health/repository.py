@@ -9,6 +9,7 @@ from kubernetes.client import (
     V1Job,
     V1PersistentVolumeClaim,
     V1Pod,
+    V1ReplicaSet,
     V1ResourceQuota,
     V1Service,
     V1StatefulSet,
@@ -81,6 +82,9 @@ class EnvironmentHealthRepository:
 
     def stateful_sets(self) -> list[V1StatefulSet]:
         return self.k8s.list_stateful_sets(self.namespace)
+
+    def replica_sets(self) -> list[V1ReplicaSet]:
+        return self.k8s.list_replica_sets(self.namespace)
 
     def volume_claims(self) -> list[V1PersistentVolumeClaim]:
         return self.k8s.list_pvcs(self.namespace)
