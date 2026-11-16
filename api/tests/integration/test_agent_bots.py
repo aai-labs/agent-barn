@@ -1638,6 +1638,34 @@ def test_one_bad_openclaw_bot_fails_alone_and_is_left_out_of_the_gateway():
         assert_that(f"bot-{bad.id}-secret" in {volume.name for volume in pod.volumes}, equal_to(False))
 
 
+def test_an_openclaw_parent_that_fails_to_start_fails_its_bots():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        k8s = _k8s(context)
+        k8s.create_deployment.side_effect = RuntimeError("cluster said no")
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR), response.text)
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.ERROR))
+        for bot in context.bots:
+            assert_that(_stored(context, bot.id).status, equal_to(AgentStatus.ERROR))
+            assert_that(_last_secret_call(k8s, f"agent-{bot.id}"), equal_to("delete_secret"))
+
+
+def test_a_held_openclaw_bot_is_left_out_of_the_gateway():
+    with given([*_GIVEN, _openclaw_parent_with_bots(1, 2)]) as context:
+        held, kept = context.bots
+        _hold(context, held)
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        entries = _overlay(context, context.parent)["agents"]["entries"]
+        assert_that(list(entries), equal_to(["main", str(kept.id)]))
+        assert_that(f"agent-{held.id}" in _created(_k8s(context).create_secret), equal_to(False))
+        assert_that(_stored(context, held.id).status, equal_to(AgentStatus.STOPPED))
+
+
 def test_an_openclaw_parent_with_bots_accepts_a_multi_line_value():
     with given([*_GIVEN, _openclaw_parent_with_bots(1)]) as context:
         config = context.injector.get(AppConfig)

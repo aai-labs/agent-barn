@@ -2589,7 +2589,7 @@ class AgentService:
             # A database fault is one of the things that lands here, and it would
             # raise again on this write. The caller still gets the classified cause.
             logger.exception("Could not record the provisioning failure for agent %s", agent.id)
-        if agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
+        if agent.parent_agent_id is None:
             try:
                 self._fail_bots(agent)
             except Exception:
