@@ -175,7 +175,9 @@ Native Hermes Slack also ships the `agentbarn-workflow-approvals` plugin, enable
 plugin API and forwards Approve and Decline clicks on workflow approval DM cards to the
 local trigger server, only when they come from `AGENTBARN_SLACK_APPROVAL_USER` in a DM;
 it never answers Hermes itself. The trigger server posts and edits those cards with the
-pod's `SLACK_BOT_TOKEN`. With no Approval DM User set, both do nothing. See
+pod's `SLACK_BOT_TOKEN` through `agentbarn_approval_dm.py`, which ships beside it in the
+Hermes ConfigMap only and never raises into a step. With no Approval DM User set, both do
+nothing. See
 [workflow approvals](../features/agent-workflows.md#workflow-approvals-af-390).
 
 Native Hermes Slack enforces channel and DM access independently through the

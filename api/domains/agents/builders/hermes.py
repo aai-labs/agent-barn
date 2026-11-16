@@ -62,6 +62,8 @@ WORKFLOW_APPROVALS_PLUGIN_INIT: str = (_WORKFLOW_APPROVALS / "__init__.py").read
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
+# Imported by the trigger server from its own directory; Hermes only (Slack approval DMs).
+APPROVAL_DM_PY: str = (_COMMON_SCRIPTS / "agentbarn_approval_dm.py").read_text()
 FILE_SYNC_PY: str = (_COMMON_SCRIPTS / "file-sync.py").read_text()
 
 
@@ -509,6 +511,7 @@ def build_hermes_config_map(
         "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
+        "agentbarn_approval_dm.py": APPROVAL_DM_PY,
         "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
         "file-sync.py": FILE_SYNC_PY,

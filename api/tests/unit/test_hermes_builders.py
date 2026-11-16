@@ -431,6 +431,8 @@ def test_config_map_contains_runtime_adapter_and_scoped_slack_access_plugin() ->
 
     assert "communications-runtime-adapter.py" in config_map.data
     assert "agent-trigger-server.py" in config_map.data
+    # The trigger server imports it from /app/config for Slack approval DMs.
+    assert "agentbarn_approval_dm.py" in config_map.data
     # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
     assert "boot-run.py" in config_map.data
     assert "agentbarn_message.py" not in config_map.data

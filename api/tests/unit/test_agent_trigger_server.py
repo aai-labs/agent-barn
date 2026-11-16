@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 import runpy
+import sys
 from pathlib import Path
 
 import pytest
@@ -763,19 +764,37 @@ def test_a_decision_that_wins_the_park_race_is_still_honoured(monkeypatch, trigg
     assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
 
 
-def _slack_card(monkeypatch, trigger_server, *, fail: bool = False) -> list[tuple[str, dict]]:
+@pytest.fixture
+def approval_dm(monkeypatch):
+    """A fresh agentbarn_approval_dm module, found by the trigger server's import as in the pod."""
+    spec = importlib.util.spec_from_file_location(
+        "agentbarn_approval_dm", _SCRIPT.with_name("agentbarn_approval_dm.py")
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setitem(sys.modules, "agentbarn_approval_dm", module)
+    return module
+
+
+def test_the_approval_dm_module_parses_for_the_oldest_runtime_image() -> None:
+    source = _SCRIPT.with_name("agentbarn_approval_dm.py")
+    ast.parse(source.read_text(), filename=str(source), feature_version=(3, 12))
+
+
+def _slack_card(monkeypatch, trigger_server, approval_dm, *, fail: Exception | None = None) -> list[tuple[str, dict]]:
     """Fake Slack Web API for the approval DM; records every call."""
     calls: list[tuple[str, dict]] = []
 
     def slack(method, body):
         calls.append((method, body))
-        if fail:
-            raise trigger_server.DispatchError("Slack conversations.open failed: user_not_found")
+        if fail is not None:
+            raise fail
         if method == "conversations.open":
             return {"ok": True, "channel": {"id": "D1"}}
         return {"ok": True, "ts": "1700000000.000100"}
 
-    monkeypatch.setattr(trigger_server, "_slack_api", slack)
+    monkeypatch.setattr(approval_dm, "slack_api", slack)
     monkeypatch.setattr(trigger_server, "RUNTIME_KIND", "hermes")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("AGENTBARN_SLACK_APPROVAL_USER", "U0APPROVER")
@@ -791,8 +810,10 @@ def _decision_buttons(blocks: list[dict]) -> list[tuple[str, str]]:
     ]
 
 
-def test_a_live_request_is_sent_to_the_approval_dm_and_settled_with_who_decided(monkeypatch, trigger_server) -> None:
-    calls = _slack_card(monkeypatch, trigger_server)
+def test_a_live_request_is_sent_to_the_approval_dm_and_settled_with_who_decided(
+    monkeypatch, trigger_server, approval_dm
+) -> None:
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm)
     decision = {"state": "APPROVED", "decided_in": "slack", "decided_by_slack_handle": "ana"}
 
     result, hermes, _ = _approval_step(monkeypatch, trigger_server, decision)
@@ -815,7 +836,7 @@ def test_a_live_request_is_sent_to_the_approval_dm_and_settled_with_who_decided(
         "Approved in Slack by @ana",
     )
     assert _decision_buttons(settled["blocks"]) == []
-    assert trigger_server._SLACK_CARDS == {}
+    assert approval_dm._CARDS == {}
 
 
 @pytest.mark.parametrize(
@@ -825,15 +846,17 @@ def test_a_live_request_is_sent_to_the_approval_dm_and_settled_with_who_decided(
         ({"state": "PARKED"}, 0, "Nobody decided in time, so the step paused. Decide on the web to continue it."),
     ],
 )
-def test_the_card_says_how_the_request_ended(monkeypatch, trigger_server, decision, live_seconds, note) -> None:
-    calls = _slack_card(monkeypatch, trigger_server)
+def test_the_card_says_how_the_request_ended(
+    monkeypatch, trigger_server, approval_dm, decision, live_seconds, note
+) -> None:
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm)
     _approval_step(monkeypatch, trigger_server, decision, live_seconds=live_seconds)
     assert calls[-1][0] == "chat.update"
     assert calls[-1][1]["text"] == note
 
 
-def test_a_command_cannot_break_out_of_the_cards_code_block(trigger_server) -> None:
-    blocks = trigger_server._card_blocks("r1", "echo ```<@U1>``` && x" + "y" * 5000, "note", "", buttons=False)
+def test_a_command_cannot_break_out_of_the_cards_code_block(approval_dm) -> None:
+    blocks = approval_dm.card_blocks("r1", "echo ```<@U1>``` && x" + "y" * 5000, "note", "", buttons=False)
     text = blocks[1]["text"]["text"]
     assert text.startswith("```") and text.endswith("…```")
     assert text[3:-3].count("```") == 0
@@ -841,24 +864,71 @@ def test_a_command_cannot_break_out_of_the_cards_code_block(trigger_server) -> N
     assert len(text) < 3000
 
 
-def test_no_card_is_sent_without_an_approval_dm_user(monkeypatch, trigger_server) -> None:
-    calls = _slack_card(monkeypatch, trigger_server)
+def test_no_card_is_sent_without_an_approval_dm_user(monkeypatch, trigger_server, approval_dm) -> None:
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm)
     monkeypatch.setenv("AGENTBARN_SLACK_APPROVAL_USER", "")
     result, _, _ = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"})
     assert result == "Deployed"
     assert calls == []
 
 
-def test_a_slack_failure_never_holds_up_the_step(monkeypatch, trigger_server) -> None:
-    calls = _slack_card(monkeypatch, trigger_server, fail=True)
+def test_openclaw_never_loads_the_approval_dm(monkeypatch, trigger_server, approval_dm) -> None:
+    _slack_card(monkeypatch, trigger_server, approval_dm)
+    monkeypatch.setattr(trigger_server, "RUNTIME_KIND", "openclaw")
+    assert trigger_server._approval_dm() is None
+
+
+def _slack_failures():
+    import http.client
+
+    return [
+        pytest.param(RuntimeError("Slack conversations.open failed: user_not_found"), id="slack-error"),
+        pytest.param(http.client.IncompleteRead(b""), id="truncated-response"),
+        pytest.param(AttributeError("'list' object has no attribute 'get'"), id="unexpected-body"),
+    ]
+
+
+@pytest.mark.parametrize("failure", _slack_failures())
+def test_a_slack_failure_posting_the_card_never_holds_up_the_step(
+    monkeypatch, trigger_server, approval_dm, failure
+) -> None:
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm, fail=failure)
     result, hermes, _ = _approval_step(monkeypatch, trigger_server, {"state": "APPROVED"})
     assert result == "Deployed"
     assert ("/v1/runs/run-1/approval", {"choice": "once"}) in hermes
     assert [method for method, _ in calls] == ["conversations.open"]
 
 
-def _card(trigger_server) -> None:
-    trigger_server._SLACK_CARDS["r1"] = {
+@pytest.mark.parametrize("failure", _slack_failures())
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [
+        ({"state": "APPROVED"}, "Deployed"),
+        ({"state": "DECLINED", "prompt": "Do not run it."}, "Followed the guidance"),
+    ],
+)
+def test_a_slack_failure_settling_the_card_keeps_the_steps_outcome(
+    monkeypatch, trigger_server, approval_dm, failure, decision, expected
+) -> None:
+    # Regression: an error raised from the settle in `finally` replaced the step's result after the
+    # command had already been released, and the Hermes run was left running unread.
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm)
+    posted = approval_dm.slack_api
+
+    def fail_update(method, body):
+        if method == "chat.update":
+            calls.append((method, body))
+            raise failure
+        return posted(method, body)
+
+    monkeypatch.setattr(approval_dm, "slack_api", fail_update)
+    result, _, _ = _approval_step(monkeypatch, trigger_server, decision)
+    assert result == expected
+    assert calls[-1][0] == "chat.update"
+
+
+def _card(approval_dm) -> None:
+    approval_dm._CARDS["r1"] = {
         "channel": "D1",
         "ts": "1700000000.000100",
         "command": "rm -rf ./out",
@@ -878,32 +948,28 @@ def _click(**overrides) -> dict:
     }
 
 
-def _relayed(monkeypatch, trigger_server, payload: dict, reply) -> tuple[bool, list]:
-    import threading
-
+def _relayed(approval_dm, payload: dict, reply) -> tuple[bool, list]:
+    """Relay a click and wait for it; `reply(url, method)` answers each API call the relay makes."""
     sent: list = []
-    done = threading.Event()
 
     def record(url, token, body, *, method="POST"):
-        sent.append((url, token, body))
-        try:
-            return reply(url)
-        finally:
-            done.set()
+        sent.append((method, url, token, body))
+        return reply(url, method)
 
-    monkeypatch.setattr(trigger_server, "_post_json", record)
-    relayed = trigger_server.relay_slack_decision("r1", payload)
-    if relayed:
-        assert done.wait(5)
-    return relayed, sent
+    thread = approval_dm.relay("r1", payload, record)
+    if thread is not None:
+        thread.join(5)
+        assert not thread.is_alive()
+    return thread is not None, sent
 
 
-def test_a_click_on_the_card_is_reported_to_the_api_as_the_slack_user(monkeypatch, trigger_server) -> None:
-    _card(trigger_server)
-    relayed, sent = _relayed(monkeypatch, trigger_server, _click(), lambda url: {"state": "APPROVED"})
+def test_a_click_on_the_card_is_reported_to_the_api_as_the_slack_user(approval_dm) -> None:
+    _card(approval_dm)
+    relayed, sent = _relayed(approval_dm, _click(), lambda url, method: {"state": "APPROVED"})
     assert relayed
     assert sent == [
         (
+            "POST",
             "http://api/attempts/a/approvals/r1/slack-decision",
             "token",
             {"decision": "approve", "slack_user_id": "U0APPROVER", "slack_user_name": "ana"},
@@ -912,36 +978,58 @@ def test_a_click_on_the_card_is_reported_to_the_api_as_the_slack_user(monkeypatc
 
 
 @pytest.mark.parametrize("overrides", [{"channel_id": "D2"}, {"message_ts": "1.0"}])
-def test_a_click_that_is_not_on_our_card_is_dropped(monkeypatch, trigger_server, overrides) -> None:
-    _card(trigger_server)
-    relayed, sent = _relayed(monkeypatch, trigger_server, _click(**overrides), lambda url: None)
+def test_a_click_that_is_not_on_our_card_is_dropped(approval_dm, overrides) -> None:
+    _card(approval_dm)
+    relayed, sent = _relayed(approval_dm, _click(**overrides), lambda url, method: None)
     assert not relayed
     assert sent == []
 
 
-def test_a_click_the_api_refuses_settles_the_card_with_the_reason(monkeypatch, trigger_server) -> None:
+def _refusing(detail: str, state: str):
     import io
     import json
-    import time
     import urllib.error
 
-    calls = _slack_card(monkeypatch, trigger_server)
-    _card(trigger_server)
+    def reply(url, method):
+        if method == "GET":
+            return {"state": state}
+        body = io.BytesIO(json.dumps({"detail": detail}).encode())
+        raise urllib.error.HTTPError(url, 409, "Conflict", {}, body)  # ty: ignore[invalid-argument-type]
 
-    def refuse(url):
-        detail = json.dumps({"detail": "This command was already declined"}).encode()
-        raise urllib.error.HTTPError(url, 409, "Conflict", {}, io.BytesIO(detail))  # ty: ignore[invalid-argument-type]
+    return reply
 
-    relayed, _ = _relayed(monkeypatch, trigger_server, _click(), refuse)
+
+def test_a_refused_click_on_a_live_request_says_why(monkeypatch, trigger_server, approval_dm) -> None:
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm)
+    _card(approval_dm)
+    detail = "Only this Agent's Workflow approval DM user can decide in Slack"
+
+    relayed, _ = _relayed(approval_dm, _click(), _refusing(detail, "LIVE"))
+
     assert relayed
-    deadline = time.monotonic() + 5
-    while not calls and time.monotonic() < deadline:
-        time.sleep(0.02)
     assert calls[-1][0] == "chat.update"
-    assert calls[-1][1]["text"] == "This command was already declined"
+    assert calls[-1][1]["text"] == detail
+    assert approval_dm._CARDS == {}
 
 
-def test_the_slack_decision_route_needs_the_trigger_key_and_a_known_card(monkeypatch, trigger_server) -> None:
+def test_a_refused_click_on_a_decided_request_leaves_the_card_to_the_step(
+    monkeypatch, trigger_server, approval_dm
+) -> None:
+    # A retried or doubled click after its own decision committed: the step settles the card
+    # with who decided, not with the refusal.
+    calls = _slack_card(monkeypatch, trigger_server, approval_dm)
+    _card(approval_dm)
+
+    relayed, _ = _relayed(approval_dm, _click(), _refusing("This command was already approved", "APPROVED"))
+
+    assert relayed
+    assert calls == []
+    assert "r1" in approval_dm._CARDS
+
+
+def test_the_slack_decision_route_needs_the_trigger_key_and_a_known_card(
+    monkeypatch, trigger_server, approval_dm
+) -> None:
     import json
     import threading
     import urllib.error
@@ -949,6 +1037,7 @@ def test_the_slack_decision_route_needs_the_trigger_key_and_a_known_card(monkeyp
     from http.server import ThreadingHTTPServer
 
     monkeypatch.setattr(trigger_server, "TRIGGER_KEY", "trigger-key")
+    monkeypatch.setattr(trigger_server, "RUNTIME_KIND", "hermes")
     server = ThreadingHTTPServer(("127.0.0.1", 0), trigger_server.TriggerHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     path = "/agent-triggers/v1/workflow-approvals/6f1c2c7e-6b1f-4d0a-9a43-2f8f0b9a1c11/slack-decision"

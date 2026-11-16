@@ -430,7 +430,7 @@ def test_retention_removes_approval_commands_and_guidance() -> None:
 APPROVER = "U0APPROVER"
 
 
-def _slack_approver(context, user_id=APPROVER, *, enabled=True):
+def _slack_approver(context, user_id=APPROVER, *, enabled=True, retired=False):
     """The run's Agent has a Slack Connection naming its Workflow approval DM user."""
     from api.domains.communications.models import CommunicationConnection
 
@@ -445,6 +445,7 @@ def _slack_approver(context, user_id=APPROVER, *, enabled=True):
                 schema_version=2,
                 settings={"approval_dm_user_id": user_id},
                 credentials_encrypted="unused",
+                retired_at=datetime.now(UTC) if retired else None,
             )
         )
         session.commit()
@@ -498,17 +499,18 @@ def test_a_slack_decline_continues_the_session_like_a_web_decline_without_guidan
 
 
 @pytest.mark.parametrize(
-    ("configured", "enabled", "clicker"),
+    ("configured", "enabled", "retired", "clicker"),
     [
-        (APPROVER, True, "U0SOMEONEELSE"),
-        ("", True, APPROVER),
-        (APPROVER, False, APPROVER),
+        pytest.param(APPROVER, True, False, "U0SOMEONEELSE", id="someone-else"),
+        pytest.param("", True, False, APPROVER, id="no-approval-dm-user"),
+        pytest.param(APPROVER, False, False, APPROVER, id="connection-disabled"),
+        pytest.param(APPROVER, True, True, APPROVER, id="connection-retired"),
     ],
 )
-def test_only_the_current_approval_dm_user_can_decide_in_slack(configured, enabled, clicker) -> None:
+def test_only_the_current_approval_dm_user_can_decide_in_slack(configured, enabled, retired, clicker) -> None:
     with given(_RUN_GIVEN) as context:
         _repository, row, token = _started(context)
-        _slack_approver(context, configured, enabled=enabled)
+        _slack_approver(context, configured, enabled=enabled, retired=retired)
         request_id = _raise(context, row, token)
 
         refused = _slack(context, row, token, request_id, user=clicker)

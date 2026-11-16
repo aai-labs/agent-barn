@@ -410,158 +410,16 @@ def _answer_hermes(run_id: str, session_id: str, choice: str) -> None:
     urllib.request.urlopen(answer, timeout=30).close()
 
 
-# Workflow approval DM cards by request ID. Process-local: a restart ends every live step,
-# and a parked request is decided on the web.
-_SLACK_CARDS_LOCK = threading.Lock()
-_SLACK_CARDS: dict[str, dict] = {}
-_SLACK_COMMAND_LIMIT = 2_800
-
-
-def _slack_api(method: str, body: dict) -> dict:
-    request = urllib.request.Request(
-        f"https://slack.com/api/{method}",
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN', '')}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        decoded = json.loads(response.read())
-    if not decoded.get("ok"):
-        raise DispatchError(f"Slack {method} failed: {decoded.get('error', 'unknown_error')}")
-    return decoded
-
-
-def _card_blocks(request_id: str, command: str, note: str, review_url: str, *, buttons: bool) -> list[dict]:
-    shown = command if len(command) <= _SLACK_COMMAND_LIMIT else command[:_SLACK_COMMAND_LIMIT] + "…"
-    # Slack mrkdwn needs &, < and > escaped, and a literal fence would end the code block early.
-    shown = shown.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("```", "`\u200b``")
-    actions: list[dict] = []
-    if buttons:
-        for action, label, style in (("approve", "Approve once", "primary"), ("decline", "Decline", "danger")):
-            actions.append(
-                {
-                    "type": "button",
-                    "action_id": f"agentbarn_workflow_approval_{action}",
-                    "text": {"type": "plain_text", "text": label},
-                    "style": style,
-                    "value": request_id,
-                }
-            )
-    if review_url:
-        actions.append(
-            {
-                "type": "button",
-                "action_id": "agentbarn_workflow_approval_open",
-                "text": {"type": "plain_text", "text": "Open run"},
-                "url": review_url,
-            }
-        )
-    blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": "*A workflow step wants to run this command*"}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"```{shown}```"}},
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]},
-    ]
-    if actions:
-        blocks.append({"type": "actions", "elements": actions})
-    return blocks
-
-
-def _post_approval_card(
-    request_id: str, command: str, review_url: str, live_seconds: float, callback: tuple[str, str]
-) -> None:
-    """DM the Agent's Workflow approval user. Best effort: web review never depends on it."""
-    user = os.environ.get("AGENTBARN_SLACK_APPROVAL_USER", "").strip()
-    if not user or not os.environ.get("SLACK_BOT_TOKEN") or RUNTIME_KIND != "hermes":
-        return
-    minutes = max(int(live_seconds // 60), 1)
-    note = f"Decide within {minutes} min. After that the step pauses and waits for a decision on the web."
+def _approval_dm():
+    """The Slack approval DM helper, shipped beside this script in Hermes ConfigMaps."""
+    if RUNTIME_KIND != "hermes":
+        return None
     try:
-        channel = str(_slack_api("conversations.open", {"users": user})["channel"]["id"])
-        posted = _slack_api(
-            "chat.postMessage",
-            {
-                "channel": channel,
-                "text": "A workflow step needs your approval to run a command",
-                "blocks": _card_blocks(request_id, command, note, review_url, buttons=True),
-            },
-        )
-    except (DispatchError, OSError, ValueError, KeyError) as exc:
-        _LOGGER.warning("Could not send the workflow approval DM: %s", exc)
-        return
-    with _SLACK_CARDS_LOCK:
-        _SLACK_CARDS[request_id] = {
-            "channel": channel,
-            "ts": str(posted.get("ts", "")),
-            "command": command,
-            "review_url": review_url,
-            "callback": callback,
-        }
-
-
-def _settle_approval_card(request_id: str, note: str) -> None:
-    """Replace the card's buttons with what happened. Best effort."""
-    with _SLACK_CARDS_LOCK:
-        card = _SLACK_CARDS.pop(request_id, None)
-    if card is None:
-        return
-    try:
-        _slack_api(
-            "chat.update",
-            {
-                "channel": card["channel"],
-                "ts": card["ts"],
-                "text": note,
-                "blocks": _card_blocks(request_id, card["command"], note, card["review_url"], buttons=False),
-            },
-        )
-    except (DispatchError, OSError, ValueError) as exc:
-        _LOGGER.warning("Could not update the workflow approval DM: %s", exc)
-
-
-def _settled_note(status: dict) -> str:
-    state = status.get("state")
-    if state in ("APPROVED", "DECLINED"):
-        verdict = "Approved" if state == "APPROVED" else "Declined"
-        if status.get("decided_in") == "slack":
-            handle = status.get("decided_by_slack_handle")
-            return f"{verdict} in Slack" + (f" by @{handle}" if handle else "")
-        return f"{verdict} on the web"
-    if state == "PARKED":
-        return "Nobody decided in time, so the step paused. Decide on the web to continue it."
-    return "This approval closed without a decision."
-
-
-def relay_slack_decision(request_id: str, payload: dict) -> bool:
-    """Report a click on our own card to the API; the step's poll then acts on the recorded decision."""
-    with _SLACK_CARDS_LOCK:
-        card = dict(_SLACK_CARDS.get(request_id) or {})
-    if not card or payload.get("channel_id") != card["channel"] or payload.get("message_ts") != card["ts"]:
-        return False
-    token, callback_url = card["callback"]
-    body = {
-        "decision": payload.get("decision"),
-        "slack_user_id": payload.get("slack_user_id"),
-        "slack_user_name": payload.get("slack_user_name", ""),
-    }
-
-    def report() -> None:
-        try:
-            _post_json(f"{callback_url}/approvals/{request_id}/slack-decision", token, body)
-        except urllib.error.HTTPError as exc:
-            # The API refused it (already decided, closing, or not the approval user); say why.
-            try:
-                detail = str(json.loads(exc.read()).get("detail") or "")
-            except (OSError, ValueError, AttributeError):
-                detail = ""
-            _settle_approval_card(request_id, detail or "This approval can no longer be decided in Slack.")
-        except DispatchError as exc:
-            _LOGGER.warning("Could not record the Slack approval decision: %s", exc)
-
-    threading.Thread(target=report, daemon=True).start()
-    return True
+        import agentbarn_approval_dm
+    except ImportError:
+        _LOGGER.warning("agentbarn_approval_dm.py is missing; workflow approvals stay web-only")
+        return None
+    return agentbarn_approval_dm
 
 
 def _await_approval(
@@ -571,6 +429,7 @@ def _await_approval(
     token, callback_url = callback
     request_id: str | None = None
     status: dict = {}
+    approval_dm = _approval_dm()
     try:
         raised = (
             _post_json(
@@ -583,9 +442,10 @@ def _await_approval(
         request_url = f"{callback_url}/approvals/{raised['id']}"
         deadline = time.monotonic() + float(raised["live_seconds"])
         request_id = str(raised["id"])
-        _post_approval_card(
-            request_id, command, str(raised.get("review_url") or ""), float(raised["live_seconds"]), callback
-        )
+        if approval_dm is not None:
+            approval_dm.post(
+                request_id, command, str(raised.get("review_url") or ""), float(raised["live_seconds"]), callback
+            )
         while True:
             with _STEPS_LOCK:
                 if _STEPS.get(attempt_id, {}).get("stopped"):
@@ -613,8 +473,8 @@ def _await_approval(
         _stop_hermes(run_id, session_id)
         raise
     finally:
-        if request_id is not None:
-            _settle_approval_card(request_id, _settled_note(status))
+        if approval_dm is not None and request_id is not None:
+            approval_dm.settle(request_id, approval_dm.settled_note(status))
 
 
 def _stop_hermes(run_id: str, session_id: str) -> bool:
@@ -918,7 +778,9 @@ class TriggerHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._respond(400, {"error": str(exc)})
             return
-        self._respond(202 if relay_slack_decision(request_id, payload) else 404, {})
+        approval_dm = _approval_dm()
+        relayed = approval_dm is not None and approval_dm.relay(request_id, payload, _post_json) is not None
+        self._respond(202 if relayed else 404, {})
 
     def log_message(self, format: str, *args: object) -> None:
         return

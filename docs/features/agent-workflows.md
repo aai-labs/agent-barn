@@ -608,9 +608,10 @@ Hermes command approval; they never widen what its approval mode allows.
   Slack delivery is best effort and never delays or blocks web review.
 - **Decision source.** Each decision records `decision_source` (`web` or `slack`); a
   Slack decision also records the clicker's Slack user ID and the handle at click time,
-  and has no `decided_by_user_id`. Step history shows "@handle in Slack". A late
-  continuation of a Slack decision requires the clicker to still be the Approval DM
-  User, as a web decider must still hold `agent.update`. The runtime status read adds
+  and has no `decided_by_user_id`. Step history shows "@handle in Slack". Slack
+  decisions are live-only, so the waiting step always acts on them; should one ever need
+  a late continuation, it is parked again for a member to decide on the web. The runtime
+  status read adds
   `decided_in` and `decided_by_slack_handle`, and raising a request returns a
   `review_url` to the run on the Organization Workflows page.
 - **Interruption.** An attempt that expires (restart, lost session) blocks the run as

@@ -376,13 +376,6 @@ class WorkflowRunRepository:
             return False
         return self._may_update(session, run, membership)
 
-    def _decision_authorized(self, session: Session, run: WorkflowRun, request: WorkflowApprovalRequest) -> bool:
-        """A Slack decider must still be the Agent's approval DM user; a member must still hold `agent.update`."""
-        if request.decision_source == "slack":
-            approver = self._slack_approver(session, run.agent_id)
-            return approver is not None and approver == request.decided_by_slack_user_id
-        return self._decider_authorized(session, run, request.decided_by_user_id)
-
     def _decider_authorized(self, session: Session, run: WorkflowRun, user_id: UUID | None) -> bool:
         """The person who decided a request must still hold `agent.update` when the session continues."""
         if user_id is None:
@@ -899,8 +892,10 @@ class WorkflowRunRepository:
         decided = self._decided(session, run)
         if decided is None:
             return
-        if not self._decision_authorized(session, run, decided):
-            # Authority is required when deciding and again when the session continues.
+        if not self._decider_authorized(session, run, decided.decided_by_user_id):
+            # Authority is required when deciding and again when the session continues. Slack
+            # decisions are live-only and the waiting step acts on them; one found here has no
+            # member behind it, so it is parked for someone to decide on the web.
             decided.state, decided.decided_by_user_id, decided.decided_at, decided.guidance = "PARKED", None, None, None
             decided.decision_source = decided.decided_by_slack_user_id = decided.decided_by_slack_handle = None
             session.add(decided)
