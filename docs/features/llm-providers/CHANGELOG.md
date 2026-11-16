@@ -8,10 +8,16 @@ Related context: [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent
 
 - Delivered: the API can add, update and delete LiteLLM model routes by a fixed route id. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: the OpenRouter key still comes only from `OPENROUTER_API_KEY`; nothing registers a database route yet.
-- Next: slice 1, PR 5 — the OpenRouter key status for Platform Administrators.
+- Next: slice 1, PR 6 — replacing the OpenRouter key.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 5
+
+- Delivered: `GET /api/v1/platform/settings/llm-providers/openrouter`, for Platform Administrators only, reports `has_api_key`, `api_key_last4`, `key_source`, `updated_at`, `updated_by` and `env_key_configured`, never the key. `OpenRouterKeyLookup.api_key()` returns the stored key, else `OPENROUTER_API_KEY`, else empty; nothing calls it yet.
+- Changed: `operations-v1.json` and the RBAC brief list the route.
+- Follow-up: PR 6 lets a Platform Administrator replace the key.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 4
 

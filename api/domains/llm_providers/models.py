@@ -10,6 +10,7 @@ from enum import StrEnum
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import BaseModel as PydanticBaseModel
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -68,3 +69,14 @@ class LlmProviderConnection(BaseModel, table=True):
     key_source: KeySource | None = SqlField(default=None, sa_column=Column(_string_enum(KeySource, 16), nullable=True))
     updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
     deleted_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+
+
+class OpenRouterConnectionRead(PydanticBaseModel):
+    """What a Platform Administrator sees of the OpenRouter key: never the key itself."""
+
+    has_api_key: bool
+    api_key_last4: str | None = None
+    key_source: KeySource | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+    env_key_configured: bool

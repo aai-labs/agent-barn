@@ -35,6 +35,15 @@ Organization roles confer no authority on these Platform routes.
 The Platform Playbook Extraction model (`/platform/settings/playbooks`) follows the
 same rule; see [Playbooks](../playbooks.md#model-and-billing).
 
+### Platform LLM Provider settings
+
+`/platform/settings/llm-providers` routes require a current Platform Administrator
+(`require_platform_admin` and `PlatformAdminService.require_platform_admin`);
+Organization roles confer no authority on them. `GET .../openrouter` reports whether a
+key is stored, its last four characters, its source, who last changed it and when, and
+whether `OPENROUTER_API_KEY` is still configured. It never returns the key or its
+ciphertext.
+
 ### Organization Roles
 
 | Role                | Authority                                                                                                                          |
