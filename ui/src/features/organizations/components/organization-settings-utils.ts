@@ -1,4 +1,4 @@
-import { Brain, FileCode2, FolderSync, KeyRound, Layers, Sparkles, UserRound, Wallet } from "lucide-react";
+import { Brain, FileCode2, FolderSync, KeyRound, Layers, ShieldAlert, Sparkles, UserRound, Wallet } from "lucide-react";
 
 export type OrganizationSettingsSectionKey =
   | "agents"
@@ -9,7 +9,8 @@ export type OrganizationSettingsSectionKey =
   | "memory-access"
   | "shared-credentials"
   | "sync"
-  | "tier";
+  | "tier"
+  | "unusual-activity";
 
 export type OrganizationSettingsSection = {
   key: OrganizationSettingsSectionKey;
@@ -79,6 +80,13 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     adminOnly: false,
   },
   {
+    key: "unusual-activity",
+    label: "Unusual activity",
+    description: "Check each Agent's activity against what is normal for it, and flag what is not.",
+    adminOnly: true,
+    membershipAdminOnly: true,
+  },
+  {
     key: "tier",
     label: "Tier",
     description: "What your organization's tier covers, and which agents and features are on hold.",
@@ -101,6 +109,7 @@ export const ORGANIZATION_SETTINGS_ICONS = {
   "shared-credentials": KeyRound,
   sync: FolderSync,
   tier: Layers,
+  "unusual-activity": ShieldAlert,
 } as const;
 
 export function visibleOrganizationSettingsSections(canManage: boolean, isMembershipAdmin = canManage) {
