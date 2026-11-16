@@ -82,13 +82,24 @@ def ssh_server(root: Path, public_key: str):
     host_public = host.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode()
     (root / "authorized_keys").write_text(public_key + "\n")
     (root / "sshd_config").write_text(
-        "Port 2222\nHostKey /fixture/host_key\nAuthorizedKeysFile /fixture/authorized_keys\n"
+        "Port 2222\nHostKey /run/sshd/host_key\nAuthorizedKeysFile /run/sshd/authorized_keys\n"
         "StrictModes yes\nPermitRootLogin prohibit-password\nPasswordAuthentication no\n"
         "KbdInteractiveAuthentication no\nUsePAM no\nPidFile /tmp/sshd.pid\n"
         "Subsystem sftp internal-sftp\nLogLevel VERBOSE\n"
     )
     container = client.containers.run(
         image,
+        # CI bind mounts retain the runner UID. sshd's StrictModes requires the
+        # root account's authorized_keys to be owned by root inside the server.
+        entrypoint="sh",
+        command=[
+            "-c",
+            (
+                "cp /fixture/host_key /fixture/authorized_keys /fixture/sshd_config /run/sshd/"
+                " && chmod 600 /run/sshd/host_key /run/sshd/authorized_keys"
+                " && exec /usr/sbin/sshd -D -e -f /run/sshd/sshd_config"
+            ),
+        ],
         detach=True,
         ports={"2222/tcp": ("127.0.0.1", None)},
         volumes={str(root): {"bind": "/fixture", "mode": "ro"}},

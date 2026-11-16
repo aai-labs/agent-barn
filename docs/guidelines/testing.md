@@ -251,6 +251,9 @@ unsupported protocol operations, fail-closed audit, and a disposable SSH server
 through a real verified-TLS relay. The host running these API tests needs Docker
 and OpenSSH 8.9+ (`ssh-agent`, `ssh-add`, `ssh`, `scp`, `sftp`) and Git; the API
 image installs OpenSSH. All test keys, host identities and servers are disposable.
+The SSH fixture copies its read-only host inputs into root-owned server files
+before starting sshd. This keeps `StrictModes` enabled when a CI runner's UID
+owns the source files; Agent runtime containers still receive public material only.
 
 Run `make test-ssh-runtime` with both built image variables. The tests use each
 image's configured user and isolated relay environment, the generated public
