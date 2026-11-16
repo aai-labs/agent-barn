@@ -24,6 +24,9 @@ export const WorkflowApprovalSchema = z.object({
   decidedByUserId: z.uuid().nullable(),
   decidedAt: z.string().nullable(),
   guidance: z.string().nullable(),
+  // "slack" when the Agent's Workflow approval DM user decided from the Slack card.
+  decisionSource: z.enum(["web", "slack"]).nullish(),
+  decidedBySlackHandle: z.string().nullish(),
 });
 export type WorkflowApproval = z.infer<typeof WorkflowApprovalSchema>;
 

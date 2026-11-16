@@ -9,7 +9,7 @@ from api.core.config import Config
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.workflows import config as workflow_config
 from api.domains.workflows.repository import WorkflowConflict
-from api.domains.workflows.run_models import ApprovalRaised
+from api.domains.workflows.run_models import ApprovalRaised, SlackApprovalDecision
 from api.domains.workflows.run_repository import WorkflowRunRepository
 
 STEP_INSTRUCTIONS = (
@@ -105,3 +105,9 @@ class WorkflowRuntimeService:
 
     def released(self, attempt_id: UUID, token: str, request_id: UUID) -> None:
         self.dispatcher.enqueue_immediate(self.repository.released(attempt_id, token, request_id))
+
+    def slack_decision(self, attempt_id: UUID, token: str, request_id: UUID, decision: SlackApprovalDecision) -> dict:
+        """Record a click on the approval DM card; the step's own poll then acts on it as on a web decision."""
+        request, delivery_ids = self.repository.slack_decide(attempt_id, token, request_id, decision)
+        self.dispatcher.enqueue_immediate(delivery_ids)
+        return {"state": request.state}

@@ -18,6 +18,7 @@ from api.domains.agents.repository import agent_scope_predicates
 from api.domains.artifacts import config as artifact_config
 from api.domains.artifacts.models import Artifact
 from api.domains.artifacts.references import attempt_files, pin, release
+from api.domains.communications.models import CommunicationConnection
 from api.domains.events.catalog import EVENT_REGISTRY, WORKFLOW_RUN_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
@@ -35,6 +36,7 @@ from api.domains.workflows.run_models import (
     AttemptFailure,
     AttemptRead,
     AttemptResult,
+    SlackApprovalDecision,
     WorkflowApprovalRequest,
     WorkflowAttempt,
     WorkflowCheckpoint,
@@ -43,6 +45,15 @@ from api.domains.workflows.run_models import (
     WorkflowRunCreate,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+# What a Slack click on a request that is no longer live is told; the card shows it.
+_SLACK_CLOSED = {
+    "PARKED": "The Agent stopped waiting; decide on the web",
+    "APPROVED": "This command was already approved",
+    "RELEASED": "This command was already approved",
+    "DECLINED": "This command was already declined",
+    "LAPSED": "This approval request closed without a decision",
+}
 
 
 def _timeout_cause(accepted: bool) -> str:
@@ -364,6 +375,13 @@ class WorkflowRunRepository:
         if membership is None or membership.user_id != run.initiating_user_id:
             return False
         return self._may_update(session, run, membership)
+
+    def _decision_authorized(self, session: Session, run: WorkflowRun, request: WorkflowApprovalRequest) -> bool:
+        """A Slack decider must still be the Agent's approval DM user; a member must still hold `agent.update`."""
+        if request.decision_source == "slack":
+            approver = self._slack_approver(session, run.agent_id)
+            return approver is not None and approver == request.decided_by_slack_user_id
+        return self._decider_authorized(session, run, request.decided_by_user_id)
 
     def _decider_authorized(self, session: Session, run: WorkflowRun, user_id: UUID | None) -> bool:
         """The person who decided a request must still hold `agent.update` when the session continues."""
@@ -760,40 +778,96 @@ class WorkflowRunRepository:
                 raise WorkflowConflict("This approval request is closing; refresh and decide again")
             if request.state == "PARKED" and run.state != "AWAITING_APPROVAL":
                 raise WorkflowConflict("Run changed; refresh before deciding")
-            live = request.state == "LIVE"
-            request.state = "APPROVED" if approve else "DECLINED"
-            request.decided_by_user_id, request.decided_at = user_id, now
-            request.guidance = None if approve else (guidance or "").strip() or None
-            session.add(request)
-            session.flush()
-            declines = session.exec(
-                select(sa.func.count()).where(
-                    col(WorkflowApprovalRequest.run_id) == run.id,
-                    col(WorkflowApprovalRequest.step_index) == request.step_index,
-                    col(WorkflowApprovalRequest.state) == "DECLINED",
-                )
-            ).one()
-            run.revision += 1
-            if not approve and declines >= workflow_config.MAX_DECLINES_PER_STEP:
-                # The step's session sees its admission fenced and stops; nothing is continued.
-                request.continued_by_attempt_id = request.attempt_id
-                attempt.state = "STOPPED"
-                session.add(attempt)
-                run.state = "BLOCKED"
-                run.reason = (
-                    f"The Agent's commands were declined {declines} times in this step; cancel the run "
-                    "and revise the workflow"
-                )
-            elif live:
-                # Only the time actually spent waiting is added to the step's budget.
-                attempt.expires_at -= request.live_until - now
-                session.add(attempt)
-            else:
-                self._continue_when_ready(session, run)
-            verdict = "approved" if approve else "declined"
-            delivery_ids = self._event(session, run, "APPROVAL_DECIDED", f"Command {verdict}: {request.command[:500]}")
+            request.decided_by_user_id, request.decision_source = user_id, "web"
+            delivery_ids = self._record_decision(session, run, attempt, request, approve, guidance, now)
             session.commit()
             return delivery_ids
+
+    def slack_decide(
+        self, attempt_id: UUID, token: str, request_id: UUID, decision: SlackApprovalDecision
+    ) -> tuple[WorkflowApprovalRequest, list[UUID]]:
+        """A click on the approval DM card, reported by the step's runtime while the window is open.
+
+        Only the Agent's current Workflow approval DM user may decide, and only a live request:
+        a parked one is decided on the web, where membership and `agent.update` are checked.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            run, attempt, request = self._bound_request(session, attempt_id, token, request_id)
+            if request.state != "LIVE":
+                raise WorkflowConflict(_SLACK_CLOSED.get(request.state, "This approval request is closed"))
+            now = datetime.now(UTC)
+            if request.live_until <= now:
+                raise WorkflowConflict("This approval is closing; decide on the web")
+            if self._slack_approver(session, run.agent_id) != decision.slack_user_id:
+                raise WorkflowConflict("Only this Agent's Workflow approval DM user can decide in Slack")
+            request.decision_source = "slack"
+            request.decided_by_slack_user_id = decision.slack_user_id
+            request.decided_by_slack_handle = decision.slack_user_name.strip().lstrip("@") or None
+            delivery_ids = self._record_decision(
+                session, run, attempt, request, decision.decision == "approve", None, now
+            )
+            session.commit()
+            return request, delivery_ids
+
+    @staticmethod
+    def _slack_approver(session: Session, agent_id: UUID) -> str | None:
+        """The Workflow approval DM user of the Agent's enabled Slack Connection, if any."""
+        connection = session.exec(
+            select(CommunicationConnection).where(
+                col(CommunicationConnection.agent_id) == agent_id,
+                col(CommunicationConnection.platform_key) == "slack",
+                col(CommunicationConnection.retired_at).is_(None),
+                col(CommunicationConnection.enabled).is_(True),
+            )
+        ).first()
+        if connection is None:
+            return None
+        return (connection.settings or {}).get("approval_dm_user_id") or None
+
+    def _record_decision(
+        self,
+        session: Session,
+        run: WorkflowRun,
+        attempt: WorkflowAttempt,
+        request: WorkflowApprovalRequest,
+        approve: bool,
+        guidance: str | None,
+        now: datetime,
+    ) -> list[UUID]:
+        """Apply a decision the caller has authorized; the caller commits."""
+        live = request.state == "LIVE"
+        request.state = "APPROVED" if approve else "DECLINED"
+        request.decided_at = now
+        request.guidance = None if approve else (guidance or "").strip() or None
+        session.add(request)
+        session.flush()
+        declines = session.exec(
+            select(sa.func.count()).where(
+                col(WorkflowApprovalRequest.run_id) == run.id,
+                col(WorkflowApprovalRequest.step_index) == request.step_index,
+                col(WorkflowApprovalRequest.state) == "DECLINED",
+            )
+        ).one()
+        run.revision += 1
+        if not approve and declines >= workflow_config.MAX_DECLINES_PER_STEP:
+            # The step's session sees its admission fenced and stops; nothing is continued.
+            request.continued_by_attempt_id = request.attempt_id
+            attempt.state = "STOPPED"
+            session.add(attempt)
+            run.state = "BLOCKED"
+            run.reason = (
+                f"The Agent's commands were declined {declines} times in this step; cancel the run "
+                "and revise the workflow"
+            )
+        elif live:
+            # Only the time actually spent waiting is added to the step's budget.
+            attempt.expires_at -= request.live_until - now
+            session.add(attempt)
+        else:
+            self._continue_when_ready(session, run)
+        verdict = "approved" if approve else "declined"
+        where = f" in Slack by @{request.decided_by_slack_handle}" if request.decided_by_slack_handle else ""
+        return self._event(session, run, "APPROVAL_DECIDED", f"Command {verdict}{where}: {request.command[:500]}")
 
     @staticmethod
     def _decided(session: Session, run: WorkflowRun) -> WorkflowApprovalRequest | None:
@@ -819,9 +893,10 @@ class WorkflowRunRepository:
         decided = self._decided(session, run)
         if decided is None:
             return
-        if not self._decider_authorized(session, run, decided.decided_by_user_id):
+        if not self._decision_authorized(session, run, decided):
             # Authority is required when deciding and again when the session continues.
             decided.state, decided.decided_by_user_id, decided.decided_at, decided.guidance = "PARKED", None, None, None
+            decided.decision_source = decided.decided_by_slack_user_id = decided.decided_by_slack_handle = None
             session.add(decided)
             self._park(session, run, decided)
             run.reason = f"The decider no longer has access; decide again on {decided.command[:500]}"

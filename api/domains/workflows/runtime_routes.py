@@ -8,7 +8,7 @@ from fastapi_injector import Injected
 from pydantic import ValidationError
 
 from api.domains.workflows.repository import WorkflowConflict
-from api.domains.workflows.run_models import ApprovalRaised, AttemptFailure, AttemptResult
+from api.domains.workflows.run_models import ApprovalRaised, AttemptFailure, AttemptResult, SlackApprovalDecision
 from api.domains.workflows.run_service import WorkflowRunService
 from api.domains.workflows.runtime_service import WorkflowRuntimeService
 
@@ -86,6 +86,21 @@ def approval_status(attempt_id: UUID, request_id: UUID, credential: Credential, 
 def park_approval(attempt_id: UUID, request_id: UUID, credential: Credential, service: Runtime):
     try:
         return service.park(attempt_id, credential.credentials, request_id)
+    except WorkflowConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/approvals/{request_id}/slack-decision")
+async def slack_decision(
+    attempt_id: UUID, request_id: UUID, credential: Credential, service: Runtime, request: Request
+):
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        parsed = SlackApprovalDecision.model_validate(await bounded_body(request))
+        return await run_in_threadpool(service.slack_decision, attempt_id, credential.credentials, request_id, parsed)
+    except ValidationError as exc:
+        raise HTTPException(422, "Invalid Slack approval decision") from exc
     except WorkflowConflict as exc:
         raise HTTPException(409, str(exc)) from exc
 

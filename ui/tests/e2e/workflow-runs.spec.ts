@@ -326,7 +326,7 @@ test.describe("WF02 run progress and text results", () => {
 
   test("decided commands stay on their step with who decided and the guidance", async ({ page }) => {
     support.approvals = [
-      { ...approvalRequest("LIVE"), id: "00000000-0000-4000-8000-0000000000c2", command: "mkdir -p /tmp/af390", state: "RELEASED", decided_by_user_id: null, decided_at: "2026-10-17T10:01:30Z" },
+      { ...approvalRequest("LIVE"), id: "00000000-0000-4000-8000-0000000000c2", command: "mkdir -p /tmp/af390", state: "RELEASED", decided_by_user_id: null, decided_at: "2026-10-17T10:01:30Z", decision_source: "slack", decided_by_slack_handle: "ana" },
       { ...approvalRequest("LIVE"), state: "DECLINED", decided_at: "2026-10-17T10:02:00Z", guidance: "List the folder instead" },
     ];
     const runs = new WorkflowRunsPage(page);
@@ -338,6 +338,7 @@ test.describe("WF02 run progress and text results", () => {
     await runs.selectStep("Step 1: Read pipeline");
     const history = page.getByLabel("Approvals in step 1");
     await expect(history.getByText("Approved and sent to the Agent")).toBeVisible();
+    await expect(history.getByText(/^@ana in Slack · /)).toBeVisible();
     await expect(history.getByText("Declined · never run")).toBeVisible();
     await expect(history.getByText("“List the folder instead”")).toBeVisible();
   });
