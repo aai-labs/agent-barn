@@ -354,7 +354,6 @@ class PlatformLlmProviderChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     connection_id: UUID
     slug: str
-    key_source: str
     replaced_existing: bool
     actor_display: str
     subject_display: str

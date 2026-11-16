@@ -10,7 +10,7 @@ from sqlmodel import Session, col, select
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_LLM_PROVIDER_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.llm_providers.models import KeySource, LlmProviderConnection
+from api.domains.llm_providers.models import LlmProviderConnection
 from api.domains.users.models import User
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -44,7 +44,6 @@ class LlmProviderRepository:
         slug: str,
         api_key_encrypted: str,
         api_key_last4: str,
-        key_source: KeySource,
         actor_id: UUID,
         actor_display: str,
         apply: Callable[[], None],
@@ -70,7 +69,6 @@ class LlmProviderRepository:
             now = datetime.now(UTC)
             connection.api_key_encrypted = api_key_encrypted
             connection.api_key_last4 = api_key_last4
-            connection.key_source = key_source
             connection.updated_by = actor_id
             connection.updated_at = now
             session.add(connection)
@@ -85,7 +83,6 @@ class LlmProviderRepository:
                 payload={
                     "connection_id": connection.id,
                     "slug": connection.slug,
-                    "key_source": key_source.value,
                     "replaced_existing": replaced_existing,
                     "actor_display": actor_display,
                     "subject_display": connection.name,

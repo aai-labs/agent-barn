@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 from uuid import UUID, uuid7
 
 import pytest
@@ -7,9 +7,11 @@ from hamcrest import assert_that, equal_to, has_entries, has_length, is_not, non
 from sqlmodel import Session, select
 
 from api.core.config import Config
+from api.core.metrics import clear_openrouter_credits_cache
+from api.domains.costs.sync import CostSynchronizer
 from api.domains.events.models import OutboxMessage
 from api.domains.llm_providers.lookup import OpenRouterKeyLookup
-from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, KeySource, LlmProviderConnection
+from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, LlmProviderConnection
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterError
@@ -62,13 +64,12 @@ def env_key(value: str):
     return step
 
 
-def _store_key(context, key: str, source: KeySource, updated_by: UUID | None = None) -> None:
+def _store_key(context, key: str, updated_by: UUID | None = None) -> None:
     with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
         row = session.get(LlmProviderConnection, OPENROUTER_CONNECTION_ID)
         assert row is not None
         row.api_key_encrypted = encrypt_token(key, TEST_ENCRYPTION_KEY)
         row.api_key_last4 = key[-4:]
-        row.key_source = source
         row.updated_by = updated_by
         row.updated_at = datetime.now(UTC)
         session.add(row)
@@ -104,7 +105,6 @@ def test_a_platform_admin_sees_that_no_key_is_set():
                 {
                     "has_api_key": False,
                     "api_key_last4": None,
-                    "key_source": None,
                     "updated_at": None,
                     "updated_by": None,
                     "env_key_configured": False,
@@ -115,7 +115,7 @@ def test_a_platform_admin_sees_that_no_key_is_set():
 
 def test_a_platform_admin_sees_the_last_four_characters_and_who_set_the_key():
     with given(_setup(admin, env_key(""))) as context:
-        _store_key(context, STORED_KEY, KeySource.ADMIN, context.admin_id)
+        _store_key(context, STORED_KEY, context.admin_id)
 
         response = context.client.get(BASE, headers=auth(context))
 
@@ -125,7 +125,6 @@ def test_a_platform_admin_sees_the_last_four_characters_and_who_set_the_key():
             has_entries(
                 has_api_key=True,
                 api_key_last4="a1b2",
-                key_source="admin",
                 updated_by=ADMIN_NAME,
                 env_key_configured=False,
             ),
@@ -135,7 +134,7 @@ def test_a_platform_admin_sees_the_last_four_characters_and_who_set_the_key():
 
 def test_the_key_status_never_carries_the_key_or_its_ciphertext():
     with given(_setup(admin, env_key(ENV_KEY))) as context:
-        _store_key(context, STORED_KEY, KeySource.ENVIRONMENT)
+        _store_key(context, STORED_KEY)
         with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
             row = session.get(LlmProviderConnection, OPENROUTER_CONNECTION_ID)
             assert row is not None and row.api_key_encrypted is not None
@@ -143,7 +142,7 @@ def test_the_key_status_never_carries_the_key_or_its_ciphertext():
 
         response = context.client.get(BASE, headers=auth(context))
 
-        assert_that(response.json(), has_entries(key_source="environment", updated_by=None))
+        assert_that(response.json(), has_entries(has_api_key=True, updated_by=None))
         for secret in (STORED_KEY, ciphertext, ENV_KEY):
             assert secret not in response.text
 
@@ -158,7 +157,7 @@ def test_the_status_says_whether_the_environment_still_sets_a_key(value, configu
 
 def test_the_lookup_prefers_the_stored_key_to_the_environment():
     with given(_setup(env_key(ENV_KEY))) as context:
-        _store_key(context, STORED_KEY, KeySource.ADMIN)
+        _store_key(context, STORED_KEY)
 
         assert_that(context.injector.get(OpenRouterKeyLookup).api_key(), equal_to(STORED_KEY))
 
@@ -216,7 +215,6 @@ def _assert_nothing_changed(context, response) -> None:
     row = _row(context)
     assert row.api_key_encrypted is not None
     assert_that(decrypt_token(row.api_key_encrypted, TEST_ENCRYPTION_KEY), equal_to(STORED_KEY))
-    assert_that(row.key_source, equal_to(KeySource.ENVIRONMENT))
     assert_that(_events(context), has_length(0))
     assert NEW_KEY not in response.text
 
@@ -247,14 +245,14 @@ def test_a_read_only_api_key_cannot_replace_the_openrouter_key():
 
 def test_a_platform_admin_replaces_the_key_and_litellm_routes_with_it():
     with given(_setup(admin, env_key(""), openrouter_answers(True))) as context:
-        _store_key(context, STORED_KEY, KeySource.ENVIRONMENT)
+        _store_key(context, STORED_KEY)
 
         response = context.client.put(BASE, headers=auth(context), json={"api_key": f"  {NEW_KEY}  "})
 
         assert_that(response.status_code, equal_to(200), response.text)
         assert_that(
             response.json(),
-            has_entries(has_api_key=True, api_key_last4="c3d4", key_source="admin", updated_by=ADMIN_NAME),
+            has_entries(has_api_key=True, api_key_last4="c3d4", updated_by=ADMIN_NAME),
         )
         assert NEW_KEY not in response.text
         context.check_key.assert_called_once_with(NEW_KEY)
@@ -268,7 +266,7 @@ def test_a_platform_admin_replaces_the_key_and_litellm_routes_with_it():
 
 def test_the_change_is_audited_with_no_key_in_the_event():
     with given(_setup(admin, openrouter_answers(True))) as context:
-        _store_key(context, STORED_KEY, KeySource.ENVIRONMENT)
+        _store_key(context, STORED_KEY)
 
         context.client.put(BASE, headers=auth(context), json={"api_key": NEW_KEY})
 
@@ -280,7 +278,6 @@ def test_the_change_is_audited_with_no_key_in_the_event():
                 {
                     "connection_id": str(OPENROUTER_CONNECTION_ID),
                     "slug": "openrouter",
-                    "key_source": "admin",
                     "replaced_existing": True,
                     "actor_display": ADMIN_NAME,
                     "subject_display": "OpenRouter",
@@ -300,7 +297,7 @@ def test_setting_the_first_key_records_that_none_was_replaced():
 
 def test_a_key_openrouter_refuses_changes_nothing():
     with given(_setup(admin, openrouter_answers(False))) as context:
-        _store_key(context, STORED_KEY, KeySource.ENVIRONMENT)
+        _store_key(context, STORED_KEY)
 
         response = context.client.put(BASE, headers=auth(context), json={"api_key": NEW_KEY})
 
@@ -311,7 +308,7 @@ def test_a_key_openrouter_refuses_changes_nothing():
 
 def test_an_unreachable_openrouter_changes_nothing():
     with given(_setup(admin, openrouter_answers(OpenRouterError("unreachable")))) as context:
-        _store_key(context, STORED_KEY, KeySource.ENVIRONMENT)
+        _store_key(context, STORED_KEY)
 
         response = context.client.put(BASE, headers=auth(context), json={"api_key": NEW_KEY})
 
@@ -322,7 +319,7 @@ def test_an_unreachable_openrouter_changes_nothing():
 
 def test_a_litellm_failure_changes_nothing():
     with given(_setup(admin, openrouter_answers(True))) as context:
-        _store_key(context, STORED_KEY, KeySource.ENVIRONMENT)
+        _store_key(context, STORED_KEY)
         _litellm(context).upsert_model_deployment.side_effect = LiteLLMError("Failed to write the model route")
 
         response = context.client.put(BASE, headers=auth(context), json={"api_key": NEW_KEY})
@@ -351,3 +348,30 @@ def test_a_malformed_request_is_refused_without_echoing_it(body):
         assert "x" * 513 not in response.text
         context.check_key.assert_not_called()
         _litellm(context).upsert_model_deployment.assert_not_called()
+
+
+def test_cost_repair_uses_the_stored_key():
+    with given(_setup(env_key(ENV_KEY))) as context:
+        _store_key(context, STORED_KEY)
+
+        assert_that(context.injector.get(CostSynchronizer).openrouter_api_key(), equal_to(STORED_KEY))
+
+
+def test_cost_repair_falls_back_to_the_environment_key():
+    with given(_setup(env_key(ENV_KEY))) as context:
+        assert_that(context.injector.get(CostSynchronizer).openrouter_api_key(), equal_to(ENV_KEY))
+
+
+def test_the_credits_metric_polls_with_the_stored_key():
+    with given(_setup(env_key(ENV_KEY))) as context:
+        _store_key(context, STORED_KEY)
+        clear_openrouter_credits_cache()
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"data": {"limit_remaining": 5.0}}
+        try:
+            with patch("api.core.metrics.httpx.get", return_value=response) as get:
+                assert_that(context.client.get("/metrics").status_code, equal_to(200))
+        finally:
+            clear_openrouter_credits_cache()
+
+        assert_that(get.call_args.kwargs["headers"]["Authorization"], equal_to(f"Bearer {STORED_KEY}"))

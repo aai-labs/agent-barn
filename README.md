@@ -112,7 +112,7 @@ anything not listed here has a working local default:
 | `PLATFORM_ADMIN_CREDENTIALS`                        | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
 | `ENVIRONMENT`, `WEB_APP_URL`, `API_PORT`            | leave the `.env.spec` defaults                                                                                          |
 | `AGENT_TOKEN_ENCRYPTION_KEY`                        | a Fernet key — generate it below                                                                                        |
-| `OPENROUTER_API_KEY`                                | your OpenRouter key; passed to LiteLLM and used for the credit balance and cost repair                                  |
+| `OPENROUTER_API_KEY`                                | your OpenRouter key; LiteLLM and the API use it until one is saved in Platform Admin settings                           |
 | `LITELLM_MASTER_KEY`                                | a **stable** admin key — generate it below                                                                              |
 | `LITELLM_SALT_KEY`                                  | a **permanent** key that encrypts provider keys stored in LiteLLM — generate it below                                   |
 | `AGENT_LITELLM_BASE_URL`                            | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                     |

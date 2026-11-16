@@ -12,7 +12,6 @@ from api.domains.llm_providers.models import (
     OPENROUTER_ROUTE_MODEL,
     OPENROUTER_ROUTE_ORDER,
     OPENROUTER_SLUG,
-    KeySource,
     OpenRouterConnectionRead,
     OpenRouterKeyUpdate,
 )
@@ -44,7 +43,6 @@ class PlatformLlmProviderService:
         return OpenRouterConnectionRead(
             has_api_key=has_api_key,
             api_key_last4=connection.api_key_last4,
-            key_source=connection.key_source,
             updated_at=connection.updated_at if has_api_key else None,
             updated_by=updated_by if has_api_key else None,
             env_key_configured=bool(self.config.openrouter_api_key),
@@ -84,7 +82,6 @@ class PlatformLlmProviderService:
                 OPENROUTER_SLUG,
                 encrypt_token(api_key, self.config.agent_token_encryption_key),
                 api_key[-4:],
-                KeySource.ADMIN,
                 context.user.id,
                 context.user.full_name or context.user.email,
                 apply,

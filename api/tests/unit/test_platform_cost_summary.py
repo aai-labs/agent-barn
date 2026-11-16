@@ -3,10 +3,10 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 
-from api.core.config import Config
 from api.domains.costs.models import CostFilter
 from api.domains.costs.platform_service import PlatformCostService
 from api.domains.costs.repository import CostRepository, CostTotals
+from api.domains.llm_providers.lookup import OpenRouterKeyLookup
 from api.domains.platform_admin.models import StatsGranularity, StatsWindow
 from api.infrastructure.openrouter.client import CreditsStatus, OpenRouterClient, OpenRouterCredits
 
@@ -65,7 +65,7 @@ def _service(openrouter: FakeOpenRouter, *, spend="300.00", calls=100) -> Platfo
     return PlatformCostService(
         repository=cast(CostRepository, FakeRepository(spend, calls)),
         openrouter=cast(OpenRouterClient, openrouter),
-        config=cast(Config, SimpleNamespace(openrouter_api_key=PLATFORM_KEY)),
+        keys=cast(OpenRouterKeyLookup, SimpleNamespace(api_key=lambda: PLATFORM_KEY)),
     )
 
 

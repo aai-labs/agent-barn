@@ -30,8 +30,8 @@ PRE_MIGRATION_REVISION = "38de1199ae19"
 CONNECTIONS_REVISION = "22b93965859f"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 TABLE = LlmProviderConnection.__tablename__
-SEEDED_ROW = (OPENROUTER_CONNECTION_ID, OPENROUTER_SLUG, OPENROUTER_NAME, "openrouter", None, None, None, None, None)
-ROW_COLUMNS = "id, slug, name, provider_type, api_key_encrypted, api_key_last4, key_source, updated_by, deleted_at"
+SEEDED_ROW = (OPENROUTER_CONNECTION_ID, OPENROUTER_SLUG, OPENROUTER_NAME, "openrouter", None, None, None, None)
+ROW_COLUMNS = "id, slug, name, provider_type, api_key_encrypted, api_key_last4, updated_by, deleted_at"
 
 
 @pytest.fixture
@@ -71,15 +71,14 @@ def _insert(connection, **overrides):
         "provider_type": "openrouter",
         "api_key_encrypted": None,
         "api_key_last4": None,
-        "key_source": None,
         "deleted_at": None,
         **overrides,
     }
     connection.execute(
         text(
             f"INSERT INTO {TABLE} (id, created_at, updated_at, slug, name, provider_type, api_key_encrypted,"
-            " api_key_last4, key_source, deleted_at) VALUES (:id, now(), now(), :slug, :name, :provider_type,"
-            " :api_key_encrypted, :api_key_last4, :key_source, :deleted_at)"
+            " api_key_last4, deleted_at) VALUES (:id, now(), now(), :slug, :name, :provider_type,"
+            " :api_key_encrypted, :api_key_last4, :deleted_at)"
         ),
         row,
     )
@@ -100,7 +99,7 @@ def test_a_complete_key_is_accepted(database_before_connections):
     command.upgrade(database.config, CONNECTIONS_REVISION)
 
     with database.engine.begin() as connection:
-        _insert(connection, api_key_encrypted="ciphertext", api_key_last4="a1b2", key_source="admin")
+        _insert(connection, api_key_encrypted="ciphertext", api_key_last4="a1b2")
 
         count = connection.execute(text(f"SELECT count(*) FROM {TABLE}")).scalar_one()
     assert_that(count, equal_to(2))
@@ -116,10 +115,8 @@ def test_a_complete_key_is_accepted(database_before_connections):
         {"slug": "-anthropic"},  # a leading hyphen
         {"slug": ""},  # no slug
         {"provider_type": "unknown"},  # a provider the platform does not know
-        {"api_key_encrypted": "ciphertext"},  # a key with no last four or source
-        {"api_key_encrypted": "ciphertext", "api_key_last4": "a1b2"},  # a key with no source
-        {"api_key_last4": "a1b2", "key_source": "admin"},  # a last four with no key
-        {"api_key_encrypted": "ciphertext", "api_key_last4": "a1b2", "key_source": "unknown"},
+        {"api_key_encrypted": "ciphertext"},  # a key with no last four
+        {"api_key_last4": "a1b2"},  # a last four with no key
     ],
 )
 def test_the_database_refuses_a_connection_that_could_not_be_used(database_before_connections, overrides):
@@ -155,10 +152,7 @@ def test_a_clean_database_has_only_the_seeded_openrouter_connection():
         engine = context.postgres_delegate.engine
         with engine.begin() as connection:
             connection.execute(
-                text(
-                    f"UPDATE {TABLE} SET api_key_encrypted = 'ciphertext', api_key_last4 = 'a1b2',"
-                    " key_source = 'admin', deleted_at = now()"
-                )
+                text(f"UPDATE {TABLE} SET api_key_encrypted = 'ciphertext', api_key_last4 = 'a1b2', deleted_at = now()")
             )
             _insert(connection)
 

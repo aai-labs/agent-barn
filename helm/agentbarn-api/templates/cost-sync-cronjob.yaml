@@ -47,7 +47,8 @@ spec:
                 - "from api.domains.costs.sync import main; main()"
               envFrom:
                 # Carries DB_CONNECTION_URL, AGENT_TOKEN_ENCRYPTION_KEY (to resolve
-                # agent keys to owners) and OPENROUTER_API_KEY (to recover lost costs).
+                # agent keys to owners and decrypt the saved OpenRouter key) and
+                # OPENROUTER_API_KEY (used to recover lost costs while no key is saved).
                 - secretRef:
                     name: {{ .Values.secretName }}
               env:
