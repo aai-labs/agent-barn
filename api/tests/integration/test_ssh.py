@@ -7,7 +7,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, PublicFormat
 from fastapi.testclient import TestClient
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, contains_string, equal_to, has_entries, has_items, has_key, has_length, is_in, not_
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import AgentStatus
@@ -113,88 +113,230 @@ def activate(context, keys):
     return repository.issue(context.agent.id, context.organization.id, generation.generation, rows)
 
 
-def test_generate_multiple_assignments_never_exports_keys_and_restricts_deletion():
-    with given(_GIVEN) as context:
-        with when("two keys are generated and assigned"):
-            first, second = create_key(context), create_key(context, name="Other key")
-            assert first.status_code == second.status_code == 201
-            ids = [first.json()["id"], second.json()["id"]]
-            response = assign(context, ids)
-        with then("public metadata is readable and assignments are independent"):
-            assert_that(response.status_code, equal_to(200))
-            assert len(response.json()["credentials"]) == 2
-            assert response.json()["revision"] == 1
-            assert response.json()["allowed_actions"] == ["manage"]
-            assert "PRIVATE KEY" not in response.text
-            assert context.client.delete(path(context, "/" + ids[0]), headers=headers(context)).status_code == 409
-        with when("a stale edit and cross-organization reference are submitted"):
-            assert assign(context, [], revision=0).status_code == 409
-            assert assign(context, [str(uuid4())], revision=1).status_code == 404
-            foreign = path(context, "/" + ids[0]).replace(str(context.organization.id), str(uuid4()))
-            assert context.client.get(foreign, headers=headers(context)).status_code in (403, 404)
-        with then("detaching permits deletion and events contain no key material"):
-            assert assign(context, [], revision=1).status_code == 200
-            assert context.client.delete(path(context, "/" + ids[0]), headers=headers(context)).status_code == 204
-            delegate = context.injector.get(PostgresRepositoryDelegate)
-            with Session(delegate.engine) as session:
-                events = list(
-                    session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name).like("ssh.%"))).all()
-                )
-                assert len(events) >= 5
-                assert "PRIVATE KEY" not in str([e.payload for e in events])
+def there_are_shared_ssh_keys(*names, **overrides):
+    def step(context):
+        context.ssh_keys = []
+        for name in names or ("Deployment key",):
+            response = create_key(context, name=name, **overrides)
+            assert_that(response.status_code, equal_to(201))
+            context.ssh_keys.append(response.json())
+
+    return step
 
 
-def test_import_encrypted_key_duplicate_key_and_safe_validation():
-    with given(_GIVEN) as context:
-        private = Ed25519PrivateKey.generate()
+def the_ssh_keys_are_assigned():
+    def step(context):
+        response = assign(context, [key["id"] for key in context.ssh_keys])
+        assert_that(response.status_code, equal_to(200))
+
+    return step
+
+
+def the_ssh_keys_have_been_detached():
+    def step(context):
+        response = assign(context, [], revision=1)
+        assert_that(response.status_code, equal_to(200))
+
+    return step
+
+
+def there_is_an_encrypted_import(*, already_saved=False):
+    def step(context):
         from cryptography.hazmat.primitives.serialization import BestAvailableEncryption
 
-        pem = private.private_bytes(
-            Encoding.PEM, PrivateFormat.OpenSSH, BestAvailableEncryption(b"private-passphrase")
-        ).decode()
-        first = create_key(context, source="import", private_key=pem, passphrase="private-passphrase")
-        assert first.status_code == 201
-        assert "private-passphrase" not in first.text and "PRIVATE KEY" not in first.text
-        assert (
-            create_key(
-                context, source="import", name="duplicate", private_key=pem, passphrase="private-passphrase"
-            ).status_code
-            == 409
+        private = Ed25519PrivateKey.generate()
+        context.import_payload = {
+            "source": "import",
+            "private_key": private.private_bytes(
+                Encoding.PEM, PrivateFormat.OpenSSH, BestAvailableEncryption(b"private-passphrase")
+            ).decode(),
+            "passphrase": "private-passphrase",
+        }
+        if already_saved:
+            response = create_key(context, **context.import_payload)
+            assert_that(response.status_code, equal_to(201))
+
+    return step
+
+
+def the_ssh_key_policy_has_changed():
+    def step(context):
+        key = context.ssh_keys[0]
+        context.policy_update = {"name": key["name"], "enabled": False, "mode": "unrestricted", "expected_revision": 1}
+        response = context.client.put(
+            path(context, "/" + key["id"]), headers=headers(context), json=context.policy_update
         )
-        for data in [
-            {"private_key": pem, "passphrase": "wrong"},
-            {"private_key": "sensitive-bogus-input"},
-            {"private_key": pem, "source": "generate"},
-        ]:
-            response = (
-                create_key(context, source="import", **{k: v for k, v in data.items() if k != "source"})
-                if "source" not in data
-                else create_key(context, **data)
-            )
-            assert response.status_code == 422
-            assert "PRIVATE KEY" not in response.text and "sensitive-bogus-input" not in response.text
-        row = context.injector.get(SshRepository).key(UUID(first.json()["id"]), context.organization.id)
-        assert "PRIVATE KEY" not in row.private_key_encrypted
+        assert_that(response.status_code, equal_to(200))
+
+    return step
 
 
-def test_policy_cas_and_malicious_profile_fields_are_rejected():
+def ssh_audit_events(context):
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        return list(session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name).like("ssh.%"))).all())
+
+
+def test_an_administrator_can_generate_a_key_without_exporting_private_material():
     with given(_GIVEN) as context:
-        row = create_key(context).json()
-        updated = {"name": row["name"], "enabled": False, "mode": "unrestricted", "expected_revision": 1}
-        assert (
-            context.client.put(path(context, "/" + row["id"]), headers=headers(context), json=updated).status_code
-            == 200
-        )
-        assert (
-            context.client.put(path(context, "/" + row["id"]), headers=headers(context), json=updated).status_code
-            == 409
-        )
-        for name in ["host\nProxyCommand evil", "-option", "bad name"]:
-            response = create_key(
-                context,
-                servers=[{"name": "host", "hostname": name, "username": "deploy", "host_keys": [row["public_key"]]}],
-            )
-            assert response.status_code == 422
+        with when("the administrator generates a shared SSH key"):
+            response = create_key(context)
+
+        with then("only the public identity is returned"):
+            assert_that(response.status_code, equal_to(201))
+            assert_that(response.json(), has_entries(name="Deployment key", mode="restricted", revision=1))
+            assert_that(response.json()["public_key"], contains_string("ssh-ed25519"))
+            assert_that(response.text, not_(contains_string("PRIVATE KEY")))
+            assert_that(response.json(), not_(has_key("private_key")))
+            assert_that(response.json(), not_(has_key("private_key_encrypted")))
+
+
+def test_an_agent_can_be_assigned_multiple_shared_keys():
+    with given([*_GIVEN, there_are_shared_ssh_keys("Deployment key", "Other key")]) as context:
+        ids = [key["id"] for key in context.ssh_keys]
+        with when("both shared keys are assigned to the Agent"):
+            response = assign(context, ids)
+
+        with then("the saved selection contains both public identities"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["credentials"], has_length(2))
+            assert_that(response.json(), has_entries(revision=1, allowed_actions=["manage"]))
+            assert_that(response.text, not_(contains_string("PRIVATE KEY")))
+            saved = context.client.get(assignments(context), headers=headers(context)).json()
+            assert_that({key["id"] for key in saved["credentials"]}, equal_to(set(ids)))
+
+        with then("the durable audit records contain no private material"):
+            events = ssh_audit_events(context)
+            assert_that([event.event_name for event in events], has_items("ssh.key.created", "ssh.assignments.changed"))
+            assert_that(str([event.payload for event in events]), not_(contains_string("PRIVATE KEY")))
+
+
+def test_an_assigned_key_cannot_be_deleted():
+    with given([*_GIVEN, there_are_shared_ssh_keys(), the_ssh_keys_are_assigned()]) as context:
+        key = context.ssh_keys[0]
+        with when("the administrator deletes an attached key"):
+            response = context.client.delete(path(context, "/" + key["id"]), headers=headers(context))
+
+        with then("deletion is refused and the public identity remains available"):
+            assert_that(response.status_code, equal_to(409))
+            saved = context.client.get(path(context, "/" + key["id"]), headers=headers(context))
+            assert_that(saved.status_code, equal_to(200))
+            assert_that(saved.json()["public_key"], equal_to(key["public_key"]))
+
+
+@pytest.mark.parametrize("requested_keys,revision,status", [("empty", 0, 409), ("missing", 1, 404)])
+def test_a_rejected_assignment_preserves_the_agents_existing_keys(requested_keys, revision, status):
+    with given([*_GIVEN, there_are_shared_ssh_keys(), the_ssh_keys_are_assigned()]) as context:
+        requested = [] if requested_keys == "empty" else [str(uuid4())]
+        with when("a stale revision or missing shared key is submitted"):
+            response = assign(context, requested, revision=revision)
+
+        with then("the request is refused without changing the selection"):
+            assert_that(response.status_code, equal_to(status))
+            saved = context.client.get(assignments(context), headers=headers(context)).json()
+            assert_that([key["id"] for key in saved["credentials"]], equal_to([context.ssh_keys[0]["id"]]))
+            assert_that(saved["revision"], equal_to(1))
+
+
+def test_a_key_cannot_be_read_through_another_organizations_url():
+    with given([*_GIVEN, there_are_shared_ssh_keys()]) as context:
+        foreign = path(context, "/" + context.ssh_keys[0]["id"]).replace(str(context.organization.id), str(uuid4()))
+        with when("the key is requested through an inaccessible Organization"):
+            response = context.client.get(foreign, headers=headers(context))
+
+        with then("the key is concealed"):
+            assert_that(response.status_code, is_in((403, 404)))
+            assert_that(response.text, not_(contains_string(context.ssh_keys[0]["public_key"])))
+
+
+def test_a_detached_key_can_be_deleted():
+    with given(
+        [*_GIVEN, there_are_shared_ssh_keys(), the_ssh_keys_are_assigned(), the_ssh_keys_have_been_detached()]
+    ) as context:
+        url = path(context, "/" + context.ssh_keys[0]["id"])
+        with when("the administrator deletes the detached key"):
+            response = context.client.delete(url, headers=headers(context))
+
+        with then("the key is removed"):
+            assert_that(response.status_code, equal_to(204))
+            assert_that(context.client.get(url, headers=headers(context)).status_code, equal_to(404))
+
+        with then("the removal is recorded without private material"):
+            events = ssh_audit_events(context)
+            assert_that([event.event_name for event in events], has_items("ssh.key.deleted"))
+            assert_that(str([event.payload for event in events]), not_(contains_string("PRIVATE KEY")))
+
+
+def test_an_encrypted_key_can_be_imported_without_exposing_its_private_material():
+    with given([*_GIVEN, there_is_an_encrypted_import()]) as context:
+        with when("the administrator imports the key with its passphrase"):
+            response = create_key(context, **context.import_payload)
+
+        with then("only public metadata is returned and the stored key is encrypted"):
+            assert_that(response.status_code, equal_to(201))
+            assert_that(response.text, not_(contains_string("private-passphrase")))
+            assert_that(response.text, not_(contains_string("PRIVATE KEY")))
+            stored = context.injector.get(SshRepository).key(UUID(response.json()["id"]), context.organization.id)
+            assert_that(stored, not_(equal_to(None)))
+            assert_that(stored.private_key_encrypted, not_(contains_string("PRIVATE KEY")))
+
+
+def test_the_same_public_key_cannot_be_imported_under_another_name():
+    with given([*_GIVEN, there_is_an_encrypted_import(already_saved=True)]) as context:
+        with when("the administrator imports the existing key under a different name"):
+            response = create_key(context, name="Duplicate identity", **context.import_payload)
+
+        with then("the duplicate identity is refused"):
+            assert_that(response.status_code, equal_to(409))
+            assert_that(response.text, not_(contains_string("PRIVATE KEY")))
+
+
+@pytest.mark.parametrize("invalid_input", ["wrong-passphrase", "malformed-key", "generated-with-private-input"])
+def test_invalid_imports_are_refused_without_echoing_secret_fields(invalid_input):
+    with given([*_GIVEN, there_is_an_encrypted_import()]) as context:
+        payload = dict(context.import_payload)
+        if invalid_input == "wrong-passphrase":
+            payload["passphrase"] = "wrong"
+        elif invalid_input == "malformed-key":
+            payload = {"source": "import", "private_key": "sensitive-bogus-input"}
+        else:
+            payload["source"] = "generate"
+        with when("the invalid private material is submitted"):
+            response = create_key(context, **payload)
+
+        with then("validation refuses the input without echoing it"):
+            assert_that(response.status_code, equal_to(422))
+            assert_that(response.text, not_(contains_string("PRIVATE KEY")))
+            assert_that(response.text, not_(contains_string("sensitive-bogus-input")))
+            assert_that(response.text, not_(contains_string("private-passphrase")))
+
+
+def test_a_stale_policy_update_preserves_the_saved_policy():
+    with given([*_GIVEN, there_are_shared_ssh_keys(), the_ssh_key_policy_has_changed()]) as context:
+        url = path(context, "/" + context.ssh_keys[0]["id"])
+        with when("the old policy revision is submitted again"):
+            response = context.client.put(url, headers=headers(context), json=context.policy_update)
+
+        with then("the edit is refused and the saved policy remains at the new revision"):
+            assert_that(response.status_code, equal_to(409))
+            saved = context.client.get(url, headers=headers(context)).json()
+            assert_that(saved, has_entries(enabled=False, mode="unrestricted", revision=2))
+
+
+@pytest.mark.parametrize("hostname", ["host\nProxyCommand evil", "-option", "bad name"])
+def test_ssh_configuration_injection_is_refused(hostname):
+    with given([*_GIVEN, there_are_shared_ssh_keys()]) as context:
+        server = {
+            "name": "host",
+            "hostname": hostname,
+            "username": "deploy",
+            "host_keys": [context.ssh_keys[0]["public_key"]],
+        }
+        with when("an unsafe server address is submitted"):
+            response = create_key(context, name="Unsafe destination", servers=[server])
+
+        with then("no unsafe SSH profile is accepted"):
+            assert_that(response.status_code, equal_to(422))
 
 
 def test_generation_revocation_and_readding_do_not_restore_old_authority():
@@ -264,10 +406,15 @@ def test_empty_restricted_policy_never_loads_unrestricted_key(tmp_path):
             assert response == b"\x0c\x00\x00\x00\x00"
 
 
-def test_unauthenticated_access_is_rejected():
+@pytest.mark.parametrize("surface", ["shared-keys", "agent-assignments"])
+def test_ssh_credentials_cannot_be_read_without_authentication(surface):
     with given(_GIVEN) as context:
-        assert context.client.get(path(context)).status_code == 401
-        assert context.client.get(assignments(context)).status_code == 401
+        url = path(context) if surface == "shared-keys" else assignments(context)
+        with when("the SSH resource is requested without authentication"):
+            response = context.client.get(url)
+
+        with then("the caller must authenticate"):
+            assert_that(response.status_code, equal_to(401))
 
 
 def test_normal_ssh_git_scp_sftp_through_real_tls_relay(tmp_path):
@@ -384,40 +531,60 @@ def test_normal_ssh_git_scp_sftp_through_real_tls_relay(tmp_path):
                         print("Relay diagnostics:", stderr)
 
 
+def there_is_an_organization_member_with_agent_access(role_name):
+    def step(context):
+        from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
+        from api.domains.users.organization_users.models import OrganizationRole
+        from api.tests.steps.agent import there_is_agent_access
+        from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+
+        there_is_a_user(
+            email=f"{role_name}@example.com", role=OrganizationRole.MEMBER, organization_id=context.organization.id
+        )(context)
+        there_is_an_access_token_for_user()(context)
+        if role_name != "unassigned":
+            there_is_agent_access(
+                access_role_id={
+                    "owner": AGENT_OWNER_ROLE_ID,
+                    "editor": AGENT_EDITOR_ROLE_ID,
+                    "viewer": AGENT_VIEWER_ROLE_ID,
+                }[role_name]
+            )(context)
+
+    return step
+
+
+def request_ssh_surface(context, surface):
+    if surface == "shared-key-list":
+        return context.client.get(path(context), headers=headers(context))
+    if surface == "shared-key-create":
+        return create_key(context, name="Member-created key")
+    if surface == "agent-read":
+        return context.client.get(assignments(context), headers=headers(context))
+    return assign(context, [context.ssh_keys[0]["id"]])
+
+
+@pytest.mark.parametrize("surface", ["shared-key-list", "shared-key-create", "agent-read", "agent-write"])
 @pytest.mark.parametrize(
     "role_name,read_status,write_status",
     [("owner", 200, 200), ("editor", 200, 200), ("viewer", 200, 403), ("unassigned", 404, 404)],
 )
-def test_members_need_agent_credential_authority_and_cannot_manage_shared_keys(role_name, read_status, write_status):
-    from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
-    from api.domains.users.organization_users.models import OrganizationRole
-    from api.tests.steps.agent import there_is_agent_access
-    from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+def test_ssh_access_respects_organization_and_agent_authority(role_name, read_status, write_status, surface):
+    with given(
+        [*_GIVEN, there_are_shared_ssh_keys(), there_is_an_organization_member_with_agent_access(role_name)]
+    ) as context:
+        expected = {
+            "shared-key-list": 200,
+            "shared-key-create": 403,
+            "agent-read": read_status,
+            "agent-write": write_status,
+        }
+        with when("the member requests the SSH credential operation"):
+            response = request_ssh_surface(context, surface)
 
-    with given(_GIVEN) as context:
-        key = create_key(context).json()
-        steps = [
-            there_is_a_user(
-                email=f"{role_name}@example.com", role=OrganizationRole.MEMBER, organization_id=context.organization.id
-            ),
-            there_is_an_access_token_for_user(),
-        ]
-        for step in steps:
-            step(context)
-        with when("the member uses the SSH credential surfaces"):
-            if role_name != "unassigned":
-                there_is_agent_access(
-                    access_role_id={
-                        "owner": AGENT_OWNER_ROLE_ID,
-                        "editor": AGENT_EDITOR_ROLE_ID,
-                        "viewer": AGENT_VIEWER_ROLE_ID,
-                    }[role_name]
-                )(context)
-            assert context.client.get(path(context), headers=headers(context)).status_code == 200
-            assert create_key(context, name="Member-created key").status_code == 403
-            assert context.client.get(assignments(context), headers=headers(context)).status_code == read_status
-            response = assign(context, [key["id"]])
-            assert response.status_code == write_status
+        with then("Organization membership and Agent authority determine access"):
+            assert_that(response.status_code, equal_to(expected[surface]))
+            assert_that(response.text, not_(contains_string("PRIVATE KEY")))
 
 
 def test_wrong_host_and_forged_bindings_fail_and_changed_policy_closes_live_socket():

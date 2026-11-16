@@ -43,6 +43,8 @@ runtime behaves the same way.
 Python tests use the lightweight GivenPy-style helpers in
 `../../api/tests/core/givenpy.py` with pytest and PyHamcrest. GivenPy structures
 a test; it does not replace the test runner or assertions.
+These conventions follow the [GivenPy guidelines](https://github.com/tadas-subonis/givenpy#guidelines)
+while retaining the repository's existing runner and isolation helpers.
 
 - `given([...])` composes setup steps that state domain facts. Steps SHOULD be
   higher-order functions such as `skill_is_present(content)` so they can accept
@@ -52,6 +54,8 @@ a test; it does not replace the test runner or assertions.
 - A setup step MAY return a context manager such as `LambdaWith` when it owns
   cleanup. GivenPy exits returned context managers in reverse setup order.
 - `when(...)` names one meaningful action and SHOULD contain one short call.
+  Keep one `when` per scenario; split independent behaviors into separate tests
+  and place resource creation, grants, and other preconditions in Given steps.
   Hide command construction, probe installation, execution, and output parsing
   behind an action helper such as `start_hermes_agent(context)`.
 - `then(...)` asserts observable outcomes with PyHamcrest. Use separate,
