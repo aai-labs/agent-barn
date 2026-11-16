@@ -8,10 +8,16 @@ Related context: [`../costs.md`](../costs.md), [`../agent-settings.md`](../agent
 
 - Delivered: the API can add, update and delete LiteLLM model routes by a fixed route id. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: the OpenRouter key still comes only from `OPENROUTER_API_KEY`; nothing registers a database route yet.
-- Next: slice 1, PR 6 — replacing the OpenRouter key.
+- Next: slice 1, PR 7 — seeding the key from `OPENROUTER_API_KEY` and reconciling the LiteLLM route at startup.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 6
+
+- Delivered: `PUT /api/v1/platform/settings/llm-providers/openrouter` replaces the key. OpenRouter checks it first (`GET /key`; 401 or 403 gives `422`, no answer gives `503`). Under a per-connection advisory lock, the API writes the `agentbarn:openrouter` LiteLLM route (`openrouter/*`, order 1) and only then stores the encrypted key with a `platform.llm_provider.changed` event. A LiteLLM failure gives `503`. Every failure leaves the stored key and the event log unchanged, and a refused or unchecked key never reaches LiteLLM. LiteLLM can still hold a key the database does not when it applied the write but the API saw a failure (a timeout after the write, or a failed commit afterwards).
+- Changed: `OpenRouterClient.check_key`; a credential-safe route class whose `422` never echoes the body; `operations-v1.json`, the RBAC brief and `domain-events.md`.
+- Follow-up: PR 7 seeds the key from `OPENROUTER_API_KEY` and re-applies the stored key to LiteLLM at startup, which also repairs that mismatch.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 5
 

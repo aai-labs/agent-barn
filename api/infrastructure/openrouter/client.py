@@ -177,6 +177,28 @@ class OpenRouterClient:
             _credits_cache = (time.monotonic(), fingerprint, credits)
         return credits
 
+    def check_key(self, api_key: str) -> bool:
+        """Whether OpenRouter accepts the key. Raises OpenRouterError when it cannot tell."""
+        try:
+            resp = httpx.get(
+                f"{self.config.openrouter_base_url.rstrip('/')}/key",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+        except httpx.HTTPError:
+            raise OpenRouterError("OpenRouter could not be reached to check the key") from None
+        if resp.status_code in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+            return False
+        if resp.status_code != httpx.codes.OK:
+            raise OpenRouterError(f"OpenRouter key check failed with {resp.status_code}")
+        try:
+            data = resp.json().get("data")
+        except ValueError, AttributeError:
+            data = None
+        if not isinstance(data, dict):
+            raise OpenRouterError("Unexpected OpenRouter key check response")
+        return True
+
     def get_generation(self, generation_id: str, api_key: str) -> dict | None:
         """Return the true cost and token counts OpenRouter recorded for one call.
 

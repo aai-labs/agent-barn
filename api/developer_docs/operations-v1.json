@@ -1691,6 +1691,11 @@
   ],
   [
     "PUT",
+    "/platform/settings/llm-providers/openrouter",
+    "replace_openrouter_key_platform_settings_llm_providers_openrouter_put"
+  ],
+  [
+    "PUT",
     "/platform/settings/organizations",
     "update_organization_settings_platform_settings_organizations_put"
   ],

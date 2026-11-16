@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from api.core.config import get_config
@@ -12,6 +13,7 @@ from api.infrastructure.openrouter.client import (
     CreditsStatus,
     OpenRouterClient,
     OpenRouterCredits,
+    OpenRouterError,
     clear_models_cache,
 )
 
@@ -350,3 +352,46 @@ def test_a_generation_lookup_without_a_key_sends_no_authorization():
         _client().get_generation("gen-1", "")
 
     assert mock.call_args.kwargs["headers"] == {}
+
+
+CANDIDATE_KEY = "sk-or-v1-candidate"
+
+
+def _status(status_code: int, payload: object = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = payload
+    return MagicMock(return_value=resp)
+
+
+def test_a_key_openrouter_accepts_checks_out_with_that_key():
+    mock = _status(200, {"data": {"limit_remaining": None}})
+    with patch.object(get_config(), "openrouter_api_key", "sk-config"), patch(HTTPX_GET, mock):
+        accepted = _client().check_key(CANDIDATE_KEY)
+
+    assert accepted is True
+    assert mock.call_args.args[0] == "https://openrouter.ai/api/v1/key"
+    assert mock.call_args.kwargs["headers"] == {"Authorization": f"Bearer {CANDIDATE_KEY}"}
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_a_key_openrouter_refuses_does_not_check_out(status_code):
+    with patch(HTTPX_GET, _status(status_code, {"error": {"message": "User not found.", "code": 401}})):
+        assert _client().check_key(CANDIDATE_KEY) is False
+
+
+@pytest.mark.parametrize("status_code,payload", [(500, None), (429, None), (200, {"error": "no data"})])
+def test_an_answer_that_settles_nothing_raises_without_the_key(status_code, payload):
+    with patch(HTTPX_GET, _status(status_code, payload)), pytest.raises(OpenRouterError) as raised:
+        _client().check_key(CANDIDATE_KEY)
+
+    assert CANDIDATE_KEY not in str(raised.value)
+
+
+def test_an_unreachable_openrouter_raises_without_the_key():
+    failure = httpx.ConnectError(f"connection failed for {CANDIDATE_KEY}")
+    with patch(HTTPX_GET, MagicMock(side_effect=failure)), pytest.raises(OpenRouterError) as raised:
+        _client().check_key(CANDIDATE_KEY)
+
+    assert CANDIDATE_KEY not in str(raised.value)
+    assert raised.value.__cause__ is None
