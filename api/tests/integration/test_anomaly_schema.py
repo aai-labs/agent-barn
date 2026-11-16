@@ -17,7 +17,7 @@ from hamcrest import assert_that, calling, equal_to, raises
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session, SQLModel, func, select
 
 from api.core.config import get_config
 from api.domains.anomalies.models import AgentAnomaly, AgentAnomalyOverride, AnomalySignal
@@ -175,7 +175,7 @@ def test_ended_anomalies_do_not_block_a_new_ongoing_one():
 
         with then("both are kept"):
             with Session(context.postgres_delegate.engine) as session:
-                count = session.exec(text("SELECT count(*) FROM agent_anomaly")).one()[0]
+                count = session.exec(select(func.count()).select_from(AgentAnomaly)).one()
             assert_that(count, equal_to(2))
 
 

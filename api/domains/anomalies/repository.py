@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlmodel import Session, col, select
+from sqlmodel import Session, SQLModel, col, select
 
 from api.domains.anomalies.detection import Verdict
 from api.domains.anomalies.models import (
@@ -282,7 +282,7 @@ class AnomalyRepository:
                 for use in uses
             ]
         )
-        table = AgentActivitySeen.__table__  # type: ignore[attr-defined]
+        table = SQLModel.metadata.tables[AgentActivitySeen.__tablename__]
         statement = statement.on_conflict_do_update(
             constraint="uq_agent_activity_seen_agent_kind_subject",
             set_={

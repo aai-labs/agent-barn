@@ -128,8 +128,8 @@ class AgentActivitySeen(BaseModel, table=True):
     agent_id: UUID = SqlField(nullable=False)
     kind: str = SqlField(nullable=False, max_length=32)
     subject: str = SqlField(nullable=False, sa_type=sa.Text)
-    first_seen_at: datetime = SqlField(sa_type=sa.DateTime(timezone=True), nullable=False)  # type: ignore[call-overload]
-    last_seen_at: datetime = SqlField(sa_type=sa.DateTime(timezone=True), nullable=False)  # type: ignore[call-overload]
+    first_seen_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    last_seen_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
 
 
 class AgentAnomalyState(BaseModel, table=True):
@@ -148,11 +148,11 @@ class AgentAnomalyState(BaseModel, table=True):
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     agent_id: UUID = SqlField(nullable=False)
-    tool_calls_read_through: datetime | None = SqlField(  # type: ignore[call-overload]
-        default=None, sa_type=sa.DateTime(timezone=True), nullable=True
+    tool_calls_read_through: datetime | None = SqlField(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
     )
-    business_actions_read_through: datetime | None = SqlField(  # type: ignore[call-overload]
-        default=None, sa_type=sa.DateTime(timezone=True), nullable=True
+    business_actions_read_through: datetime | None = SqlField(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
     )
 
 
@@ -191,11 +191,9 @@ class AgentAnomaly(BaseModel, table=True):
     observed_value: float = SqlField(nullable=False)
     usual_value: float | None = SqlField(default=None, nullable=True)
     threshold: float | None = SqlField(default=None, nullable=True)
-    started_at: datetime = SqlField(sa_type=sa.DateTime(timezone=True), nullable=False)  # type: ignore[call-overload]
-    last_observed_at: datetime = SqlField(sa_type=sa.DateTime(timezone=True), nullable=False)  # type: ignore[call-overload]
-    ended_at: datetime | None = SqlField(  # type: ignore[call-overload]
-        default=None, sa_type=sa.DateTime(timezone=True), nullable=True
-    )
+    started_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    last_observed_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    ended_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True))
     classification_state: str = SqlField(
         default=ClassificationState.STATISTICS_ONLY.value, nullable=False, max_length=32
     )
