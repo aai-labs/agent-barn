@@ -36,6 +36,7 @@ def test_stream_updates_authorizes_before_returning_async_stream() -> None:
         web_chat_repository=Mock(),
         gateway=Mock(),
         signals=cast(CommunicationSignalBus, signals),
+        usage=Mock(),
     )
 
     stream = service.stream_updates(agent_id, context, "thread-1")
@@ -69,6 +70,7 @@ def test_stream_updates_does_not_create_a_connection_for_a_read() -> None:
         web_chat_repository=Mock(),
         gateway=Mock(),
         signals=cast(CommunicationSignalBus, signals),
+        usage=Mock(),
     )
 
     stream = service.stream_updates(agent_id, context, "thread-1")
@@ -140,6 +142,7 @@ def test_stream_updates_uses_incremental_reads_and_targeted_status_refreshes() -
         web_chat_repository=Mock(),
         gateway=Mock(),
         signals=cast(CommunicationSignalBus, signals),
+        usage=Mock(),
     )
 
     with (

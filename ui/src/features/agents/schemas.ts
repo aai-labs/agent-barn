@@ -163,6 +163,12 @@ export const AgentSchema = z.object({
   /** The limit a run actually gets: the Agent's own, or the platform default. */
   effectiveMaxTurns: z.number().int().default(0),
   memoryEnabled: z.boolean().default(false),
+  // When it was suspended and why ("tier": its organization's tier stopped covering it).
+  // A suspended agent can't start until it is resumed.
+  suspendedAt: z.string().nullable().optional(),
+  suspensionReason: z.string().nullable().optional(),
+  memorySuspendedAt: z.string().nullable().optional(),
+  memorySuspensionReason: z.string().nullable().optional(),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),

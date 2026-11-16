@@ -51,11 +51,12 @@ class BillingSettingsRepository:
             min_purchase_usd=row.min_purchase_usd,
             max_purchase_usd=row.max_purchase_usd,
             purchase_fee_percent=row.purchase_fee_percent,
+            payment_grace_days=row.payment_grace_days,
             updated_at=row.updated_at,
         )
 
     def set_settings(
-        self, changes: Mapping[str, bool | float], actor_id: UUID, actor_display: str
+        self, changes: Mapping[str, bool | float | int], actor_id: UUID, actor_display: str
     ) -> tuple[BillingSettingsRead, list[UUID]]:
         """Store the settings and stage one audit Event per setting that moved, in one
         commit. A setting saved at the value already in force writes nothing. Raises
@@ -82,6 +83,7 @@ class BillingSettingsRepository:
                     min_purchase_usd=stored.min_purchase_usd,
                     max_purchase_usd=stored.max_purchase_usd,
                     purchase_fee_percent=stored.purchase_fee_percent,
+                    payment_grace_days=stored.payment_grace_days,
                     updated_at=now,
                     updated_by=actor_id,
                 )

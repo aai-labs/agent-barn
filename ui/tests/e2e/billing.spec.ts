@@ -379,6 +379,7 @@ test.describe("Platform · Billing settings", () => {
       min_purchase_usd: 5,
       max_purchase_usd: 500,
       purchase_fee_percent: 0,
+      payment_grace_days: 7,
       updated_at: null,
     };
     await page.route("**/api/v1/platform/settings/billing", (route) => {
@@ -398,6 +399,7 @@ test.describe("Platform · Billing settings", () => {
     await section.getByRole("button", { name: "Edit" }).click();
     await page.getByLabel("Smallest purchase").fill("10");
     await page.getByLabel("Purchase fee").fill("5.5");
+    await page.getByLabel("Payment grace period").fill("14");
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
     const confirm = page.getByRole("dialog");
@@ -409,7 +411,9 @@ test.describe("Platform · Billing settings", () => {
     await expect(section.getByRole("status")).toContainText("Billing settings saved.");
     await expect(section).toContainText("$10.00");
     await expect(section).toContainText("5.5%");
+    await expect(section).toContainText("14 days");
     expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ payment_grace_days: 14 });
     // $1 of credit is $1 of model spend: the fee is the only markup.
     expect(saved[0]).not.toHaveProperty("credit_rate");
     await expect(section.getByText("Credit per dollar")).toHaveCount(0);
@@ -419,6 +423,8 @@ test.describe("Platform · Billing settings", () => {
     ["Smallest purchase", "0.49", "Enter an amount from $0.50 to $100,000.00."],
     ["Largest purchase", "100001", "Enter an amount from the smallest purchase to $100,000.00."],
     ["Purchase fee", "101", "Enter a percentage from 0 to 100."],
+    ["Payment grace period", "61", "Enter a whole number of days from 0 to 60."],
+    ["Payment grace period", "2.5", "Enter a whole number of days from 0 to 60."],
   ] as const) {
     test(`${label} refuses ${typed} before saving`, async ({ page }) => {
       const data = new DataSupport(page);
@@ -434,6 +440,7 @@ test.describe("Platform · Billing settings", () => {
             min_purchase_usd: 5,
             max_purchase_usd: 500,
             purchase_fee_percent: 0,
+            payment_grace_days: 7,
             updated_at: null,
           },
         }),
@@ -463,6 +470,7 @@ test.describe("Platform · Billing settings", () => {
       min_purchase_usd: 5,
       max_purchase_usd: 500,
       purchase_fee_percent: 0,
+      payment_grace_days: 7,
       updated_at: null,
       ...initial,
     };

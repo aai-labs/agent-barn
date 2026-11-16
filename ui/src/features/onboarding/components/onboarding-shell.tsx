@@ -14,16 +14,22 @@ export function OnboardingDialogFrame({ children, onClose, busy }: { children: R
   return <DialogFrame.Provider value={{ onClose, busy }}>{children}</DialogFrame.Provider>;
 }
 
-/** Quick start sets up Ava in Telegram; "own" hires an Agent the user configures. */
+/** Quick start sets up a ready-made assistant (in Telegram on the free trial); "own" hires an
+ *  Agent the user configures. */
 export type OnboardingPath = "quick" | "own";
 
-function stepsFor(path: OnboardingPath, email: string) {
+function stepsFor(path: OnboardingPath, email: string, choosingTier: boolean, sharedBot: boolean) {
   return [
     { title: "Signed in", description: email },
-    { title: "Choose how to start", description: "Ready-made or your own" },
+    // Choosing a tier comes first in the same step, when there is one to choose.
+    choosingTier
+      ? { title: "Choose your tier", description: "Free, or a paid tier" }
+      : { title: "Choose how to start", description: "Ready-made or your own" },
     path === "own"
       ? { title: "Set up your agent", description: "Template, runtime and model" }
-      : { title: "Connect Telegram", description: "Chat with your agent there" },
+      : sharedBot
+        ? { title: "Connect Telegram", description: "Chat with your agent there" }
+        : { title: "Set up your assistant", description: "Ready to chat on the web" },
     { title: "Connect Gmail", description: "Optional, read-only" },
     { title: "You're ready", description: path === "own" ? "Chat now, add channels later" : "Your agent says hi" },
   ];
@@ -43,6 +49,9 @@ export function OnboardingShell({
   footerStart,
   footerEnd,
   children,
+  choosingTier = false,
+  sharedBot = true,
+  planName = "Free trial",
 }: {
   step: 1 | 2 | 3 | 4;
   path: OnboardingPath;
@@ -53,9 +62,14 @@ export function OnboardingShell({
   footerStart?: ReactNode;
   footerEnd?: ReactNode;
   children?: ReactNode;
+  choosingTier?: boolean;
+  /** Whether the quick start goes through the shared Telegram bot: the free trial's way to try it. */
+  sharedBot?: boolean;
+  /** What the credit card in the rail is titled: the free trial, or the paid tier. */
+  planName?: string;
 }) {
   const dialog = useContext(DialogFrame);
-  const steps = stepsFor(path, email);
+  const steps = stepsFor(path, email, choosingTier, sharedBot);
   if (dialog) {
     return (
       <Dialog open onOpenChange={(open) => { if (!open && !dialog.busy) dialog.onClose(); }}>
@@ -125,7 +139,7 @@ export function OnboardingShell({
             style={{ background: "var(--bg-elev)", borderColor: "var(--line)", color: "var(--ink-3)" }}
           >
             <b className="mb-0.5 block text-[13px] font-semibold" style={{ color: "var(--ink)" }}>
-              Free trial
+              {planName}
             </b>
             {formatUsd(creditUsd)} credit
           </div>

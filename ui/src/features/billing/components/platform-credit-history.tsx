@@ -17,6 +17,9 @@ const KIND_FILTER_LABEL: Record<CreditKind, string> = {
   chargeback: "Disputed payments",
   adjustment: "Adjustments",
   trial: "Trial credit",
+  tier_credit: "Tier credit",
+  allowance: "Monthly usage",
+  allowance_expiry: "Expired monthly usage",
 };
 
 /** Every organization's purchases, refunds, disputed payments, adjustments and trial

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, Ban } from "lucide-react";
 
 import { useOrganizationBilling } from "@/features/billing/hooks/use-organization-billing";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { useActiveOrgRole } from "../hooks/use-active-org-role";
 import { useOrganizationLlmBudget } from "../hooks/use-organization-llm-budget";
@@ -20,15 +21,18 @@ function renewalSuffix(renewsAt: string | null | undefined) {
  * `show` picks which state this instance is responsible for, so the page-level
  * warning and the app-wide exhausted notice never both appear at once. Renders
  * nothing when the limit is unset, healthy, or not yet observed — an unknown figure
- * must never be presented as either safe or breached.
+ * must never be presented as either safe or breached. Nor on the none tier: it runs no
+ * agents, and the team page already says to subscribe.
  */
 export function LlmBudgetBanner({ show }: { show: "warning" | "exhausted" }) {
   const { budget } = useOrganizationLlmBudget();
   const { selectedOrganization, role } = useActiveOrgRole();
   const onCredit = runsOnCredit(budget?.window);
   const { billing } = useOrganizationBilling(selectedOrganization?.id, { enabled: onCredit && role === "OWNER" });
+  const { tier } = useTierEntitlements();
 
   if (!budget || budget.state !== show) return null;
+  if (tier?.activation === "none") return null;
   if (budget.spendUsd == null) return null;
 
   const exhausted = show === "exhausted";

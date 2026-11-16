@@ -8,6 +8,9 @@ export const KIND_LABEL: Record<CreditKind, string> = {
   refund: "Refund",
   chargeback: "Disputed payment",
   adjustment: "Adjustment",
+  tier_credit: "Tier credit",
+  allowance: "Monthly usage",
+  allowance_expiry: "Unused monthly usage expired",
 };
 
 export function formatDate(iso: string) {

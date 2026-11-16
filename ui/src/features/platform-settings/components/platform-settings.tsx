@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, Sparkles, Workflow } from "lucide-react";
+import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, Layers, Sparkles, Workflow } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -10,6 +10,7 @@ import { PlatformBillingSettings } from "@/features/billing/components/platform-
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformOrganizationSettings } from "@/features/organizations/components/platform-organization-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
+import { TiersSettings } from "@/features/tiers/components/tiers-settings";
 import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 export const PLATFORM_SETTINGS_SECTIONS = {
@@ -43,6 +44,11 @@ export const PLATFORM_SETTINGS_SECTIONS = {
     Icon: Sparkles,
     description: "Manage public signup and what each new trial organization receives.",
   },
+  tiers: {
+    label: "Tiers",
+    Icon: Layers,
+    description: "What organizations may use and what they pay for it.",
+  },
   billing: {
     label: "Billing",
     Icon: CreditCard,
@@ -75,6 +81,7 @@ export function PlatformSettings() {
         {active === "workflows" && <PlatformWorkflowSettings />}
         {active === "playbooks" && <PlatformPlaybookSettings />}
         {active === "trials" && <PlatformTrialSettings />}
+        {active === "tiers" && <TiersSettings />}
         {active === "billing" && <PlatformBillingSettings />}
       </SettingsPageLayout>
     </div>

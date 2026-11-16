@@ -174,6 +174,8 @@ class AgentMemoryRepository:
             if agent.memory_enabled == enabled:
                 return []
             agent.memory_enabled = enabled
+            if enabled:
+                agent.resume_memory()
             session.add(agent)
             session.flush()
             event_id = self._stage(
