@@ -1,13 +1,16 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import cast
 
+from api.core.config import Config
 from api.domains.costs.models import CostFilter
 from api.domains.costs.platform_service import PlatformCostService
 from api.domains.costs.repository import CostRepository, CostTotals
 from api.domains.platform_admin.models import StatsGranularity, StatsWindow
 from api.infrastructure.openrouter.client import CreditsStatus, OpenRouterClient, OpenRouterCredits
 
+PLATFORM_KEY = "sk-or-platform"
 WINDOW = StatsWindow(
     start=datetime(2026, 8, 4, tzinfo=UTC),
     end=datetime(2026, 8, 4, tzinfo=UTC) + timedelta(days=30),
@@ -49,19 +52,33 @@ class FakeRepository:
 class FakeOpenRouter:
     def __init__(self, credits):
         self.credits = credits
+        self.keys: list[str] = []
 
-    def get_credits(self):
+    def get_credits(self, api_key):
+        self.keys.append(api_key)
         return self.credits
 
 
-def _summary(*, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)):
+def _service(openrouter: FakeOpenRouter, *, spend="300.00", calls=100) -> PlatformCostService:
     # cast: the service takes concrete types because injector resolves it from
-    # annotations. These stand in for the two reads the arithmetic below depends on.
-    service = PlatformCostService(
+    # annotations. These stand in for the reads the arithmetic below depends on.
+    return PlatformCostService(
         repository=cast(CostRepository, FakeRepository(spend, calls)),
-        openrouter=cast(OpenRouterClient, FakeOpenRouter(credits)),
+        openrouter=cast(OpenRouterClient, openrouter),
+        config=cast(Config, SimpleNamespace(openrouter_api_key=PLATFORM_KEY)),
     )
-    return service.get_summary(WINDOW, CostFilter())
+
+
+def _summary(*, spend="300.00", calls=100, credits=OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)):
+    return _service(FakeOpenRouter(credits), spend=spend, calls=calls).get_summary(WINDOW, CostFilter())
+
+
+def test_credits_are_read_with_the_platform_openrouter_key():
+    openrouter = FakeOpenRouter(OpenRouterCredits(status=CreditsStatus.UNAVAILABLE))
+
+    _service(openrouter).get_summary(WINDOW, CostFilter())
+
+    assert openrouter.keys == [PLATFORM_KEY]
 
 
 def test_burn_rate_is_window_spend_divided_by_window_days():

@@ -196,6 +196,7 @@ class AppModule(Module):
             memory_key_hashes=config.memory_cost_key_hashes,
             memory_key_source=memory_keys.hashes,
             on_healed=llm_budgets.apply_healed_spend,
+            openrouter_api_key=lambda: config.openrouter_api_key,
         )
 
     @provider

@@ -23,8 +23,12 @@ def _clear_cache():
     clear_models_cache()
 
 
+HTTPX_GET = "api.infrastructure.openrouter.client.httpx.get"
+
+
 def _mock_get(payload: dict) -> MagicMock:
     resp = MagicMock()
+    resp.status_code = 200
     resp.json.return_value = payload
     resp.raise_for_status.return_value = None
     mock = MagicMock(return_value=resp)
@@ -69,6 +73,14 @@ def test_list_models_caches_across_calls():
         client.list_models()
 
     assert mock.call_count == 1
+
+
+def test_the_catalogue_is_fetched_without_a_key():
+    mock = _mock_get({"data": []})
+    with patch.object(get_config(), "openrouter_api_key", "sk-config"), patch(HTTPX_GET, mock):
+        _client().list_models()
+
+    assert "Authorization" not in mock.call_args.kwargs.get("headers", {})
 
 
 def test_list_models_falls_back_to_id_when_name_missing():
@@ -247,11 +259,8 @@ def test_service_injects_default_when_absent_from_catalog():
 
 
 def _credits(payload: dict, key: str = "sk-test") -> OpenRouterCredits:
-    with (
-        patch.object(get_config(), "openrouter_api_key", key),
-        patch("api.infrastructure.openrouter.client.httpx.get", _mock_get(payload)),
-    ):
-        return _client().get_credits()
+    with patch(HTTPX_GET, _mock_get(payload)):
+        return _client().get_credits(key)
 
 
 def test_credits_report_the_limit_and_what_is_left():
@@ -305,3 +314,39 @@ def test_without_a_key_the_balance_is_unavailable_and_nothing_is_polled():
     credits = _credits({"data": {"limit_remaining": 5.0}}, key="")
 
     assert credits.status is CreditsStatus.UNAVAILABLE
+
+
+def test_credits_are_read_with_the_key_passed_in_not_the_configured_one():
+    mock = _mock_get({"data": {"limit_remaining": 5.0}})
+    with patch.object(get_config(), "openrouter_api_key", "sk-config"), patch(HTTPX_GET, mock):
+        _client().get_credits("sk-passed")
+
+    assert mock.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-passed"}
+
+
+def test_a_cached_balance_is_never_served_for_a_different_key():
+    mock = _mock_get({"data": {"limit_remaining": 5.0}})
+    with patch(HTTPX_GET, mock):
+        client = _client()
+        client.get_credits("sk-one")
+        client.get_credits("sk-one")
+        client.get_credits("sk-two")
+
+    assert mock.call_count == 2
+
+
+def test_a_generation_is_looked_up_with_the_key_passed_in_not_the_configured_one():
+    mock = _mock_get({"data": {"total_cost": 0.1}})
+    with patch.object(get_config(), "openrouter_api_key", "sk-config"), patch(HTTPX_GET, mock):
+        generation = _client().get_generation("gen-1", "sk-passed")
+
+    assert generation == {"total_cost": 0.1}
+    assert mock.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-passed"}
+
+
+def test_a_generation_lookup_without_a_key_sends_no_authorization():
+    mock = _mock_get({"data": {"total_cost": 0.1}})
+    with patch.object(get_config(), "openrouter_api_key", "sk-config"), patch(HTTPX_GET, mock):
+        _client().get_generation("gen-1", "")
+
+    assert mock.call_args.kwargs["headers"] == {}

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from injector import inject, singleton
 
+from api.core.config import Config
 from api.domains.costs.models import (
     CostFilter,
     CostFilterOption,
@@ -38,6 +39,7 @@ class PlatformCostService:
 
     repository: CostRepository
     openrouter: OpenRouterClient
+    config: Config
 
     def get_summary(self, window: StatsWindow, filters: CostFilter) -> PlatformCostSummaryRead:
         base = build_cost_summary(self.repository, window, filters)
@@ -45,7 +47,7 @@ class PlatformCostService:
         organizations = self.repository.spend_by_organization(window, filters)
 
         daily_burn = daily_burn_rate(base.total_spend, window.start, window.end)
-        credits = self.openrouter.get_credits()
+        credits = self.openrouter.get_credits(self.config.openrouter_api_key)
 
         return PlatformCostSummaryRead(
             **base.model_dump(),

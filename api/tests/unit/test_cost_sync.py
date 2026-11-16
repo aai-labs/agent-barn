@@ -16,6 +16,7 @@ from api.infrastructure.crypto import encrypt_token
 ENCRYPTION_KEY = "1D6Y5nQlDrGqVsUqiF3W7lqTfOZhh0EBBMWCkFRoNTA="
 ORG_ID = UUID("00000000-0000-0000-0000-0000000000aa")
 ORG_NAME = "Acme Inc"
+OPENROUTER_KEY = "sk-or-heal"
 
 
 class FakeCostRepository:
@@ -85,9 +86,11 @@ class FakeGenerations:
         self.missing = set(missing)
         self.failing = set(failing)
         self.looked_up: list[str] = []
+        self.keys: list[str] = []
 
-    def get_generation(self, generation_id):
+    def get_generation(self, generation_id, api_key):
         self.looked_up.append(generation_id)
+        self.keys.append(api_key)
         if generation_id in self.failing:
             raise RuntimeError("openrouter unavailable")
         if generation_id in self.missing:
@@ -169,6 +172,7 @@ def _synchronizer(repository, *, agents=None, spend_logs=None, generations=None)
         spend_logs=spend_logs or FakeSpendLogs(),
         generations=generations or FakeGenerations(),
         encryption_key=ENCRYPTION_KEY,
+        openrouter_api_key=lambda: OPENROUTER_KEY,
     )
 
 
@@ -349,6 +353,30 @@ def test_candidates_are_healed_with_the_cost_openrouter_reports():
     assert dict(repository.healed) == {"gen-a": Decimal("0.0026582"), "gen-b": Decimal("0.5")}
 
 
+def test_healing_looks_generations_up_with_the_openrouter_key_it_is_given():
+    repository = FakeCostRepository(candidates=[_candidate("gen-a"), _candidate("gen-b")])
+    generations = FakeGenerations()
+
+    _synchronizer(repository, generations=generations).run_once()
+
+    assert generations.keys == [OPENROUTER_KEY, OPENROUTER_KEY]
+
+
+def test_the_openrouter_key_is_resolved_once_per_healing_run():
+    repository = FakeCostRepository(candidates=[_candidate("gen-a"), _candidate("gen-b")])
+    resolved: list[str] = []
+
+    def key() -> str:
+        resolved.append(OPENROUTER_KEY)
+        return OPENROUTER_KEY
+
+    synchronizer = _synchronizer(repository)
+    synchronizer.openrouter_api_key = key
+    synchronizer.run_once()
+
+    assert resolved == [OPENROUTER_KEY]
+
+
 def test_organizations_with_newly_healed_spend_are_reported_once_healing_is_done():
     """So their credit limits can come down by what healing found, without waiting for
     the next reconciliation."""
@@ -415,7 +443,7 @@ def test_one_failed_lookup_does_not_abort_the_others():
 
 def test_a_generation_without_a_cost_is_not_marked_healed():
     class NoCost:
-        def get_generation(self, generation_id):
+        def get_generation(self, generation_id, api_key):
             return {"native_tokens_prompt": 1}
 
     repository = FakeCostRepository(candidates=[_candidate("gen-a")])
@@ -499,7 +527,13 @@ def test_healing_stops_when_only_unresolvable_rows_are_left():
 def test_memory_costs_use_the_trusted_key_and_canonical_bank_only():
     repository = FakeCostRepository()
     synchronizer = CostSynchronizer(
-        repository, FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+        repository,
+        FakeAgentRepository(),
+        FakeSpendLogs(),
+        FakeGenerations(),
+        "",
+        frozenset({"memory-hash"}),
+        openrouter_api_key=lambda: OPENROUTER_KEY,
     )
     record = synchronizer._to_record(
         _row(api_key="memory-hash", end_user=f"org-{ORG_ID}", spend=0.123456789123), {}, {ORG_ID: ORG_NAME}
@@ -516,7 +550,13 @@ def test_memory_costs_use_the_trusted_key_and_canonical_bank_only():
 
 def test_an_untrusted_key_cannot_select_an_organization_through_a_bank_marker():
     synchronizer = CostSynchronizer(
-        FakeCostRepository(), FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+        FakeCostRepository(),
+        FakeAgentRepository(),
+        FakeSpendLogs(),
+        FakeGenerations(),
+        "",
+        frozenset({"memory-hash"}),
+        openrouter_api_key=lambda: OPENROUTER_KEY,
     )
     for bank in (f"org-{ORG_ID}", "private-user-marker"):
         record = synchronizer._to_record(_row(api_key="other-hash", end_user=bank), {}, {ORG_ID: ORG_NAME})
@@ -527,7 +567,13 @@ def test_an_untrusted_key_cannot_select_an_organization_through_a_bank_marker():
 
 def test_invalid_or_unknown_memory_bank_stays_in_platform_unattributed_costs():
     synchronizer = CostSynchronizer(
-        FakeCostRepository(), FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+        FakeCostRepository(),
+        FakeAgentRepository(),
+        FakeSpendLogs(),
+        FakeGenerations(),
+        "",
+        frozenset({"memory-hash"}),
+        openrouter_api_key=lambda: OPENROUTER_KEY,
     )
     for bank in (None, "private-user-marker", f"org-{str(ORG_ID).upper()}", f"org-{uuid4()}", "org-invalid"):
         record = synchronizer._to_record(_row(api_key="memory-hash", end_user=bank), {}, {ORG_ID: ORG_NAME})
@@ -545,6 +591,7 @@ def test_memory_rows_count_as_organization_attributed_without_counting_as_agent_
         FakeGenerations(),
         "",
         frozenset({"memory-hash"}),
+        openrouter_api_key=lambda: OPENROUTER_KEY,
     )
     result = synchronizer.run_once()
     assert result.attributed == 1
