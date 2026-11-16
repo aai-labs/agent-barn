@@ -7,6 +7,7 @@ database; the `org-id`, `agent_name` and `org_name` labels are never trusted.
 """
 
 import re
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -256,8 +257,16 @@ def quantity(raw: object) -> float | None:
 # --- core services --------------------------------------------------------
 
 
-def core_services(deployments: Sequence[V1Deployment], stateful_sets: Sequence[V1StatefulSet]) -> list[CoreServiceRead]:
-    """The platform's own Deployments and StatefulSets. An Agent's Deployment is not one."""
+def core_services(
+    deployments: Sequence[V1Deployment],
+    stateful_sets: Sequence[V1StatefulSet],
+    replica_sets: Sequence[V1ReplicaSet] | None = None,
+) -> list[CoreServiceRead]:
+    """The platform's own Deployments and StatefulSets. An Agent's Deployment is not one.
+
+    `replica_sets` date each Deployment's rollout; see `_rollout`.
+    """
+    revisions = _replica_set_revisions(replica_sets or [])
     services: list[CoreServiceRead] = []
     for kind, workloads in (("Deployment", deployments), ("StatefulSet", stateful_sets)):
         for workload in workloads:
@@ -273,7 +282,7 @@ def core_services(deployments: Sequence[V1Deployment], stateful_sets: Sequence[V
             build_sha = rollout = rolled_out_at = None
             if isinstance(workload, V1Deployment):
                 build_sha = _build_sha(workload)
-                rollout, rolled_out_at = _rollout(workload)
+                rollout, rolled_out_at = _rollout(workload, revisions)
                 if rollout == RolloutState.STUCK and level == HealthLevel.OK:
                     level = HealthLevel.WARNING
             services.append(
@@ -299,20 +308,47 @@ def _build_sha(deployment: V1Deployment) -> str | None:
     return sha if isinstance(sha, str) and _BUILD_SHA.fullmatch(sha) else None
 
 
-def _rollout(deployment: V1Deployment) -> tuple[RolloutState | None, datetime | None]:
-    """Where the Deployment's latest rollout stands, and when it finished if it has.
+_REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 
-    Read from the `Progressing` condition's reason only; its message is never read.
+
+def _replica_set_revisions(replica_sets: Sequence[V1ReplicaSet]) -> dict[tuple[str, str], datetime]:
+    """When each Deployment's ReplicaSet of each revision was made, by (Deployment, revision)."""
+    made: dict[tuple[str, str], datetime] = {}
+    for replica_set in replica_sets:
+        metadata = replica_set.metadata
+        owner = _controller(metadata)
+        revision = (metadata.annotations or {}).get(_REVISION_ANNOTATION)
+        if owner and owner.kind == "Deployment" and owner.name and revision and metadata.creation_timestamp:
+            made[owner.name, revision] = metadata.creation_timestamp
+    return made
+
+
+def _rollout(
+    deployment: V1Deployment, revisions: Mapping[tuple[str, str], datetime]
+) -> tuple[RolloutState | None, datetime | None]:
+    """Where the Deployment's latest rollout stands, and when it started if it is done.
+
+    The state is the `Progressing` condition's reason, never its message. The condition also
+    moves when an unchanged pod recovers, so the rollout counts as under way only while pods
+    are still being replaced, and its time is when the current ReplicaSet was made, which
+    only a new rollout changes. Without the ReplicaSets, the condition's time stands in.
     """
     conditions = (deployment.status.conditions if deployment.status else None) or []
     progressing = next((condition for condition in conditions if condition.type == "Progressing"), None)
     if progressing is None:
         return None, None
-    if progressing.reason == "NewReplicaSetAvailable":
-        return RolloutState.COMPLETE, progressing.last_update_time
     if progressing.reason == "ProgressDeadlineExceeded":
         return RolloutState.STUCK, None
-    return RolloutState.IN_PROGRESS, None
+    status = deployment.status
+    desired = deployment.spec.replicas if deployment.spec and deployment.spec.replicas is not None else 1
+    replacing = (status.observed_generation or 0) < (deployment.metadata.generation or 0) or (
+        status.updated_replicas or 0
+    ) < desired
+    if progressing.reason != "NewReplicaSetAvailable" and replacing:
+        return RolloutState.IN_PROGRESS, None
+    revision = (deployment.metadata.annotations or {}).get(_REVISION_ANNOTATION)
+    made = revisions.get((deployment.metadata.name, revision)) if revision else None
+    return RolloutState.COMPLETE, made or progressing.last_update_time
 
 
 _NEVER = datetime.min.replace(tzinfo=UTC)
@@ -327,7 +363,16 @@ def deployed_version(services: Sequence[CoreServiceRead]) -> DeployedVersionRead
     built = [service for service in services if service.build_sha]
     if not built:
         return None
-    newest = max(built, key=lambda service: (service.rolled_out_at is not None, service.rolled_out_at or _NEVER))
+    # Rollouts of one deploy can finish in the same second; then the build most services run wins.
+    votes = Counter(service.build_sha for service in built)
+    newest = max(
+        built,
+        key=lambda service: (
+            service.rolled_out_at is not None,
+            service.rolled_out_at or _NEVER,
+            votes[service.build_sha],
+        ),
+    )
     behind = sorted(service.name for service in built if service.build_sha != newest.build_sha)
     assert newest.build_sha is not None
     return DeployedVersionRead(

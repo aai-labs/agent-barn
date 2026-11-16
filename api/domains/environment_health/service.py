@@ -200,7 +200,7 @@ class EnvironmentHealthService:
                 logger.warning("Environment health cannot read restart history from Prometheus", exc_info=True)
                 sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
 
-        services = cluster.core_services(deployments or [], stateful_sets or [])
+        services = cluster.core_services(deployments or [], stateful_sets or [], replica_sets)
         deployed = cluster.deployed_version(services)
         cron_jobs = cluster.cron_jobs(crons, jobs or [], now) if crons is not None else []
         backups = cluster.scheduled_backups(

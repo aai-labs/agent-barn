@@ -103,6 +103,10 @@ def _claim(name: str, size: str, labels: dict[str, str] | None = None, phase: st
     )
 
 
+def _owned(kind: str, name: str) -> list[V1OwnerReference]:
+    return [V1OwnerReference(api_version="apps/v1", kind=kind, name=name, uid="1", controller=True)]
+
+
 def _pod(
     name: str,
     *,
@@ -482,10 +486,16 @@ _OLD_SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 def _released(
-    name: str, sha: str | None, *, reason: str = "NewReplicaSetAvailable", rolled_out_ago=timedelta(days=6)
+    name: str,
+    sha: str | None,
+    *,
+    reason: str = "NewReplicaSetAvailable",
+    rolled_out_ago=timedelta(days=6),
+    updated: int = 1,
+    revision: str = "4",
 ) -> V1Deployment:
     return V1Deployment(
-        metadata=V1ObjectMeta(name=name),
+        metadata=V1ObjectMeta(name=name, generation=7, annotations={"deployment.kubernetes.io/revision": revision}),
         spec=V1DeploymentSpec(
             replicas=1,
             selector=V1LabelSelector(),
@@ -494,7 +504,9 @@ def _released(
             ),
         ),
         status=V1DeploymentStatus(
+            observed_generation=7,
             ready_replicas=1,
+            updated_replicas=updated,
             conditions=[
                 V1DeploymentCondition(type="Available", status="True", reason="MinimumReplicasAvailable"),
                 V1DeploymentCondition(
@@ -507,6 +519,44 @@ def _released(
             ],
         ),
     )
+
+
+def _replica_set(deployment: str, revision: str, created_ago: timedelta) -> V1ReplicaSet:
+    return V1ReplicaSet(
+        metadata=V1ObjectMeta(
+            name=f"{deployment}-5c9f8d{revision}",
+            creation_timestamp=_NOW - created_ago,
+            annotations={"deployment.kubernetes.io/revision": revision},
+            owner_references=_owned("Deployment", deployment),
+        )
+    )
+
+
+def test_a_rollout_time_is_when_the_current_replica_set_was_made_not_when_a_pod_last_recovered():
+    services = cluster.core_services(
+        [
+            # Still on the old build; a pod crashed and came back a minute ago, which moves the
+            # condition's time and, while it recovers, its reason.
+            _released("agentbarn-gateway", _OLD_SHA, rolled_out_ago=timedelta(minutes=1)),
+            _released("agentbarn-worker", _OLD_SHA, reason="ReplicaSetUpdated", rolled_out_ago=timedelta(minutes=1)),
+            _released("agentbarn-api", _SHA, rolled_out_ago=timedelta(days=2)),
+        ],
+        [],
+        [
+            _replica_set("agentbarn-gateway", "3", timedelta(days=20)),
+            _replica_set("agentbarn-gateway", "4", timedelta(days=9)),
+            _replica_set("agentbarn-worker", "4", timedelta(days=20)),
+            _replica_set("agentbarn-api", "4", timedelta(days=2, minutes=3)),
+        ],
+    )
+
+    by_name = {service.name: service for service in services}
+    assert by_name["agentbarn-gateway"].rolled_out_at == _NOW - timedelta(days=9)
+    worker = by_name["agentbarn-worker"]
+    assert (worker.rollout, worker.rolled_out_at) == (cluster.RolloutState.COMPLETE, _NOW - timedelta(days=20))
+    deployed = cluster.deployed_version(services)
+    assert deployed is not None
+    assert (deployed.build_sha, deployed.behind) == (_SHA, ["agentbarn-gateway", "agentbarn-worker"])
 
 
 def test_a_service_carries_its_build_and_when_its_last_rollout_finished():
@@ -525,7 +575,9 @@ def test_a_stuck_rollout_is_a_warning_and_an_unrecognised_build_is_dropped():
         [
             _released("agentbarn-ui", "not-a-sha; rm -rf"),
             _released("agentbarn-api", _SHA, reason="ProgressDeadlineExceeded", rolled_out_ago=timedelta(hours=2)),
-            _released("agentbarn-worker", _SHA, reason="ReplicaSetUpdated", rolled_out_ago=timedelta(minutes=1)),
+            _released(
+                "agentbarn-worker", _SHA, reason="ReplicaSetUpdated", rolled_out_ago=timedelta(minutes=1), updated=0
+            ),
         ],
         [],
     )
@@ -554,6 +606,24 @@ def test_the_deployed_version_is_the_newest_build_and_says_when_services_disagre
     assert (deployed.build_sha, deployed.rolled_out_at, deployed.mixed) == (_SHA, _NOW - timedelta(days=6), True)
     assert deployed.behind == ["agentbarn-gateway"]
     assert cluster.deployed_version(cluster.core_services([_released("redis", None)], [])) is None
+
+
+def test_when_rollouts_tie_the_build_most_services_run_is_the_deployed_one():
+    same_time = timedelta(days=3)
+    services = cluster.core_services(
+        [
+            # First by name, so the order the services come in does not decide.
+            _released("agentbarn-api", _OLD_SHA, rolled_out_ago=same_time),
+            _released("agentbarn-ui", _SHA, rolled_out_ago=same_time),
+            _released("agentbarn-worker", _SHA, rolled_out_ago=same_time),
+        ],
+        [],
+    )
+
+    deployed = cluster.deployed_version(services)
+
+    assert deployed is not None
+    assert (deployed.build_sha, deployed.behind) == (_SHA, ["agentbarn-api"])
 
 
 # --- capacity -------------------------------------------------------------
@@ -786,10 +856,6 @@ def test_events_are_newest_first():
     events = [_event("BackOff", "x", name=f"pod-{minute}", age=timedelta(minutes=minute)) for minute in (3, 0, 7)]
     rows = cluster.warning_events(events, {}, _NOW)
     assert [row.last_seen for row in rows] == [_NOW, _NOW - timedelta(minutes=3), _NOW - timedelta(minutes=7)]
-
-
-def _owned(kind: str, name: str) -> list[V1OwnerReference]:
-    return [V1OwnerReference(api_version="apps/v1", kind=kind, name=name, uid="1", controller=True)]
 
 
 def test_events_about_a_workloads_runs_and_pods_read_as_one_row_for_the_workload():
