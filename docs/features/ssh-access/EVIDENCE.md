@@ -165,6 +165,24 @@ Both runtime contracts and all 29 selected browser checks passed. The automated
 browser suite uses mocked APIs; the manual screenshots and UI checks above use
 the running API. Existing dependency deprecation warnings were non-fatal.
 
+## Behavior-focused test follow-up
+
+Tested at `8f20e0931f427bbc5f0cbc7310cfa3b4ee01b4c8`: credential management
+and permission scenarios now use reusable domain-named Given steps, one user
+action per scenario, and PyHamcrest assertions on API responses, persisted
+selection and durable audit. Independent generation/import, duplicate identity,
+validation, deletion, stale-edit and permission behaviors were split out of the
+original bundled tests. The four member roles and four SSH operations are
+independent cases, so a refusal does not prevent another permission case running.
+The existing real TLS/OpenSSH, generation, tenant and audit-failure contracts remain.
+
+The staging regression command below passed again: **183 selected checks**,
+including the separated scenarios. API lint, format and type checks passed.
+These are the same production behaviors with clearer tests; this follow-up does
+not change executable application code or require new UI captures. The routed
+code/testing guides link the requested DDD and GivenPy references while retaining
+the repository's feature structure, local GivenPy helpers and test isolation.
+
 ## Review limits and delivery
 
 Staging integration (`bc6cf138`, 2026-11-16) retained both deployment-guide
