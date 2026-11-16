@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypeVar
@@ -41,6 +42,7 @@ from api.domains.environment_health.models import (
 from api.domains.environment_health.repository import EnvironmentHealthRepository
 from api.domains.resource_limits.models import ResourceLimitsRead
 from api.domains.resource_limits.service import ResourceLimitsService
+from api.domains.resource_usage.models import NamespacePeaksRead, PlatformCapacityRead
 from api.domains.resource_usage.platform_service import PlatformResourceUsageService
 from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.prometheus.client import PrometheusError
@@ -57,6 +59,9 @@ IDLE_AFTER_DAYS = 14
 
 T = TypeVar("T")
 
+# One thread per cluster read and Prometheus query, so none waits on another.
+_READ_WORKERS = 16
+
 
 def _state_of(error: Exception) -> SourceState:
     if isinstance(error, ApiException) and error.status == 403:
@@ -64,10 +69,6 @@ def _state_of(error: Exception) -> SourceState:
     if isinstance(error, ConfigException):
         return SourceState.NOT_CONFIGURED
     return SourceState.UNAVAILABLE
-
-
-def _number(value: int | None) -> float | None:
-    return None if value is None else float(value)
 
 
 def overall_level(
@@ -155,9 +156,9 @@ class EnvironmentHealthService:
         sources: dict[EnvironmentSource, SourceState] = {}
         identities = cluster.identities_by_id(self.agent_repository.find_live_for_platform_usage())
 
-        def read(source: EnvironmentSource, fetch: Callable[[], T]) -> T | None:
+        def settle(source: EnvironmentSource, read: Future[T]) -> T | None:
             try:
-                value = fetch()
+                value = read.result()
             except Exception as error:
                 state = _state_of(error)
                 if state == SourceState.UNAVAILABLE:
@@ -167,38 +168,58 @@ class EnvironmentHealthService:
             sources[source] = SourceState.AVAILABLE
             return value
 
-        pods = read(EnvironmentSource.PODS, self.repository.pods)
-        deployments = read(EnvironmentSource.DEPLOYMENTS, self.repository.deployments)
-        stateful_sets = read(EnvironmentSource.STATEFUL_SETS, self.repository.stateful_sets)
-        replica_sets = read(EnvironmentSource.REPLICA_SETS, self.repository.replica_sets)
-        claims = read(EnvironmentSource.VOLUME_CLAIMS, self.repository.volume_claims)
-        kube_services = read(EnvironmentSource.SERVICES, self.repository.services)
-        crons = read(EnvironmentSource.CRON_JOBS, self.repository.cron_jobs)
-        jobs = read(EnvironmentSource.JOBS, self.repository.jobs)
-        quotas = read(EnvironmentSource.RESOURCE_QUOTAS, self.repository.resource_quotas)
-        events = read(EnvironmentSource.EVENTS, self.repository.warning_events)
+        def query(read: Future[T], what: str) -> T | None:
+            try:
+                return read.result()
+            except PrometheusError:
+                logger.warning("Environment health cannot read %s from Prometheus", what, exc_info=True)
+                sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
+                return None
 
-        alert_samples = runtime_samples = restart_samples = None
-        if not self.repository.prometheus_configured:
-            sources[EnvironmentSource.PROMETHEUS] = SourceState.NOT_CONFIGURED
-        else:
-            # Each query on its own, so a failed runtime query still keeps the alerts that loaded.
-            sources[EnvironmentSource.PROMETHEUS] = SourceState.AVAILABLE
-            try:
-                alert_samples = self.repository.firing_alerts(at=now)
-            except PrometheusError:
-                logger.warning("Environment health cannot read firing alerts from Prometheus", exc_info=True)
-                sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
-            try:
-                runtime_samples = self.repository.runtime_health(at=now)
-            except PrometheusError:
-                logger.warning("Environment health cannot read runtime health from Prometheus", exc_info=True)
-                sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
-            try:
-                restart_samples = self.repository.restart_history(at=now, window_days=RESTART_WINDOW_DAYS)
-            except PrometheusError:
-                logger.warning("Environment health cannot read restart history from Prometheus", exc_info=True)
-                sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
+        repository = self.repository
+        prometheus = repository.prometheus_configured
+        # Every cluster and Prometheus read at once: each waits on the network, and one after
+        # another they would add up to the page's load time.
+        with ThreadPoolExecutor(max_workers=_READ_WORKERS, thread_name_prefix="environment-health") as pool:
+            pods_read = pool.submit(repository.pods)
+            deployments_read = pool.submit(repository.deployments)
+            stateful_sets_read = pool.submit(repository.stateful_sets)
+            replica_sets_read = pool.submit(repository.replica_sets)
+            claims_read = pool.submit(repository.volume_claims)
+            kube_services_read = pool.submit(repository.services)
+            crons_read = pool.submit(repository.cron_jobs)
+            jobs_read = pool.submit(repository.jobs)
+            quotas_read = pool.submit(repository.resource_quotas)
+            events_read = pool.submit(repository.warning_events)
+            if prometheus:
+                alerts_read = pool.submit(repository.firing_alerts, at=now)
+                runtime_read = pool.submit(repository.runtime_health, at=now)
+                restarts_read = pool.submit(repository.restart_history, at=now, window_days=RESTART_WINDOW_DAYS)
+            peaks_read = pool.submit(self.platform_usage_service.namespace_peaks, now, window_hours=PEAK_WINDOW_HOURS)
+            usage_read = pool.submit(self.platform_usage_service.namespace_capacity, now)
+
+            pods = settle(EnvironmentSource.PODS, pods_read)
+            deployments = settle(EnvironmentSource.DEPLOYMENTS, deployments_read)
+            stateful_sets = settle(EnvironmentSource.STATEFUL_SETS, stateful_sets_read)
+            replica_sets = settle(EnvironmentSource.REPLICA_SETS, replica_sets_read)
+            claims = settle(EnvironmentSource.VOLUME_CLAIMS, claims_read)
+            kube_services = settle(EnvironmentSource.SERVICES, kube_services_read)
+            crons = settle(EnvironmentSource.CRON_JOBS, crons_read)
+            jobs = settle(EnvironmentSource.JOBS, jobs_read)
+            quotas = settle(EnvironmentSource.RESOURCE_QUOTAS, quotas_read)
+            events = settle(EnvironmentSource.EVENTS, events_read)
+
+            alert_samples = runtime_samples = restart_samples = None
+            if not prometheus:
+                sources[EnvironmentSource.PROMETHEUS] = SourceState.NOT_CONFIGURED
+            else:
+                # Each query on its own, so a failed runtime query still keeps the alerts that loaded.
+                sources[EnvironmentSource.PROMETHEUS] = SourceState.AVAILABLE
+                alert_samples = query(alerts_read, "firing alerts")
+                runtime_samples = query(runtime_read, "runtime health")
+                restart_samples = query(restarts_read, "restart history")
+            peaks = peaks_read.result()
+            usage = usage_read.result()
 
         services = cluster.core_services(deployments or [], stateful_sets or [], replica_sets)
         deployed = cluster.deployed_version(services)
@@ -221,7 +242,7 @@ class EnvironmentHealthService:
         failed = cluster.failed_agents(self.agent_repository.find_failed_for_platform())
         idle = self._idle_agents(now, identities, pods, claims)
         ceilings = self.resource_limits_service.get_limits()
-        capacity = self._capacity(now, ceilings, quotas, claims, pods, kube_services)
+        capacity = self._capacity(ceilings, peaks, usage, quotas, claims, pods, kube_services)
         volumes = cluster.volume_allocation(claims or [], identities)
         owners = cluster.workload_owners(
             deployments=deployments or [],
@@ -301,8 +322,9 @@ class EnvironmentHealthService:
 
     def _capacity(
         self,
-        now: datetime,
         ceilings: ResourceLimitsRead,
+        peaks: NamespacePeaksRead,
+        usage: PlatformCapacityRead,
         quotas: list[V1ResourceQuota] | None,
         claims: list[V1PersistentVolumeClaim] | None,
         pods: list[V1Pod] | None,
@@ -314,18 +336,17 @@ class EnvironmentHealthService:
         usual answer (see `docs/adr/2026-10-01-capacity-limits-entered-by-hand.md`). Once the
         cluster's owners grant the read, the quota's own figures take over with no change here.
         """
-        peaks = self.platform_usage_service.namespace_peaks(now, window_hours=PEAK_WINDOW_HOURS)
         by_resource = {
-            "limits.memory": _number(peaks.limits_memory_bytes),
-            "requests.memory": _number(peaks.requests_memory_bytes),
+            "limits.memory": cluster.as_float(peaks.limits_memory_bytes),
+            "requests.memory": cluster.as_float(peaks.requests_memory_bytes),
             "limits.cpu": peaks.limits_cpu_cores,
             "requests.cpu": peaks.requests_cpu_cores,
-            "pods": _number(peaks.pods),
+            "pods": cluster.as_float(peaks.pods),
         }
         if quotas:
             return cluster.with_peaks(cluster.quota_lines(quotas), by_resource)
         lines = cluster.entered_lines(
-            self.platform_usage_service.namespace_capacity(now),
+            usage,
             storage_requested=cluster.storage_committed(claims) if claims is not None else None,
             pods_counted=cluster.pods_committed(pods) if pods is not None else None,
             storage_ceiling=ceilings.requests_storage_bytes,

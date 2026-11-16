@@ -959,20 +959,20 @@ def entered_lines(
     entered = CapacitySource.ENTERED
     return _ordered(
         [
-            _line("requests.storage", storage_requested, _number(storage_ceiling), entered),
-            _line("persistentvolumeclaims", _number(claims_counted), _number(claims_ceiling), entered),
-            _line("pods", _number(pods_counted), _number(pods_ceiling), entered),
-            _line("services", _number(services_counted), _number(services_ceiling), entered),
+            _line("requests.storage", storage_requested, as_float(storage_ceiling), entered),
+            _line("persistentvolumeclaims", as_float(claims_counted), as_float(claims_ceiling), entered),
+            _line("pods", as_float(pods_counted), as_float(pods_ceiling), entered),
+            _line("services", as_float(services_counted), as_float(services_ceiling), entered),
             _line(
                 "limits.memory",
-                _number(capacity.committed_limits_memory_bytes),
-                _number(capacity.limits_memory_bytes),
+                as_float(capacity.committed_limits_memory_bytes),
+                as_float(capacity.limits_memory_bytes),
                 entered,
             ),
             _line(
                 "requests.memory",
-                _number(capacity.committed_requests_memory_bytes),
-                _number(capacity.requests_memory_bytes),
+                as_float(capacity.committed_requests_memory_bytes),
+                as_float(capacity.requests_memory_bytes),
                 entered,
             ),
             _line("limits.cpu", capacity.committed_limits_cpu_cores, capacity.limits_cpu_cores, entered),
@@ -1008,7 +1008,7 @@ def with_peaks(lines: Iterable[CapacityLineRead], peaks: Mapping[str, float | No
     return result
 
 
-def _number(value: int | None) -> float | None:
+def as_float(value: int | None) -> float | None:
     return None if value is None else float(value)
 
 
