@@ -167,6 +167,9 @@ RESTORE_POINT_MAX_PER_AGENT=5
 RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES=360
 RESTORE_POINT_SCHEDULED_MAX_PER_AGENT=4
 RESTORE_POINT_SCHEDULE_MAX_CONCURRENT=2
+# The deploy workflows read each of these from an optional GitHub Variable of the
+# same name, prefixed STAGING_ on staging and PUBLIC_ on the public deploy (e.g.
+# STAGING_RESTORE_POINT_SCHEDULED_MAX_PER_AGENT). Unset means the value above.
 
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).
@@ -176,7 +179,9 @@ FIRECRAWL_API_KEY=
 # Not needed for production since Firecrawl is on ClusterIP (internal only).
 # FIRECRAWL_BULL_AUTH_KEY=
 # Optional: memory limits for the Firecrawl API and its RabbitMQ queue. Empty keeps
-# the chart defaults (2Gi and 512Mi). Raise them if either container is OOMKilled.
+# the chart defaults (3Gi and 1Gi). Raise them if either container is OOMKilled.
+# Never set them below the chart's memory requests (2Gi and 256Mi): Kubernetes
+# rejects a pod whose request exceeds its limit.
 FIRECRAWL_API_MEMORY_LIMIT=
 FIRECRAWL_RABBITMQ_MEMORY_LIMIT=
 

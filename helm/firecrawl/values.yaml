@@ -42,12 +42,13 @@ service:
   rabbitmqPort: 5672
 
 resources:
+  # The API sat near its 2Gi limit and restarted on OOM; request what it actually uses.
   api:
     requests:
-      memory: 1Gi
+      memory: 2Gi
       cpu: 200m
     limits:
-      memory: 2Gi
+      memory: 3Gi
       cpu: 1000m
   playwright:
     requests:
@@ -56,10 +57,11 @@ resources:
     limits:
       memory: 2Gi
       cpu: 1000m
+  # rabbitmq was OOM-killed at 512Mi.
   rabbitmq:
     requests:
-      memory: 128Mi
+      memory: 256Mi
       cpu: 100m
     limits:
-      memory: 512Mi
+      memory: 1Gi
       cpu: 500m

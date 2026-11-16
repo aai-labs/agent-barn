@@ -29,7 +29,7 @@ import {
   type WorkflowVersion,
 } from "../schemas";
 import { changedByOthers } from "../utils";
-import { workflowPageParser, workflowViewParser } from "../url-state";
+import { workflowPageParser, workflowsTabParser, workflowViewParser } from "../url-state";
 import {
   workflowApiProblems,
   workflowProblems,
@@ -41,7 +41,9 @@ import { WorkflowList } from "./workflow-list";
 import { WorkflowSaveAlert } from "./workflow-save-alert";
 import { WorkflowSnapshot } from "./workflow-snapshot";
 import { WorkflowRunStart } from "./workflow-run-start";
-import { WorkflowRunDetail, WorkflowRuns } from "./workflow-runs";
+import { WorkflowRunDetail } from "./workflow-runs";
+import { WorkflowApprovalInbox } from "./workflow-approval-inbox";
+import { WorkflowAgentRuns } from "./workflow-agent-runs";
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError && Array.isArray(error.details?.detail)) {
@@ -81,6 +83,8 @@ export function WorkflowsPage({
       .withOptions({ history: "push", scroll: false }),
   );
   const [page, setPage] = useQueryState("workflowPage", workflowPageParser);
+  const [landingTab, setLandingTab] = useQueryState("workflowsTab", workflowsTabParser);
+  const [agentRunPage, setAgentRunPage] = useQueryState("agentRunPage", workflowPageParser);
   const [editTarget, setEditTarget] = useState<{
     workflowId: string;
     revision: number;
@@ -105,7 +109,6 @@ export function WorkflowsPage({
   const [archive, setArchive] = useState(false);
   const [historic, setHistoric] = useState<WorkflowVersion | null>(null);
   const [view, setView] = useQueryState("workflowView", workflowViewParser);
-  const [, setRunPage] = useQueryState("workflowRunPage", workflowPageParser);
   const [startVersion, setStartVersion] = useState<WorkflowVersion | null>(
     null,
   );
@@ -115,6 +118,14 @@ export function WorkflowsPage({
       .withDefault("")
       .withOptions({ history: "push", scroll: false }),
   );
+  // A run opens on its own page; its breadcrumb leads back to the landing Runs tab.
+  const openRun = (id: string) => {
+    setStartVersion(null);
+    setHistoric(null);
+    void setSelected("");
+    void setView(null);
+    void setRunId(id);
+  };
   useEffect(() => {
     if (!startVersion) return;
     onStartingChange?.(true);
@@ -223,15 +234,16 @@ export function WorkflowsPage({
             <span aria-hidden="true">/</span>
           </>
         )}
-        {selected && !editing ? (
+        {(selected || runId) && !editing ? (
           <button
             className="hover:text-[var(--ink)]"
             aria-label="All workflows"
             onClick={() => {
               setHistoric(null);
               void setView(null);
-              void setRunPage(null);
               setStartVersion(null);
+              // Back to where the page came from: a run's list, or the saved workflows.
+              void setLandingTab(runId ? "runs" : "workflows");
               void setRunId("");
               void setSelected("");
             }}
@@ -241,6 +253,14 @@ export function WorkflowsPage({
         ) : !embedded ? (
           <span>Workflows</span>
         ) : null}
+        {runId && !selected && (
+          <>
+            <span aria-hidden="true">/</span>
+            <span aria-current="page" className="text-[var(--ink)]">
+              Run detail
+            </span>
+          </>
+        )}
         {selected && !editing && (
           <>
             <span aria-hidden="true">/</span>
@@ -270,20 +290,6 @@ export function WorkflowsPage({
             )}
             {runId ? (
               <>
-                <button
-                  type="button"
-                  aria-label="Back to runs"
-                  className="hover:text-[var(--ink)]"
-                  onClick={() => {
-                    setStartVersion(null);
-                    setHistoric(null);
-                    void setView("runs");
-                    void setRunId(null);
-                  }}
-                >
-                  Runs
-                </button>
-                <span aria-hidden="true">/</span>
                 <span aria-current="page" className="text-[var(--ink)]">
                   Run detail
                 </span>
@@ -292,7 +298,7 @@ export function WorkflowsPage({
               <span aria-current="page">Start run</span>
             ) : view !== "overview" ? (
               <span aria-current="page" className="text-[var(--ink)]">
-                {view === "runs" ? "Runs" : "Version history"}
+                Version history
               </span>
             ) : null}
           </>
@@ -309,14 +315,14 @@ export function WorkflowsPage({
                     ? current?.draft.name || "Workflow"
                     : "Workflows"}
               </Heading>
-              <p className="text-sm mt-2" style={{ color: "var(--ink-3)" }}>
-                {agent.name} ·{" "}
-                {editing
-                  ? "Unsaved draft"
-                  : selected
-                    ? `Saved v${current?.number ?? "…"}${detail.data?.archivedAt ? " · Archived" : ""}`
-                    : "Your repeatable work"}
-              </p>
+              {(editing || selected) && (
+                <p className="text-sm mt-2" style={{ color: "var(--ink-3)" }}>
+                  {agent.name} ·{" "}
+                  {editing
+                    ? "Unsaved draft"
+                    : `Saved v${current?.number ?? "…"}${detail.data?.archivedAt ? " · Archived" : ""}`}
+                </p>
+              )}
             </div>
             <div className="flex gap-2 flex-wrap">
               {editing ? (
@@ -412,11 +418,11 @@ export function WorkflowsPage({
               ) : null}
             </div>
           </div>
-          <p className="text-sm mb-6" style={{ color: "var(--ink-3)" }}>
-            {capabilities.data?.execution
-              ? "Saving and running are separate. Each run uses the saved version and inputs you choose."
-              : "Execution is unavailable. Saving a workflow will not start a run."}
-          </p>
+          {capabilities.data && !capabilities.data.execution && (
+            <p className="text-sm mb-6" style={{ color: "var(--ink-3)" }}>
+              Execution is unavailable. Saving a workflow will not start a run.
+            </p>
+          )}
         </>
       )}
       {!canAuthor && (
@@ -483,10 +489,7 @@ export function WorkflowsPage({
           canManageFiles={canAgent(agent, "agent.update")}
           runId={runId}
           canRunAgain={canRun}
-          onOpenRun={(id) => {
-            void setView("runs");
-            void setRunId(id);
-          }}
+          onOpenRun={openRun}
         />
       ) : startVersion && selected ? (
         <WorkflowRunStart
@@ -495,11 +498,7 @@ export function WorkflowsPage({
           workflowId={selected}
           version={startVersion}
           onBack={() => setStartVersion(null)}
-          onStarted={(id) => {
-            setStartVersion(null);
-            void setView("runs");
-            void setRunId(id);
-          }}
+          onStarted={openRun}
         />
       ) : draft ? (
         <WorkflowEditor
@@ -516,12 +515,7 @@ export function WorkflowsPage({
           <Tabs
             value={view}
             onValueChange={(value) => {
-              if (
-                value !== "overview" &&
-                value !== "runs" &&
-                value !== "history"
-              )
-                return;
+              if (value !== "overview" && value !== "history") return;
               void setView(value);
               if (value === "overview") setHistoric(null);
             }}
@@ -537,12 +531,6 @@ export function WorkflowsPage({
                 className="h-full flex-none border-0 px-4 group-data-horizontal/tabs:after:bottom-[-1px]"
               >
                 Overview
-              </TabsTrigger>
-              <TabsTrigger
-                value="runs"
-                className="h-full flex-none border-0 px-4 group-data-horizontal/tabs:after:bottom-[-1px]"
-              >
-                Runs
               </TabsTrigger>
               <TabsTrigger
                 value="history"
@@ -561,16 +549,6 @@ export function WorkflowsPage({
                 onView={(version) => {
                   setHistoric(version);
                   void setView("overview");
-                }}
-              />
-            </TabsContent>
-            <TabsContent value="runs">
-              <WorkflowRuns
-                agentId={agentId}
-                workflowId={detail.data.id}
-                onOpen={(id) => {
-                  void setView("runs");
-                  void setRunId(id);
                 }}
               />
             </TabsContent>
@@ -596,19 +574,55 @@ export function WorkflowsPage({
           <p role="status">Loading workflow…</p>
         )
       ) : (
-        <WorkflowList
-          agentId={agentId}
-          agentName={agent.name}
-          page={page}
-          onPageChange={setPage}
-          onOpen={(workflowId) => {
-            setHistoric(null);
-            void setView("overview");
-            setVersionPage(1);
-            void setRunPage(null);
-            void setSelected(workflowId);
+        <Tabs
+          value={landingTab}
+          onValueChange={(value) => {
+            if (value === "runs" || value === "workflows") void setLandingTab(value);
           }}
-        />
+          className="gap-6"
+        >
+          <TabsList
+            aria-label="Workflows views"
+            className="gap-1 bg-transparent p-0 group-data-horizontal/tabs:h-auto"
+          >
+            <TabsTrigger
+              value="runs"
+              className="h-9 flex-none rounded-full px-4 data-active:border-[var(--line-strong)] data-active:bg-[var(--bg-elev)] data-active:text-[var(--ink)] data-active:shadow-sm"
+            >
+              Runs
+            </TabsTrigger>
+            <TabsTrigger
+              value="workflows"
+              className="h-9 flex-none rounded-full px-4 data-active:border-[var(--line-strong)] data-active:bg-[var(--bg-elev)] data-active:text-[var(--ink)] data-active:shadow-sm"
+            >
+              Workflows
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="runs">
+            <WorkflowApprovalInbox agentId={agentId} onOpen={(run) => openRun(run.id)} />
+            <WorkflowAgentRuns
+              agentId={agentId}
+              page={agentRunPage}
+              onPageChange={setAgentRunPage}
+              onOpen={(run) => openRun(run.id)}
+              onShowWorkflows={() => void setLandingTab("workflows")}
+            />
+          </TabsContent>
+          <TabsContent value="workflows">
+            <WorkflowList
+              agentId={agentId}
+              agentName={agent.name}
+              page={page}
+              onPageChange={setPage}
+              onOpen={(workflowId) => {
+                setHistoric(null);
+                void setView("overview");
+                setVersionPage(1);
+                void setSelected(workflowId);
+              }}
+            />
+          </TabsContent>
+        </Tabs>
       )}
       <ConfirmationDialog
         open={discard}

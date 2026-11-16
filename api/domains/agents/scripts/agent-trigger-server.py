@@ -253,6 +253,9 @@ def dispatch(idempotency_key: str, payload: dict) -> str:
 WORKFLOW_STEPS_PATH = "/agent-triggers/v1/workflow-steps"
 _STEP_PATH = re.compile(r"^/agent-triggers/v1/workflow-steps/([0-9a-f-]{36})/stop$")
 _STEP_TIMEOUT_SECONDS = 900
+_APPROVAL_POLL_SECONDS = 2
+# The platform stores the verbatim command up to this size; a longer one is never shown truncated.
+_APPROVAL_COMMAND_LIMIT = 100_000
 _SUMMARY_LIMIT = 4000
 _FILE_HANDOFF_TIMEOUT_SECONDS = 120
 # In-flight steps by attempt id. Process-local: a pod restart ends the session, and the
@@ -310,15 +313,39 @@ def _sse_events(response):
         yield "\n".join(data_lines)
 
 
-def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
+class ApprovalParked(RuntimeError):
+    """The live approval window closed; the platform holds the request and stopped this session."""
+
+
+def _hermes_step(
+    attempt_id: str,
+    session_id: str,
+    prompt: str,
+    *,
+    resume: bool = False,
+    callback: tuple[str, str] | None = None,
+) -> str:
+    """Run one Hermes turn. With a callback, approvals are decided through the platform; otherwise they stop it."""
+    body: dict = {"input": prompt, "session_id": session_id}
+    if resume:
+        # A continuation must see the step's earlier turns; an empty history fails instead.
+        body["resume_session"] = True
+        body["resume_require_history"] = True
     request = urllib.request.Request(
         f"{RUNTIME_API_URL}/v1/runs",
-        data=json.dumps({"input": prompt, "session_id": session_id}).encode(),
+        data=json.dumps(body).encode(),
         method="POST",
         headers=_runtime_headers(session_id),
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        run_id = json.loads(response.read())["run_id"]
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            run_id = json.loads(response.read())["run_id"]
+    except urllib.error.HTTPError as exc:
+        if resume:
+            raise RuntimeError(
+                f"The step's earlier session could not be resumed (HTTP {exc.code}); it was not continued"
+            ) from exc
+        raise
     with _STEPS_LOCK:
         if attempt_id in _STEPS:
             _STEPS[attempt_id]["run_id"] = run_id
@@ -337,9 +364,18 @@ def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
             payload = json.loads(data)
             event = payload.get("event")
             if event == "approval.request":
-                _stop_hermes(run_id, session_id)
-                command = str(payload.get("command") or payload.get("description") or "a command")[:500]
-                raise NeedsAttention(f"The Agent needs approval to run {command}. Approve it in chat, then rerun.")
+                command = payload.get("command")
+                exact = isinstance(command, str) and bool(command.strip()) and len(command) <= _APPROVAL_COMMAND_LIMIT
+                if callback is None or not exact:
+                    # Only the verbatim command may be put to a person; anything else stops for chat.
+                    _stop_hermes(run_id, session_id)
+                    shown = str(command or payload.get("description") or "a command")[:500]
+                    raise NeedsAttention(f"The Agent needs approval to run {shown}. Approve it in chat, then rerun.")
+                guidance = _await_approval(attempt_id, callback, run_id, session_id, str(command), _event_age(payload))
+                if guidance is not None:
+                    # Declined, denied and stopped: the same session continues with the guidance.
+                    return _hermes_step(attempt_id, session_id, guidance, resume=True, callback=callback)
+                continue
             if event == "run.completed":
                 return str(payload.get("text") or payload.get("output") or "")
             if event in ("run.failed", "run.cancelled"):
@@ -347,14 +383,88 @@ def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
     raise RuntimeError("The Agent session ended without a result")
 
 
-def _stop_hermes(run_id: str, session_id: str) -> None:
+def _event_age(payload: dict) -> float:
+    """Seconds since Hermes raised the event; its approval timeout runs from then, not from when we read it."""
+    stamp = payload.get("timestamp")
+    try:
+        if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+            raised_at = float(stamp)
+        elif isinstance(stamp, str):
+            parsed = datetime.fromisoformat(stamp)
+            raised_at = (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).timestamp()
+        else:
+            return 0.0
+    except ValueError:
+        return 0.0
+    return min(max(time.time() - raised_at, 0.0), 3600.0)
+
+
+def _answer_hermes(run_id: str, session_id: str, choice: str) -> None:
+    answer = urllib.request.Request(
+        f"{RUNTIME_API_URL}/v1/runs/{run_id}/approval",
+        data=json.dumps({"choice": choice}).encode(),
+        method="POST",
+        headers=_runtime_headers(session_id),
+    )
+    urllib.request.urlopen(answer, timeout=30).close()
+
+
+def _await_approval(
+    attempt_id: str, callback: tuple[str, str], run_id: str, session_id: str, command: str, age: float = 0.0
+) -> str | None:
+    """Hold the live request until a person decides. Returns None once approved, or the decline prompt."""
+    token, callback_url = callback
+    try:
+        raised = (
+            _post_json(
+                f"{callback_url}/approvals",
+                token,
+                {"command": command, "runtime_run_id": run_id, "age_seconds": round(age, 3)},
+            )
+            or {}
+        )
+        request_url = f"{callback_url}/approvals/{raised['id']}"
+        deadline = time.monotonic() + float(raised["live_seconds"])
+        while True:
+            with _STEPS_LOCK:
+                if _STEPS.get(attempt_id, {}).get("stopped"):
+                    raise RuntimeError("Agent session cancelled")
+            if time.monotonic() >= deadline:
+                # Park first: a decision that arrived meanwhile wins and is acted on below.
+                status = _post_json(f"{request_url}/park", token, {}) or {}
+                if status.get("state") == "PARKED":
+                    raise ApprovalParked()
+            else:
+                status = _post_json(request_url, token, None, method="GET") or {}
+            if status.get("state") == "APPROVED":
+                _answer_hermes(run_id, session_id, "once")
+                _post_json(f"{request_url}/released", token, {})
+                return None
+            if status.get("state") == "DECLINED":
+                # Deny, then stop: two runs must never share the session the guidance resumes.
+                _answer_hermes(run_id, session_id, "deny")
+                if not _stop_hermes(run_id, session_id):
+                    raise RuntimeError("The Agent session could not be stopped after a declined command")
+                return str(status["prompt"])
+            time.sleep(_APPROVAL_POLL_SECONDS)
+    except BaseException:
+        # Never leave a held command behind: parked, fenced or failed, the session stops here.
+        _stop_hermes(run_id, session_id)
+        raise
+
+
+def _stop_hermes(run_id: str, session_id: str) -> bool:
+    """Stop a Hermes run; True once it is stopped or had already ended."""
     try:
         stop = urllib.request.Request(
             f"{RUNTIME_API_URL}/v1/runs/{run_id}/stop", data=b"{}", method="POST", headers=_runtime_headers(session_id)
         )
         urllib.request.urlopen(stop, timeout=10).close()
+        return True
+    except urllib.error.HTTPError as exc:
+        return exc.code in (404, 409)
     except (urllib.error.URLError, OSError):
-        pass
+        return False
 
 
 def _openclaw_step(session_id: str, prompt: str) -> str:
@@ -438,6 +548,7 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
     try:
         handoff = _post_json(f"{callback_url}/handoff", token, None, method="GET") or {}
         session_id, prompt = str(handoff["session_id"]), str(handoff["prompt"])
+        resume = bool(handoff.get("resume"))
         if handoff.get("files"):
             workspace = os.environ.get("ARTIFACT_UPLOAD_ROOTS", "").split(":")[0]
             if not workspace:
@@ -458,7 +569,7 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
         if len(prompt.encode()) > 64000:
             raise RuntimeError("Workflow context exceeds the context limit")
         if RUNTIME_KIND == "hermes":
-            text = _hermes_step(attempt_id, session_id, prompt)
+            text = _hermes_step(attempt_id, session_id, prompt, resume=resume, callback=(token, callback_url))
         elif RUNTIME_KIND == "openclaw":
             text = _openclaw_step(session_id, prompt)
         else:
@@ -478,7 +589,7 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
                 "Previous response:\n" + text[:8000]
             )
             if RUNTIME_KIND == "hermes":
-                corrected = _hermes_step(attempt_id, session_id, correction)
+                corrected = _hermes_step(attempt_id, session_id, correction, callback=(token, callback_url))
             else:
                 corrected = _openclaw_step(session_id, correction)
             met, summary = _parse_step_reply(corrected, require_envelope=True)
@@ -486,6 +597,8 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
             _post_json(f"{callback_url}/result", token, {"summary": summary, "criteria_met": True})
         else:
             _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000], "retryable": False})
+    except ApprovalParked:
+        pass  # the platform already moved the run to Awaiting Approval
     except InvalidWorkflowResult as exc:
         _post_json(f"{callback_url}/failure", token, {"reason": str(exc), "retryable": False})
     except NeedsAttention as exc:

@@ -45,7 +45,7 @@ jobs:
           if [ -z "$range" ] || ! git diff --name-only $range > /tmp/changed.txt 2>/dev/null; then
             api=true; ui=true; hermes=true; openclaw=true; worker=true
           else
-            if grep -qE '^(api/|helm/agentbarn-api/|helm/hindsight/|Makefile$)' /tmp/changed.txt; then api=true; fi
+            if grep -qE '^(api/|helm/agentbarn-api/|helm/hindsight/|\.github/workflows/deploy(-public)?\.yml$|Makefile$)' /tmp/changed.txt; then api=true; fi
             if grep -qE '^(ui/|Makefile$)' /tmp/changed.txt; then ui=true; fi
             # The base-image workflows verify the runtime-facing builder,
             # startup, Skill-discovery, PVC, and telemetry contracts, so

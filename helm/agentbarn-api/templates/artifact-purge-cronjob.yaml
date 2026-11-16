@@ -5,7 +5,7 @@ metadata:
   name: {{ .Release.Name }}-artifact-purge
   namespace: {{ .Release.Namespace }}
 spec:
-  schedule: "*/10 * * * *"
+  schedule: "4-59/10 * * * *"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 300
   successfulJobsHistoryLimit: 2
@@ -36,5 +36,5 @@ spec:
                 - secretRef:
                     name: {{ .Values.artifacts.provisionerSecret | required "artifacts.provisionerSecret is required for bucket cleanup" }}
               resources:
-                {{- toYaml .Values.worker.resources | nindent 16 }}
+                {{- toYaml .Values.jobs.resources | nindent 16 }}
 {{- end }}

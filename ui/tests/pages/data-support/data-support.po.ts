@@ -20,6 +20,7 @@ import { PlaybookDataSupport } from "./playbook-data-support.po";
 import { ResourceUsageDataSupport } from "./resource-usage-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
 import { SyncProviderDataSupport } from "./sync-provider-data-support.po";
+import { TaskDataSupport } from "./task-data-support.po";
 import { UserDataSupport } from "./user-data-support.po";
 
 export class DataSupport {
@@ -44,6 +45,7 @@ export class DataSupport {
   public platformStats: PlatformStatsDataSupport;
   public playbooks: PlaybookDataSupport;
   public resourceUsage: ResourceUsageDataSupport;
+  public tasks: TaskDataSupport;
 
   constructor(page: Page) {
     this.auth = new AuthSupport(page);
@@ -67,5 +69,6 @@ export class DataSupport {
     this.platformStats = new PlatformStatsDataSupport(page);
     this.playbooks = new PlaybookDataSupport(page);
     this.resourceUsage = new ResourceUsageDataSupport(page);
+    this.tasks = new TaskDataSupport(page);
   }
 }

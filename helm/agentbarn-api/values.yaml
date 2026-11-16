@@ -153,7 +153,7 @@ restorePoints:
     # threshold (RESTORE_POINT_RECONCILIATION_STALE_SECONDS) is longer than the
     # capture timeout above, so a row is only swept once its Job has genuinely had
     # time to finish.
-    schedule: "*/10 * * * *"
+    schedule: "9-59/10 * * * *"
   # Scheduled snapshots of running Agents. The CronJob checks often; each Agent gets a
   # snapshot once its newest is older than intervalMinutes (0 turns the schedule off).
   # maxPerAgent is how many each Agent keeps; maxConcurrent caps snapshots running at
@@ -161,7 +161,7 @@ restorePoints:
   # the namespace quota.
   schedule:
     enabled: true
-    cron: "*/5 * * * *"
+    cron: "2-59/5 * * * *"
     intervalMinutes: 360
     maxPerAgent: 4
     maxConcurrent: 2
@@ -225,7 +225,7 @@ costs:
     # actually charged. The interval must stay above
     # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
-    schedule: "*/15 * * * *"
+    schedule: "6-59/15 * * * *"
 
 businessValue:
   backfill:
@@ -245,13 +245,13 @@ organizationLlmBudgets:
     # Every 15 minutes. Limits are applied when someone saves them; this pass only
     # repairs drift (a push that failed while the proxy was down, or a team or Agent
     # key edited by hand). Runs under Forbid like the other reconcilers.
-    schedule: "*/15 * * * *"
+    schedule: "12-59/15 * * * *"
   alerts:
     enabled: true
     # Every 5 minutes. Only Organizations with a limit set are read, and the pass is
     # informational — the proxy enforces the limit in the request path, so this only
     # bounds how late someone is told, never how much is spent.
-    schedule: "*/5 * * * *"
+    schedule: "3-59/5 * * * *"
 
 worker:
   enabled: true
@@ -263,6 +263,17 @@ worker:
     limits:
       memory: 512Mi
       cpu: 1000m
+
+# Every CronJob pod. Smaller than the worker: they are short runs, and the namespace
+# quota charges each pod's limits while it runs.
+jobs:
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 50m
+    limits:
+      memory: 512Mi
+      cpu: 500m
 
 syncEngine:
   enabled: true

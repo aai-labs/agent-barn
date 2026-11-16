@@ -244,6 +244,15 @@ export function PanelLink({
       >
         <Icon size={16} aria-hidden style={{ color: iconColor, flexShrink: 0 }} />
         <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        {item.badge ? (
+          <span
+            className="flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold text-white"
+            style={{ background: "var(--warn)" }}
+            aria-label={`${item.badge} waiting on you`}
+          >
+            {item.badge}
+          </span>
+        ) : null}
         {trailing && <ChevronRight size={14} aria-hidden style={{ color: "var(--ink-4)" }} />}
       </Link>
       {(item.active || item.expanded) && item.children && (

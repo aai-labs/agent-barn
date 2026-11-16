@@ -331,6 +331,27 @@ def test_a_reader_gets_a_download_link_for_the_files_artifact():
         )
 
 
+@pytest.mark.parametrize("state", ["DELETING", "DELETED"])
+def test_a_file_whose_artifact_expired_says_so(state: str):
+    with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.ADMIN)]) as context:
+        task = _task(context)
+        artifact = _artifact(context)
+        stored = _attach(context, task, artifact)
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get_one(Artifact, artifact.id)
+            row.state = state
+            session.add(row)
+            session.commit()
+
+        with pytest.raises(HTTPException) as raised:
+            _service(context).file_link(context.agent.id, task.id, stored.id, context.current_user_context)
+
+        assert_that(
+            (raised.value.status_code, raised.value.detail),
+            equal_to((status.HTTP_410_GONE, "This file has expired and can no longer be downloaded.")),
+        )
+
+
 def test_a_member_without_access_cannot_get_a_download_link():
     with given([*_GIVEN, there_is_an_agent(), _signed_in(OrganizationRole.MEMBER)]) as context:
         task = _task(context)

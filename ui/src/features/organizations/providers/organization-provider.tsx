@@ -34,6 +34,7 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "memory-grants",
   "organization-memory-items",
   "playbook-extractions",
+  "agent-tasks",
   "agent-webhooks",
   "webhook-invocations",
   // Org-dimensioned, but evicted so returning to an org rereads current access.

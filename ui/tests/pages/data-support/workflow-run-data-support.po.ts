@@ -29,6 +29,11 @@ export class WorkflowRunDataSupport {
   attempt: Record<string, unknown> | null = null;
   runReason: string | null = null;
   failHistory = false;
+  /** The current step's approval request, as the API reads it. */
+  approval: Record<string, unknown> | null = null;
+  /** Every request of the run, as the single-run read lists them. */
+  approvals: Record<string, unknown>[] = [];
+  decisions: Record<string, unknown>[] = [];
   /** Overrides the step list with this many-step progression (for walkthrough captures). */
   stepStates: string[] | null = null;
   constructor(private page: Page) {}
@@ -113,6 +118,8 @@ export class WorkflowRunDataSupport {
           ? "Cancelled; completed step summaries are preserved"
           : null),
       attempt: this.attempt,
+      approval: this.approval,
+      approvals: this.approvals,
       created_at: "2026-10-17T10:00:00Z",
       settled_at: ["SUCCEEDED", "CANCELLED", "FAILED"].includes(this.state)
         ? "2026-10-17T10:02:18Z"
@@ -123,7 +130,9 @@ export class WorkflowRunDataSupport {
         ? []
         : ["SUCCEEDED", "CANCELLED", "FAILED"].includes(this.state)
           ? ["rerun"]
-          : ["cancel"],
+          : ["LIVE", "PARKED"].includes(String(this.approval?.state))
+            ? ["decide", "cancel"]
+            : ["cancel"],
       ...over,
     });
     const rerunRun = () =>
@@ -178,7 +187,9 @@ export class WorkflowRunDataSupport {
     );
     await this.page.route(`${base}/workflow-runs**`, async (route) => {
       const path = new URL(route.request().url()).pathname;
-      if (route.request().method() === "GET" && !path.endsWith("/history"))
+      // The approvals badge polls on its own schedule; reads count only the runs themselves.
+      const awaiting = new URL(route.request().url()).searchParams.has("awaiting_decision");
+      if (route.request().method() === "GET" && !path.endsWith("/history") && !awaiting)
         this.reads++;
       if (this.failRead || !path.includes(`/organizations/${TEST_ORG_ID}/`)) {
         await route.fulfill({ status: 404, json: { detail: "Run not found" } });
@@ -225,6 +236,17 @@ export class WorkflowRunDataSupport {
               kind: "ATTEMPT_FAILED",
               detail: "Pipedrive is not connected",
             },
+            ...(this.approval
+              ? [
+                  {
+                    id: "00000000-0000-4000-8000-0000000000a4",
+                    created_at: "2026-10-17T10:01:30Z",
+                    revision: 3,
+                    kind: "APPROVAL_REQUESTED",
+                    detail: `Approval requested to run ${this.approval.command}`,
+                  },
+                ]
+              : []),
             ...(this.state === "SUCCEEDED"
               ? [
                   {
@@ -249,10 +271,21 @@ export class WorkflowRunDataSupport {
         await route.fulfill({ status: 202, json: rerunRun() });
       } else if (path.endsWith(RERUN_ID)) {
         await route.fulfill({ json: rerunRun() });
+      } else if (path.endsWith("/decision")) {
+        const body = route.request().postDataJSON();
+        this.decisions.push(body);
+        const late = this.approval?.state === "PARKED";
+        this.approval = { ...this.approval, state: body.decision === "approve" ? "APPROVED" : "DECLINED", guidance: body.guidance ?? null };
+        if (late) this.state = "QUEUED";
+        await route.fulfill({ json: run() });
       } else if (path.endsWith("/cancel")) {
         this.state = "CANCELLED";
         await route.fulfill({ json: run() });
       } else if (path.endsWith(RUN_ID)) await route.fulfill({ json: run() });
+      else if (new URL(route.request().url()).searchParams.get("awaiting_decision") === "true")
+        await route.fulfill({
+          json: page(["LIVE", "PARKED"].includes(String(this.approval?.state)) ? [run()] : []),
+        });
       else
         await route.fulfill({
           json: page(this.reruns.length ? [rerunRun(), run()] : [run()]),

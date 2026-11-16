@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Layers,
   LayoutGrid,
+  ListChecks,
   PackageOpen,
   MessageSquare,
   MessagesSquare,
@@ -37,6 +38,8 @@ export type NavItem = {
   icon: LucideIcon;
   active: boolean;
   tone?: "danger";
+  /** A count of things waiting on the viewer here, such as workflow approvals. */
+  badge?: number;
   /** Shown nested under the item while it is active, or always when `expanded`. */
   children?: NavItem[];
   expanded?: boolean;
@@ -202,6 +205,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   workflows: Workflow,
   files: PackageOpen,
   playbooks: BookOpen,
+  tasks: ListChecks,
   "file-sync": FolderSync,
   activity: Activity,
   costs: Wallet,
@@ -212,7 +216,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "file-sync"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "tasks", "file-sync"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 

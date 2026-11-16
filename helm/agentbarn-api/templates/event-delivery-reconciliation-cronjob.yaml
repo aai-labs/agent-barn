@@ -42,5 +42,5 @@ spec:
                 - secretRef:
                     name: {{ .Values.litellmApiKeySecretName }}
               resources:
-                {{- toYaml .Values.worker.resources | nindent 16 }}
+                {{- toYaml .Values.jobs.resources | nindent 16 }}
 {{- end }}

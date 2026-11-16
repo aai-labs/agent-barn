@@ -1,0 +1,3 @@
+name: agentbarn-tasks
+version: "1.0"
+description: Give the Agent a Task tool, show its open Tasks each turn, and remind it to record its work

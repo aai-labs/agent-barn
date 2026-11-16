@@ -1,8 +1,11 @@
 import logging
 import secrets
 from dataclasses import dataclass
+from typing import Annotated
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from fastapi import Header, HTTPException, status
+from fastapi_injector import Injected
 from injector import inject, singleton
 from sqlalchemy.exc import MultipleResultsFound
 
@@ -190,3 +193,15 @@ def _business_action_labels(action: BusinessAction) -> dict[str, str]:
         "is_write": is_write,
         "status": action.status.value.lower(),
     }
+
+
+def authenticated_agent(
+    agent_id: UUID,
+    authorization: Annotated[str, Header()],
+    service: Annotated[IngestService, Injected(IngestService)],
+) -> Agent:
+    """The Agent in the path, once its ingest key has been checked. Other domains' Agent routes use it too."""
+    try:
+        return service.authenticate(agent_id, authorization.removeprefix("Bearer ").strip())
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from None

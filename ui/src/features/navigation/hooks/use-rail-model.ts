@@ -6,6 +6,7 @@ import {
   ChartColumn,
   CreditCard,
   House,
+  ListChecks,
   Receipt,
   Settings2,
   Target,
@@ -107,6 +108,15 @@ export function useRailModel(): RailModel {
           },
         ]
       : []),
+    // Every member may open it: the list holds only Tasks of Agents they can see. After the
+    // Owner/Admin pages, so a phone's bottom bar keeps its destinations.
+    {
+      key: "tasks",
+      label: "Tasks",
+      href: `${orgBase}/tasks`,
+      icon: ListChecks,
+      active: pathname.startsWith(`${orgBase}/tasks`),
+    },
     ...(billing?.available
       ? [
           {

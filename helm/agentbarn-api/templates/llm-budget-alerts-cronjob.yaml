@@ -63,7 +63,7 @@ spec:
                   mountPath: /etc/kubeconfig
                   readOnly: true
               resources:
-                {{- toYaml .Values.worker.resources | nindent 16 }}
+                {{- toYaml .Values.jobs.resources | nindent 16 }}
           volumes:
             - name: kubeconfig
               secret:

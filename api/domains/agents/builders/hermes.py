@@ -29,11 +29,13 @@ from .memory import (
     memory_command_mount,
     memory_command_volume,
 )
+from .tasks import TASK_COMMAND, TASK_TOOL, TASK_TOOL_INSTRUCTIONS, task_command_mount, task_command_volume
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
 _LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 _SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
 
@@ -47,6 +49,8 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+TASKS_PLUGIN_YAML: str = (_TASKS_PLUGIN / "plugin.yaml").read_text()
+TASKS_PLUGIN_INIT: str = (_TASKS_PLUGIN / "__init__.py").read_text()
 LISTEN_IN_PLUGIN_YAML: str = (_LISTEN_IN / "plugin.yaml").read_text()
 LISTEN_IN_PLUGIN_INIT: str = (_LISTEN_IN / "__init__.py").read_text()
 LISTEN_IN_CHECK_PY: str = (_SCRIPTS / "listen-in-check.py").read_text()
@@ -119,6 +123,10 @@ def _hermes_config_core(
         model_name = model
     return {
         "toolsets": ["all"],
+        # Tool search hides plugin and MCP tools behind a search bridge, so the model must look
+        # agentbarn_task up before every use and, in practice, skips it. Our Agents have no other
+        # deferrable tools, so serving them all directly costs one schema; revisit if MCP lands.
+        "tools": {"tool_search": {"enabled": "off"}},
         "model": {
             "provider": "openrouter",
             "default": model_name,
@@ -214,7 +222,7 @@ def build_hermes_gateway_config(
     slack_listen_in: list[str] | None = None,
     discord_listen_in: list[str] | None = None,
 ) -> dict:
-    plugins = ["telemetry-push"]
+    plugins = ["telemetry-push", "agentbarn-tasks"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
     if native_slack:
@@ -463,8 +471,11 @@ def build_hermes_config_map(
         "agentbarn_artifacts.py": ARTIFACT_TOOL,
         "agentbarn-artifacts": ARTIFACT_COMMAND,
         "agentbarn-memory": MEMORY_COMMAND,
+        "agentbarn_task.py": TASK_TOOL,
+        "agentbarn-task": TASK_COMMAND,
         "TOOLS.md": tools_md,
         "AGENTS.md": agents_md
+        + TASK_TOOL_INSTRUCTIONS
         + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
         + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
@@ -473,6 +484,8 @@ def build_hermes_config_map(
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
+        "agentbarn-tasks-plugin.yaml": TASKS_PLUGIN_YAML,
+        "agentbarn-tasks-init.py": TASKS_PLUGIN_INIT,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
         "agentbarn-listen-in-plugin.yaml": LISTEN_IN_PLUGIN_YAML,
         "agentbarn-listen-in-init.py": LISTEN_IN_PLUGIN_INIT,
@@ -647,6 +660,7 @@ def build_hermes_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                task_command_mount(),
                                 artifact_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
@@ -672,6 +686,7 @@ def build_hermes_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        task_command_volume(name),
                         artifact_command_volume(name),
                         client.V1Volume(
                             name="config",
