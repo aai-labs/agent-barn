@@ -9,6 +9,8 @@ import { useOpenRouterConnection } from "../hooks/use-openrouter-connection";
 import type { OpenRouterConnection } from "../schemas";
 import { OpenRouterKeyDialog } from "./openrouter-key-dialog";
 
+const MASKED_KEY_PREFIX = "sk-*******";
+
 export function PlatformLlmProviderSettings() {
   const { connection, isLoading, error, reload, replaceKey, isReplacing, replaceError, resetReplace } =
     useOpenRouterConnection();
@@ -89,7 +91,10 @@ function KeyStatus({ connection }: { connection: OpenRouterConnection }) {
   const changed = connection.updatedAt ? formatDate(connection.updatedAt) : null;
   return (
     <>
-      <p className="mb-0 mt-2 text-sm">Key ending in {connection.apiKeyLast4}</p>
+      <p className="mb-0 mt-2 text-sm">
+        {MASKED_KEY_PREFIX}
+        {connection.apiKeyLast4}
+      </p>
       {changed && (
         <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
           {connection.updatedBy ? `Changed by ${connection.updatedBy} on ${changed}` : `Changed on ${changed}`}

@@ -54,7 +54,7 @@ A saved key records `platform.llm_provider.changed`, Platform scope, projected t
 
 Platform Admin settings → **LLM providers** (`/dashboard/platform/settings?section=llm-providers`, `ui/src/features/llm-providers/`) shows an OpenRouter card:
 
-- a saved key: "Key ending in …" and who changed it when;
+- a saved key: masked as `sk-*******` plus its last four characters, and who changed it when;
 - no key: whether Agents are using `OPENROUTER_API_KEY` meanwhile, or that they cannot call OpenRouter models until a key is saved;
 - a saved key while `OPENROUTER_API_KEY` is still set: a note that the secret can be deleted once every environment sharing it has a saved key.
 

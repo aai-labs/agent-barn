@@ -24,7 +24,7 @@ test("Platform Admin replaces the OpenRouter key and sees only its last four cha
   await page.goto("/dashboard/platform/settings");
   await page.getByRole("complementary").getByRole("link", { name: "LLM providers", exact: true }).click();
 
-  await expect(settings.card()).toContainText("Key ending in a1b2");
+  await expect(settings.card()).toContainText("sk-*******a1b2");
   await expect(settings.card()).toContainText("Platform Person");
   await expect(settings.card()).not.toContainText("OPENROUTER_API_KEY");
 
@@ -35,7 +35,7 @@ test("Platform Admin replaces the OpenRouter key and sees only its last four cha
 
   await expect(settings.dialog()).toHaveCount(0);
   await expect(page.getByRole("status")).toHaveText("OpenRouter key saved.");
-  await expect(settings.card()).toContainText("Key ending in c3d4");
+  await expect(settings.card()).toContainText("sk-*******c3d4");
   await expect(page.getByText(NEW_KEY)).toHaveCount(0);
   expect(mock.writes).toEqual([{ api_key: NEW_KEY }]);
   await page.screenshot({ path: test.info().outputPath("platform-llm-providers.png"), fullPage: true });
@@ -87,7 +87,7 @@ test("a key OpenRouter refuses keeps the dialog open and the saved key unchanged
   );
   await expect(settings.keyInput()).toHaveValue(NEW_KEY);
   await settings.cancelDialog();
-  await expect(settings.card()).toContainText("Key ending in a1b2");
+  await expect(settings.card()).toContainText("sk-*******a1b2");
   expect(mock.writes).toHaveLength(1);
 });
 
@@ -124,5 +124,5 @@ test("a failed status read can be retried", async ({ page }) => {
   await expect(page.getByText("Could not load LLM provider settings")).toBeVisible();
   mock.recover();
   await page.getByRole("button", { name: /retry|try again/i }).click();
-  await expect(settings.card()).toContainText("Key ending in a1b2");
+  await expect(settings.card()).toContainText("sk-*******a1b2");
 });

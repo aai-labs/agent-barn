@@ -13,6 +13,10 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-16 — AF-447 — slice 1, key display follow-up
+
+- Changed: the OpenRouter card shows a saved key as `sk-*******` plus its last four characters instead of "Key ending in …". The API still returns only the last four characters; the prefix is fixed UI text. `platform-llm-providers.spec.ts` and [`llm-providers.md`](../llm-providers.md) follow.
+
 ### 2026-11-16 — AF-447 — slice 1, PR 11
 
 - Delivered: slice 1 is complete. [`llm-providers.md`](../llm-providers.md) documents the LLM Provider Connection, its invariants, the LiteLLM routes, the API and UI, and the move off `OPENROUTER_API_KEY`; the [ADR](../../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md) records why provider keys are platform data synced to LiteLLM.
