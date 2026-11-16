@@ -262,6 +262,31 @@ def test_heartbeat_runs_are_not_reminded(tmp_path: Path):
 # --- open Tasks each turn ---
 
 
+def test_an_unfinished_tasks_latest_note_is_shown_with_it(tmp_path: Path):
+    driven = _drive(
+        tmp_path,
+        [_prompt()],
+        open_tasks=[
+            {
+                "id": "task-1",
+                "title": "Weekly greetings",
+                "status": "in_progress",
+                "latest_note": "Greeting 5\nof 7 sent",
+            },
+            {"id": "task-2", "title": "Draft summary", "status": "open", "latest_note": None},
+            {"id": "task-3", "title": "Old work", "status": "done", "latest_note": "All sent"},
+            {"id": "task-4", "title": "Long", "status": "open", "latest_note": "x" * 400},
+        ],
+    )
+
+    context = _context(driven["results"][0])
+
+    assert_that(context, contains_string('task-1 [in_progress] Weekly greetings (latest note: "Greeting 5 of 7 sent")'))
+    assert_that(context, contains_string("task-2 [open] Draft summary\n"))
+    assert_that(context, contains_string("task-3 [done] Old work\n"))
+    assert_that(context, contains_string('task-4 [open] Long (latest note: "' + "x" * 200 + '…")'))
+
+
 def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     driven = _drive(
         tmp_path,

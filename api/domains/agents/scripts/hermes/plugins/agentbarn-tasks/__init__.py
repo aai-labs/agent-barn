@@ -44,6 +44,9 @@ _LIST_PAGE_SIZE = 100
 _OPEN_TASKS_SHOWN = 10
 # Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 _DONE_TASKS_SHOWN = 3
+# An unfinished Task is listed with the start of its latest note, so a later turn or scheduled run,
+# which has no memory of earlier ones, sees where the work got to.
+_LATEST_NOTE_CHARS = 200
 _AUTOMATIC_TITLE_CHARS = 120
 _AUTOMATIC_DESCRIPTION_CHARS = 2000
 _COMMAND_TIMEOUT_SECONDS = 150
@@ -650,8 +653,17 @@ def _task_lines(output: str) -> list[str]:
         shown = [task for task in items if isinstance(task, dict) and task.get("status") == task_status]
         for task in shown[: _DONE_TASKS_SHOWN if task_status == "done" else _OPEN_TASKS_SHOWN]:
             title = str(task.get("title", ""))[:120]
-            lines.append(f"- {task.get('id')} [{task_status}] {title}")
+            note = "" if task_status == "done" else _note_preview(task.get("latest_note"))
+            lines.append(f"- {task.get('id')} [{task_status}] {title}{note}")
     return lines
+
+
+def _note_preview(note) -> str:
+    text = " ".join(note.split()) if isinstance(note, str) else ""
+    if not text:
+        return ""
+    shown = text[:_LATEST_NOTE_CHARS] + ("…" if len(text) > _LATEST_NOTE_CHARS else "")
+    return f' (latest note: "{shown}")'
 
 
 def _open_task_lines() -> list[str]:

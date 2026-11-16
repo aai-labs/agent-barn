@@ -54,7 +54,12 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
   `remove_file`.
 - If the work failed, set `failed` with a `body` saying why. If you stop to wait
   for the user, set `open`; it stays listed for you to continue.
-- Add a `body` (a note) only for a decision or problem worth knowing later.
+- A later turn or scheduled run has no memory of the earlier ones. Each time you
+  work on a job that spans several, add a `body` saying how far the job is (for
+  example `3 of 7 sent`). The latest note is shown with the Task at the start of
+  each turn: read it to know where the job stands, and set `done` when the last
+  part is finished. Otherwise add a `body` (a note) only for a decision or
+  problem worth knowing later.
 - Quick answers, small talk, your startup checklist (BOOT.md) and heartbeat
   checks do not need a Task.
 

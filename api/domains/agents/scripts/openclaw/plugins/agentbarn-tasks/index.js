@@ -34,6 +34,7 @@ const LIST_PAGE_SIZE = 100;
 const OPEN_TASKS_SHOWN = 10;
 // Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 const DONE_TASKS_SHOWN = 3;
+const LATEST_NOTE_CHARS = 200;
 const AUTOMATIC_TITLE_CHARS = 120;
 const AUTOMATIC_DESCRIPTION_CHARS = 2000;
 const COMMAND_TIMEOUT_MS = 150_000;
@@ -423,6 +424,14 @@ function smallTalk(message) {
 }
 
 // The open Tasks, then the latest finished ones, from one listing (most recently changed first).
+// An unfinished Task is listed with the start of its latest note, so a later turn or scheduled run,
+// which has no memory of earlier ones, sees where the work got to.
+function notePreview(note) {
+  const text = typeof note === "string" ? note.split(/\s+/).filter(Boolean).join(" ") : "";
+  if (!text) return "";
+  return ` (latest note: "${text.slice(0, LATEST_NOTE_CHARS)}${text.length > LATEST_NOTE_CHARS ? "…" : ""}")`;
+}
+
 function taskLines(output) {
   let items;
   try {
@@ -435,7 +444,8 @@ function taskLines(output) {
   for (const status of ["in_progress", "open", "done"]) {
     const shown = items.filter((task) => task?.status === status);
     for (const task of shown.slice(0, status === "done" ? DONE_TASKS_SHOWN : OPEN_TASKS_SHOWN)) {
-      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}`);
+      const note = status === "done" ? "" : notePreview(task.latest_note);
+      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}${note}`);
     }
   }
   return lines;
