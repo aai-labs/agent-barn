@@ -10,7 +10,7 @@ from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.business_value.catalogue import DEFAULT_MINUTES, OutcomeType
-from api.domains.business_value.classifier import BusinessActionStatus
+from api.domains.business_value.classifier import SHELL_TOOL_NAMES, BusinessActionStatus, command_invocations
 from api.domains.business_value.models import (
     ActivitySeriesPoint,
     ActivityTotalsRead,
@@ -54,6 +54,19 @@ class WriteCategories:
     unverified: int = 0
     failed: int = 0
     unclassified: int = 0
+
+
+def is_shell_tool(tool_name: str) -> bool:
+    """Whether a tool call runs a shell command on either runtime."""
+    return tool_name in SHELL_TOOL_NAMES
+
+
+def shell_invocations(command: str, executables: frozenset[str]) -> list[list[str]]:
+    """The arguments of each invocation of `executables` in a shell tool call's command.
+
+    Exposes the Business Action classifier's shell parsing to other domains.
+    """
+    return command_invocations(command, executables)
 
 
 def effective_minutes(overrides: dict[str, int]) -> dict[OutcomeType, int]:
