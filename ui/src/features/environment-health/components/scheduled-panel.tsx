@@ -86,10 +86,13 @@ export function ScheduledPanel({
   cronJobs,
   backups,
   state,
+  runsState,
 }: {
   cronJobs: CronJob[];
   backups: ScheduledBackups;
   state: SourceState | undefined;
+  /** Whether each job's runs could be read; without them a failing job only shows once it stalls. */
+  runsState: SourceState | undefined;
 }) {
   return (
     <Section
@@ -133,6 +136,12 @@ export function ScheduledPanel({
             </li>
           ))}
         </ul>
+      )}
+      {cronJobs.length > 0 && runsState && runsState !== "available" && (
+        <p className="m-0 mt-2 text-[12px]" style={{ color: "var(--ink-4)" }}>
+          Whether each job&apos;s latest run worked could not be read, so a failing job shows only once it has not
+          worked for a day.
+        </p>
       )}
 
       <div data-testid="environment-backups">

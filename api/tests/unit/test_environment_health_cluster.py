@@ -825,31 +825,41 @@ def test_events_about_a_workloads_runs_and_pods_read_as_one_row_for_the_workload
     assert agent_row.agent is not None and agent_row.agent.agent_name == "Ada"
 
 
-def test_a_cron_jobs_failed_runs_are_left_to_the_scheduled_jobs_list():
+def _run_pod(name: str, job_name: str, **kwargs) -> V1Pod:
+    return _pod(
+        name, ready=False, owner=V1OwnerReference(api_version="batch/v1", kind="Job", name=job_name, uid="1"), **kwargs
+    )
+
+
+def test_a_cron_jobs_finished_runs_are_left_to_the_scheduled_jobs_list():
+    failed_run = _job("agentbarn-backup", failed=True, ago=timedelta(minutes=10))
+    stuck_run = _job("agentbarn-cost-sync", failed=None, ago=timedelta(minutes=5))
     pods = [
-        _pod(
-            "agentbarn-backup-29909210-abcde",
-            ready=False,
-            phase="Failed",
-            terminated="Error",
-            owner=V1OwnerReference(api_version="batch/v1", kind="Job", name="agentbarn-backup-29909210", uid="1"),
+        _run_pod(f"{failed_run.metadata.name}-bcdfg", failed_run.metadata.name, phase="Failed", terminated="Error"),
+        # Still running and cannot be scheduled: the scheduled jobs list calls it running.
+        _run_pod(
+            f"{stuck_run.metadata.name}-hjklm",
+            stuck_run.metadata.name,
+            phase="Pending",
+            conditions=[V1PodCondition(type="PodScheduled", status="False", reason="Unschedulable")],
         ),
-        _pod(
-            "rp-capture-abc-xyz",
-            ready=False,
-            phase="Failed",
-            terminated="Error",
-            owner=V1OwnerReference(api_version="batch/v1", kind="Job", name="rp-capture-abc", uid="2"),
-        ),
+        _run_pod("rp-capture-abc-xyz", "rp-capture-abc", phase="Failed", terminated="Error"),
         _pod("agentbarn-backup-ui-5c-xyz", ready=False, waiting="CrashLoopBackOff", restarts=4),
     ]
 
-    workloads = cluster.without_cron_runs(cluster.workloads(pods, {}, _NOW), ["agentbarn-backup"])
+    workloads = cluster.without_cron_runs(
+        cluster.workloads(pods, {}, _NOW), cluster.finished_cron_runs([failed_run, stuck_run])
+    )
 
-    # The run's pod goes, since its CronJob shows as failing; a Job no CronJob runs and a
-    # Deployment whose name starts the same way stay. The pod counts are unchanged.
-    assert sorted(issue.pod_name for issue in workloads.issues) == ["agentbarn-backup-ui-5c-xyz", "rp-capture-abc-xyz"]
-    assert workloads.pods_total == 3
+    # The finished run's pod goes, since its CronJob shows as failing. A run still under way
+    # stays, since nothing else says it is stuck; so do a Job no CronJob runs and a
+    # Deployment whose name starts the same way. The pod counts are unchanged.
+    assert sorted(issue.pod_name for issue in workloads.issues) == [
+        "agentbarn-backup-ui-5c-xyz",
+        f"{stuck_run.metadata.name}-hjklm",
+        "rp-capture-abc-xyz",
+    ]
+    assert workloads.pods_total == 4
 
 
 # --- Prometheus -----------------------------------------------------------
@@ -1041,13 +1051,20 @@ def _cron(
     )
 
 
-def _job(cron_name: str, *, failed: bool, ago: timedelta) -> V1Job:
-    condition = V1JobCondition(
-        type="Failed" if failed else "Complete",
-        status="True",
-        reason="BackoffLimitExceeded" if failed else None,
-        message="Job has reached the specified backoff limit: password=hunter2",
-        last_transition_time=_NOW - ago,
+def _job(cron_name: str, *, failed: bool | None, ago: timedelta) -> V1Job:
+    """A run of the CronJob, `ago` since it finished; with `failed=None`, `ago` since it started and still running."""
+    conditions = (
+        None
+        if failed is None
+        else [
+            V1JobCondition(
+                type="Failed" if failed else "Complete",
+                status="True",
+                reason="BackoffLimitExceeded" if failed else None,
+                message="Job has reached the specified backoff limit: password=hunter2",
+                last_transition_time=_NOW - ago,
+            )
+        ]
     )
     return V1Job(
         metadata=V1ObjectMeta(
@@ -1055,7 +1072,7 @@ def _job(cron_name: str, *, failed: bool, ago: timedelta) -> V1Job:
             creation_timestamp=_NOW - ago - timedelta(seconds=30),
             owner_references=[V1OwnerReference(api_version="batch/v1", kind="CronJob", name=cron_name, uid="1")],
         ),
-        status=V1JobStatus(conditions=[condition]),
+        status=V1JobStatus(conditions=conditions),
     )
 
 

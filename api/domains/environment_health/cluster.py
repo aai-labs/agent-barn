@@ -505,20 +505,16 @@ def agent_pod_readiness(pods: Sequence[V1Pod]) -> dict[UUID, bool]:
     return ready
 
 
-def without_cron_runs(read: WorkloadsRead, cron_names: Iterable[str]) -> WorkloadsRead:
-    """Drop the pods of CronJob runs, whose failures the scheduled jobs list already shows.
+def without_cron_runs(read: WorkloadsRead, finished_runs: set[str]) -> WorkloadsRead:
+    """Drop the pods of finished CronJob runs, whose failures the scheduled jobs list already shows.
 
-    A run's Job is named `<cron job>-<scheduled minute>`. Pod counts are left as they are.
+    `finished_runs` are the Job names from `finished_cron_runs`. A run still under way stays:
+    the scheduled jobs list only calls it running, so a run stuck unscheduled or failing to
+    pull its image is shown here. Pod counts are left as they are.
     """
-    names = tuple(cron_names)
-
-    def is_run(workload_name: str | None) -> bool:
-        return any(
-            (workload_name or "").startswith(f"{cron}-") and (workload_name or "")[len(cron) + 1 :].isdigit()
-            for cron in names
-        )
-
-    return read.model_copy(update={"issues": [issue for issue in read.issues if not is_run(issue.workload_name)]})
+    return read.model_copy(
+        update={"issues": [issue for issue in read.issues if issue.workload_name not in finished_runs]}
+    )
 
 
 def workloads(
@@ -662,6 +658,15 @@ def _cron_owner(job: V1Job) -> str | None:
         if owner.kind == "CronJob":
             return owner.name
     return None
+
+
+def finished_cron_runs(jobs: Sequence[V1Job]) -> set[str]:
+    """The names of the Jobs a CronJob started that have completed or failed."""
+    return {
+        job.metadata.name
+        for job in jobs
+        if job.metadata.name and _cron_owner(job) is not None and _job_outcome(job) is not None
+    }
 
 
 _CRON_ORDER = {CronJobState.FAILING: 0, CronJobState.STALLED: 1, CronJobState.OK: 2, CronJobState.SUSPENDED: 3}

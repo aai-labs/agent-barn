@@ -211,8 +211,8 @@ class EnvironmentHealthService:
         )
         restarts = cluster.pod_restarts(restart_samples) if restart_samples is not None else None
         workloads = cluster.workloads(pods, identities, now, restarts) if pods is not None else WorkloadsRead()
-        if crons is not None:
-            workloads = cluster.without_cron_runs(workloads, [cron.name for cron in cron_jobs])
+        if jobs is not None:
+            workloads = cluster.without_cron_runs(workloads, cluster.finished_cron_runs(jobs))
         alerts = cluster.firing_alerts(alert_samples or [], identities)
         unhealthy = cluster.unhealthy_runtimes(
             runtime_samples or [], identities, cluster.agent_pod_readiness(pods or [])
