@@ -664,6 +664,17 @@ def test_a_short_spike_near_the_ceiling_turns_a_quiet_line_into_a_warning():
     assert (cpu.ratio, cpu.peak_ratio, cpu.level) == (0.25, 0.99, CapacityLevel.WARNING)
 
 
+def test_a_peak_is_never_below_the_current_figure():
+    lines = cluster.with_peaks(_cpu_and_pods(30.0, 40.0, 30, 60), {"limits.cpu": 28.0, "pods": 29.0})
+
+    by_resource = {line.resource: line for line in lines}
+    # The current figure is read from the cluster now; the peak from samples 30s apart, so a
+    # pod that started since the last sample is in the first and not yet in the second.
+    cpu = by_resource["limits.cpu"]
+    assert (cpu.peak, cpu.peak_ratio) == (30.0, 0.75)
+    assert (by_resource["pods"].peak, by_resource["pods"].peak_ratio) == (30.0, 0.5)
+
+
 def test_a_peak_never_lowers_a_level_or_judges_a_line_without_a_ceiling():
     lines = cluster.with_peaks(_cpu_and_pods(38.0, 40.0, 30, None), {"limits.cpu": 39.0, "pods": 50.0})
 

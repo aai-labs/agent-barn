@@ -924,6 +924,10 @@ def with_peaks(lines: Iterable[CapacityLineRead], peaks: Mapping[str, float | No
     A line that is quiet now but touched its critical threshold in the window is a warning: a
     pod starting at that moment, such as a scheduled job, would have been refused. A peak never
     lowers a level, and a line with no ceiling keeps its peak without a ratio.
+
+    A peak is never below the current figure. The current figure is read from the cluster now
+    and the peak from samples 30 seconds apart, so a pod that started since the last sample is
+    in the first and not yet in the second.
     """
     result = []
     for line in lines:
@@ -931,6 +935,8 @@ def with_peaks(lines: Iterable[CapacityLineRead], peaks: Mapping[str, float | No
         if peak is None:
             result.append(line)
             continue
+        if line.used is not None:
+            peak = max(peak, line.used)
         peak_ratio = peak / line.hard if line.hard else None
         level = line.level
         if level == CapacityLevel.OK and peak_ratio is not None and peak_ratio >= CRITICAL_RATIO:
