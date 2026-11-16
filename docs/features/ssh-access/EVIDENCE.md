@@ -3,6 +3,9 @@
 Observed: 2026-11-16 (Europe/Berlin)
 Tested implementation: `ee7e5a9c81b8c73cda9f731a35eb06cf6fddd261`, based on staging `d39a4b43`.
 The following evidence/documentation commit changes no executable source.
+The settings layout and CI fixture follow-up were tested at
+`44575f716dd0230b028bfeaba65df8f2d5c11484`; the original feature checks below
+remain attributed to `ee7e5a9c`.
 
 ## Environment and boundary
 
@@ -59,13 +62,52 @@ are not claims that the real API returned 503.
 
 ## Screenshots
 
-[Shared Credentials](evidence/shared-credentials.png),
-[public identity and server policy](evidence/key-policy.png),
-[Agent SSH access](evidence/agent-access.png).
+These are ordered captures from successful flows against the real local API,
+not mocked save responses. The generation flow uses a temporary unattached key;
+the assignment flow uses the existing disposable server's configured key.
+
+| Step | Screenshot and observed result |
+| --- | --- |
+| 1. Generate a shared key | [Completed key form and Save action](evidence/01-generate-key.png). |
+| 2. Key creation succeeds | [Saved public identity](evidence/02-key-saved.png); no private key is returned. The temporary key was subsequently deleted. |
+| 3. Select access for an Agent | [Checked shared key and Apply action](evidence/03-select-key.png), using a fresh stopped **SSH setup example** Agent. |
+| 4. Confirm the change | [Apply confirmation](evidence/04-confirm-access.png) explicitly keeps this Agent stopped. |
+| 5. Verify the saved result | [Assigned key and SSH shortcut after reloading](evidence/05-access-saved.png). The real PUT returned 200; settings correctly remain pending until the next start. |
+| 6. Check phone layout | [390-pixel layout](evidence/06-access-mobile.png): the access badge clears the title, and the SSH shortcut wraps without horizontal overflow. |
+
+[Shared Credentials overview](evidence/shared-credentials.png),
+[public identity and configured server policy](evidence/key-policy.png),
+[existing running mock Agent](evidence/agent-access.png),
+[successful assignment observations](evidence/happy-path.json).
+
+The temporary stopped Agent was deleted after capture; the existing running
+Hermes demo was not restarted by this UI check. Its actual SSH execution proof
+is the separate [native terminal transcript](evidence/live-demo.json).
 
 ![Shared SSH credentials in the running local app](evidence/shared-credentials.png)
 
 ![SSH key attached to the mock Agent](evidence/agent-access.png)
+
+## Settings layout follow-up verification
+
+The Integrations and SSH sections now have a 32-pixel gap and matching headings
+outside their cards. Assigned SSH keys use plain rows inside the settings card;
+selection uses a background highlight instead of another bordered card. Long
+aliases wrap on narrow screens. The Configuration title and access badge no
+longer overlap at the checked 390-pixel width.
+
+At `44575f71`, real browser creation, selection, confirmation, successful save,
+reload and mobile inspection passed without browser page errors. Twelve selected
+Playwright checks passed (`ssh.spec.ts` and `integration-setup.spec.ts`, including
+the authentication setup). `make check-api`, `make check-ui`, `make lint-ui`, and
+`git diff --check` passed. The successful screenshots were visually inspected.
+
+The preceding CI SSH image checks failed because the disposable server's
+read-only `authorized_keys` bind mount retained the runner's ownership. The
+fixture now copies its inputs into root-owned server files and retains
+`StrictModes yes`. A local ownership reproduction failed with exit 255 before
+the fix and returned `owner-fixture-success` afterwards. Both actual runtime
+SSH contracts passed again (2 tests); the production signing code is unchanged.
 
 ## Automated verification at the tested commit
 
