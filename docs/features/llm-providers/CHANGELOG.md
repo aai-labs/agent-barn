@@ -8,10 +8,16 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- Next: the first CI run of the pinned-LiteLLM route contract test, the slice 1 demo on local k3d, then slice 2, other provider connections.
+- Next: the slice 1 demo on local k3d, then slice 2, other provider connections.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-16 — AF-447 — slice 1, PR 13
+
+- Fixed: a replaced OpenRouter key kept serving the old key until LiteLLM restarted. PR 12's contract test caught it in CI. LiteLLM v1.96.2 never removed a wildcard route's replaced entry from its router; v1.101.0 does (BerriAI/litellm#39664).
+- Changed: LiteLLM is pinned to v1.101.6 in the Helm values, Compose and both LiteLLM contract helpers. All six LiteLLM contract tests pass on it: the OpenRouter route test, the one-off spend limit tests and the memory budget tests. The endpoints, Prometheus metric names and config keys the platform uses are unchanged.
+- Release impact: LiteLLM applies 24 new migrations to its own database when the new image starts. Pinning v1.96.2 again does not undo them.
 
 ### 2026-11-16 — AF-447 — slice 1, PR 12
 

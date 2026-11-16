@@ -12,7 +12,7 @@ from testcontainers.postgres import PostgresContainer
 
 from api.tests.core.givenpy import LambdaWith
 
-IMAGE = "ghcr.io/berriai/litellm:v1.96.2"
+IMAGE = "ghcr.io/berriai/litellm:v1.101.6"
 MASTER_KEY = "sk-model-store-contract-master"
 SALT_KEY = "model-store-contract-salt"
 REPOSITORY_CONFIG = Path(__file__).resolve().parents[3] / "docker" / "litellm" / "config.yaml"

@@ -605,7 +605,7 @@ class LiteLLMClient:
         This is LiteLLM's paginated public spend API. `/spend/logs` is deprecated and
         aggregates rather than listing rows; `/spend/logs/ui` is internal and absent
         from the OpenAPI schema, so neither is safe to depend on in client-deployed
-        installs. `/spend/logs/v2` is present in v1.83 and v1.96 alike.
+        installs. `/spend/logs/v2` is present in v1.83, v1.96 and v1.101 alike.
 
         Dates must be `YYYY-MM-DD HH:MM:SS` — a bare date returns HTTP 400.
 
