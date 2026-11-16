@@ -72,6 +72,8 @@ from api.domains.restore_points.models import (
 from api.infrastructure.prometheus.client import PrometheusSample
 
 _NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+_UID_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_UID_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 _ACME = UUID("00000000-0000-7000-8000-0000000000aa")
 _GiB = 1024**3
 
@@ -114,6 +116,7 @@ def _pod(
     owner: V1OwnerReference | None = None,
     conditions: list[V1PodCondition] | None = None,
     reason: str | None = None,
+    uid: str | None = None,
 ) -> V1Pod:
     state = (
         V1ContainerState(waiting=V1ContainerStateWaiting(reason=waiting, message="secret token=abc"))
@@ -132,6 +135,7 @@ def _pod(
     return V1Pod(
         metadata=V1ObjectMeta(
             name=name,
+            uid=uid,
             labels=labels,
             creation_timestamp=_NOW - age,
             owner_references=[owner] if owner else None,
@@ -389,21 +393,37 @@ def test_without_restart_history_an_oom_kill_this_week_is_still_listed():
     assert issue.pod_name == "rabbitmq-0" and issue.oom_killed
 
 
-def test_restart_history_keeps_only_pod_names_and_whole_counts():
+def test_restart_history_keeps_only_pod_ids_and_whole_counts():
     restarts = cluster.pod_restarts(
         [
-            PrometheusSample({"pod": "rabbitmq-0", "signal": "restarts"}, 14.97),
-            PrometheusSample({"pod": "rabbitmq-0", "signal": "oom_killed"}, 1.0),
+            PrometheusSample({"pod": "rabbitmq-0", "uid": _UID_A, "signal": "restarts"}, 14.97),
+            PrometheusSample({"pod": "rabbitmq-0", "uid": _UID_A, "signal": "oom_killed"}, 1.0),
+            # Without a uid, as an older kube-state-metrics reports it, the name is the key.
             PrometheusSample({"pod": "firecrawl-1", "signal": "oom_killed"}, 1.0),
+            PrometheusSample({"pod": "redis-0", "uid": "not-a-uid", "signal": "restarts"}, 4.0),
             PrometheusSample({"pod": "Not A Pod; rm -rf", "signal": "restarts"}, 3.0),
             PrometheusSample({"pod": "redis-0", "signal": "something-else"}, 9.0),
         ]
     )
 
     assert restarts == {
-        "rabbitmq-0": cluster.PodRestarts(restarts=15, oom_killed=True),
+        _UID_A: cluster.PodRestarts(restarts=15, oom_killed=True),
         "firecrawl-1": cluster.PodRestarts(restarts=0, oom_killed=True),
+        "redis-0": cluster.PodRestarts(restarts=4, oom_killed=False),
     }
+
+
+def test_a_replaced_pod_does_not_inherit_the_restarts_of_the_pod_it_replaced():
+    restarts = cluster.pod_restarts(
+        [PrometheusSample({"pod": "postgres-0", "uid": _UID_A, "signal": "restarts"}, 4.0)]
+    )
+
+    replacement = cluster.workloads([_pod("postgres-0", uid=_UID_B)], {}, _NOW, restarts)
+    original = cluster.workloads([_pod("postgres-0", uid=_UID_A, restarts=4)], {}, _NOW, restarts)
+
+    assert replacement.issues == []
+    [issue] = original.issues
+    assert (issue.restarts_in_window, issue.repeatedly_restarting) == (4, True)
 
 
 def test_pods_committed_counts_what_the_pods_quota_counts():

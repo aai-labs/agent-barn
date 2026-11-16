@@ -151,19 +151,31 @@ _AGENT_REQUESTS = {
 
 
 # Restart history: `crashing` restarts on every scrape and its container was last OOM-killed;
-# `steady` restarted long ago and not since, so its counter never moves.
+# `steady` restarted long ago and not since, so its counter never moves; `oomed-long-ago` was
+# OOM-killed before the window and has not restarted since, so the gauge still reads OOMKilled.
+# `postgres-0` was replaced: the pod that kept restarting is gone and the new one, with the
+# same name and another uid, is steady.
 _RESTART_SCRAPES = itertools.count(1)
+CRASHING_UID = "11111111-1111-4111-8111-111111111111"
+REPLACED_UID = "22222222-2222-4222-8222-222222222222"
+REPLACEMENT_UID = "33333333-3333-4333-8333-333333333333"
 
 
 def _restart_metrics() -> str:
     scrape = next(_RESTART_SCRAPES)
+    restarts = "kube_pod_container_status_restarts_total"
+    reason = "kube_pod_container_status_last_terminated_reason"
     return (
-        "# TYPE kube_pod_container_status_restarts_total counter\n"
-        f'kube_pod_container_status_restarts_total{{namespace="ns",pod="crashing",container="app"}} {scrape}\n'
-        'kube_pod_container_status_restarts_total{namespace="ns",pod="steady",container="app"} 28\n'
-        "# TYPE kube_pod_container_status_last_terminated_reason gauge\n"
-        'kube_pod_container_status_last_terminated_reason{namespace="ns",pod="crashing",container="app",reason="OOMKilled"} 1\n'
-        'kube_pod_container_status_last_terminated_reason{namespace="ns",pod="steady",container="app",reason="Error"} 1\n'
+        f"# TYPE {restarts} counter\n"
+        f'{restarts}{{namespace="ns",pod="crashing",uid="{CRASHING_UID}",container="app"}} {scrape}\n'
+        f'{restarts}{{namespace="ns",pod="steady",container="app"}} 28\n'
+        f'{restarts}{{namespace="ns",pod="oomed-long-ago",container="app"}} 5\n'
+        f'{restarts}{{namespace="ns",pod="postgres-0",uid="{REPLACED_UID}",container="db"}} {scrape}\n'
+        f'{restarts}{{namespace="ns",pod="postgres-0",uid="{REPLACEMENT_UID}",container="db"}} 0\n'
+        f"# TYPE {reason} gauge\n"
+        f'{reason}{{namespace="ns",pod="crashing",uid="{CRASHING_UID}",container="app",reason="OOMKilled"}} 1\n'
+        f'{reason}{{namespace="ns",pod="steady",container="app",reason="Error"}} 1\n'
+        f'{reason}{{namespace="ns",pod="oomed-long-ago",container="app",reason="OOMKilled"}} 1\n'
     )
 
 
@@ -487,14 +499,19 @@ def test_the_namespace_peaks_parse_and_hold_the_highest_commitment_and_pod_count
 def test_the_restart_history_keeps_the_pod_that_keeps_restarting_and_its_oom_kill(scraped: Scraped):
     def history() -> dict[str, PodRestarts] | None:
         found = pod_restarts(scraped.repository.prometheus.query(restart_history_query(7), _now()))
-        return found if found.get("crashing", PodRestarts(0, False)).restarts >= 3 else None
+        return found if found.get(CRASHING_UID, PodRestarts(0, False)).restarts >= 3 else None
 
     found = _wait_until(history, "a few scrapes of the restart counter")
 
-    # The pod whose counter moves is there with its OOM kill; the one whose counter stood still
-    # all along is not, however high its count, and an Error is not an OOM kill.
-    assert found["crashing"].oom_killed
+    # The pod whose counter moves is there with its OOM kill, by its uid; the one whose counter
+    # stood still all along is not, however high its count, and an Error is not an OOM kill.
+    assert found[CRASHING_UID].oom_killed
     assert "steady" not in found
+    # An OOM kill from before the window, with no restart since, is not this week's.
+    assert "oomed-long-ago" not in found
+    # A replaced pod's restarts stay with it, not with the new pod of the same name.
+    assert found[REPLACED_UID].restarts >= 3 and not found[REPLACED_UID].oom_killed
+    assert REPLACEMENT_UID not in found and "postgres-0" not in found
 
 
 def test_each_agents_requests_are_found_by_its_pod_name_and_counted_once(scraped: Scraped):
