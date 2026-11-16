@@ -139,6 +139,8 @@ releases:
     set:
       - name: masterKey
         value: {{ env "LITELLM_MASTER_KEY" | required "LITELLM_MASTER_KEY is required" | quote }}
+      - name: saltKey
+        value: {{ env "LITELLM_SALT_KEY" | required "LITELLM_SALT_KEY is required" | quote }}
       - name: openrouterApiKey
         value: {{ env "OPENROUTER_API_KEY" | required "OPENROUTER_API_KEY is required" | quote }}
       - name: databaseUrl

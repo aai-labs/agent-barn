@@ -8,6 +8,7 @@
 # Required in .env (auto-sourced):
 #   OPENROUTER_API_KEY   — passed to litellm
 #   LITELLM_MASTER_KEY   — litellm admin key; must be a stable value (required)
+#   LITELLM_SALT_KEY     — encrypts provider keys litellm stores; never change it (required)
 #
 # Ports on localhost:
 #   7070  — LiteLLM proxy
@@ -51,11 +52,12 @@ step()   { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
 step "Checking dependencies"
 command -v docker >/dev/null 2>&1 || red "docker not found"
 [[ -n "${OPENROUTER_API_KEY:-}" ]] || red "OPENROUTER_API_KEY is not set — add it to .env"
-# LiteLLM persists issued keys in its Postgres and (with no separate salt key)
-# encrypts them with the master key, so the key must stay stable across runs.
-# Require it rather than generating a throwaway that changes every run and
-# breaks agents created under a previous key.
+# Compose passes the master key to LiteLLM and the litellm Secret seeded below
+# passes it to the API, so both must read the same value from .env.
 [[ -n "${LITELLM_MASTER_KEY:-}" ]] || red "LITELLM_MASTER_KEY is not set — add a stable value to .env, e.g. LITELLM_MASTER_KEY=sk-\$(openssl rand -hex 16)"
+# LiteLLM encrypts the provider keys it stores in its Postgres with the salt
+# key; a different value cannot decrypt them.
+[[ -n "${LITELLM_SALT_KEY:-}" ]] || red "LITELLM_SALT_KEY is not set — add a stable value to .env, e.g. LITELLM_SALT_KEY=\$(openssl rand -hex 32)"
 green "  docker present"
 
 # ── litellm-db + litellm (compose) ───────────────────────────────────────────

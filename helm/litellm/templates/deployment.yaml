@@ -29,6 +29,7 @@ spec:
         # Roll the pods when the envFrom secret changes (master key, OpenRouter
         # key, db url); a Secret update alone does not alter the pod template.
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        checksum/salt-secret: {{ include (print $.Template.BasePath "/salt-secret.yaml") . | sha256sum }}
       labels:
         {{- include "litellm.selectorLabels" . | nindent 8 }}
     spec:
@@ -47,6 +48,8 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
+            - secretRef:
+                name: {{ .Values.saltSecretName }}
           readinessProbe:
             tcpSocket:
               port: 4000

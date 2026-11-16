@@ -76,6 +76,15 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+### LiteLLM salt key
+
+LiteLLM's model store is on (`store_model_in_db: true`), so model routes the API registers persist in LiteLLM's database with their provider keys encrypted under `LITELLM_SALT_KEY`. The chart keeps the salt in its own `litellm-salt` Secret because the API reads the `litellm` Secret.
+
+- Generate one value per environment with `openssl rand -hex 32` and add it before the deploy that introduces it: GitHub secrets `LITELLM_SALT_KEY` (k3s), `STAGING_LITELLM_SALT_KEY` (staging) and `PUBLIC_LITELLM_SALT_KEY` (public), and `.env` locally. Helmfile fails with `LITELLM_SALT_KEY is required` without it.
+- Adding it does not affect running Agents: LiteLLM stores virtual keys as hashes, not encrypted.
+- Never change it. LiteLLM cannot decrypt stored provider keys under a different value. If it was changed, restore the previous value; otherwise every stored provider key must be saved again so LiteLLM re-encrypts it.
+- The config-file OpenRouter route (`OPENROUTER_API_KEY`) stays at `order: 2` and is rendered only while that key is set. LiteLLM sends requests to the lowest-order healthy route, so a healthy database route at `order: 1` is used instead.
+
 ## Public signup configuration
 
 Configure public self-signup in **Platform settings → Signup & trials**. Sign-up grants the
@@ -705,6 +714,7 @@ kubeconfig portably with
 | `PUBLIC_POSTGRES_LITELLM_PASSWORD` | New |
 | `PUBLIC_POSTGRES_FIRECRAWL_PASSWORD` | New |
 | `PUBLIC_LITELLM_MASTER_KEY` | New (`sk-` + random) |
+| `PUBLIC_LITELLM_SALT_KEY` | New (`openssl rand -hex 32`). Never change it once set |
 | `PUBLIC_SECRET_SIGNING_KEY` | New |
 | `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
 | `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` (API policy: 8+, upper, lower, digit; `openssl rand -hex` is not enough) |
