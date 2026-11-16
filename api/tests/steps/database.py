@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 
@@ -17,6 +18,7 @@ from api.domains.auth.repository import (
 )
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.tiers.models import SEED_TIERS, Tier
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -85,6 +87,15 @@ def database_is_clean():
                     "memory_request": STANDARD_MEMORY_REQUEST_BYTES,
                     "memory_limit": STANDARD_MEMORY_LIMIT_BYTES,
                 },
+            )
+            # The Tier catalog back to what the migration seeded.
+            conn.execute(text("DELETE FROM organization_subscription"))
+            conn.execute(text("UPDATE organization SET tier_id = NULL WHERE tier_id IS NOT NULL"))
+            conn.execute(text("DELETE FROM tier"))
+            now = datetime.now(UTC)
+            conn.execute(
+                Tier.__table__.insert(),  # ty: ignore[unresolved-attribute]
+                [{**seed, "enabled": False, "created_at": now, "updated_at": now} for seed in SEED_TIERS],
             )
             conn.commit()
         delegate.delete_all(RefreshToken)

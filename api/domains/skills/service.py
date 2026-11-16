@@ -29,6 +29,7 @@ from api.domains.skills.models import (
 )
 from api.domains.skills.repository import SkillRepository
 from api.domains.templates.slug import slugify
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 
@@ -54,6 +55,7 @@ class SkillService:
     repository: SkillRepository
     permission_policy: PermissionPolicy
     agent_authorization: AgentAuthorization
+    usage: UsageGuard
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -671,6 +673,7 @@ class SkillService:
         context: CurrentUserContext,
     ) -> SkillDetailRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.usage.check(agent.organization_id, UsageAction.CREATE_SKILL)
         files = self._validated_files(data.files)
         slug = self._allocate_agent_slug(data.name, agent)
         skill = Skill(
@@ -700,6 +703,7 @@ class SkillService:
         context: CurrentUserContext,
     ) -> SkillDetailRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.usage.check(agent.organization_id, UsageAction.CREATE_SKILL)
         source = self.repository.get_by_id_for_agent(source_skill_id, agent.id, agent.organization_id)
         if source is None or source.agent_id is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source Skill not found")
@@ -750,6 +754,7 @@ class SkillService:
     def create_skill(self, data: SkillCreate, context: CurrentUserContext) -> SkillSummaryRead:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        self.usage.check(org_id, UsageAction.CREATE_SKILL)
         files = self._validated_files(data.files)
         slug = self._allocate_slug(data.name, org_id)
         skill = Skill(
@@ -869,6 +874,7 @@ class SkillService:
         """Create an independent Organization Skill draft from a visible source version."""
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.SKILL_MANAGE)
+        self.usage.check(org_id, UsageAction.CREATE_SKILL)
         source = self._get_or_404(skill_id, org_id)
         latest = self.repository.get_latest_version(source.id)
         if latest is None:
