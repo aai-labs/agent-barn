@@ -11,6 +11,7 @@ import { ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentResourceUsageTab } from "@/features/resource-usage/components/agent-resource-usage-tab";
+import { AgentAnomaliesTab } from "@/features/anomalies/components/agent-anomalies-tab";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
@@ -233,6 +234,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 }}
               />
             )}
+            {resolvedTab === "anomalies" && <AgentAnomaliesTab key={agent.id} agent={agent} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
             </div>
           </>

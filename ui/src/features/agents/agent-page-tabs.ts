@@ -17,6 +17,7 @@ export type AgentPageTab =
   | "activity"
   | "costs"
   | "resource-usage"
+  | "anomalies"
   | "about";
 
 export const AGENT_PAGE_TABS: AgentPageTab[] = [
@@ -33,6 +34,7 @@ export const AGENT_PAGE_TABS: AgentPageTab[] = [
   "activity",
   "costs",
   "resource-usage",
+  "anomalies",
   "about",
 ];
 
@@ -50,6 +52,7 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   activity: "Activity",
   costs: "Costs",
   "resource-usage": "Resource usage",
+  anomalies: "Anomalies",
   about: "Overview",
 };
 
@@ -95,6 +98,9 @@ export function visibleAgentPageTabs(
     // How the container is doing, so it follows Activity's gate rather than Costs':
     // the same activity.read that guards runtime diagnostics and health.
     ...(canReadActivity ? (["resource-usage"] as AgentPageTab[]) : []),
+    // Oversight of the Organization's Agents, held by Owners and Admins through the
+    // Organization Permissions anomaly.read and anomaly.manage, never by an Agent role.
+    ...(role === "OWNER" || role === "ADMIN" ? (["anomalies"] as AgentPageTab[]) : []),
     "about",
   ];
 }
