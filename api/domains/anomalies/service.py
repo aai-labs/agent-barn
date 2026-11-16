@@ -20,15 +20,19 @@ from api.domains.anomalies.detection import (
     evaluate_rate,
     has_enough_history,
     rate_baseline,
+    rate_threshold,
 )
 from api.domains.anomalies.models import (
     NEW_SIGNAL_BY_KIND,
     AgentAnomalyOverride,
     AgentAnomalyOverrideRead,
     AgentAnomalyOverrideUpdate,
+    AgentAnomalyRead,
+    AgentNormalBehaviourRead,
     AnomalyDetectionSettingsRead,
     AnomalyDetectionSettingsUpdate,
     AnomalySignal,
+    RateBaselineRead,
     SeenKind,
 )
 from api.domains.anomalies.repository import (
@@ -46,6 +50,7 @@ from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.tool_calls.service import ToolCallService
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
 
@@ -65,84 +70,6 @@ def override_read(override: AgentAnomalyOverride | None) -> AgentAnomalyOverride
     )
 
 
-@inject
-@singleton
-@dataclass
-class AnomalyService:
-    """Who may see an Agent's Anomalies and adjust its normal: Organization Owners and
-    Admins only, through `anomaly.read` and `anomaly.manage`.
-
-    Agent routes resolve the Agent first, so an Agent the caller cannot see is a 404
-    before the Organization Permission is checked (as for `agent.size.manage`).
-    """
-
-    settings_repository: AnomalySettingsRepository
-    permission_policy: PermissionPolicy
-    agent_authorization: AgentAuthorization
-    organization_lookup: OrganizationLookupService
-    event_delivery_dispatcher: EventDeliveryDispatcher
-
-    def get_settings(self, organization_id: UUID, context: CurrentUserContext) -> AnomalyDetectionSettingsRead:
-        self.permission_policy.require(context, organization_id, PermissionKey.ANOMALY_READ, detail=READ_DENIED_DETAIL)
-        return self._settings_read(organization_id, context)
-
-    def update_settings(
-        self, organization_id: UUID, data: AnomalyDetectionSettingsUpdate, context: CurrentUserContext
-    ) -> AnomalyDetectionSettingsRead:
-        self.permission_policy.require(
-            context, organization_id, PermissionKey.ANOMALY_MANAGE, detail=MANAGE_DENIED_DETAIL
-        )
-        _settings, delivery_ids = self.settings_repository.set_enabled_with_event(
-            organization_id,
-            data.enabled,
-            actor=self._actor(context, organization_id),
-            subject_display=self.organization_lookup.get_name(organization_id),
-        )
-        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
-        return self._settings_read(organization_id, context)
-
-    def set_override(
-        self, agent_id: UUID, data: AgentAnomalyOverrideUpdate, context: CurrentUserContext
-    ) -> AgentAnomalyOverrideRead:
-        agent = self._require_agent(agent_id, context, PermissionKey.ANOMALY_MANAGE, MANAGE_DENIED_DETAIL)
-        override, delivery_ids = self.settings_repository.set_override_with_event(
-            agent.organization_id,
-            agent.id,
-            OverrideValues(
-                sensitivity=data.sensitivity.value,
-                max_llm_tokens_per_hour=data.max_llm_tokens_per_hour,
-                max_llm_calls_per_hour=data.max_llm_calls_per_hour,
-            ),
-            actor=self._actor(context, agent.organization_id),
-            subject_display=agent.name,
-        )
-        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
-        return override_read(override)
-
-    def _require_agent(
-        self, agent_id: UUID, context: CurrentUserContext, permission: PermissionKey, detail: str
-    ) -> Agent:
-        agent = self.agent_authorization.require_visible(context, agent_id)
-        self.permission_policy.require(context, agent.organization_id, permission, detail=detail)
-        return agent
-
-    def _settings_read(self, organization_id: UUID, context: CurrentUserContext) -> AnomalyDetectionSettingsRead:
-        settings = self.settings_repository.get_settings(organization_id)
-        return AnomalyDetectionSettingsRead(
-            enabled=settings is not None and settings.enabled,
-            can_manage=self.permission_policy.resolve(context, organization_id, PermissionKey.ANOMALY_MANAGE)
-            is not None,
-            updated_at=settings.updated_at if settings is not None else None,
-        )
-
-    @staticmethod
-    def _actor(context: CurrentUserContext, organization_id: UUID) -> Actor:
-        return Actor(
-            identity=resolve_actor_identity(context, organization_id),
-            display=context.user.full_name or context.user.email,
-        )
-
-
 # Rows are stamped when inserted but only visible once their transaction commits, so
 # the check stops short of "now" to read each row exactly once.
 STORAGE_LAG = timedelta(minutes=2)
@@ -160,7 +87,7 @@ class CheckSummary:
 
 
 @dataclass
-class _History:
+class AgentHistory:
     """An Agent's hourly figures over its baseline window and the hour being checked."""
 
     active_days: int
@@ -198,12 +125,15 @@ class AnomalyCheckService:
     cost_service: CostService
     business_value_service: BusinessValueService
 
-    def run_checks(self, now: datetime | None = None) -> CheckSummary:
-        until = (now or datetime.now(UTC)) - STORAGE_LAG
+    def windows(self, now: datetime) -> tuple[datetime, datetime | None]:
+        """Where the checked hour ends for tool and Business Action figures, and for LLM
+        figures, which are complete only up to the last cost sync (None before any)."""
+        until = now - STORAGE_LAG
         synced = self.cost_service.last_sync_completed_at()
-        # LLM figures are complete only up to the last cost sync; without one there
-        # are none to judge.
-        cost_until = min(until, synced) if synced is not None else None
+        return until, min(until, synced) if synced is not None else None
+
+    def run_checks(self, now: datetime | None = None) -> CheckSummary:
+        until, cost_until = self.windows(now or datetime.now(UTC))
         organizations = self.repository.enabled_organization_ids()
         agents = failures = 0
         for organization_id in organizations:
@@ -254,7 +184,7 @@ class AnomalyCheckService:
         organization_id: UUID,
         agent_id: UUID,
         override: AgentAnomalyOverride | None,
-        history: _History,
+        history: AgentHistory,
         at: datetime,
     ) -> None:
         caps = (
@@ -273,7 +203,7 @@ class AnomalyCheckService:
             verdict = evaluate_cap(observed, cap) if cap is not None and observed is not None else None
             self._record(organization_id, agent_id, signal, verdict, at)
 
-    def history(self, agent_id: UUID, until: datetime, cost_until: datetime | None) -> _History:
+    def history(self, agent_id: UUID, until: datetime, cost_until: datetime | None) -> AgentHistory:
         """Hourly figures over the baseline window, which stops at the start of the hour
         the checked hour begins in, so the two never overlap."""
         tool_hours = self.tool_call_service.hourly_tool_activity(
@@ -302,7 +232,7 @@ class AnomalyCheckService:
             else None
         )
         error_rates = [rate for row in tool_hours if (rate := error_rate(row.errors, row.calls)) is not None]
-        return _History(
+        return AgentHistory(
             active_days=len({hour.date() for hour in active}),
             tool_calls=[float(tools_by_hour[hour].calls) if hour in tools_by_hour else 0.0 for hour in active],
             error_rates=error_rates,
@@ -407,3 +337,142 @@ def _summarise(
         for kind, subject in first
     ]
     return uses, counts
+
+
+@inject
+@singleton
+@dataclass
+class AnomalyService:
+    """Who may see an Agent's Anomalies and adjust its normal: Organization Owners and
+    Admins only, through `anomaly.read` and `anomaly.manage`.
+
+    Agent routes resolve the Agent first, so an Agent the caller cannot see is a 404
+    before the Organization Permission is checked (as for `agent.size.manage`).
+    """
+
+    settings_repository: AnomalySettingsRepository
+    anomaly_repository: AnomalyRepository
+    check_service: AnomalyCheckService
+    permission_policy: PermissionPolicy
+    agent_authorization: AgentAuthorization
+    organization_lookup: OrganizationLookupService
+    event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def get_settings(self, organization_id: UUID, context: CurrentUserContext) -> AnomalyDetectionSettingsRead:
+        self.permission_policy.require(context, organization_id, PermissionKey.ANOMALY_READ, detail=READ_DENIED_DETAIL)
+        return self._settings_read(organization_id, context)
+
+    def update_settings(
+        self, organization_id: UUID, data: AnomalyDetectionSettingsUpdate, context: CurrentUserContext
+    ) -> AnomalyDetectionSettingsRead:
+        self.permission_policy.require(
+            context, organization_id, PermissionKey.ANOMALY_MANAGE, detail=MANAGE_DENIED_DETAIL
+        )
+        _settings, delivery_ids = self.settings_repository.set_enabled_with_event(
+            organization_id,
+            data.enabled,
+            actor=self._actor(context, organization_id),
+            subject_display=self.organization_lookup.get_name(organization_id),
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        return self._settings_read(organization_id, context)
+
+    def set_override(
+        self, agent_id: UUID, data: AgentAnomalyOverrideUpdate, context: CurrentUserContext
+    ) -> AgentAnomalyOverrideRead:
+        agent = self._require_agent(agent_id, context, PermissionKey.ANOMALY_MANAGE, MANAGE_DENIED_DETAIL)
+        override, delivery_ids = self.settings_repository.set_override_with_event(
+            agent.organization_id,
+            agent.id,
+            OverrideValues(
+                sensitivity=data.sensitivity.value,
+                max_llm_tokens_per_hour=data.max_llm_tokens_per_hour,
+                max_llm_calls_per_hour=data.max_llm_calls_per_hour,
+            ),
+            actor=self._actor(context, agent.organization_id),
+            subject_display=agent.name,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        return override_read(override)
+
+    def list_anomalies(
+        self, agent_id: UUID, context: CurrentUserContext, pagination: Pagination
+    ) -> PaginatedItems[AgentAnomalyRead]:
+        agent = self._require_agent(agent_id, context, PermissionKey.ANOMALY_READ, READ_DENIED_DETAIL)
+        items, total = self.anomaly_repository.list_anomalies(agent.id, pagination)
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[AgentAnomalyRead.model_validate(item, from_attributes=True) for item in items],
+        )
+
+    def normal_behaviour(self, agent_id: UUID, context: CurrentUserContext) -> AgentNormalBehaviourRead:
+        """What the check currently counts as normal for the Agent, worked out now
+        exactly as the next check would."""
+        agent = self._require_agent(agent_id, context, PermissionKey.ANOMALY_READ, READ_DENIED_DETAIL)
+        now = datetime.now(UTC)
+        until, cost_until = self.check_service.windows(now)
+        history = self.check_service.history(agent.id, until, cost_until)
+        override = self.settings_repository.get_override(agent.id)
+        override_values = override_read(override)
+        rated = [
+            (RateSignal.TOOL_CALLS_PER_HOUR, history.tool_calls),
+            (RateSignal.TOOL_ERROR_RATE, history.error_rates),
+            (RateSignal.WRITES_PER_HOUR, history.writes),
+        ]
+        if cost_until is not None:
+            rated += [
+                (RateSignal.LLM_CALLS_PER_HOUR, history.llm_calls),
+                (RateSignal.LLM_TOKENS_PER_HOUR, history.llm_tokens),
+            ]
+        rates = [
+            RateBaselineRead(
+                signal=signal,
+                usual=baseline.median,
+                threshold=rate_threshold(signal, baseline, override_values.sensitivity),
+                active_hours=baseline.active_hours,
+            )
+            for signal, values in rated
+            if (baseline := rate_baseline(values)) is not None
+        ]
+        seen: dict[SeenKind, list[str]] = defaultdict(list)
+        for row in self.anomaly_repository.seen_since(agent.id, now - BASELINE):
+            seen[SeenKind(row.kind)].append(row.subject)
+        settings = self.settings_repository.get_settings(agent.organization_id)
+        return AgentNormalBehaviourRead(
+            detection_enabled=settings is not None and settings.enabled,
+            enough_history=has_enough_history(history.active_days),
+            active_days=history.active_days,
+            rates=rates,
+            tools=sorted(seen[SeenKind.TOOL]),
+            integrations=sorted(seen[SeenKind.INTEGRATION]),
+            integration_actions=sorted(seen[SeenKind.INTEGRATION_ACTION]),
+            destinations=sorted(seen[SeenKind.DESTINATION]),
+            override=override_values,
+            can_manage=self.permission_policy.resolve(context, agent.organization_id, PermissionKey.ANOMALY_MANAGE)
+            is not None,
+        )
+
+    def _require_agent(
+        self, agent_id: UUID, context: CurrentUserContext, permission: PermissionKey, detail: str
+    ) -> Agent:
+        agent = self.agent_authorization.require_visible(context, agent_id)
+        self.permission_policy.require(context, agent.organization_id, permission, detail=detail)
+        return agent
+
+    def _settings_read(self, organization_id: UUID, context: CurrentUserContext) -> AnomalyDetectionSettingsRead:
+        settings = self.settings_repository.get_settings(organization_id)
+        return AnomalyDetectionSettingsRead(
+            enabled=settings is not None and settings.enabled,
+            can_manage=self.permission_policy.resolve(context, organization_id, PermissionKey.ANOMALY_MANAGE)
+            is not None,
+            updated_at=settings.updated_at if settings is not None else None,
+        )
+
+    @staticmethod
+    def _actor(context: CurrentUserContext, organization_id: UUID) -> Actor:
+        return Actor(
+            identity=resolve_actor_identity(context, organization_id),
+            display=context.user.full_name or context.user.email,
+        )
