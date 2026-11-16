@@ -132,6 +132,12 @@ recreate the signer, and restart assigned Agents.
 The development TLS directory is mode 0700 on the host; Compose binds its two
 files individually into the non-root signer. Keep that parent directory private.
 
+Keep `eventDelivery.reconciliation.enabled` and the event worker enabled. SSH
+audit intent is durable in PostgreSQL immediately; audit projections are queued by
+the existing reconciler (default every five minutes) and can lag behind signing.
+The signer deliberately has no Redis access. See the
+[event delivery operations](../features/domain-events.md) for backlog/retry behavior.
+
 Disabling/deleting a key or stopping an Agent prevents future authentication;
 existing remote sessions remain open. A signer restart drops signing connections,
 and later SSH invocations reconnect; there is no replay of an interrupted signature

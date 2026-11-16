@@ -61,6 +61,10 @@ returned. Payloads contain scoped IDs, public fingerprints, revisions, correlati
 and bounded outcomes only. They contain no key material, bearer token, raw protocol
 payload or remote command/output. See [Shared SSH access](ssh-access.md) for
 interrupted-attempt interpretation and the authentication-only audit boundary.
+SSH producers intentionally leave deliveries `PENDING` for the existing
+reconciler rather than making an immediate Redis call from the signing boundary;
+that process has database-only egress. Durable audit intent commits immediately,
+and projection visibility follows reconciliation and worker delivery.
 
 AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 

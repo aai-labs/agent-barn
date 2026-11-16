@@ -53,6 +53,12 @@ The relay requires verified `wss://`, makes no automatic request replay, and ref
 
 Key creation/change/deletion and assignment changes use transactional Domain Events. Each valid signing request records `ssh.signing.authorized` before OpenSSH and `ssh.signing.issued` or `ssh.signing.refused` before returning its result. Events contain owning Organization/Agent, key ID/fingerprint/revision where known, request correlation, outcome, and bound public host fingerprint. The Security Audit projection consumes these events. Private keys, passphrases, bearer tokens, raw protocol payloads, remote command strings, and output are excluded. A missing completion event after authorization indicates an interrupted attempt, not proof that a signature reached a client.
 
+SSH events initially leave deliveries `PENDING`; the existing Event Delivery
+reconciler publishes them for the audit worker. The signing process has no Redis
+credentials or egress. PostgreSQL audit intent is synchronous, while Security
+Audit projection can lag by the reconciliation interval and worker backlog.
+Keep the existing reconciler and event worker enabled.
+
 This service sees authentication, not the encrypted remote SSH command stream. Existing Agent terminal Tool Call telemetry remains available but is not a complete or tamper-resistant remote command record. Remote account permissions remain responsible for allowed operations. A recording SSH gateway or execution broker would be a separate future boundary. Bearer-token theft can impersonate that Agent until revocation; the entire Agent workload shares one identity. This does not protect against an administrator of the signing host, database plus encryption key, or Agent pod credentials.
 
 The internal `/metrics` endpoint exports `agentbarn_ssh_connections` and
