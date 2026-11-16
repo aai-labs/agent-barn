@@ -349,12 +349,16 @@ class AgentRepository:
             )
 
     def native_connection_suspended_since(self, agent_id: UUID, since: datetime) -> bool:
-        """Whether one of the Agent's native Connections was suspended at or after `since`."""
+        """Whether one of the Agent's or its Bots' native Connections was suspended at or after `since`."""
         with Session(self.delegate.engine) as session:
             return (
                 session.exec(
                     select(CommunicationConnection.id).where(
-                        col(CommunicationConnection.agent_id) == agent_id,
+                        col(CommunicationConnection.agent_id).in_(
+                            select(Agent.id).where(
+                                or_(col(Agent.id) == agent_id, col(Agent.parent_agent_id) == agent_id)
+                            )
+                        ),
                         col(CommunicationConnection.platform_key).in_(NATIVE_PLATFORM_KEYS),
                         col(CommunicationConnection.suspended_at) >= since,
                     )

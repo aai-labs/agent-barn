@@ -2609,6 +2609,8 @@ class AgentService:
         if not preflight and agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
             deleted_bots = self.repository.find_deleted_bots(agent.id)
             for bot in self.repository.find_live_bots(agent.id):
+                if bot.suspended_at is not None:
+                    continue
                 try:
                     assembled_bots.append((bot, self._assemble_agent(bot)))
                 except Exception as exc:
@@ -3410,9 +3412,12 @@ class AgentService:
                 logger.info("Agent %s has a lifecycle operation in progress; it applies the change", agent_id)
                 return
             current = self.repository.get_by_id(agent_id)
-            if current is None or current.deleted_at is not None or current.status != AgentStatus.RUNNING:
+            if current is None or current.deleted_at is not None:
                 return
-            self._start_agent_unchecked(self._stop_agent_unchecked(current, actor), actor)
+            pod = self.pod_of(current)
+            if pod.status != AgentStatus.RUNNING:
+                return
+            self._start_agent_unchecked(self._stop_agent_unchecked(pod, actor), actor)
 
     def stop_running_suspended(self, actor: ActorIdentity) -> None:
         """Stop every Agent still running though it is suspended: one whose stop was skipped
@@ -3435,7 +3440,17 @@ class AgentService:
             current = self.repository.get_by_id(agent_id)
             if current is None or current.deleted_at is not None or current.status != AgentStatus.RUNNING:
                 return
-            self._stop_agent_unchecked(current, actor)
+            if current.parent_agent_id is None:
+                self._stop_agent_unchecked(current, actor)
+                return
+            pod = self.pod_of(current)
+            if pod.status != AgentStatus.RUNNING:
+                current.status = AgentStatus.STOPPED
+                self.repository.save(current)
+            elif pod.suspended_at is not None:
+                self._stop_agent_unchecked(pod, actor)
+            else:
+                self._start_agent_unchecked(self._stop_agent_unchecked(pod, actor), actor)
 
     def restart_agent_for_platform(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
         """Restart any Agent for a Platform Administrator: stop it if it runs, then start it.

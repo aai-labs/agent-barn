@@ -52,6 +52,13 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-16 — AF-425 — Tier holds on Bots
+
+- Fixed: staging's tier holds acted on a Bot as if it had its own pod. Holding a running Bot marked it STOPPED and revoked its keys while its profile kept answering in the Parent Agent's pod. Holding one of a Bot's native Connections created a Deployment, Service and PVC for the Bot. The Parent Agent's next start served held Bots again.
+- Now `stop_suspended` and `restart_to_apply` act through the pod: a Bot's hold restarts its running Parent Agent, or only marks the Bot STOPPED when the Parent Agent isn't running, and a held Parent Agent is stopped rather than restarted. A start skips held Bots, which keep their profile data. `native_connection_suspended_since` also covers the Parent Agent's Bots, so a Bot Connection held during the start restarts it again.
+- Changed: nothing in the tiers domain.
+- Follow-up: the end-to-end run.
+
 ### 2026-11-16 — AF-425 — Apply & Restart on an errored Bot
 
 - Fixed: the settings sections decided whether to restart from the Bot's own status. A Bot in ERROR under a RUNNING Parent Agent got a plain Apply, so it stayed in error after its settings were fixed, and the credentials section sent `restart: false`, which the server refuses for a running pod. `useAgentApplyAndRestart` now returns `restarts`, true for a running Agent or a Bot in error whose Parent Agent runs, and every settings section uses it for its label and its restart.

@@ -7,16 +7,19 @@ import pytest
 import yaml
 from fastapi import status
 from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
+from sqlmodel import Session, select
 
 from api.core.config import Config as AppConfig
 from api.domains.agents.models import AgentStatus, AgentType, CommandApprovalMode, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
 from api.domains.communications.models import CommunicationConnection
+from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.integrations.runtime import RuntimeContext
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.templates.repository import TemplateRepository
+from api.domains.usage.models import SuspensionReason
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -42,6 +45,7 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 
 BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
+_SYSTEM = ActorIdentity(type=ActorIdentityType.SYSTEM, id="test")
 CREATE = {"name": "Sales", "template_key": "test-template"}
 RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
 POD_OPERATIONS = [
@@ -1016,6 +1020,91 @@ def test_starting_a_running_parent_is_refused_and_removes_nothing():
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
         assert_that(_k8s(context).delete_deployment.called, equal_to(False))
         assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def _hold(context, agent):
+    repository = context.injector.get(AgentRepository)
+    stored = repository.get_by_id(agent.id)
+    stored.suspend(SuspensionReason.TIER, datetime.now(UTC))
+    repository.save(stored)
+
+
+def _served(context):
+    data = _created(_k8s(context).create_config_map)[f"agent-{context.parent.id}"].data
+    return [entry["id"] for entry in json.loads(data["bots.json"])["bots"]]
+
+
+def test_a_held_bot_is_not_served_at_its_parents_start():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        held, kept = context.bots
+        _hold(context, held)
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_served(context), equal_to([str(kept.id)]))
+        assert_that(f"agent-{held.id}" in _created(_k8s(context).create_secret), equal_to(False))
+        assert_that(_stored(context, held.id).status, equal_to(AgentStatus.STOPPED))
+        assert_that(_stored(context, kept.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_holding_a_running_bot_restarts_its_parent_without_it():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        held, kept = context.bots
+        _start(context)
+        _hold(context, held)
+        _k8s(context).reset_mock()
+
+        context.injector.get(AgentService).stop_suspended(held.id, _SYSTEM)
+
+        assert_that(list(_created(_k8s(context).create_deployment)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(_served(context), equal_to([str(kept.id)]))
+        assert_that(_stored(context, held.id).status, equal_to(AgentStatus.STOPPED))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_held_bot_under_a_stopped_parent_is_only_marked_stopped():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        stale = _stored(context, context.bot.id)
+        stale.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(stale)
+        _hold(context, context.bot)
+
+        context.injector.get(AgentService).stop_suspended(context.bot.id, _SYSTEM)
+
+        assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.STOPPED))
+        assert_that(_k8s(context).create_deployment.called, equal_to(False))
+
+
+def test_a_bots_held_connection_restarts_its_parent_and_never_gives_the_bot_a_pod():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _start(context)
+        _k8s(context).reset_mock()
+
+        context.injector.get(AgentService).restart_to_apply(context.bot.id, _SYSTEM)
+
+        k8s = _k8s(context)
+        assert_that(list(_created(k8s.create_deployment)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(list(_created(k8s.create_service)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(list(_created(k8s.create_pvc)), equal_to([f"agent-{context.parent.id}"]))
+        assert_that(_stored(context, context.bot.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_bots_connection_held_during_its_parents_start_counts_for_the_parent():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        before = datetime.now(UTC)
+        _connect(context, context.bot, "slack")
+        repository = context.injector.get(AgentRepository)
+        assert_that(repository.native_connection_suspended_since(context.parent.id, before), equal_to(False))
+        with Session(context.postgres_delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(CommunicationConnection.agent_id == context.bot.id)
+            ).one()
+            connection.suspend(SuspensionReason.TIER, datetime.now(UTC))
+            session.add(connection)
+            session.commit()
+
+        assert_that(repository.native_connection_suspended_since(context.parent.id, before), equal_to(True))
 
 
 def _connect(context, agent, platform):

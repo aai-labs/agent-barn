@@ -21,6 +21,7 @@ The pod belongs to the Parent Agent.
 - A Bot's status mirrors its Parent Agent's, except that a Bot whose own setup fails is in error while the others run. When the Parent Agent fails to start or its runtime exits, its Bots go into error with it and their runtime keys are revoked.
 - Changing a Bot restarts the Parent Agent and all its Bots (Apply & Restart), also when the Bot is in error while its Parent Agent runs.
 - Deleting a Bot takes effect at the Parent Agent's next restart. Deleting the Parent Agent deletes its Bots.
+- A Bot on a tier hold is not served. Holding a running Bot, or switching off one of its Slack, Telegram or Discord Connections, restarts its Parent Agent without it. A held Bot keeps its data and is served again once released and the Parent Agent restarts.
 - Every start issues each Bot fresh runtime keys. The LiteLLM key is created once per Agent and kept across starts.
 - A Bot whose runtime material is missing at start is not served, and none of its helpers run. Nothing falls back to the Parent Agent's identity.
 - Each profile's values are written to an environment file that Hermes expands `${…}` in, so a value with a line break or `${` can't be held. On the Parent Agent it refuses the start, naming only the key; on a Bot it puts that Bot in error.
