@@ -179,21 +179,40 @@ class RestorePointRepository:
             return list(session.exec(query).all())
 
     def find_scheduled_failures_since(self, since: datetime) -> list[ScheduledBackupFailures]:
-        """Per Agent, the scheduled backups created since `since` that failed. Most failures first."""
+        """Per running Agent, the scheduled backups created since `since` that failed. Most failures first.
+
+        Only Agents still running and not deleted, as `find_overdue_scheduled_backups` reads
+        them, and only while failing: an Agent with a READY scheduled backup newer than its
+        latest failure has recovered and is left out.
+        """
+        newest_ready = (
+            select(
+                col(AgentRestorePoint.agent_id).label("agent_id"),
+                func.max(AgentRestorePoint.created_at).label("taken_at"),
+            )
+            .where(
+                col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED,
+                col(AgentRestorePoint.status) == RestorePointStatus.READY,
+            )
+            .group_by(col(AgentRestorePoint.agent_id))
+            .subquery()
+        )
+        last_failed = func.max(AgentRestorePoint.created_at)
         with Session(self.delegate.engine) as session:
             query = (
-                select(
-                    col(AgentRestorePoint.agent_id),
-                    func.count(),
-                    func.max(AgentRestorePoint.created_at),
-                )
+                select(col(AgentRestorePoint.agent_id), func.count(), last_failed)
+                .join(Agent, col(Agent.id) == col(AgentRestorePoint.agent_id))
+                .outerjoin(newest_ready, newest_ready.c.agent_id == col(AgentRestorePoint.agent_id))
                 .where(
                     col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED,
                     col(AgentRestorePoint.status) == RestorePointStatus.FAILED,
                     col(AgentRestorePoint.created_at) >= since,
+                    col(Agent.status) == AgentStatus.RUNNING,
+                    col(Agent.deleted_at).is_(None),
                 )
-                .group_by(col(AgentRestorePoint.agent_id))
-                .order_by(func.count().desc(), func.max(AgentRestorePoint.created_at).desc())
+                .group_by(col(AgentRestorePoint.agent_id), newest_ready.c.taken_at)
+                .having(or_(newest_ready.c.taken_at.is_(None), newest_ready.c.taken_at < last_failed))
+                .order_by(func.count().desc(), last_failed.desc())
             )
             return [
                 ScheduledBackupFailures(agent_id=agent_id, failures=failures, last_failed_at=last_failed_at)
