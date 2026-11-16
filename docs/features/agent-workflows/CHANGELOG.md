@@ -24,7 +24,8 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Runtime: new Hermes plugin `agentbarn-workflow-approvals` (public `register_slack_action_handler`), new trigger server route for its clicks, `AGENTBARN_SLACK_APPROVAL_USER` in the pod environment. Pinned-image contract: `api/tests/fixtures/hermes_workflow_approval_driver.py`, run by `hermes-base/test-image.sh`.
 - Migration: `f3a393c5d1e2` after `e4b439a1c7d2`; earlier decisions become `web`.
 - Known limit: the Agent's terminal can read `AGENT_TRIGGER_KEY`, so a misbehaving Agent could report a Slack decision as the Approval DM User. Tracked in [AF-452](https://aai-labs.atlassian.net/browse/AF-452), with the existing exposure of `RUNTIME_API_KEY`.
-- Not yet verified: posting, editing and clicking a card in a real Slack workspace.
+- Live evidence (2026-11-16, local k3d, `hermes-base:0.2.11`, a real Slack workspace and app, Hermes Agent in `manual` approval mode): approved in Slack (released, run succeeded); declined in Slack (never run, session continued without guidance); approved on the web while live (card read "Approved on the web"); unanswered (card read "Nobody decided in time…", run parked); late web approval then a new live request approved in Slack (run succeeded). Each card lost its buttons when its request settled. Slack renders the recorded `@handle` as a mention of the person.
+- Not verified live: a click on a card already decided elsewhere (its buttons are gone within seconds), a click by anyone other than the Approval DM User, and the save-time workspace check (local Slack token validation is off). Each is covered by automated tests.
 
 ### 2026-11-12 — AF-439 — [PR #367](https://github.com/aai-labs/agent-barn/pull/367) — Organization-owned workflows run by Agents (API)
 
