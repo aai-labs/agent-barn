@@ -18,13 +18,13 @@ On staging (AF-436) the volume-claim quota sat at 60 of 60 and scheduled backups
 - The read model adds:
   - for capacity lines, a 24-hour peak and its ratio;
   - for pods, restarts within a 7-day window and whether a container was OOM-killed in it;
-  - for each platform Deployment, its `build-sha` annotation (kept only as 7–40 hex characters), its rollout state from the `Progressing` condition's reason, and when its last rollout finished;
+  - for each platform Deployment, its `build-sha` annotation (kept only as 7–40 hex characters), its rollout state from the `Progressing` condition's reason and its replica counts, and when its current ReplicaSet was made;
   - the newest build and the services on another one;
   - for each platform CronJob, its name, a schedule kept only when it matches the cron grammar, whether it is suspended or running, and the times of its last schedule, last success and last failure;
   - for scheduled backups, the interval, how many running Agents there are and how many fail or are overdue, and for the worst five of each the count and time of failures in 24 hours or the time of the last successful one;
   - for idle Agents, the time of the last message a person sent and of the last model call, and counts and sizes of what each one holds.
 - It carries no Job or condition messages, no CronJob command or arguments, no `failure_reason` of a restore point, no message content, and no annotation other than `build-sha`.
-- The new cluster reads (Services, CronJobs, Jobs) are optional sources like the rest. A refusal shows as "not permitted" and the rest of the page renders. The backups and idle-Agent parts read only the database, so they work with no cluster at all.
+- The new cluster reads (Services, CronJobs, Jobs, ReplicaSets) are optional sources like the rest. A refusal shows as "not permitted" and the rest of the page renders. The backups and idle-Agent parts read only the database, so they work with no cluster at all.
 - The conversation, activity and restore-point services each gain one platform-wide read with no Organization scope, returning times or counts by Agent id. They are for `require_platform_admin` routes only, as `find_live_for_platform_usage` is.
 - A peak sampled every 30 seconds can still miss a burst shorter than one scrape.
 - Each list that grows with the platform carries how many rows it has and at most 100 of them, worst first, so the response stays small when something fails across the platform. Counts are numbers only and add nothing to classify.
