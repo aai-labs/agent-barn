@@ -317,6 +317,44 @@ def test_general_access_on_a_bot_needs_general_access_on_its_parent():
         assert_that(allowed.status_code, equal_to(status.HTTP_200_OK))
 
 
+def test_losing_the_parent_hides_a_bot_shared_on_its_own():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _grant(context, context.parent, AGENT_VIEWER_ROLE_ID)
+        _grant(context, context.bot, AGENT_EDITOR_ROLE_ID)
+        assert_that(_share(context, context.parent).status_code, equal_to(status.HTTP_200_OK))
+        _act_as_member(context)
+
+        assert_that(_get(context, f"/{context.bot.id}").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_names(_get(context, "?include_bots=true")), equal_to([]))
+        assert_that(_get(context, f"/{context.parent.id}/bots").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_a_restricted_parent_hides_a_bot_open_to_the_organization():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _share(context, context.parent, general_access_role_id=AGENT_VIEWER_ROLE_ID)
+        _share(context, context.bot, general_access_role_id=AGENT_EDITOR_ROLE_ID)
+        assert_that(_share(context, context.parent).status_code, equal_to(status.HTTP_200_OK))
+        _act_as_member(context)
+
+        assert_that(_get(context, f"/{context.bot.id}").status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_names(_get(context, "?include_bots=true")), equal_to([]))
+
+
+def test_a_bot_open_to_the_organization_stays_visible_with_its_parent():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        _member(context)
+        _share(context, context.parent, general_access_role_id=AGENT_VIEWER_ROLE_ID)
+        _share(context, context.bot, general_access_role_id=AGENT_EDITOR_ROLE_ID)
+        _act_as_member(context)
+
+        bot = _get(context, f"/{context.bot.id}")
+
+        assert_that(bot.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(bot.json()["allowed_actions"], has_item("agent.update"))
+
+
 def test_a_bots_lifecycle_lock_is_its_parents():
     with given([*_GIVEN, _parent_with_bots(1)]) as context:
         repository = context.injector.get(AgentRepository)

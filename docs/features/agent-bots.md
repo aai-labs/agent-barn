@@ -56,7 +56,7 @@ Each Bot keeps its own SOUL and instructions, sessions, built-in memory, model a
 ## Access
 
 - A Bot's effective access is its own grants plus its Parent Agent's grants. Bot grants only add.
-- A Member can be given access to a Bot only if they can read its Parent Agent.
+- A Member can be given access to a Bot only if they can read its Parent Agent. A Member who can no longer read the Parent Agent, because their grant was removed or its General Access went back to Restricted, no longer sees its Bots, whatever the Bots' own grants and General Access say.
 - Creating a Bot needs `agent.create` in the Organization and `agent.update` on the Parent Agent. Restarting needs `agent.lifecycle.manage` on the Parent Agent.
 
 ## UI

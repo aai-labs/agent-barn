@@ -111,7 +111,26 @@ def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_d
         if authorization_scope.permission is None:
             raise ValueError("Explicit Agent visibility requires a Permission")
         permission_id = PERMISSION_ID_BY_KEY[authorization_scope.permission]
+        read_permission_id = PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ]
         parent = aliased(Agent)
+        parent_reads = [
+            exists().where(
+                col(AgentAccess.agent_id) == col(Agent.parent_agent_id),
+                col(AgentAccess.organization_id) == authorization_scope.organization_id,
+                col(AgentAccess.membership_id) == authorization_scope.membership_id,
+                col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+                col(AgentAccessRolePermission.permission_id) == read_permission_id,
+            )
+        ]
+        if authorization_scope.include_general_access:
+            parent_reads.append(
+                exists().where(
+                    col(parent.id) == col(Agent.parent_agent_id),
+                    col(AgentAccessRolePermission.role_id) == col(parent.general_access_role_id),
+                    col(AgentAccessRolePermission.permission_id) == read_permission_id,
+                )
+            )
+        predicates.append(or_(col(Agent.parent_agent_id).is_(None), *parent_reads))
         grants = [
             exists().where(
                 col(AgentAccess.agent_id).in_([col(Agent.id), col(Agent.parent_agent_id)]),
@@ -710,7 +729,11 @@ class AgentRepository:
                 include_general_access=include_general_access,
             )
             for bot_id, parent_id in parents.items():
-                permissions.setdefault(bot_id, set()).update(inherited.get(parent_id, set()))
+                parent_permissions = inherited.get(parent_id, set())
+                if PermissionKey.AGENT_READ in parent_permissions:
+                    permissions.setdefault(bot_id, set()).update(parent_permissions)
+                else:
+                    permissions.pop(bot_id, None)
         return permissions
 
     def replace_access_settings(

@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-16 — AF-425 — Bot access needs read on the Parent Agent
+
+- Fixed: the rule that a Bot is shared only with Members who can read its Parent Agent was checked only when access was granted. Removing a Member's Parent Agent grant, or putting the Parent Agent back to Restricted, left the Bot visible through its own grant or General Access. `agent_scope_predicates` and `find_agent_permissions` now give a scoped Membership nothing on a Bot unless it can read the Parent Agent. Organization Owners and Admins are unaffected.
+- Changed: the share endpoint keeps its grant-time refusal, which gives the clearer error.
+- Follow-up: Apply & Restart on an errored Bot.
+
 ### 2026-11-16 — AF-425 — Refuse `${` in a Bot pod's values
 
 - Fixed: `bot-setup.py` leaves a value containing `${` out of a profile's `.env`, because Hermes loads that file with python-dotenv, which expands `${…}` even in single quotes. Nothing told the user, so a Parent Agent credential with `${` stopped reaching its terminal once it had a Bot. A start now refuses such a value the way it refuses a line break, naming only the key. On a Bot it puts that Bot in error.
