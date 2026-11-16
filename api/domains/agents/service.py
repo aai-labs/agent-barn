@@ -3115,6 +3115,11 @@ class AgentService:
                         status_code=status.HTTP_409_CONFLICT,
                         detail=f"{env_name} has a line break, which a Bot's environment file cannot hold",
                     )
+                if "${" in value:
+                    raise AgentProvisioningPrecondition(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"{env_name} contains ${{, which a Bot's environment file cannot hold",
+                    )
         bots_manifest = None
         if bots or deleted_bot_ids:
             passthrough = bot_passthrough_names(

@@ -797,6 +797,43 @@ def test_a_multi_line_value_refuses_a_parent_with_bots_naming_only_the_key():
         assert_that(_k8s(context).create_deployment.called, equal_to(False))
 
 
+def test_an_interpolated_value_refuses_a_parent_with_bots_naming_only_the_key():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        config = context.injector.get(AppConfig)
+        config.agent_firecrawl_api_key = "fc-k3y${HOME}tail"
+        config.agent_firecrawl_base_url = "https://configured.firecrawl.example/v1"
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+        assert_that(response.text, contains_string("FIRECRAWL_API_KEY"))
+        assert_that("fc-k3y" in response.text, equal_to(False))
+        assert_that(_k8s(context).create_deployment.called, equal_to(False))
+
+
+def test_an_interpolated_value_on_a_bot_fails_only_that_bot():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        bad = context.bots[0]
+        context.postgres_delegate.save(
+            CommunicationConnection(
+                organization_id=bad.organization_id,
+                agent_id=bad.id,
+                platform_key="discord",
+                display_name="Bot Discord",
+                enabled=True,
+                schema_version=1,
+                settings={"allowed_user_ids": ["user-1"]},
+                credentials_encrypted=encrypt_token(json.dumps({"bot_token": "bot${X}discord"}), TEST_ENCRYPTION_KEY),
+            )
+        )
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+
+
 def test_a_parent_without_bots_ships_no_manifest():
     with given([*_GIVEN, _parent_with_bots()]) as context:
         _start(context)

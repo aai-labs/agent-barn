@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-16 — AF-425 — Refuse `${` in a Bot pod's values
+
+- Fixed: `bot-setup.py` leaves a value containing `${` out of a profile's `.env`, because Hermes loads that file with python-dotenv, which expands `${…}` even in single quotes. Nothing told the user, so a Parent Agent credential with `${` stopped reaching its terminal once it had a Bot. A start now refuses such a value the way it refuses a line break, naming only the key. On a Bot it puts that Bot in error.
+- Changed: `bot-setup.py` keeps its guard.
+- Follow-up: Bot access needs read on the Parent Agent.
+
 ### 2026-11-16 — AF-425 — A Parent Agent's failure fails its Bots
 
 - Fixed: a failed start or an observed runtime exit put only the Parent Agent in ERROR and revoked only its gateway tokens. Its Bots kept their status and their fresh tokens, and their Secrets stayed in the cluster. Now the Parent Agent's failure also removes its Bots' Secrets and ConfigMaps, revokes their tokens, deleted Bots' included, and puts each live Bot in ERROR with the Parent Agent's error.
