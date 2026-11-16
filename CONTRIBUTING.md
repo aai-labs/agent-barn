@@ -174,6 +174,16 @@ model and migration plus a validator under
 `api/infrastructure/integration_validators/`. Tests must mock upstream APIs and
 cover credential validation, errors, and rate-limit behavior.
 
+### Shared SSH verification
+
+Shared SSH changes also require the checks in the
+[SSH verification guide](docs/guidelines/testing.md#shared-ssh-access-verification).
+The API workflow runs `make check-ssh`; both runtime image workflows include their
+real SSH contract and are triggered by changes to the shared relay/contracts.
+OpenSSH is required in the API image and both runtime images. The relay owns a
+separate pinned Python environment so its dependencies cannot alter either
+runtime's provider dependencies.
+
 ## Community, security, and licensing
 
 The [Code of Conduct](CODE_OF_CONDUCT.md) applies to repository activity and

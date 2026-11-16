@@ -33,8 +33,8 @@ OPENCLAW_IMAGE_REPOSITORY=agentbarn-openclaw-base
 # still pin explicit tags.
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
-OPENCLAW_IMAGE_TAG=0.4.0
-HERMES_IMAGE_TAG=0.1.0
+OPENCLAW_IMAGE_TAG=0.7.9
+HERMES_IMAGE_TAG=0.2.12
 
 # ── Postgres (app DB) ────────────────────────────────────────────────────────
 POSTGRES_APP_USER=agentfarm
@@ -56,6 +56,13 @@ MEMORY_RUNTIME_SERVICE_KEY=
 MEMORY_LITELLM_KEY_HASHES=
 # Optional initial model; shared by the API default and Hindsight startup.
 # MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
+
+# Optional SSH signing listener. Requires compatible runtime images and verified
+# WSS ingress; see docs/guidelines/operations.md#ssh-signing-deployment.
+SSH_ENABLED=false
+SSH_SIGNER_URL=
+# Public PEM CA certificate only, if the listener uses private PKI.
+SSH_CA_CERTIFICATE=
 # Active key SHA-256 hash when several attribution hashes are retained.
 # Compose infers it for one hash; deployment loads it from the hook-generated hash Secret.
 

@@ -52,6 +52,16 @@ Post-commit delivery
 
 ## Initial event catalogue
 
+Shared SSH adds Organization-scoped `ssh.key.created`, `ssh.key.changed`,
+`ssh.key.deleted`, `ssh.assignments.changed`, and `ssh.signing.authorized`,
+`ssh.signing.issued`, `ssh.signing.refused`, all projected by
+`security_audit.projection`. Key/assignment events commit with their mutation;
+signing authorization commits before OpenSSH and the result commits before being
+returned. Payloads contain scoped IDs, public fingerprints, revisions, correlation
+and bounded outcomes only. They contain no key material, bearer token, raw protocol
+payload or remote command/output. See [Shared SSH access](ssh-access.md) for
+interrupted-attempt interpretation and the authentication-only audit boundary.
+
 AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 
 - `organization.role.changed` — emitted when a Membership's Organization Role changes.

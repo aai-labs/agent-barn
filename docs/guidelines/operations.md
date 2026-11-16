@@ -10,9 +10,10 @@ configuration, start, and stop instructions. Its
 topology.
 
 The API keeps `fastapi[standard]` for its supported server/tooling dependencies.
-`websockets` remains a transitive Uvicorn standard dependency; it is no longer an
-API-owned provider-session requirement. Use `uv sync` with the committed lockfile
-as in the README setup; native transport dependencies belong to the runtime images.
+`websockets==17.0` is also a direct dependency for the SSH relay contract; it is
+not an API-owned chat-provider session requirement. Both runtime images install
+it into `/opt/agentbarn-ssh`, separately from their own Python dependencies. Use
+`uv sync` with the committed lockfile as in the README setup.
 
 ## Database migrations
 
@@ -66,6 +67,13 @@ listed in [`testing.md`](testing.md#verification-commands). Deployment runs
 Alembic through the API chart migration hook described in
 `../architecture/runtime-and-deployment.md`.
 
+Migration `a193d7f0c284` adds Organization SSH keys, composite-tenant Agent
+assignments, and per-generation signing credentials. It does not migrate existing
+provider credentials or enable SSH. Downgrade refuses while any SSH key exists:
+stop assigned Agents, detach/delete keys through the current API, disable SSH,
+then downgrade. Back up the database and preserve `AGENT_TOKEN_ENCRYPTION_KEY`;
+losing that key makes stored SSH credentials unusable.
+
 ## Checks and tests
 
 Testing and verification commands live in [`testing.md`](testing.md).
@@ -75,6 +83,64 @@ Testing and verification commands live in [`testing.md`](testing.md).
 The deployable services have independent Helm charts. `../../helmfile.yaml.gotmpl` controls release ordering, and `../../.github/workflows/deploy.yml` builds images and applies Helmfile. Read `../architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
+
+## SSH signing deployment
+
+SSH is opt-in (`SSH_ENABLED=false`, Helm `ssh.enabled=false`). Deploy the schema,
+API/UI, signing service, and both updated runtime images before attaching keys.
+Hermes 0.2.12 and OpenClaw 0.7.9 add `/opt/agentbarn-ssh`; older images cannot run the injected relay. Existing
+Agents receive new public profiles/socket/token only on restart. The default
+deployment remains unchanged until SSH is enabled.
+
+Set `SSH_ENABLED=true` and `SSH_SIGNER_URL=wss://<public-host>/ssh/v1/agent` for the
+product API/Helmfile. The URL must be reachable from Agent pods, have a valid TLS
+certificate, and support WebSocket upgrades. Helm ingress routes only that exact
+path to the signer; TLS terminates at the existing trusted ingress. The ingress to
+signer hop is inside the trusted cluster. `SSH_CA_CERTIFICATE` optionally supplies
+a PEM CA certificate to Agents for private PKI; never put a CA private key here.
+Do not disable certificate verification. Use public host keys verified separately
+when configuring restricted servers; rotate policies/pins before retiring old keys.
+
+The deployment workflows read `SSH_ENABLED`, `SSH_SIGNER_URL`, and
+`SSH_CA_CERTIFICATE` from GitHub Variables, prefixed `STAGING_` for staging and
+`PUBLIC_` for the public deployment. Unset flags remain off. Operator-run Helmfile
+uses the same unprefixed environment names from `.env.deploy.spec`. The CA value
+is public PEM material; do not supply its private key.
+
+The signer receives only explicit database and encryption-key Secret references,
+not the API's full environment or kubeconfig. It runs non-root with no ServiceAccount
+token, read-only root, disabled core dumps, dropped capabilities, and memory-backed
+temporary sockets. Its NetworkPolicy permits ingress only from `ssh.ingressNamespace`
+and `ssh.ingressPodLabels` (default kube-system Traefik), and egress only to DNS and
+`ssh.databasePort` (default 5432). Set those chart values for the actual controller
+and database topology; require a NetworkPolicy-enforcing CNI. It never opens SSH
+connections to target machines. Only the Agent does that. Default limits are
+64 connections/replica, 8/Agent/replica, and 60 seconds idle; Helm values
+`ssh.maxConnections`, `ssh.maxAgentConnections`, `ssh.idleTimeoutSeconds` tune them.
+The local relay independently caps each Agent at eight simultaneous connections.
+
+For local development, run `make ssh-local-tls` once to create ignored, disposable
+30-day TLS files under `.scratch/ssh-tls`, then run
+`docker compose --profile ssh up -d --build ssh-signer`. The certificate covers
+localhost, host.docker.internal and host.k3d.internal; select an address actually
+reachable from the Agent cluster. Pass the contents of `cert.pem` as
+`SSH_CA_CERTIFICATE` to the API, configure its signer URL, and restart the API.
+The local certificate is not a production identity. Rotation is explicit: remove
+those two development files, regenerate them, update the API's public CA value,
+recreate the signer, and restart assigned Agents.
+
+The development TLS directory is mode 0700 on the host; Compose binds its two
+files individually into the non-root signer. Keep that parent directory private.
+
+Disabling/deleting a key or stopping an Agent prevents future authentication;
+existing remote sessions remain open. A signer restart drops signing connections,
+and later SSH invocations reconnect; there is no replay of an interrupted signature
+request. Database or audit persistence failure refuses signing. Troubleshoot with
+signer health and content-free relay errors, policy revisions, generation, current
+assignments, verified server keys, and Security Audit signing events. Never enable
+HTTP header/body or raw SSH-agent payload logging. See the
+[feature contract](../features/ssh-access.md) for guarantees and limits and the
+[verification guide](testing.md#shared-ssh-access-verification) for disposable checks.
 
 ## Public signup configuration
 

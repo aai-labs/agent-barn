@@ -367,3 +367,20 @@ artifacts:
   maxBytes: 26214400
   linkMaxSeconds: 3600
   retentionDays: 30
+
+# SSH private keys stay in this signing service. Compatible runtime images are required.
+ssh:
+  enabled: false
+  caCertificate: "" # Optional PEM CA for private installations.
+  signerUrl: "" # wss://<API host>/ssh/v1/agent
+  replicaCount: 1
+  maxConnections: 64
+  maxAgentConnections: 8
+  idleTimeoutSeconds: 60
+  databasePort: 5432
+  ingressNamespace: kube-system
+  ingressPodLabels:
+    app.kubernetes.io/name: traefik
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }

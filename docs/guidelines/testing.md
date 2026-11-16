@@ -90,6 +90,8 @@ deployment limits cannot change their expected budget contracts.
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
 | `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
+| `make check-ssh` | Render enabled/disabled signing deployment, exact ingress, explicit secrets, process and network restrictions | Helm 3.19.0 |
+| `make test-ssh-runtime` | Real TLS signing and normal SSH/Git/scp/sftp using both runtime images' actual users | Docker, `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` set to built images |
 | `make test-api` | API unit and integration tests, excluding the Kubernetes client test; runs one pytest-xdist worker per CPU, each with its own PostgreSQL container; tests marked `xdist_group("heavy_containers")` (pinned LiteLLM/Hindsight contracts) share one worker so those containers never start concurrently | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
@@ -237,6 +239,34 @@ gateway authorization/revocation, database rotation/cache, RBAC, tenancy,
 preflight and lifecycle error handling. Existing offline image contracts own
 typed Graph files/Excel and gog import. Keep those checks alongside this suite;
 a green cluster run alone does not prove their contracts.
+
+## Shared SSH access verification
+
+Run `make check-api`, `make check-ui`, `make lint-ui`, `make check-migrations`, and
+`make check-ssh` for SSH changes. `tests/integration/test_ssh.py` covers real
+PostgreSQL migrations and tenant foreign keys, administrative and Agent RBAC,
+safe import/generate responses, revision conflicts, assignment/lifecycle behavior,
+token generation/revocation, restricted host/user and forged-binding refusal,
+unsupported protocol operations, fail-closed audit, and a disposable SSH server
+through a real verified-TLS relay. The host running these API tests needs Docker
+and OpenSSH 8.9+ (`ssh-agent`, `ssh-add`, `ssh`, `scp`, `sftp`) and Git; the API
+image installs OpenSSH. All test keys, host identities and servers are disposable.
+
+Run `make test-ssh-runtime` with both built image variables. The tests use each
+image's configured user and isolated relay environment, the generated public
+ConfigMap files, real TLS signing, and a temporary SSH server; they exercise a
+generated volume-owner init command in each runtime image as root, verify its
+resulting ownership and permissions, then use the runtime's configured user for a
+login-shell SSH command and each runtime's native terminal/exec tool, Git clone/commit/push/fetch, scp/sftp, socket ownership
+and mode, and revocation. They mount no private key into the runtime container.
+These are container contracts, not evidence of production ingress or cluster
+NetworkPolicy enforcement. Both runtime image CI suites include their SSH wrapper;
+changes to the common relay/SSH contracts trigger both image workflows.
+
+`ui/tests/e2e/ssh.spec.ts` covers admin generation/import, public-only responses,
+retained drafts after errors, read-only Member views, and Agent revision-conflict
+and restart flows against mocked APIs. These tests demonstrate UI behavior, not
+real backend authorization. Use the API and runtime contracts for that boundary.
 
 ## Runtime plugin tests
 

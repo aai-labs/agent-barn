@@ -86,4 +86,6 @@ the artifact domain router but excluded from the public user API schema.
 
 ## Change impact
 
+Shared SSH access adds the `ssh` domain and a machine-only signing listener at `/ssh/v1/agent` (`api/ssh_app.py`, port 8005). Ordinary runtime SSH clients call a local relay; the signer holds the private keys and issues signatures through isolated OpenSSH agents. Product key/assignment routes remain in the product API. The SSH UI feature, both runtime images, Agent lifecycle and optional signer deployment follow the [Shared SSH access contract](../features/ssh-access.md).
+
 A new domain normally requires API registration, DI-compatible layering, tests, UI schema/query integration where exposed, this system map, and the task route in `../INDEX.md`. Internal event-producing changes require the Domain Events feature guide, a registered event schema, payload safety checks, and PostgreSQL transaction coverage. A change crossing organization, agent, template, or skill boundaries should be checked for tenant isolation and for version/assignment behavior before implementation.

@@ -376,6 +376,10 @@ _Avoid_: skill, application secret
 An encrypted, provider-specific credential payload owned by an organization and reusable across agents. Admins manage shared credentials; any org member can attach one to an agent.
 _Avoid_: org secret, global credential
 
+**SSH Credential**:
+An Organization-owned SSH key whose encrypted private material stays in Agent Barn's signing service. Organization Owner/Admin manage the key and its restricted-server or unrestricted policy; authorized Agent credential managers attach it to Agents. Agents use an SSH-agent socket and receive signatures, never the private key. See [Shared SSH access](docs/features/ssh-access.md).
+_Avoid_: Agent Secret, provider Shared Credential, command broker
+
 **Integration**:
 An external service made available to an agent through an Agent Secret and runtime-specific configuration.
 _Avoid_: credential

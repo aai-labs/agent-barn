@@ -347,3 +347,15 @@ garage-backup:
 # Creates and removes a fresh three-node local k3d cluster; never uses current kubeconfig.
 test-garage-cluster:
 	cd api && uv run python -m pytest runtime_tests/test_garage_cluster.py -v
+
+# Disposable signing tests use only local servers and generated keys.
+.PHONY: check-ssh ssh-local-tls test-ssh-runtime
+check-ssh:
+	cd api && uv run python scripts/check_ssh_charts.py
+
+ssh-local-tls:
+	cd api && uv run python scripts/ssh_local_tls.py
+
+test-ssh-runtime:
+	@test -n "$(HERMES_TEST_IMAGE)" -a -n "$(OPENCLAW_TEST_IMAGE)" || (echo 'Set HERMES_TEST_IMAGE and OPENCLAW_TEST_IMAGE to built runtime images'; exit 1)
+	cd api && uv run python -m pytest runtime_tests/test_hermes_ssh.py runtime_tests/test_openclaw_ssh.py -v

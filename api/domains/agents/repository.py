@@ -74,6 +74,7 @@ from api.domains.rbac.models import (
     Permission,
 )
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.ssh.models import AgentSshCredential, SshRuntimeCredential
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -1521,6 +1522,12 @@ class AgentRepository:
             session.flush()
             stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
             stage_agent_task_cleanup(session, persisted.id, persisted.organization_id)
+            session.exec(sa.delete(AgentSshCredential).where(col(AgentSshCredential.agent_id) == persisted.id))
+            session.exec(
+                sa.update(SshRuntimeCredential)
+                .where(col(SshRuntimeCredential.agent_id) == persisted.id)
+                .values(token_hash=None, revoked_at=now)
+            )
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired

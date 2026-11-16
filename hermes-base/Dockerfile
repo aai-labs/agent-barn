@@ -55,7 +55,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         jq \
         ripgrep \
         fd-find \
-        poppler-utils \
+        poppler-utils openssh-client \
         ffmpeg \
         imagemagick \
         sqlite3 \
@@ -130,6 +130,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         apt-get install -y --no-install-recommends azure-cli && \
         rm -rf /var/lib/apt/lists/*; \
     fi
+
+# Keep relay dependencies separate from the runtime's own Python packages.
+RUN uv venv --python /opt/hermes/.venv/bin/python /opt/agentbarn-ssh && \
+    uv pip install --python /opt/agentbarn-ssh/bin/python 'websockets==17.0'
 
 USER hermes
 

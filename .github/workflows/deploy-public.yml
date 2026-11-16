@@ -366,6 +366,9 @@ jobs:
           AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ vars.PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME }}
           MEMORY_DEFAULT_MODEL: ${{ vars.PUBLIC_MEMORY_DEFAULT_MODEL }}
           MEMORY_LITELLM_KEY_HASHES: ${{ vars.PUBLIC_MEMORY_LITELLM_KEY_HASHES }}
+          SSH_ENABLED: ${{ vars.PUBLIC_SSH_ENABLED || 'false' }}
+          SSH_SIGNER_URL: ${{ vars.PUBLIC_SSH_SIGNER_URL }}
+          SSH_CA_CERTIFICATE: ${{ vars.PUBLIC_SSH_CA_CERTIFICATE }}
         run: |
           set -euo pipefail
           credentials_file="$(mktemp)"

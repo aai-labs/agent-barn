@@ -1,0 +1,109 @@
+{{- if .Values.ssh.enabled }}
+{{- if not (hasPrefix "wss://" .Values.ssh.signerUrl) }}
+{{- fail "ssh.signerUrl must be a verified wss:// URL" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ssh
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ssh
+spec:
+  replicas: {{ .Values.ssh.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentbarn-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ssh
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        build-sha: {{ .Values.buildSha | quote }}
+      labels:
+        {{- include "agentbarn-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ssh
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: ssh
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn", "api.ssh_main:app", "--host", "0.0.0.0", "--port", "8005", "--ws-max-size", "262144"]
+          ports: [{ name: ssh, containerPort: 8005 }]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          env:
+            - name: DB_CONNECTION_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: DB_CONNECTION_URL } }
+            - name: AGENT_TOKEN_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: AGENT_TOKEN_ENCRYPTION_KEY } }
+            # The shared Config requires these fields. This process exposes no user authentication.
+            - { name: SECRET_SIGNING_KEY, value: "ssh-runtime-has-no-user-authentication" }
+            - { name: PLATFORM_ADMIN_CREDENTIALS, value: "" }
+            - { name: ORGANIZATION_DEFAULT_LLM_BUDGET_USD, value: "0" }
+            - { name: AGENT_DEFAULT_LLM_BUDGET_USD, value: "0" }
+            - { name: ANALYTICS_ENABLED, value: "false" }
+            - { name: SSH_ENABLED, value: "true" }
+            - { name: SSH_SOCKET_DIRECTORY, value: "/tmp" }
+            - { name: SSH_MAX_CONNECTIONS, value: {{ .Values.ssh.maxConnections | quote }} }
+            - { name: SSH_MAX_AGENT_CONNECTIONS, value: {{ .Values.ssh.maxAgentConnections | quote }} }
+            - { name: SSH_IDLE_TIMEOUT_SECONDS, value: {{ .Values.ssh.idleTimeoutSeconds | quote }} }
+          volumeMounts: [{ name: sockets, mountPath: /tmp }]
+          readinessProbe:
+            httpGet: { path: /health, port: ssh }
+          livenessProbe:
+            httpGet: { path: /health, port: ssh }
+          resources:
+            {{- toYaml .Values.ssh.resources | nindent 12 }}
+      volumes:
+        - name: sockets
+          emptyDir: { medium: Memory, sizeLimit: 32Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ssh
+spec:
+  type: ClusterIP
+  ports: [{ name: ssh, port: 8005, targetPort: ssh }]
+  selector:
+    {{- include "agentbarn-api.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ssh
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-ssh
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "agentbarn-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ssh
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.ssh.ingressNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.ssh.ingressPodLabels | nindent 14 }}
+      ports: [{ protocol: TCP, port: 8005 }]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    - ports: [{ protocol: TCP, port: {{ .Values.ssh.databasePort }} }]
+{{- end }}

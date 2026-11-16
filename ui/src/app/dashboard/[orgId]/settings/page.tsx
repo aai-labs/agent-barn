@@ -13,6 +13,7 @@ import {
   visibleOrganizationSettingsSections,
   type OrganizationSettingsSectionKey,
 } from "@/features/organizations/components/organization-settings-utils";
+import { SshCredentialsPanel } from "@/features/ssh/components/ssh-credentials-panel";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
@@ -61,7 +62,7 @@ export default function SettingsPage() {
           {section.key === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
           {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
           {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
-          {section.key === "shared-credentials" && <SharedCredentialsPanel />}
+          {section.key === "shared-credentials" && <><SharedCredentialsPanel /><SshCredentialsPanel key={selectedOrganization?.id} /></>}
           {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
           {section.key === "tier" && selectedOrganization && (
             <TierHoldsPanel organizationId={selectedOrganization.id} canManage={isMembershipAdmin} />

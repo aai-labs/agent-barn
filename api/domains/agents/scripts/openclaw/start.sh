@@ -59,5 +59,10 @@ if [ -n "${MEMORY_API_KEY:-}" ]; then
 fi
 python3 /app/config/file-sync.py --once || true
 python3 /app/config/file-sync.py &
+if [ -n "${AGENTBARN_SSH_SIGNER_TOKEN:-}" ]; then
+  /opt/agentbarn-ssh/bin/python /app/config/ssh-agent-relay.py --configure
+  /opt/agentbarn-ssh/bin/python /app/config/ssh-agent-relay.py &
+  /opt/agentbarn-ssh/bin/python /app/config/ssh-agent-relay.py --wait
+fi
 touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 exec openclaw gateway --allow-unconfigured
