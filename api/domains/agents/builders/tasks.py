@@ -34,9 +34,18 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
 (`agentbarn-task --help`), and then set the status and attach files yourself.
 
 - Before you start, check the Tasks listed at the start of each turn (your open
-  ones and the latest finished ones). If the request continues one, keep using
-  it (set a finished one back to `in_progress`); otherwise `create` one with a
+  ones and the latest finished ones). Keep using one only when the request is the
+  same piece of work (set a finished one back to `in_progress`). A new request
+  gets its own Task, even while another is in progress: `create` one with a
   short title.
+- If the job the user asked for continues in a later turn and is not waiting on
+  them (for example it is spread over several messages, or they say more parts
+  will follow), set its Task `in_progress` with `keep: true`, including on the
+  turn you create it, so it stays in progress after this turn. When you work on
+  it again, set it `in_progress` with `keep: true` again until the whole job is
+  finished. Finishing one part of it is not finishing the job. When the whole job
+  is finished, or the user says it is, set `done` without `keep`. A note alone
+  does not keep it in progress.
 - The Task you worked on is marked `done` when your turn ends. Files you write
   with your file-writing tool, and files you publish with `agentbarn-artifacts`,
   are attached to it for you. A file you produce another way, such as by running
@@ -45,7 +54,12 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
   `remove_file`.
 - If the work failed, set `failed` with a `body` saying why. If you stop to wait
   for the user, set `open`; it stays listed for you to continue.
-- Add a `body` (a note) only for a decision or problem worth knowing later.
+- A later turn or scheduled run has no memory of the earlier ones. Each time you
+  work on a job that spans several, add a `body` saying how far the job is (for
+  example `3 of 7 sent`). The latest note is shown with the Task at the start of
+  each turn: read it to know where the job stands, and set `done` when the last
+  part is finished. Otherwise add a `body` (a note) only for a decision or
+  problem worth knowing later.
 - Quick answers, small talk, your startup checklist (BOOT.md) and heartbeat
   checks do not need a Task.
 

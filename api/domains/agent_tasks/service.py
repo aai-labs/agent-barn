@@ -101,16 +101,19 @@ class AgentTaskService:
 
     def list_own_tasks(
         self, organization_id: UUID, agent_id: UUID, task_status: AgentTaskStatus | None, pagination: Pagination
-    ) -> PaginatedItems[AgentTaskRead]:
+    ) -> PaginatedItems[AgentTaskSummary]:
         """An Agent's own Tasks, for the Agent itself; a deleted Agent has none.
 
-        Most recently changed first, so a Task the Agent just finished is among the latest it sees.
+        Most recently changed first, so a Task the Agent just finished is among the latest it sees. Each
+        carries its latest Note, so a later turn or scheduled run sees where the work got to.
         """
-        return self.repository.find_in_organization(
-            AgentTaskFilter(agent_id=agent_id, status=task_status),
-            pagination,
-            AuthorizationScope(organization_id=organization_id),
-            recently_changed_first=True,
+        return self._summarized(
+            self.repository.find_in_organization(
+                AgentTaskFilter(agent_id=agent_id, status=task_status),
+                pagination,
+                AuthorizationScope(organization_id=organization_id),
+                recently_changed_first=True,
+            )
         )
 
     def get_own_task(self, organization_id: UUID, agent_id: UUID, task_id: UUID) -> AgentTaskDetail:
@@ -177,7 +180,7 @@ class AgentTaskService:
         )
 
     def _summarized(self, page: PaginatedItems[AgentTaskRead]) -> PaginatedItems[AgentTaskSummary]:
-        """People's lists put the most recently changed Task first, matching the time they show."""
+        """Add each listed Task's File and Note counts and its latest Note."""
         return PaginatedItems[AgentTaskSummary](
             page=page.page, page_size=page.page_size, total=page.total, items=self.repository.summarize(page.items)
         )

@@ -8,7 +8,8 @@ next; a turn that wrote files is also held back once before it finishes (`pre_ve
 If it still ends without a Task, the plugin records one itself, named after the request,
 with origin `automatic`. It also does the bookkeeping that would otherwise cost the model
 a call each: when a turn ends, the files it wrote go to the Task it worked on and a Task
-it left in progress is marked done, or reopened if the turn did not finish. Only a Task
+it left in progress is marked done, or reopened if the turn did not finish; one it kept
+(`keep`, for work that continues in a later turn) stays in progress. Only a Task
 call that changed something counts as recording the work: reading the Tasks does not.
 Runs with a parent session (Hermes's background review, subagents) are left alone: they
 are not the user's request.
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 _TOOL = "agentbarn_task"
 _STATUSES = ["open", "in_progress", "done", "failed"]
+# A Task the Agent left in_progress with keep: work that continues in a later turn. Only a turn
+# that did not complete moves it (to open); otherwise it stays in_progress.
+_KEPT = "kept"
 _WORK_THRESHOLD = 3
 # The startup checklist (boot-run.py) runs in this session; it is not a request to keep a Task for.
 _BOOT_SESSION_ID = "agentbarn-boot"
@@ -40,6 +44,9 @@ _LIST_PAGE_SIZE = 100
 _OPEN_TASKS_SHOWN = 10
 # Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 _DONE_TASKS_SHOWN = 3
+# An unfinished Task is listed with the start of its latest note, so a later turn or scheduled run,
+# which has no memory of earlier ones, sees where the work got to.
+_LATEST_NOTE_CHARS = 200
 _AUTOMATIC_TITLE_CHARS = 120
 _AUTOMATIC_DESCRIPTION_CHARS = 2000
 _COMMAND_TIMEOUT_SECONDS = 150
@@ -158,9 +165,10 @@ _SCHEMA = {
     "description": (
         "Record work that uses tools or produces files as a Task the people you work for can follow. "
         "`create` one before you start (it starts in_progress); when your turn ends, files you wrote with your "
-        "file-writing tool or published are attached and a Task still in_progress is marked done. Attach any "
-        "other file that is part of the result yourself. Set `failed` (with a body saying why) or "
-        "`open` (waiting on the user) yourself."
+        "file-writing tool or published are attached and a Task still in_progress is marked done. If the work "
+        "continues in a later turn and is not waiting on the user, set it in_progress with keep: true so it stays "
+        "in progress. Attach any other file that is part of the result yourself. Set `failed` (with a body saying "
+        "why), `open` (waiting on the user) or `done` yourself."
     ),
     "parameters": {
         "type": "object",
@@ -178,6 +186,14 @@ _SCHEMA = {
                 "description": "The new status, a list filter, or the starting status for create (in_progress).",
             },
             "body": {"type": "string", "description": "The note, for note; or one to add with create or status."},
+            "keep": {
+                "type": "boolean",
+                "description": (
+                    "With create, or status in_progress: keep the Task in progress after this turn, because the "
+                    "job continues in a later turn (more parts or messages to come). Without it the Task is "
+                    "marked done when the turn ends."
+                ),
+            },
             "path": {"type": "string", "description": "The file to attach, absolute or relative to your workspace."},
             "name": {"type": "string", "description": "The file's name as shown on the Task, for attach."},
             "content_type": {"type": "string", "description": "A bare type/subtype, for attach."},
@@ -428,10 +444,12 @@ def _status_set(tool_name: str, args) -> str | None:
     if tool_name != _TOOL or not isinstance(args, dict):
         return None
     if args.get("action") == "create":
-        return args["status"] if args.get("status") in _STATUSES else "in_progress"
-    if args.get("action") == "status" and args.get("status") in _STATUSES:
-        return args["status"]
-    return None
+        status = args["status"] if args.get("status") in _STATUSES else "in_progress"
+    elif args.get("action") == "status" and args.get("status") in _STATUSES:
+        status = args["status"]
+    else:
+        return None
+    return _KEPT if status == "in_progress" and args.get("keep") in (True, "true") else status
 
 
 def _track(
@@ -524,10 +542,14 @@ def _attach_automatically(turn: dict) -> list[str]:
 
 
 def _settle_in_progress(turn: dict, status: str) -> None:
-    """Move each Task the Agent left in_progress this turn to `status`; a status it chose itself stays."""
+    """Move each Task the Agent left in_progress this turn to `status`; a status it chose itself stays.
+
+    A Task it kept stays in_progress, unless the turn did not complete: then it is reopened too.
+    """
     settled = False
+    settles = {"in_progress", _KEPT} if status == "open" else {"in_progress"}
     for task_id, current in sorted(turn["statuses"].items()):
-        if current == "in_progress":
+        if current in settles:
             _run(["status", task_id, status])
             settled = True
     if settled:
@@ -631,8 +653,17 @@ def _task_lines(output: str) -> list[str]:
         shown = [task for task in items if isinstance(task, dict) and task.get("status") == task_status]
         for task in shown[: _DONE_TASKS_SHOWN if task_status == "done" else _OPEN_TASKS_SHOWN]:
             title = str(task.get("title", ""))[:120]
-            lines.append(f"- {task.get('id')} [{task_status}] {title}")
+            note = "" if task_status == "done" else _note_preview(task.get("latest_note"))
+            lines.append(f"- {task.get('id')} [{task_status}] {title}{note}")
     return lines
+
+
+def _note_preview(note) -> str:
+    text = " ".join(note.split()) if isinstance(note, str) else ""
+    if not text:
+        return ""
+    shown = text[:_LATEST_NOTE_CHARS] + ("…" if len(text) > _LATEST_NOTE_CHARS else "")
+    return f' (latest note: "{shown}")'
 
 
 def _open_task_lines() -> list[str]:
@@ -668,8 +699,9 @@ def _on_pre_llm_call(session_id="", turn_id="", user_message="", parent_session_
         parts.append(
             "[Agent Barn] Your open and latest finished Tasks:\n"
             + "\n".join(lines)
-            + "\nIf the request continues one of these, keep using it with the agentbarn_task tool (set a done "
-            "one back to in_progress) rather than creating another."
+            + "\nKeep using one of these only when the request is the same piece of work: set it to in_progress "
+            "with the agentbarn_task tool, with keep: true if the work still continues after this turn. A new "
+            "request gets its own Task, even while another is in progress."
         )
     with _lock:
         reminder = _next_turn_reminders.pop(session_id, None)
