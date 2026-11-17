@@ -8,11 +8,17 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection. `LlmProviderKeyChecker` can check their keys, but nothing calls it yet.
-- Next: the slice 1 demo on local k3d; slice 2, PR 3, listing the connections.
+- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection. `LlmProviderKeyChecker` can check their keys, but nothing calls it yet. `GET /api/v1/platform/settings/llm-providers` lists the connections.
+- Next: the slice 1 demo on local k3d; slice 2, PR 4, the `platform.llm_provider.created` event.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 3
+
+- Delivered: `GET /api/v1/platform/settings/llm-providers`, for Platform Administrators only, lists the connections that are not deleted, OpenRouter first and then by name. Each item has `slug`, `name`, `provider_type`, `base_url`, `has_api_key`, `api_key_last4`, `updated_at`, `updated_by` and `env_key_configured`, never the key or its ciphertext. `updated_at` and `updated_by` are set only while a key is saved, as on the OpenRouter status. `env_key_configured` is true only for OpenRouter while `OPENROUTER_API_KEY` is set, so the UI keeps that warning once PR 12 removes `GET .../openrouter`.
+- Changed: `operations-v1.json`, the RBAC brief and [`llm-providers.md`](../llm-providers.md) list the route.
+- Follow-up: PR 4 registers the `platform.llm_provider.created` event.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 2
 

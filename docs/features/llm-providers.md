@@ -44,10 +44,11 @@ A replaced key applies at once only on LiteLLM v1.101.0 or later. Earlier versio
 
 ## API
 
-Both routes are under `require_platform_admin`, which refuses writes from a read-only API key.
+Every route is under `require_platform_admin`, which refuses writes from a read-only API key.
 
 | Route | Does |
 | --- | --- |
+| `GET /api/v1/platform/settings/llm-providers` | Lists the connections that are not deleted, OpenRouter first and then by name. Each has `slug`, `name`, `provider_type`, `base_url`, the key status (`has_api_key`, `api_key_last4`, `updated_at`, `updated_by`) and `env_key_configured`, which is true only for OpenRouter while `OPENROUTER_API_KEY` is set |
 | `GET /api/v1/platform/settings/llm-providers/openrouter` | The status: `has_api_key`, `api_key_last4`, `updated_at`, `updated_by` (a name) and `env_key_configured` (whether `OPENROUTER_API_KEY` is set) |
 | `PUT /api/v1/platform/settings/llm-providers/openrouter` | Replaces the key, `{api_key}`, trimmed and at most 512 characters; answers with the status |
 

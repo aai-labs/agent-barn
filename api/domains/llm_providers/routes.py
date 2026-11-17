@@ -8,7 +8,11 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import require_platform_admin
-from api.domains.llm_providers.models import OpenRouterConnectionRead, OpenRouterKeyUpdate
+from api.domains.llm_providers.models import (
+    LlmProviderConnectionRead,
+    OpenRouterConnectionRead,
+    OpenRouterKeyUpdate,
+)
 from api.domains.llm_providers.service import PlatformLlmProviderService
 
 
@@ -28,6 +32,14 @@ class CredentialSafeRoute(APIRoute):
 platform_llm_providers_router = APIRouter(
     route_class=CredentialSafeRoute, prefix="/platform/settings/llm-providers", tags=["platform-settings"]
 )
+
+
+@platform_llm_providers_router.get("", response_model=list[LlmProviderConnectionRead])
+def list_connections(
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.list_connections(context)
 
 
 @platform_llm_providers_router.get("/openrouter", response_model=OpenRouterConnectionRead)

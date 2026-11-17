@@ -10,7 +10,7 @@ from sqlmodel import Session, col, select
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_LLM_PROVIDER_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.llm_providers.models import LlmProviderConnection
+from api.domains.llm_providers.models import OPENROUTER_SLUG, LlmProviderConnection
 from api.domains.users.models import User
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -38,6 +38,22 @@ class LlmProviderRepository:
             return None
         connection, full_name, email = row
         return connection, full_name or email
+
+    def list_active(self) -> list[tuple[LlmProviderConnection, str | None]]:
+        """Every connection not deleted, OpenRouter first and then by name, each with the name of
+        whoever last changed it."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(LlmProviderConnection, User.full_name, User.email)
+                .outerjoin(User, col(User.id) == col(LlmProviderConnection.updated_by))
+                .where(col(LlmProviderConnection.deleted_at).is_(None))
+                .order_by(
+                    sa.case((col(LlmProviderConnection.slug) == OPENROUTER_SLUG, 0), else_=1),
+                    col(LlmProviderConnection.name),
+                    col(LlmProviderConnection.slug),
+                )
+            ).all()
+        return [(connection, full_name or email) for connection, full_name, email in rows]
 
     def replace_key(
         self,

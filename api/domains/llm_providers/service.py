@@ -12,6 +12,7 @@ from api.domains.llm_providers.models import (
     OPENROUTER_ROUTE_MODEL,
     OPENROUTER_ROUTE_ORDER,
     OPENROUTER_SLUG,
+    LlmProviderConnectionRead,
     OpenRouterConnectionRead,
     OpenRouterKeyUpdate,
 )
@@ -32,6 +33,27 @@ class PlatformLlmProviderService:
     openrouter: OpenRouterClient
     litellm: LiteLLMClient
     dispatcher: EventDeliveryDispatcher
+
+    def list_connections(self, context: CurrentUserContext) -> list[LlmProviderConnectionRead]:
+        self.authority.require_platform_admin(context.user)
+        env_key_configured = bool(self.config.openrouter_api_key)
+        listed = []
+        for connection, updated_by in self.repository.list_active():
+            has_api_key = connection.api_key_encrypted is not None
+            listed.append(
+                LlmProviderConnectionRead(
+                    slug=connection.slug,
+                    name=connection.name,
+                    provider_type=connection.provider_type,
+                    base_url=connection.base_url,
+                    has_api_key=has_api_key,
+                    api_key_last4=connection.api_key_last4,
+                    updated_at=connection.updated_at if has_api_key else None,
+                    updated_by=updated_by if has_api_key else None,
+                    env_key_configured=env_key_configured and connection.slug == OPENROUTER_SLUG,
+                )
+            )
+        return listed
 
     def read_openrouter(self, context: CurrentUserContext) -> OpenRouterConnectionRead:
         self.authority.require_platform_admin(context.user)

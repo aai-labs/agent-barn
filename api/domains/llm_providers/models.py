@@ -106,6 +106,20 @@ class LlmProviderConnection(BaseModel, table=True):
     deleted_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
 
 
+class LlmProviderConnectionRead(PydanticBaseModel):
+    """What a Platform Administrator sees of a connection: never the key itself."""
+
+    slug: str
+    name: str
+    provider_type: ProviderType
+    base_url: str | None = None
+    has_api_key: bool
+    api_key_last4: str | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+    env_key_configured: bool
+
+
 class OpenRouterConnectionRead(PydanticBaseModel):
     """What a Platform Administrator sees of the OpenRouter key: never the key itself."""
 
