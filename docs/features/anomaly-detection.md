@@ -131,8 +131,9 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   Anomaly that starts and ends at that use. The ledger then records the use.
 - The first check of an Agent only fills its ledger from its last 14 days and flags no
   first use.
-- Each Agent is checked on its own: one failing is logged and the rest still run; the Job
-  then exits non-zero.
+- Each Agent is checked on its own: one failing is logged, the rest still run and the Job
+  succeeds, so it is not restarted to check every Agent again. The next run, 15 minutes
+  later, retries the failed Agent. A run that cannot check at all (no database) fails.
 
 ## Anomaly records
 
