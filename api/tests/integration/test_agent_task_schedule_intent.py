@@ -47,8 +47,11 @@ def _an_agent_with_an_ingest_key():
 
 def _the_decision_model(answer: ChoiceAnswer | Exception):
     def step(context):
-        result = DecisionResult(answers={"intent": answer}, input_tokens=10, output_tokens=1)
-        context.decide = Mock(side_effect=answer if isinstance(answer, Exception) else None, return_value=result)
+        if isinstance(answer, Exception):
+            context.decide = Mock(side_effect=answer)
+        else:
+            result = DecisionResult(answers={"intent": answer}, input_tokens=10, output_tokens=1)
+            context.decide = Mock(return_value=result)
         context.injector.get(DecisionService).decide = context.decide
 
     return step
@@ -93,9 +96,11 @@ def test_the_model_is_asked_about_the_request_the_schedule_and_the_task_and_bill
         assert_that(
             state,
             has_entries(
-                request=_BODY["request"],
-                schedule=has_entries(recurrence="every 1d", run_limit=7),
-                task=has_entries(title="Daily greeting for a week", status_the_agent_set="done"),
+                {
+                    "request": equal_to(_BODY["request"]),
+                    "schedule": has_entries(recurrence="every 1d", run_limit=7),
+                    "task": has_entries(title="Daily greeting for a week", status_the_agent_set="done"),
+                }
             ),
         )
         assert_that(questions, has_key("intent"))

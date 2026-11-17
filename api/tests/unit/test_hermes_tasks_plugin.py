@@ -29,6 +29,7 @@ class _Plugin:
         self.log = tmp_path / "calls.jsonl"
         self.workspace = tmp_path / "workspace"
         self.workspace.mkdir()
+        self.home = tmp_path / "home"
         spec = importlib.util.spec_from_file_location("agentbarn_tasks_plugin", _PLUGIN)
         assert spec is not None and spec.loader is not None
         self.module = importlib.util.module_from_spec(spec)
@@ -1148,7 +1149,6 @@ _GREETING = "Post a greeting every minute, 7 times. It is done after 7 greetings
 
 def _scheduling(tmp_path: Path, intent: str | None = "runs") -> _Plugin:
     plugin = _Plugin(tmp_path)
-    plugin.home = tmp_path / "home"
     (plugin.home / "cron").mkdir(parents=True)
     plugin.env["HERMES_HOME"] = str(plugin.home)
     if intent:

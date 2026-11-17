@@ -479,8 +479,9 @@ def _track(
             if task_id:
                 turn["task_ids"].add(task_id)
                 turn["last_task"] = task_id
-                if isinstance(args.get("title"), str):
-                    turn["titles"][task_id] = args["title"]
+                title = args.get("title") if isinstance(args, dict) else None
+                if isinstance(title, str):
+                    turn["titles"][task_id] = title
                 status = _status_set(tool_name, args)
                 if status:
                     turn["statuses"][task_id] = status
@@ -656,11 +657,13 @@ def _record_scheduled_run(session_id: str, turn_id: str, job_id: str, turn: dict
     if not link or not isinstance(link.get("task_id"), str):
         return False
     task_id = link["task_id"]
-    job = (_jobs() or {}).get(job_id) or {}
-    repeat = job.get("repeat") if isinstance(job.get("repeat"), dict) else {}
-    done = repeat.get("completed") if isinstance(repeat.get("completed"), int) else int(link.get("runs") or 0)
-    limit = repeat.get("times") if isinstance(repeat.get("times"), int) else None
-    once = (job.get("schedule") or {}).get("kind") == "once" if isinstance(job.get("schedule"), dict) else False
+    job: dict = (_jobs() or {}).get(job_id) or {}
+    repeat = job.get("repeat")
+    repeat = repeat if isinstance(repeat, dict) else {}
+    completed, times, schedule = repeat.get("completed"), repeat.get("times"), job.get("schedule")
+    done: int = completed if isinstance(completed, int) else int(link.get("runs") or 0)
+    limit = times if isinstance(times, int) else None
+    once = isinstance(schedule, dict) and schedule.get("kind") == "once"
     # Hermes counts a recurring run after it ends, and a one-off before it starts.
     number = done if once else done + 1
     with _lock:
