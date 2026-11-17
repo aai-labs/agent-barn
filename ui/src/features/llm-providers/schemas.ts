@@ -1,15 +1,5 @@
 import { z } from "zod";
 
-export const OpenRouterConnectionSchema = z.object({
-  hasApiKey: z.boolean(),
-  apiKeyLast4: z.string().nullable(),
-  updatedAt: z.string().nullable(),
-  updatedBy: z.string().nullable(),
-  envKeyConfigured: z.boolean(),
-});
-
-export type OpenRouterConnection = z.infer<typeof OpenRouterConnectionSchema>;
-
 export const ProviderTypeSchema = z.enum([
   "openrouter",
   "anthropic",
@@ -25,11 +15,16 @@ export const ProviderTypeSchema = z.enum([
 
 export type ProviderType = z.infer<typeof ProviderTypeSchema>;
 
-export const LlmProviderConnectionSchema = OpenRouterConnectionSchema.extend({
+export const LlmProviderConnectionSchema = z.object({
   slug: z.string(),
   name: z.string(),
   providerType: ProviderTypeSchema,
   baseUrl: z.string().nullable(),
+  hasApiKey: z.boolean(),
+  apiKeyLast4: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  updatedBy: z.string().nullable(),
+  envKeyConfigured: z.boolean(),
 });
 
 export type LlmProviderConnection = z.infer<typeof LlmProviderConnectionSchema>;
@@ -41,5 +36,10 @@ export type NewLlmProviderConnection = {
   apiKey: string;
   slug?: string;
   name?: string;
+  baseUrl?: string;
+};
+
+export type KeyReplacement = {
+  apiKey: string;
   baseUrl?: string;
 };

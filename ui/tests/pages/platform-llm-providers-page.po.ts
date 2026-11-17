@@ -19,8 +19,8 @@ export class PlatformLlmProvidersPage {
     return this.page.getByRole("dialog");
   }
 
-  keyInput() {
-    return this.dialog().getByLabel("OpenRouter API key");
+  keyInput(provider = "OpenRouter") {
+    return this.dialog().getByLabel(`${provider} API key`, { exact: true });
   }
 
   async submitKey(key: string) {
@@ -43,6 +43,14 @@ export class PlatformLlmProvidersPage {
 
   providerCardNames() {
     return this.otherProviders().getByRole("heading", { level: 4 });
+  }
+
+  replaceKeyButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: "Replace key" });
+  }
+
+  deleteButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: "Delete" });
   }
 
   addProviderButton() {
@@ -86,5 +94,16 @@ export class PlatformLlmProvidersPage {
     if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);
     await this.apiKeyInput().fill(input.key);
     await this.dialog().getByRole("button", { name: "Add provider" }).click();
+  }
+
+  async replaceKey(name: string, input: { key: string; baseUrl?: string }) {
+    await this.replaceKeyButton(name).click();
+    if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);
+    await this.keyInput(name).fill(input.key);
+    await this.dialog().getByRole("button", { name: "Save key" }).click();
+  }
+
+  async confirmDelete() {
+    await this.dialog().getByRole("button", { name: "Delete provider" }).click();
   }
 }
