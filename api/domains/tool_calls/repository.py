@@ -228,10 +228,13 @@ class ToolCallRepository:
         after: datetime.datetime | None,
         until: datetime.datetime,
         argument_keys: tuple[str, ...],
-        occurred_since: datetime.datetime | None = None,
+        occurred_since: datetime.datetime,
     ) -> list[StoredToolCall]:
-        """Tool calls stored in (`after`, `until`], oldest first, carrying only
-        `argument_keys` of their arguments.
+        """Tool calls that happened since `occurred_since` and were stored in (`after`,
+        `until`], oldest first, carrying only `argument_keys` of their arguments.
+
+        `occurred_since` is required: it keeps the read on `ix_tool_call_agent_occurred`
+        rather than every row the Agent ever stored.
 
         The projection happens in the database, so arguments that can hold customer
         data (file contents, messages) are never loaded. Unscoped: only the scheduled
@@ -243,12 +246,11 @@ class ToolCallRepository:
         projected = sa.func.jsonb_strip_nulls(sa.func.jsonb_build_object(*pairs)) if pairs else sa.text("'{}'::jsonb")
         query = select(col(ToolCall.created_at), col(ToolCall.occurred_at), col(ToolCall.tool_name), projected).where(
             col(ToolCall.agent_id) == agent_id,
+            col(ToolCall.occurred_at) >= occurred_since,
             col(ToolCall.created_at) <= until,
         )
         if after is not None:
             query = query.where(col(ToolCall.created_at) > after)
-        if occurred_since is not None:
-            query = query.where(col(ToolCall.occurred_at) >= occurred_since)
         with self.get_session() as session:
             rows = session.exec(query.order_by(col(ToolCall.created_at), col(ToolCall.id))).all()  # type: ignore[call-overload]
         return [

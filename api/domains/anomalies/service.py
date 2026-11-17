@@ -258,7 +258,9 @@ class AnomalyCheckService:
         learning = state is None
         tool_calls_after = None if state is None else state.tool_calls_read_through
         actions_after = None if state is None else state.business_actions_read_through
-        occurred_since = until - BASELINE if learning else None
+        # Older activity counts as unseen anyway, and bounding by it keeps the read on
+        # the Agent's recent rows.
+        occurred_since = until - BASELINE
         calls = self.tool_call_service.tool_calls_stored_between(
             agent_id,
             after=tool_calls_after,

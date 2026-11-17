@@ -511,3 +511,32 @@ def test_an_ongoing_anomaly_ends_once_its_agent_is_deleted():
                 _anomalies(context, AnomalySignal.TOOL_CALLS_PER_HOUR),
                 contains_exactly(has_properties(ended_at=LATER - timedelta(minutes=2))),
             )
+
+
+def _stored_late(row, stored_at: datetime):
+    row.created_at = stored_at
+    return row
+
+
+def _ledger_subjects(context, kind: SeenKind) -> list[str]:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        query = select(col(AgentActivitySeen.subject)).where(
+            col(AgentActivitySeen.agent_id) == context.agent.id, col(AgentActivitySeen.kind) == kind.value
+        )
+        return sorted(session.exec(query).all())
+
+
+def test_activity_from_before_the_baseline_window_is_not_read_even_when_stored_since():
+    with given([*_ENABLED, usual_activity()]) as context:
+        stored = NOW + timedelta(minutes=1)
+        _learned_then(
+            context,
+            [
+                _stored_late(
+                    _tool_call(context.agent, NOW - timedelta(days=20), arguments={"url": "https://ancient.example"}),
+                    stored,
+                )
+            ],
+        )
+
+        assert_that(_ledger_subjects(context, SeenKind.DESTINATION), equal_to([KNOWN_HOST]))

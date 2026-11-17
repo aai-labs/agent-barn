@@ -167,7 +167,11 @@ def test_tool_calls_stored_since_a_cursor_carry_only_the_argument_keys_asked_for
         )
 
         calls = context.injector.get(ToolCallService).tool_calls_stored_between(
-            agent.id, after=cursor, until=datetime.now(UTC), argument_keys=("url", "urls", "command")
+            agent.id,
+            after=cursor,
+            until=datetime.now(UTC),
+            argument_keys=("url", "urls", "command"),
+            occurred_since=HOUR,
         )
 
         assert_that(
@@ -236,7 +240,7 @@ def test_business_actions_stored_since_a_cursor_name_their_integration_and_verb(
         _save(context, *rows)
 
         actions = context.injector.get(BusinessValueService).business_actions_stored_between(
-            agent.id, after=cursor, until=datetime.now(UTC)
+            agent.id, after=cursor, until=datetime.now(UTC), occurred_since=HOUR
         )
 
         assert_that(actions, contains_exactly(has_properties(integration="crm", verb="delete", occurred_at=HOUR)))

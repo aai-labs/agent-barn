@@ -46,7 +46,7 @@ class ToolCallService:
         after: datetime | None,
         until: datetime,
         argument_keys: tuple[str, ...],
-        occurred_since: datetime | None = None,
+        occurred_since: datetime,
     ) -> list[StoredToolCall]:
         """An Agent's tool calls stored after a cursor, with only the argument keys asked
         for, for the scheduled anomaly check. Background work, like `hourly_tool_activity`.

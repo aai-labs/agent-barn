@@ -127,7 +127,8 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   exists per Agent, signal and subject (`uq_agent_anomaly_ongoing`). The ongoing
   Anomalies of an Agent deleted since the last check end with that check.
 - First use: the check reads tool calls and Business Actions stored since its last
-  cursor (`agent_anomaly_state`, by `created_at`, so late rows are read once). Each tool,
+  cursor (`agent_anomaly_state`, by `created_at`, so late rows are read once) that
+  happened in the last 14 days; older ones would count as unseen anyway. Each tool,
   integration, action and host is looked up in the Agent's ledger
   (`agent_activity_seen`); one not seen since 14 days before its use is recorded as an
   Anomaly that starts and ends at that use. The ledger then records the use.
