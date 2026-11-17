@@ -66,10 +66,15 @@ export function WorkflowInputsEditor({
                 error={errorFor(inputField(index, "description"))}
                 onBlur={() => onTouch(inputField(index, "description"))}
                 // Its first line becomes the label on the start-run form and the key
-                // behind it; saved labels and keys stay until it is edited.
+                // behind it; saved labels and keys stay until that line is edited.
                 onChange={(description) => {
                   const label = inputLabelFromDescription(description);
-                  update(index, { description, label, key: inputKeyFromLabel(label) });
+                  update(
+                    index,
+                    label === inputLabelFromDescription(item.description)
+                      ? { description }
+                      : { description, label, key: inputKeyFromLabel(label) },
+                  );
                 }}
               />
             </div>
@@ -156,8 +161,10 @@ function InputDescription({
   const errorId = `workflow-input-${index}-description-error`;
   return (
     <div className="min-w-0">
-      <input
-        className="af-input block w-full"
+      {/* A description may run over several lines; only the first names the input. */}
+      <textarea
+        className="af-input block w-full resize-none"
+        rows={value.split("\n").length}
         aria-label={`Input ${index + 1} description`}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}

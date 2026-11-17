@@ -1,6 +1,7 @@
 "use client";
 
-import { WorkflowFiles } from "./workflow-files";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
+import { FILES_GONE, WorkflowFiles } from "./workflow-files";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, Clock3, FileCheck2, Files, LayoutDashboard } from "lucide-react";
@@ -257,6 +258,8 @@ function RunContents({
   const [selectedView, setSelectedView] = useState("summary");
   const showArtifacts = selectedView === "artifacts";
   const actions = useWorkflowRunActions();
+  // The API refuses a re-run the Tier leaves out, so the button is not offered.
+  const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
   const [confirm, setConfirm] = useState(false);
   const [confirmRerun, setConfirmRerun] = useState(false);
   const [rerunRequestId] = useState(() => crypto.randomUUID());
@@ -279,7 +282,7 @@ function RunContents({
                 Cancel run
               </button>
             )}
-            {run.allowedActions.includes("rerun") && (
+            {run.allowedActions.includes("rerun") && tierAllowsWorkflows && (
               <button
                 className="af-btn af-btn-primary"
                 onClick={() => setConfirmRerun(true)}
@@ -408,6 +411,9 @@ function RunContents({
                 Files published during this run, including work from unfinished
                 steps. Step and final outputs are labeled below.
               </p>
+              {run.agentArchived ? (
+                <p className="mt-3 text-sm text-[var(--ink-3)]">{FILES_GONE}</p>
+              ) : (
               <AgentFiles
                 canManageFiles={canManageFiles}
                 key={run.id}
@@ -430,6 +436,7 @@ function RunContents({
                   run.state,
                 )}
               />
+              )}
             </div>
           ) : (
             <>
@@ -443,6 +450,7 @@ function RunContents({
               {!(selectedStep?.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state)) && <>
               <WorkflowFiles
                 agentId={agentId}
+                unavailable={run.agentArchived}
                 title={selectedStep ? "Step input files" : "Run input files"}
                 files={Array.from(
                   new Map(
@@ -463,6 +471,7 @@ function RunContents({
               {selectedStep ? (
                 <WorkflowFiles
                   agentId={agentId}
+                  unavailable={run.agentArchived}
                   title="Step outputs"
                   description={selectedStep.outputDescription}
                   files={selectedStep.artifacts ?? []}
@@ -471,6 +480,7 @@ function RunContents({
                 run.state === "SUCCEEDED" && (
                   <WorkflowFiles
                     agentId={agentId}
+                    unavailable={run.agentArchived}
                     title="Final outputs"
                     description={run.finalOutputDescription}
                     files={run.finalArtifacts ?? []}

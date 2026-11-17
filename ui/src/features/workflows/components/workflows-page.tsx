@@ -62,6 +62,7 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
   const [page, setPage] = useQueryState("workflowPage", workflowPageParser);
   const [filter, setFilter] = useQueryState("workflowFilter", workflowFilterParser);
   const [recentPage, setRecentPage] = useQueryState("workflowRunPage", workflowPageParser);
+  const [activePage, setActivePage] = useQueryState("workflowActivePage", workflowPageParser);
   const [versionPage, setVersionPage] = useQueryState("workflowVersionPage", workflowPageParser);
   // The Agent a link asked to run as, such as "Run a workflow" on an Agent's page.
   const [preferredAgent, setPreferredAgent] = useQueryState(
@@ -462,7 +463,8 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
           <WorkflowRunList
             title="Active"
             filters={{ status: "active", pageSize: 50 }}
-            page={1}
+            page={activePage}
+            onPageChange={setActivePage}
             onOpen={(run) => openRun(run.id)}
           />
           <WorkflowRunList

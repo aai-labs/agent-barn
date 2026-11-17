@@ -73,6 +73,7 @@ export class WorkflowDataSupport {
       stepId,
       paginated = false,
       description,
+      inputDescription,
       emptyCriteria = false,
     }: {
       saved?: boolean;
@@ -82,6 +83,8 @@ export class WorkflowDataSupport {
       stepId?: string;
       paginated?: boolean;
       description?: string;
+      /** The first input's description, e.g. one that runs over several lines. */
+      inputDescription?: string;
       emptyCriteria?: boolean;
     } = {},
   ) {
@@ -93,6 +96,7 @@ export class WorkflowDataSupport {
     if (emptyCriteria) workflow.version.draft.steps[0].completion_criteria = "";
     if (stepId) workflow.version.draft.steps[0].id = stepId;
     if (description) workflow.version.draft.description = description;
+    if (inputDescription) workflow.version.draft.inputs[0].description = inputDescription;
     let present = saved;
     if (paginated) {
       workflow.revision = 3;

@@ -378,6 +378,35 @@ test.describe("WF01 Organization workflow authoring", () => {
     });
   });
 
+  test("a description keeps its lines, and its label and key until the first line changes", async ({
+    page,
+  }) => {
+    const saved = "Which topic to digest\nSecond line of help";
+    await support.intercept(MOCK_AGENT_ID, { saved: true, inputDescription: saved });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.cardAction(NAME, "Edit");
+    const description = workflows.editor().getByLabel("Input 1 description");
+    await expect(description).toHaveValue(saved);
+    await description.fill(`${saved}, and more`);
+    await workflows.save();
+    await expect.poll(() => support.saveRequests.length).toBe(1);
+    expect(draftOf(support.saveRequests.at(-1)!).inputs[0]).toMatchObject({
+      description: `${saved}, and more`,
+      label: "Reporting period",
+      key: "period",
+    });
+    await expect(workflows.editor()).toHaveCount(0);
+    await workflows.cardAction(NAME, "Edit");
+    await description.fill(`Topic to digest\nSecond line of help`);
+    await workflows.save();
+    await expect.poll(() => support.saveRequests.length).toBe(2);
+    expect(draftOf(support.saveRequests.at(-1)!).inputs[0]).toMatchObject({
+      label: "Topic to digest",
+      key: "topic-to-digest",
+    });
+  });
+
   test("similar descriptions name the colliding input, and distinct ones save", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();

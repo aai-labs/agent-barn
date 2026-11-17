@@ -43,9 +43,8 @@ function RunForm({
   const actions = useWorkflowRunActions();
   const { agents, isLoading, error: agentsError, refetch } = useAgents();
   // A run needs agent.update on a running Agent; the server checks again on start.
-  const runnable = agents.filter(
-    (agent) => agent.status === "RUNNING" && canAgent(agent, "agent.update"),
-  );
+  const updatable = agents.filter((agent) => canAgent(agent, "agent.update"));
+  const runnable = updatable.filter((agent) => agent.status === "RUNNING");
   const offered = (id?: string | null) =>
     id && runnable.some((agent) => agent.id === id) ? id : null;
   // Until someone chooses, the Agent the link named wins, then the workflow's default.
@@ -164,7 +163,9 @@ function RunForm({
             </p>
           ) : runnable.length === 0 ? (
             <p className="text-sm text-[var(--ink-3)]">
-              No running agent you can update. Start an agent, then run this workflow.
+              {updatable.length === 0
+                ? "You can only view the agents here. Running a workflow needs edit access to an agent; ask its owner or an Organization admin."
+                : "No running agent you can update. Start an agent, then run this workflow."}
             </p>
           ) : (
             <AgentPillPicker

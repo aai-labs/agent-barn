@@ -15,10 +15,12 @@ import { WorkflowRunsPage } from "../pages/workflow-runs-page.po";
 import { WorkflowsPage } from "../pages/workflows-page.po";
 import { artifactFixture } from "../fixtures/artifacts";
 import { WORKFLOW_ID } from "../fixtures/workflows";
+import UserContext from "../fixtures/user-context.json";
 
 test.describe("WF02 run progress and text results", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
   let support: WorkflowRunDataSupport;
+  let workflowData: WorkflowDataSupport;
   test.beforeEach(async ({ page }) => {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
@@ -26,9 +28,8 @@ test.describe("WF02 run progress and text results", () => {
     await data.users.interceptGetOrganizationsRequest();
     await data.agents.interceptGetAgentRequest({ body: mockAgent });
     await data.agents.interceptGetAgentsRequest();
-    await new WorkflowDataSupport(page).intercept(MOCK_AGENT_ID, {
-      saved: true,
-    });
+    workflowData = new WorkflowDataSupport(page);
+    await workflowData.intercept(MOCK_AGENT_ID, { saved: true });
     support = new WorkflowRunDataSupport(page);
     await support.intercept(MOCK_AGENT_ID);
   });
@@ -260,6 +261,30 @@ test.describe("WF02 run progress and text results", () => {
       });
     }
   }
+
+  test("the Runs tab stops polling while every active run is parked", async ({ page }) => {
+    await page.clock.install();
+    support.state = "PAUSED";
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await expect(runs.runs("Active")).toBeVisible();
+    const reads = support.reads;
+    await page.clock.runFor(10_000);
+    expect(support.reads).toBe(reads);
+  });
+
+  test("active runs past the first page are reached with the pager", async ({ page }) => {
+    support.listTotal = 120;
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await runs.runs("Active").getByRole("button", { name: "Next runs" }).click();
+    await expect(page).toHaveURL(/workflowActivePage=2/);
+    await expect
+      .poll(() => support.listQueries.some((query) => /page=2&status=active/.test(query)))
+      .toBe(true);
+    // The badge counts within one page, so it asks for the largest the API serves.
+    expect(support.awaitingQueries.at(-1)).toContain("page_size=100");
+  });
 
   test("blocked runs explain how to proceed", async ({ page }) => {
     support.state = "BLOCKED";
@@ -802,6 +827,19 @@ test.describe("WF02 run progress and text results", () => {
     ).toBeVisible();
     await expect(page.getByLabel("Run summary")).toHaveCount(0);
   });
+  test("a Tier without workflows does not offer Run again", async ({ page }) => {
+    support.state = "SUCCEEDED";
+    await new DataSupport(page).organizations.interceptGetOrganization({
+      organization: {
+        ...UserContext.organization_users[0].organization,
+        entitlements: { features: ["team"], allowed_platform_keys: null },
+      },
+    });
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run summary")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run again", exact: true })).toHaveCount(0);
+  });
+
   test("Viewers cannot run a settled run again", async ({ page }) => {
     support.viewer = true;
     support.state = "FAILED";
@@ -830,7 +868,8 @@ test.describe("WF02 run progress and text results", () => {
     await runs.goto(MOCK_AGENT_ID);
     // Any Member may open the dialog; starting needs an Agent they can update.
     await runs.openRunDialog();
-    await expect(runs.dialog()).toContainText("No running agent you can update");
+    await expect(runs.dialog()).toContainText("Running a workflow needs edit access to an agent");
+    await expect(runs.dialog()).not.toContainText("Start an agent");
     await expect(runs.runAs("Maya")).toHaveCount(0);
     await expect(
       runs.dialog().getByRole("button", { name: "Start run", exact: true }),
@@ -843,6 +882,19 @@ test.describe("WF02 run progress and text results", () => {
       page.getByRole("button", { name: "Cancel run", exact: true }),
     ).toHaveCount(0);
   });
+  test("with every updatable Agent stopped, the Run dialog asks to start one", async ({ page }) => {
+    const stopped = { ...mockAgent, status: "STOPPED" };
+    const data = new DataSupport(page);
+    await data.agents.interceptGetAgentRequest({ body: stopped });
+    await data.agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [stopped] },
+    });
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.dialog()).toContainText("No running agent you can update. Start an agent");
+  });
+
   test("revoked access conceals the run and text results", async ({ page }) => {
     support.failRead = true;
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true, TEST_ORG_ID);
@@ -1034,6 +1086,43 @@ test.describe("WF02 run progress and text results", () => {
     await expect(detail).toContainText("Archived");
     await expect(detail.getByRole("link", { name: /Open Maya/ })).toHaveCount(0);
     await expect(detail.getByRole("button", { name: "Run again" })).toHaveCount(0);
+  });
+
+  test("a run on a deleted Agent names its files without offering or failing on them", async ({
+    page,
+  }) => {
+    support.state = "SUCCEEDED";
+    support.agentArchived = true;
+    support.fileInputs = true;
+    support.viewer = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoOrganizationRun();
+    const outputs = page.getByLabel("Final outputs", { exact: true });
+    await expect(outputs).toContainText("pipeline.csv");
+    await expect(outputs).toContainText("can no longer be downloaded");
+    await expect(outputs.getByRole("button", { name: /Download/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "All artifacts", exact: true }).click();
+    const panel = page.getByLabel("Selected run view", { exact: true });
+    await expect(panel).toContainText("can no longer be downloaded");
+    await expect(panel).not.toContainText("not found");
+    await expect(panel).not.toContainText("unavailable");
+  });
+
+  test("a workflow's card counts a run just started from it", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    const card = workflows.card("Weekly pipeline report");
+    await expect(card).toContainText("0 runs");
+    await card.getByRole("button", { name: "Run Weekly pipeline report" }).click();
+    const runs = new WorkflowRunsPage(page);
+    await runs.chooseAgent("Maya");
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    workflowData.runCount = 1;
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await runs.backToRuns();
+    await page.getByRole("tab", { name: "Workflows" }).click();
+    await expect(workflows.card("Weekly pipeline report")).toContainText("1 run");
   });
 
   test("an old run still shows the output its step was asked for", async ({ page }) => {

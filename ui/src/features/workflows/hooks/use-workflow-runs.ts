@@ -18,9 +18,11 @@ import {
   type WorkflowRunList,
   type WorkflowInputValue,
 } from "../run-schemas";
-import { workflowsKey } from "./use-workflows";
+import { workflowKeys, workflowsKey } from "./use-workflows";
 
 const HISTORY_PAGE = 100;
+/** The most the API returns at once; the badge counts within this page. */
+const AWAITING_PAGE = 100;
 
 /** Runs are addressed by their own id; the Agent that runs one is a filter or a field, never the path. */
 function useRunScope() {
@@ -30,6 +32,8 @@ function useRunScope() {
     // Not useOrganizationApiBase, which throws: the navigation badge also runs with no Organization.
     base: `/api/v1/organizations/${organizationId}/workflow-runs`,
     key: [...workflowsKey.all, "runs", { organizationId }] as const,
+    /** Workflow cards carry a run count, so a new run makes them stale too. */
+    workflowLists: workflowKeys.lists({ organizationId }),
     enabled: Boolean(organizationId),
   };
 }
@@ -65,9 +69,9 @@ export function useWorkflowRuns(
     enabled: scope.enabled && enabled,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
+      // Parked runs (paused, blocked, awaiting approval) change only on a person's action.
       !query.state.error &&
-      (filters.status === "active" ||
-        query.state.data?.items.some((run) => isRunProgressing(run.state)))
+      query.state.data?.items.some((run) => isRunProgressing(run.state))
         ? 3000
         : false,
     queryFn: async () =>
@@ -120,7 +124,7 @@ export function useAwaitingApprovals(
     queryFn: async () =>
       (
         await api.get<WorkflowRunList>(
-          `${scope.base}?${runQuery({ agentId, pageSize: 20 }, { awaiting_decision: "true" })}`,
+          `${scope.base}?${runQuery({ agentId, pageSize: AWAITING_PAGE }, { awaiting_decision: "true" })}`,
           { schema: WorkflowRunListSchema },
         )
       ).data,
@@ -169,6 +173,8 @@ export function useWorkflowRunActions() {
   const scope = useRunScope();
   const client = useQueryClient();
   const invalidate = () => client.invalidateQueries({ queryKey: scope.key });
+  const invalidateCounts = () =>
+    client.invalidateQueries({ queryKey: scope.workflowLists });
   const start = useMutation({
     mutationFn: async (payload: {
       workflowId: string;
@@ -195,7 +201,7 @@ export function useWorkflowRunActions() {
       ).data,
     onSuccess: async (run) => {
       client.setQueryData([...scope.key, run.id], run);
-      await invalidate();
+      await Promise.all([invalidate(), invalidateCounts()]);
     },
   });
   const cancel = useMutation({
@@ -225,7 +231,10 @@ export function useWorkflowRunActions() {
           { schema: WorkflowRunSchema },
         )
       ).data,
-    onSuccess: (run) => client.setQueryData([...scope.key, run.id], run),
+    onSuccess: (run) => {
+      client.setQueryData([...scope.key, run.id], run);
+      void invalidateCounts();
+    },
     // A refused re-run may mean access was lost: refetch so errors replace cached content.
     onSettled: invalidate,
   });

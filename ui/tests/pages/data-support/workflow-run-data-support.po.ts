@@ -45,6 +45,10 @@ export class WorkflowRunDataSupport {
   agentArchived = false;
   /** Query strings of run list reads, to assert the filters sent. */
   listQueries: string[] = [];
+  /** Query strings of approvals inbox and badge reads. */
+  awaitingQueries: string[] = [];
+  /** Reports more runs than one page lists, so a list offers its pager. */
+  listTotal: number | null = null;
   /** A second run, on another Agent, listed beside the primary one. */
   otherAgentRun: { agent_id: string; agent_name: string } | null = null;
   /** The Agent the saved workflow starts runs with by default. */
@@ -53,7 +57,8 @@ export class WorkflowRunDataSupport {
   stepStates: string[] | null = null;
   constructor(private page: Page) {}
   async intercept(agentId: string) {
-    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts?**`, route => route.fulfill({json: {items: this.fileInputs ? [this.uploaded] : [], total: this.fileInputs ? 1 : 0, page: 1, page_size: 20}}));
+    // A deleted Agent's files are gone with it, as the API answers.
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts?**`, route => this.agentArchived ? route.fulfill({status: 404, json: {detail: `Agent ${agentId} not found`}}) : route.fulfill({json: {items: this.fileInputs ? [this.uploaded] : [], total: this.fileInputs ? 1 : 0, page: 1, page_size: 20}}));
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/artifacts/storage`, async route => {
       if (route.request().method() === "POST") {
         this.provisionRequests++;
@@ -303,11 +308,12 @@ export class WorkflowRunDataSupport {
         this.state = "CANCELLED";
         await route.fulfill({ json: run() });
       } else if (path.endsWith(RUN_ID)) await route.fulfill({ json: run() });
-      else if (new URL(route.request().url()).searchParams.get("awaiting_decision") === "true")
+      else if (new URL(route.request().url()).searchParams.get("awaiting_decision") === "true") {
+        this.awaitingQueries.push(new URL(route.request().url()).search);
         await route.fulfill({
           json: page(["LIVE", "PARKED"].includes(String(this.approval?.state)) ? [run()] : []),
         });
-      else {
+      } else {
         const query = new URL(route.request().url()).searchParams;
         this.listQueries.push(query.toString());
         const settled = ["SUCCEEDED", "CANCELLED", "FAILED"];
@@ -323,7 +329,9 @@ export class WorkflowRunDataSupport {
             (!query.get("status") ||
               settled.includes(String(item.state)) === (query.get("status") === "settled")),
         );
-        await route.fulfill({ json: page(items) });
+        await route.fulfill({
+          json: { ...page(items), total: this.listTotal ?? items.length },
+        });
       }
     });
   }
