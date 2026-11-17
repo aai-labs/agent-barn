@@ -81,8 +81,6 @@ class WorkflowRunRepository:
 
     def existing_start(
         self,
-        workflow_id: UUID,
-        agent_id: UUID,
         scope: AuthorizationScope,
         payload: WorkflowRunCreate,
         user_id: UUID,
@@ -90,8 +88,9 @@ class WorkflowRunRepository:
     ) -> UUID | None:
         with Session(self.delegate.engine) as session:
             run = session.exec(
-                self.scoped(agent_id, scope).where(
-                    col(WorkflowRun.workflow_id) == workflow_id,
+                self.scoped(scope).where(
+                    col(WorkflowRun.workflow_id) == payload.workflow_id,
+                    col(WorkflowRun.agent_id) == payload.agent_id,
                     col(WorkflowRun.client_request_id) == payload.client_request_id,
                 )
             ).one_or_none()
@@ -111,24 +110,25 @@ class WorkflowRunRepository:
                 )
             )
 
-    def owning_agent_id(self, workflow_id: UUID) -> UUID:
-        with Session(self.delegate.engine) as session:
-            return session.get_one(Workflow, workflow_id).agent_id
+    def agents(self, agent_ids: Iterable[UUID]) -> dict[UUID, Agent]:
+        """The Agents of already authorized runs, including deleted ones."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            return {agent.id: agent for agent in session.exec(select(Agent).where(col(Agent.id).in_(set(agent_ids))))}
 
     @staticmethod
-    def scoped(agent_id: UUID, scope: AuthorizationScope) -> SelectOfScalar[WorkflowRun]:
+    def scoped(scope: AuthorizationScope, *, include_deleted: bool = False) -> SelectOfScalar[WorkflowRun]:
+        """Runs on the Agents this scope reaches; reads keep the runs of deleted Agents."""
         return (
             select(WorkflowRun)
-            .join(Workflow, col(Workflow.id) == col(WorkflowRun.workflow_id))
-            .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-            .where(col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope))
+            .join(Agent, col(Agent.id) == col(WorkflowRun.agent_id))
+            .where(*agent_scope_predicates(scope, include_deleted=include_deleted))
         )
 
-    def get(
-        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope
-    ) -> tuple[WorkflowRun, WorkflowVersion] | None:
+    def get(self, run_id: UUID, scope: AuthorizationScope) -> tuple[WorkflowRun, WorkflowVersion] | None:
         with Session(self.delegate.engine) as session:
-            run = session.exec(self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id)).one_or_none()
+            run = session.exec(
+                self.scoped(scope, include_deleted=True).where(col(WorkflowRun.id) == run_id)
+            ).one_or_none()
             version = session.get(WorkflowVersion, run.version_id) if run else None
             return (run, version) if run and version else None
 
@@ -170,19 +170,25 @@ class WorkflowRunRepository:
 
     def list_runs(
         self,
-        agent_id: UUID,
         scope: AuthorizationScope,
         page: int,
         size: int,
-        workflow_id: UUID | None,
+        workflow_id: UUID | None = None,
+        agent_id: UUID | None = None,
         awaiting_decision: bool = False,
+        settled: bool | None = None,
     ) -> tuple[list[tuple[WorkflowRun, WorkflowVersion]], int]:
         with Session(self.delegate.engine) as session:
-            query = self.scoped(agent_id, scope)
+            query = self.scoped(scope, include_deleted=True)
             if workflow_id:
                 query = query.where(col(WorkflowRun.workflow_id) == workflow_id)
+            if agent_id:
+                query = query.where(col(WorkflowRun.agent_id) == agent_id)
+            if settled is not None:
+                terminal = col(WorkflowRun.state).in_(TERMINAL_STATES)
+                query = query.where(terminal if settled else ~terminal)
             if awaiting_decision:
-                # Correlated per run, so the open-request partial index serves it within this Agent.
+                # Correlated per run, so the open-request partial index serves it for the Agents in scope.
                 query = query.where(
                     sa.exists().where(
                         col(WorkflowApprovalRequest.run_id) == WorkflowRun.id,
@@ -201,11 +207,13 @@ class WorkflowRunRepository:
             return [(run, version) for run, version in rows], total
 
     def history(
-        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, newest_first: bool = False
+        self, run_id: UUID, scope: AuthorizationScope, page: int, size: int, newest_first: bool = False
     ) -> tuple[list[WorkflowHistory], int]:
         with Session(self.delegate.engine) as session:
             query = select(WorkflowHistory).where(
-                col(WorkflowHistory.run_id).in_(self.scoped(agent_id, scope).with_only_columns(col(WorkflowRun.id))),
+                col(WorkflowHistory.run_id).in_(
+                    self.scoped(scope, include_deleted=True).with_only_columns(col(WorkflowRun.id))
+                ),
                 col(WorkflowHistory.run_id) == run_id,
             )
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
@@ -219,8 +227,7 @@ class WorkflowRunRepository:
         run.updated_at = now
         session.add(run)
         session.add(WorkflowHistory(run_id=run.id, revision=run.revision, kind=kind, detail=detail))
-        workflow = session.get_one(Workflow, run.workflow_id)
-        agent = session.get_one(Agent, workflow.agent_id)
+        agent = session.get_one(Agent, run.agent_id)
         message = self.outbox.stage(
             session=session,
             registry=EVENT_REGISTRY,
@@ -241,8 +248,6 @@ class WorkflowRunRepository:
 
     def start(
         self,
-        workflow_id: UUID,
-        agent_id: UUID,
         scope: AuthorizationScope,
         payload: WorkflowRunCreate,
         user_id: UUID,
@@ -251,8 +256,9 @@ class WorkflowRunRepository:
         rerun_of_run_id: UUID | None = None,
     ) -> tuple[WorkflowRun, list[UUID]]:
         request_hash = start_hash(payload, user_id, rerun_of_run_id)
+        workflow_id, agent_id = payload.workflow_id, payload.agent_id
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            # Serialize starts across this Agent's definitions, including its first run.
+            # Serialize starts on this Agent, including its first run.
             agent = session.exec(
                 select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope)).with_for_update(of=Agent)
             ).one_or_none()
@@ -260,10 +266,7 @@ class WorkflowRunRepository:
                 raise WorkflowConflict("Workflow access changed")
             workflow = session.exec(
                 select(Workflow)
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-                .where(
-                    col(Workflow.id) == workflow_id, col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope)
-                )
+                .where(col(Workflow.id) == workflow_id, col(Workflow.organization_id) == scope.organization_id)
                 .with_for_update(of=Workflow)
             ).one_or_none()
             if workflow is None:
@@ -276,7 +279,9 @@ class WorkflowRunRepository:
             ).one_or_none()
             if existing:
                 if existing.request_hash != request_hash:
-                    raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
+                    raise WorkflowConflict(
+                        "Start request identity was reused with a different Agent, inputs, version or actor"
+                    )
                 return existing, []
             if rerun_of_run_id:
                 # Retention may have removed the source's inputs since the caller read them.
@@ -290,7 +295,9 @@ class WorkflowRunRepository:
                 raise WorkflowConflict("The saved version is unavailable or the workflow is archived")
             run = WorkflowRun(
                 workflow_id=workflow_id,
+                agent_id=agent_id,
                 version_id=payload.version_id,
+                title=payload.title,
                 initiating_user_id=user_id,
                 initiating_membership_id=membership_id,
                 client_request_id=payload.client_request_id,
@@ -331,10 +338,10 @@ class WorkflowRunRepository:
             session.commit()
             return run, delivery_ids
 
-    def cancel(self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, revision: int) -> list[UUID]:
+    def cancel(self, run_id: UUID, scope: AuthorizationScope, revision: int) -> list[UUID]:
         with Session(self.delegate.engine) as session:
             run = session.exec(
-                self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
+                self.scoped(scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
             ).one_or_none()
             if run is None:
                 raise WorkflowConflict("Run access changed")
@@ -362,8 +369,7 @@ class WorkflowRunRepository:
         """The person who decided a request must still hold `agent.update` when the session continues."""
         if user_id is None:
             return False
-        workflow = session.get_one(Workflow, run.workflow_id)
-        agent = session.get(Agent, workflow.agent_id)
+        agent = session.get(Agent, run.agent_id)
         membership = (
             session.exec(
                 select(OrganizationUser).where(
@@ -392,11 +398,10 @@ class WorkflowRunRepository:
                 include_general_access=user.email_verified_at is not None,
             )
         )
-        workflow = session.get_one(Workflow, run.workflow_id)
         return (
             session.exec(
                 select(Agent).where(
-                    col(Agent.id) == workflow.agent_id,
+                    col(Agent.id) == run.agent_id,
                     *([col(Agent.status) == AgentStatus.RUNNING] if running else []),
                     *agent_scope_predicates(scope),
                 )
@@ -420,13 +425,12 @@ class WorkflowRunRepository:
     def artifact_attempt(
         self, session: Session, attempt_id: UUID, agent_id: UUID, *, lock: bool = True
     ) -> tuple[WorkflowRun, WorkflowAttempt]:
-        """Publication authority comes from an authenticated owning Agent, never the completion bearer."""
+        """Publication authority comes from the authenticated Agent running the run, never the completion bearer."""
         attempt = session.get(WorkflowAttempt, attempt_id)
         if attempt is None:
             raise WorkflowConflict("Workflow attempt not found")
         run = session.get_one(WorkflowRun, attempt.run_id)
-        workflow = session.get_one(Workflow, run.workflow_id)
-        if workflow.agent_id != agent_id:
+        if run.agent_id != agent_id:
             raise WorkflowConflict("Workflow attempt belongs to another Agent")
         return self._fenced_attempt(session, attempt, lock=lock)
 
@@ -734,7 +738,6 @@ class WorkflowRunRepository:
         self,
         run_id: UUID,
         request_id: UUID,
-        agent_id: UUID,
         scope: AuthorizationScope,
         user_id: UUID,
         approve: bool,
@@ -742,7 +745,7 @@ class WorkflowRunRepository:
     ) -> list[UUID]:
         with Session(self.delegate.engine) as session:
             run = session.exec(
-                self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
+                self.scoped(scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
             ).one_or_none()
             if run is None:
                 raise WorkflowConflict("Run access changed")
@@ -887,8 +890,7 @@ class WorkflowRunRepository:
             run = session.exec(select(WorkflowRun).where(col(WorkflowRun.id) == run_id).with_for_update()).one_or_none()
             if run is None or run.state in TERMINAL_STATES:
                 return None, []
-            workflow = session.get_one(Workflow, run.workflow_id)
-            agent = session.get(Agent, workflow.agent_id)
+            agent = session.get(Agent, run.agent_id)
             if agent is None or agent.deleted_at is not None:
                 run.state = "CANCELLING"
             attempt = session.exec(
