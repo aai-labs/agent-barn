@@ -32,4 +32,59 @@ export class PlatformLlmProvidersPage {
   async cancelDialog() {
     await this.dialog().getByRole("button", { name: "Cancel" }).click();
   }
+
+  otherProviders() {
+    return this.page.getByRole("region", { name: "Other providers" });
+  }
+
+  providerCard(name: string) {
+    return this.otherProviders().getByRole("region", { name, exact: true });
+  }
+
+  providerCardNames() {
+    return this.otherProviders().getByRole("heading", { level: 4 });
+  }
+
+  addProviderButton() {
+    return this.otherProviders().getByRole("button", { name: "Add provider" });
+  }
+
+  providerSelect() {
+    return this.dialog().getByRole("combobox", { name: "Provider" });
+  }
+
+  providerOptions() {
+    return this.page.getByRole("option");
+  }
+
+  nameInput() {
+    return this.dialog().getByLabel("Name", { exact: true });
+  }
+
+  slugInput() {
+    return this.dialog().getByLabel("Slug", { exact: true });
+  }
+
+  baseUrlInput() {
+    return this.dialog().getByLabel("Base URL", { exact: true });
+  }
+
+  apiKeyInput() {
+    return this.dialog().getByLabel("API key", { exact: true });
+  }
+
+  async chooseProvider(label: string) {
+    await this.providerSelect().click();
+    await this.page.getByRole("option", { name: label, exact: true }).click();
+  }
+
+  async addProvider(input: { provider?: string; key: string; name?: string; slug?: string; baseUrl?: string }) {
+    await this.addProviderButton().click();
+    if (input.provider) await this.chooseProvider(input.provider);
+    if (input.name !== undefined) await this.nameInput().fill(input.name);
+    if (input.slug !== undefined) await this.slugInput().fill(input.slug);
+    if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);
+    await this.apiKeyInput().fill(input.key);
+    await this.dialog().getByRole("button", { name: "Add provider" }).click();
+  }
 }

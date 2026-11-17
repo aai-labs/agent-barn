@@ -7,6 +7,7 @@ import { formatDate } from "@/shared/date";
 
 import { useOpenRouterConnection } from "../hooks/use-openrouter-connection";
 import type { OpenRouterConnection } from "../schemas";
+import { LlmProviderConnectionList } from "./llm-provider-connection-list";
 import { OpenRouterKeyDialog } from "./openrouter-key-dialog";
 
 const MASKED_KEY_PREFIX = "sk-*******";
@@ -38,42 +39,45 @@ export function PlatformLlmProviderSettings() {
   }
 
   return (
-    <section className="af-card overflow-hidden" aria-labelledby="openrouter-heading">
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 id="openrouter-heading" className="m-0 text-sm font-medium">
-              OpenRouter
-            </h3>
-            <KeyStatus connection={connection} />
+    <div className="flex flex-col gap-4">
+      <section className="af-card overflow-hidden" aria-labelledby="openrouter-heading">
+        <div className="p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 id="openrouter-heading" className="m-0 text-sm font-medium">
+                OpenRouter
+              </h3>
+              <KeyStatus connection={connection} />
+            </div>
+            <button type="button" className="af-btn shrink-0" onClick={openDialog}>
+              {connection.hasApiKey ? "Replace key" : "Save a key"}
+            </button>
           </div>
-          <button type="button" className="af-btn shrink-0" onClick={openDialog}>
-            {connection.hasApiKey ? "Replace key" : "Save a key"}
-          </button>
+          {connection.hasApiKey && connection.envKeyConfigured && (
+            <p role="note" className="mb-0 mt-4 text-sm" style={{ color: "var(--ink-3)" }}>
+              OPENROUTER_API_KEY is still set in this deployment&apos;s secrets. Agents use the saved key; LiteLLM falls
+              back to the secret only while the saved key&apos;s route is unavailable. Delete the secret once every
+              environment that shares it has a saved key.
+            </p>
+          )}
+          {saved && (
+            <p role="status" className="mb-0 mt-4 text-sm">
+              OpenRouter key saved.
+            </p>
+          )}
         </div>
-        {connection.hasApiKey && connection.envKeyConfigured && (
-          <p role="note" className="mb-0 mt-4 text-sm" style={{ color: "var(--ink-3)" }}>
-            OPENROUTER_API_KEY is still set in this deployment&apos;s secrets. Agents use the saved key; LiteLLM falls
-            back to the secret only while the saved key&apos;s route is unavailable. Delete the secret once every
-            environment that shares it has a saved key.
-          </p>
-        )}
-        {saved && (
-          <p role="status" className="mb-0 mt-4 text-sm">
-            OpenRouter key saved.
-          </p>
-        )}
-      </div>
-      <OpenRouterKeyDialog
-        key={dialogKey}
-        replacing={connection.hasApiKey}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onSave={save}
-        isSaving={isReplacing}
-        saveError={replaceError}
-      />
-    </section>
+        <OpenRouterKeyDialog
+          key={dialogKey}
+          replacing={connection.hasApiKey}
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          onSave={save}
+          isSaving={isReplacing}
+          saveError={replaceError}
+        />
+      </section>
+      <LlmProviderConnectionList />
+    </div>
   );
 }
 

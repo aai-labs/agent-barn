@@ -71,6 +71,8 @@ Platform Admin settings → **LLM providers** (`/dashboard/platform/settings?sec
 
 "Save a key" or "Replace key" opens a dialog with a password field. A refused or failed save keeps the dialog open with the API's message; an empty key is not sent.
 
+Below it, **Other providers** lists every other live connection by name, each with its key masked as `*******` plus its last four characters (other providers' keys don't all start with `sk-`), who changed it when, and for Azure and Custom the provider and base URL. "Add provider" opens a dialog that offers the known providers not yet connected, Azure and Custom, never OpenRouter. Azure and Custom also ask for a name, slug and base URL. The key is a password field. A refused add keeps the dialog open with the API's message; a missing provider or empty key is not sent.
+
 ## Moving off the environment key
 
 `OPENROUTER_API_KEY` is optional. While it is set, LiteLLM serves it through the config-file route and the API falls back to it. Each environment's key is saved in Platform Admin settings before its GitHub secret is deleted; staging and k3s share one secret. The steps are in the [operations guide](../guidelines/operations.md#openrouter-key). Deleting a secret before its environments have a saved key leaves LiteLLM with no OpenRouter route.

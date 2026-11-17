@@ -8,11 +8,17 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
-- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter can be deleted. There is no UI for any of this yet.
-- Next: the slice 1 demo on local k3d; slice 2, PR 10, the connection list and add dialog in the UI.
+- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter can be deleted. The UI lists the other connections and adds them; replacing their keys and deleting them is API-only so far.
+- Next: the slice 1 demo on local k3d; slice 2, PR 11, replacing keys and deleting connections in the UI.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 10
+
+- Delivered: Platform Admin settings → LLM providers shows an **Other providers** card below OpenRouter. It lists each other live connection from `GET /platform/settings/llm-providers`, its key masked as `*******` plus the last four characters, who changed it when, and for Azure and Custom the provider and base URL. "Add provider" opens a dialog: a provider select offering the known providers not yet connected, Azure and Custom (never OpenRouter), a name, slug and base URL for Azure and Custom, and a password field for the key. It sends `POST /platform/settings/llm-providers`; a refusal keeps the dialog open with the API's message, and a missing provider or empty key is not sent. A failed list read can be retried on its own.
+- Changed: `ui/src/features/llm-providers/` gains the connection schema, `useLlmProviderConnections`, the list and the add dialog. Replacing the OpenRouter key now invalidates every LLM provider query. `platform-llm-providers.spec.ts`, its page object and its data support cover the list, adding a known provider and an Azure connection, and refusals. [`llm-providers.md`](../llm-providers.md) describes the card.
+- Follow-up: PR 11 adds replacing keys and deleting connections to the UI.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 9
 

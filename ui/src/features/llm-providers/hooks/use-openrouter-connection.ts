@@ -3,12 +3,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
-import { createQueryKeyStructure } from "@/shared/query-keys";
 
 import { OpenRouterConnectionSchema, type OpenRouterConnection } from "../schemas";
+import { llmProvidersKey } from "./use-llm-provider-connections";
 
 const BASE = "/api/v1/platform/settings/llm-providers/openrouter";
-const KEY = createQueryKeyStructure("platform-llm-providers").detail("openrouter");
+const KEY = llmProvidersKey.detail("openrouter");
 
 export function useOpenRouterConnection() {
   const client = useQueryClient();
@@ -22,7 +22,7 @@ export function useOpenRouterConnection() {
       (await api.put<OpenRouterConnection>(BASE, { apiKey }, { schema: OpenRouterConnectionSchema })).data,
     onSuccess: async (data) => {
       client.setQueryData(KEY, data);
-      await client.invalidateQueries({ queryKey: KEY });
+      await client.invalidateQueries({ queryKey: llmProvidersKey.all });
     },
   });
   return {
