@@ -28,6 +28,10 @@ class ConnectionAlreadyExists(Exception):
     pass
 
 
+class ConnectionChanged(Exception):
+    pass
+
+
 @inject
 @singleton
 @dataclass
@@ -79,11 +83,16 @@ class LlmProviderRepository:
         api_key_last4: str,
         actor_id: UUID,
         actor_display: str,
-        apply: Callable[[], None],
+        *,
+        seen_base_url: str | None,
+        base_url: str | None,
+        apply: Callable[[], None] | None = None,
     ) -> list[UUID]:
-        """Store a new key, calling `apply` first under the connection's lock.
+        """Store a new key and the base URL it was checked at, calling `apply` first under the
+        connection's lock.
 
-        `apply` pushes the key to LiteLLM; if it raises, nothing is stored.
+        `apply` pushes the key to LiteLLM; if it raises, nothing is stored. Raises ConnectionChanged
+        when the stored base URL is no longer `seen_base_url`, the one read before the key was checked.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
@@ -94,10 +103,15 @@ class LlmProviderRepository:
             ).one_or_none()
             if connection is None:
                 raise ConnectionNotFound(slug)
+            previous_base_url = connection.base_url
+            if previous_base_url != seen_base_url:
+                raise ConnectionChanged(slug)
             replaced_existing = connection.api_key_encrypted is not None
-            apply()
+            if apply is not None:
+                apply()
             now = datetime.now(UTC)
             connection.api_key_encrypted = api_key_encrypted
+            connection.base_url = base_url
             connection.api_key_last4 = api_key_last4
             connection.updated_by = actor_id
             connection.updated_at = now
@@ -108,7 +122,13 @@ class LlmProviderRepository:
                 connection,
                 actor_id,
                 now,
-                {"replaced_existing": replaced_existing, "actor_display": actor_display},
+                {
+                    "replaced_existing": replaced_existing,
+                    "provider_type": connection.provider_type.value,
+                    "previous_base_url": previous_base_url,
+                    "base_url": base_url,
+                    "actor_display": actor_display,
+                },
             )
             session.commit()
             return ids

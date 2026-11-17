@@ -279,6 +279,9 @@ def test_the_change_is_audited_with_no_key_in_the_event():
                     "connection_id": str(OPENROUTER_CONNECTION_ID),
                     "slug": "openrouter",
                     "replaced_existing": True,
+                    "provider_type": "openrouter",
+                    "previous_base_url": None,
+                    "base_url": None,
                     "actor_display": ADMIN_NAME,
                     "subject_display": "OpenRouter",
                 }

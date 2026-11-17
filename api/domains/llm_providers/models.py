@@ -162,6 +162,23 @@ class LlmProviderConnectionCreate(PydanticBaseModel):
         return SecretStr(trimmed)
 
 
+class LlmProviderKeyReplace(PydanticBaseModel):
+    """A new key and, for Azure or Custom only, a new base URL, whose rules the service checks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: SecretStr
+    base_url: str | None = None
+
+    @field_validator("api_key")
+    @classmethod
+    def _trimmed_and_bounded(cls, value: SecretStr) -> SecretStr:
+        trimmed = value.get_secret_value().strip()
+        if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
+            raise ValueError("Enter a key.")
+        return SecretStr(trimmed)
+
+
 class OpenRouterConnectionRead(PydanticBaseModel):
     """What a Platform Administrator sees of the OpenRouter key: never the key itself."""
 

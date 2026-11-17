@@ -10,13 +10,14 @@ from api.core.config import Config
 from api.domains.events.models import OutboxMessage
 from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, LlmProviderConnection, ProviderType
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.llm_provider_keys.checker import (
     BaseUrlNotAnApi,
     BaseUrlNotPublic,
     LlmProviderKeyChecker,
     LlmProviderUnreachable,
 )
+from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -620,3 +621,337 @@ def test_an_azure_key_that_is_refused_or_unchecked_stores_nothing(answer, status
         assert NEW_KEY not in response.text
         assert_that(_rows(context, "azure-eu"), equal_to([]))
         assert_that(_events(context), has_length(0))
+
+
+CHANGED_EVENT = "platform.llm_provider.changed"
+REPLACED_KEY = "sk-replacement-key-k9l0"
+FABRIKAM_BASE_URL = "https://fabrikam.openai.azure.com"
+NOT_FOUND = "That connection does not exist."
+BASE_URL_NOT_TAKEN = "Only Azure and Custom connections take a base URL."
+CHANGED_WHILE_CHECKING = "The connection changed while the key was checked. Nothing was saved."
+OPENROUTER_ROUTE = {
+    "model_name": "openrouter/*",
+    "litellm_params": {
+        "model": "openrouter/*",
+        "api_key": REPLACED_KEY,
+        "api_base": "https://openrouter.ai/api/v1",
+        "order": 1,
+    },
+    "model_info": {"id": "agentbarn:openrouter", "disable_background_health_check": True},
+}
+
+
+def openrouter_answers(accepted: bool | Exception):
+    def step(context):
+        check = Mock(side_effect=accepted) if isinstance(accepted, Exception) else Mock(return_value=accepted)
+        context.injector.get(OpenRouterClient).check_key = check
+        context.check_key = check
+
+    return step
+
+
+def anthropic_connected(context):
+    context.connection = _connection(
+        context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY)
+    )
+
+
+def azure_connected(context):
+    context.connection = _connection(
+        context, "azure-eu", "Azure Europe", ProviderType.AZURE, base_url=AZURE_BASE_URL, **_with_key(AZURE_KEY)
+    )
+
+
+def _replace(context, slug: str, key: str = REPLACED_KEY, headers: dict | None = None, **fields):
+    return context.client.put(f"{BASE}/{slug}/key", headers=headers or auth(context), json={"api_key": key, **fields})
+
+
+def _changed_events(context) -> list[OutboxMessage]:
+    with _session(context) as session:
+        return list(session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name) == CHANGED_EVENT)).all())
+
+
+def _stored(context, slug: str) -> tuple[str | None, str | None]:
+    [row] = _rows(context, slug)
+    key = decrypt_token(row.api_key_encrypted, TEST_ENCRYPTION_KEY) if row.api_key_encrypted else None
+    return key, row.base_url
+
+
+def _assert_unchanged(context, response, slug: str, key: str, base_url: str | None) -> None:
+    assert REPLACED_KEY not in response.text
+    assert_that(_stored(context, slug), equal_to((key, base_url)))
+    assert_that(_changed_events(context), has_length(0))
+
+
+def test_an_organization_owner_cannot_replace_a_key():
+    with given(_setup(provider_answers(True), anthropic_connected)) as context:
+        response = _replace(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+        context.check.assert_not_called()
+        _assert_unchanged(context, response, "anthropic", ANTHROPIC_KEY, None)
+
+
+def test_a_read_only_api_key_cannot_replace_a_key():
+    with given(_setup(admin, provider_answers(True), anthropic_connected)) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _replace(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(403))
+        context.check.assert_not_called()
+        _assert_unchanged(context, response, "anthropic", ANTHROPIC_KEY, None)
+
+
+def test_the_openrouter_key_is_routed_in_litellm_before_it_is_stored():
+    with given(_setup(admin, env_key(""), openrouter_answers(True), provider_answers(True))) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY)
+        stored_while_routing = []
+        litellm = context.injector.get(LiteLLMClient)
+        litellm.upsert_model_deployment.side_effect = lambda **_: stored_while_routing.append(
+            _stored(context, "openrouter")[0]
+        )
+
+        response = _replace(context, "openrouter", key=f"  {REPLACED_KEY}  ")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            has_entries(slug="openrouter", has_api_key=True, api_key_last4="k9l0", updated_by=ADMIN_NAME),
+        )
+        context.check_key.assert_called_once_with(REPLACED_KEY)
+        context.check.assert_not_called()
+        litellm.upsert_model_deployment.assert_called_once_with(**OPENROUTER_ROUTE)
+        assert_that(stored_while_routing, equal_to([OPENROUTER_KEY]))
+        assert_that(_stored(context, "openrouter"), equal_to((REPLACED_KEY, None)))
+
+
+def test_a_litellm_failure_leaves_the_openrouter_key_unchanged():
+    with given(_setup(admin, openrouter_answers(True))) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY)
+        context.injector.get(LiteLLMClient).upsert_model_deployment.side_effect = LiteLLMError("route not written")
+
+        response = _replace(context, "openrouter")
+
+        assert_that(response.status_code, equal_to(503))
+        _assert_unchanged(context, response, "openrouter", OPENROUTER_KEY, None)
+
+
+@pytest.mark.parametrize(("answer", "status_code"), [(False, 422), (OpenRouterError("unreachable"), 503)])
+def test_an_openrouter_key_that_is_refused_or_unchecked_changes_nothing(answer, status_code):
+    with given(_setup(admin, openrouter_answers(answer))) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY)
+
+        response = _replace(context, "openrouter")
+
+        assert_that(response.status_code, equal_to(status_code))
+        context.injector.get(LiteLLMClient).upsert_model_deployment.assert_not_called()
+        _assert_unchanged(context, response, "openrouter", OPENROUTER_KEY, None)
+
+
+def test_a_known_provider_key_is_checked_and_stored_without_a_litellm_route():
+    with given(_setup(admin, provider_answers(True), anthropic_connected)) as context:
+        response = _replace(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            has_entries(slug="anthropic", base_url=None, api_key_last4="k9l0", updated_by=ADMIN_NAME),
+        )
+        context.check.assert_called_once_with(ProviderType.ANTHROPIC, REPLACED_KEY)
+        context.injector.get(LiteLLMClient).upsert_model_deployment.assert_not_called()
+        assert_that(_stored(context, "anthropic"), equal_to((REPLACED_KEY, None)))
+        [row] = _rows(context, "anthropic")
+        assert_that(row.updated_by, equal_to(context.admin_id))
+
+
+def test_replacing_a_key_is_audited_with_no_part_of_either_key():
+    with given(_setup(admin, provider_answers(True), anthropic_connected)) as context:
+        _replace(context, "anthropic")
+
+        events = _changed_events(context)
+        assert_that(events, has_length(1))
+        assert_that(
+            events[0].payload,
+            equal_to(
+                {
+                    "connection_id": str(context.connection.id),
+                    "slug": "anthropic",
+                    "replaced_existing": True,
+                    "provider_type": "anthropic",
+                    "previous_base_url": None,
+                    "base_url": None,
+                    "actor_display": ADMIN_NAME,
+                    "subject_display": "Anthropic",
+                }
+            ),
+        )
+        assert_that(events[0].subject, has_entries(type="SYSTEM", id=str(context.connection.id)))
+        for secret in (REPLACED_KEY, ANTHROPIC_KEY, "k9l0", "c3d4"):
+            assert secret not in str(events[0].payload)
+
+
+def test_a_first_key_for_a_known_provider_records_that_none_was_replaced():
+    with given(_setup(admin, provider_answers(True))) as context:
+        _connection(context, "deepseek", "DeepSeek", ProviderType.DEEPSEEK)
+
+        response = _replace(context, "deepseek")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(_changed_events(context)[0].payload, has_entries(replaced_existing=False))
+
+
+def test_an_azure_key_is_checked_at_the_stored_base_url_when_none_is_given():
+    with given(_setup(admin, provider_answers(True), azure_connected)) as context:
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), has_entries(base_url=AZURE_BASE_URL, api_key_last4="k9l0"))
+        context.check.assert_called_once_with(ProviderType.AZURE, REPLACED_KEY, AZURE_BASE_URL)
+        assert_that(_stored(context, "azure-eu"), equal_to((REPLACED_KEY, AZURE_BASE_URL)))
+        assert_that(
+            _changed_events(context)[0].payload,
+            has_entries(provider_type="azure", previous_base_url=AZURE_BASE_URL, base_url=AZURE_BASE_URL),
+        )
+
+
+@pytest.mark.parametrize("provider_type", [ProviderType.AZURE, ProviderType.CUSTOM])
+def test_a_new_base_url_is_checked_and_stored_with_the_new_key(provider_type):
+    with given(_setup(admin, provider_answers(True))) as context:
+        _connection(context, "eu-models", "EU models", provider_type, base_url=AZURE_BASE_URL, **_with_key(AZURE_KEY))
+
+        response = _replace(context, "eu-models", base_url=f" {FABRIKAM_BASE_URL}/ ")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), has_entries(base_url=FABRIKAM_BASE_URL))
+        context.check.assert_called_once_with(provider_type, REPLACED_KEY, FABRIKAM_BASE_URL)
+        assert_that(_stored(context, "eu-models"), equal_to((REPLACED_KEY, FABRIKAM_BASE_URL)))
+        assert_that(
+            _changed_events(context)[0].payload,
+            has_entries(
+                provider_type=provider_type.value, previous_base_url=AZURE_BASE_URL, base_url=FABRIKAM_BASE_URL
+            ),
+        )
+
+
+@pytest.mark.parametrize(("slug", "key"), [("anthropic", ANTHROPIC_KEY), ("openrouter", OPENROUTER_KEY)])
+def test_a_base_url_for_a_provider_without_one_is_refused(slug, key):
+    with given(_setup(admin, provider_answers(True), openrouter_answers(True), anthropic_connected)) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY)
+
+        response = _replace(context, slug, base_url=AZURE_BASE_URL)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": BASE_URL_NOT_TAKEN}))
+        context.check.assert_not_called()
+        context.check_key.assert_not_called()
+        _assert_unchanged(context, response, slug, key, None)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "detail"),
+    [
+        ("http://fabrikam.openai.azure.com", NOT_PUBLIC),
+        ("https:///openai", NOT_PUBLIC),
+        ("https://admin:hunter2@fabrikam.openai.azure.com", URL_EXTRAS),
+        ("https://fabrikam.openai.azure.com?api-version=1", URL_EXTRAS),
+    ],
+)
+def test_a_new_base_url_that_breaks_the_rules_is_refused_before_the_key_is_checked(base_url, detail):
+    with given(_setup(admin, provider_answers(True), azure_connected)) as context:
+        response = _replace(context, "azure-eu", base_url=base_url)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        assert "hunter2" not in response.text
+        context.check.assert_not_called()
+        _assert_unchanged(context, response, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+
+@pytest.mark.parametrize(
+    ("answer", "status_code", "detail"),
+    [
+        (False, 422, "Azure Europe did not accept this key. Nothing was saved."),
+        (LlmProviderUnreachable(), 503, "Azure Europe could not be reached to check the key. Nothing was saved."),
+        (BaseUrlNotPublic(), 422, NOT_PUBLIC),
+        (BaseUrlNotAnApi(), 422, NOT_AN_API),
+    ],
+)
+def test_a_key_or_base_url_the_check_does_not_accept_changes_nothing(answer, status_code, detail):
+    with given(_setup(admin, provider_answers(answer), azure_connected)) as context:
+        response = _replace(context, "azure-eu", base_url=FABRIKAM_BASE_URL)
+
+        assert_that(response.status_code, equal_to(status_code))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        _assert_unchanged(context, response, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_a_missing_connection_is_not_found(deleted):
+    with given(_setup(admin, provider_answers(True))) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _replace(context, "xai")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        context.check.assert_not_called()
+        assert_that(_changed_events(context), has_length(0))
+
+
+def _while_checking(context, change):
+    def check(*_):
+        with _session(context) as session:
+            [row] = session.exec(select(LlmProviderConnection).where(LlmProviderConnection.slug == "azure-eu")).all()
+            change(row)
+            session.add(row)
+            session.commit()
+        return True
+
+    context.injector.get(LlmProviderKeyChecker).check = Mock(side_effect=check)
+
+
+def test_a_base_url_changed_while_the_key_was_checked_is_not_overwritten():
+    with given(_setup(admin, azure_connected)) as context:
+        _while_checking(context, lambda row: setattr(row, "base_url", FABRIKAM_BASE_URL))
+
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": CHANGED_WHILE_CHECKING}))
+        _assert_unchanged(context, response, "azure-eu", AZURE_KEY, FABRIKAM_BASE_URL)
+
+
+def test_a_connection_deleted_while_the_key_was_checked_is_not_found():
+    with given(_setup(admin, azure_connected)) as context:
+        _while_checking(context, lambda row: setattr(row, "deleted_at", datetime.now(UTC)))
+
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        assert_that(_changed_events(context), has_length(0))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"api_key": "   "},
+        {"api_key": "x" * 513},
+        {"api_key": REPLACED_KEY, "unexpected": REPLACED_KEY},
+        {"api_key": REPLACED_KEY, "slug": "other"},
+    ],
+)
+def test_a_malformed_key_replacement_is_refused_without_echoing_it(body):
+    with given(_setup(admin, provider_answers(True), anthropic_connected)) as context:
+        response = context.client.put(f"{BASE}/anthropic/key", headers=auth(context), json=body)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": "Invalid LLM provider key request"}))
+        context.check.assert_not_called()
+        _assert_unchanged(context, response, "anthropic", ANTHROPIC_KEY, None)

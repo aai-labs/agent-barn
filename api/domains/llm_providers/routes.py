@@ -11,6 +11,7 @@ from api.domains.auth.utils import require_platform_admin
 from api.domains.llm_providers.models import (
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
+    LlmProviderKeyReplace,
     OpenRouterConnectionRead,
     OpenRouterKeyUpdate,
 )
@@ -50,6 +51,16 @@ def add_connection(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     return service.add_connection(data, context)
+
+
+@platform_llm_providers_router.put("/{slug}/key", response_model=LlmProviderConnectionRead)
+def replace_key(
+    slug: str,
+    data: LlmProviderKeyReplace,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.replace_key(slug, data, context)
 
 
 @platform_llm_providers_router.get("/openrouter", response_model=OpenRouterConnectionRead)
