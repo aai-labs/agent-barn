@@ -137,7 +137,9 @@ class AnomalyCheckService:
         organizations = self.repository.enabled_organization_ids()
         agents = failures = 0
         for organization_id in organizations:
-            for agent_id in self.agent_service.live_agent_ids(organization_id):
+            agent_ids = self.agent_service.live_agent_ids(organization_id)
+            self.repository.end_ongoing_except(organization_id, agent_ids, until)
+            for agent_id in agent_ids:
                 agents += 1
                 try:
                     self._check_agent(organization_id, agent_id, until, cost_until)

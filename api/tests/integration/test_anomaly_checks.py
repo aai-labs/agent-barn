@@ -18,9 +18,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from hamcrest import assert_that, contains_exactly, empty, equal_to, has_length, has_properties
+from hamcrest import assert_that, contains_exactly, empty, equal_to, has_length, has_properties, not_none
 from sqlmodel import Session, col, select
 
+from api.domains.agents.models import Agent
 from api.domains.anomalies.models import (
     AgentActivitySeen,
     AgentAnomaly,
@@ -450,14 +451,63 @@ def test_turning_detection_off_and_on_again_relearns_instead_of_flagging_the_gap
         _check(context)
 
         with when("detection is off while the Agent starts using a new host, then on again"):
-            settings = context.injector.get(AnomalySettingsRepository)
-            actor = Actor(identity=ActorIdentity(type=ActorIdentityType.SYSTEM, id=uuid4()), display="test")
-            settings.set_enabled_with_event(context.organization.id, False, actor=actor, subject_display="org")
+            _set_enabled(context, False)
             _save(
                 context, _tool_call(context.agent, NOW + timedelta(minutes=1), arguments={"url": "https://gap.example"})
             )
-            settings.set_enabled_with_event(context.organization.id, True, actor=actor, subject_display="org")
+            _set_enabled(context, True)
             _check(context, LATER)
 
         with then("what happened while it was off is learned, not flagged"):
             assert_that(_anomalies(context, AnomalySignal.NEW_DESTINATION), empty())
+
+
+def _set_enabled(context, enabled: bool) -> None:
+    actor = Actor(identity=ActorIdentity(type=ActorIdentityType.SYSTEM, id=uuid4()), display="test")
+    context.injector.get(AnomalySettingsRepository).set_enabled_with_event(
+        context.organization.id, enabled, actor=actor, subject_display="org"
+    )
+
+
+def test_turning_detection_off_ends_what_was_ongoing():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _save(context, *[_tool_call(context.agent, at) for at in _spread(_in_last_hour(), 200, minutes=30)])
+        _check(context)
+
+        with when("detection is turned off, and later back on while the spike goes on"):
+            _set_enabled(context, False)
+            ended_by_turning_off = _anomalies(context, AnomalySignal.TOOL_CALLS_PER_HOUR)[0].ended_at
+            _set_enabled(context, True)
+            _save(context, *[_tool_call(context.agent, at) for at in _spread(_in_last_hour(LATER), 300, minutes=30)])
+            _check(context, LATER)
+
+        with then("the first Anomaly ended when detection was turned off, and a new one started"):
+            assert_that(ended_by_turning_off, not_none())
+            assert_that(
+                _anomalies(context, AnomalySignal.TOOL_CALLS_PER_HOUR),
+                contains_exactly(
+                    has_properties(started_at=NOW - timedelta(minutes=2), ended_at=not_none()),
+                    has_properties(started_at=LATER - timedelta(minutes=2), ended_at=None),
+                ),
+            )
+
+
+def test_an_ongoing_anomaly_ends_once_its_agent_is_deleted():
+    with given([*_ENABLED, usual_activity(), costs_are_synced_until(LATER)]) as context:
+        _save(context, *[_tool_call(context.agent, at) for at in _spread(_in_last_hour(), 200, minutes=30)])
+        _check(context)
+
+        with when("the Agent is deleted before the next check"):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                agent = session.get(Agent, context.agent.id)
+                assert agent is not None
+                agent.deleted_at = NOW + timedelta(minutes=5)
+                session.add(agent)
+                session.commit()
+            _check(context, LATER)
+
+        with then("its Anomaly has ended"):
+            assert_that(
+                _anomalies(context, AnomalySignal.TOOL_CALLS_PER_HOUR),
+                contains_exactly(has_properties(ended_at=LATER - timedelta(minutes=2))),
+            )
