@@ -25,6 +25,7 @@ import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { AgentWorkflowRuns } from "@/features/workflows/components/agent-workflow-runs";
 import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
 import { AgentTasksTab } from "@/features/tasks/components/agent-tasks-tab";
@@ -51,6 +52,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const canReadActivity = canAgent(agent, "activity.read");
   const { role } = useActiveOrgRole();
   const workflowCapabilities = useWorkflowCapabilities(canAgent(agent, "agent.read"));
+  const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
   const tabs = visibleAgentPageTabs(agent, role, {
     workflowAuthoring: workflowCapabilities.data?.authoring === true,
   });
@@ -214,7 +216,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 key={`${orgId}:${agent.id}`}
                 agentId={agent.id}
                 organizationId={orgId}
-                canRun={canAgent(agent, "agent.update") && agent.status === "RUNNING"}
+                canRun={
+                  canAgent(agent, "agent.update") &&
+                  agent.status === "RUNNING" &&
+                  tierAllowsWorkflows
+                }
               />
             )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
