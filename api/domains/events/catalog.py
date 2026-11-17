@@ -49,6 +49,7 @@ ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
 PLATFORM_WORKFLOW_AUTHORING_CHANGED = "platform.workflow_authoring.changed"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
+PLATFORM_DECISION_MODEL_CHANGED = "platform.decision_model.changed"
 PLATFORM_LLM_PROVIDER_CREATED = "platform.llm_provider.created"
 PLATFORM_LLM_PROVIDER_CHANGED = "platform.llm_provider.changed"
 PLATFORM_LLM_PROVIDER_DELETED = "platform.llm_provider.deleted"
@@ -345,6 +346,14 @@ class AgentMemoryGrantPayload(BaseModel):
 
 
 class PlatformPlaybookModelChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: str
+    current: str
+    actor_display: str
+    subject_display: str
+
+
+class PlatformDecisionModelChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     previous: str
     current: str
@@ -1227,6 +1236,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_PLAYBOOK_MODEL_CHANGED,
             schema_version=1,
             payload_model=PlatformPlaybookModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_DECISION_MODEL_CHANGED,
+            schema_version=1,
+            payload_model=PlatformDecisionModelChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )
