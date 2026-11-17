@@ -185,7 +185,7 @@ class BusinessValueService:
         return self.business_action_repository.hourly_writes(agent_id, since, until)
 
     def business_actions_stored_between(
-        self, agent_id: UUID, *, after: datetime | None, until: datetime, occurred_since: datetime | None = None
+        self, agent_id: UUID, *, after: datetime | None, until: datetime, occurred_since: datetime
     ) -> list[StoredBusinessAction]:
         """An Agent's Business Actions stored after a cursor, for the scheduled anomaly
         check. Background work, like `hourly_writes`."""

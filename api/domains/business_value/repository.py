@@ -126,9 +126,11 @@ class BusinessActionRepository:
         *,
         after: datetime | None,
         until: datetime,
-        occurred_since: datetime | None = None,
+        occurred_since: datetime,
     ) -> list[StoredBusinessAction]:
-        """An Agent's Business Actions stored in (`after`, `until`], oldest first.
+        """An Agent's Business Actions that happened since `occurred_since` and were
+        stored in (`after`, `until`], oldest first. `occurred_since` keeps the read on
+        `ix_business_action_agent_occurred`.
 
         Unscoped: only the scheduled anomaly check calls this, and no router reaches it.
         """
@@ -137,11 +139,13 @@ class BusinessActionRepository:
             col(BusinessAction.occurred_at),
             col(BusinessAction.integration),
             col(BusinessAction.verb),
-        ).where(col(BusinessAction.agent_id) == agent_id, col(BusinessAction.created_at) <= until)
+        ).where(
+            col(BusinessAction.agent_id) == agent_id,
+            col(BusinessAction.occurred_at) >= occurred_since,
+            col(BusinessAction.created_at) <= until,
+        )
         if after is not None:
             query = query.where(col(BusinessAction.created_at) > after)
-        if occurred_since is not None:
-            query = query.where(col(BusinessAction.occurred_at) >= occurred_since)
         with Session(self.delegate.engine) as session:
             rows = session.exec(query.order_by(col(BusinessAction.created_at), col(BusinessAction.id))).all()  # type: ignore[call-overload]
         return [
