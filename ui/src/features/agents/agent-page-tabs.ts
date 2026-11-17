@@ -17,7 +17,7 @@ export type AgentPageTab =
   | "activity"
   | "costs"
   | "resource-usage"
-  | "anomalies"
+  | "unusual-activity"
   | "about";
 
 export const AGENT_PAGE_TABS: AgentPageTab[] = [
@@ -34,7 +34,7 @@ export const AGENT_PAGE_TABS: AgentPageTab[] = [
   "activity",
   "costs",
   "resource-usage",
-  "anomalies",
+  "unusual-activity",
   "about",
 ];
 
@@ -52,7 +52,7 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   activity: "Activity",
   costs: "Costs",
   "resource-usage": "Resource usage",
-  anomalies: "Anomalies",
+  "unusual-activity": "Unusual activity",
   about: "Overview",
 };
 
@@ -102,7 +102,7 @@ export function visibleAgentPageTabs(
     ...(canReadActivity ? (["resource-usage"] as AgentPageTab[]) : []),
     // Oversight of the Organization's Agents, held by Owners and Admins through the
     // Organization Permissions anomaly.read and anomaly.manage, never by an Agent role.
-    ...(role === "OWNER" || role === "ADMIN" ? (["anomalies"] as AgentPageTab[]) : []),
+    ...(role === "OWNER" || role === "ADMIN" ? (["unusual-activity"] as AgentPageTab[]) : []),
     "about",
   ];
   return agent?.parentAgentId ? tabs.filter((tab) => !AGENT_POD_TABS.includes(tab)) : tabs;

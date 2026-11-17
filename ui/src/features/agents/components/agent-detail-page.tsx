@@ -239,7 +239,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 }}
               />
             )}
-            {resolvedTab === "anomalies" && <AgentAnomaliesTab key={agent.id} agent={agent} />}
+            {resolvedTab === "unusual-activity" && <AgentAnomaliesTab key={agent.id} agent={agent} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
             </div>
           </>
