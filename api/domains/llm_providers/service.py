@@ -26,8 +26,6 @@ from api.domains.llm_providers.models import (
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
-    OpenRouterConnectionRead,
-    OpenRouterKeyUpdate,
     ProviderType,
 )
 from api.domains.llm_providers.repository import (
@@ -249,24 +247,3 @@ class PlatformLlmProviderService:
             updated_by=updated_by if has_api_key else None,
             env_key_configured=bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG,
         )
-
-    def read_openrouter(self, context: CurrentUserContext) -> OpenRouterConnectionRead:
-        self.authority.require_platform_admin(context.user)
-        found = self.repository.find_active(OPENROUTER_SLUG)
-        if found is None:
-            raise HTTPException(404, "The OpenRouter connection does not exist.")
-        connection, updated_by = found
-        has_api_key = connection.api_key_encrypted is not None
-        return OpenRouterConnectionRead(
-            has_api_key=has_api_key,
-            api_key_last4=connection.api_key_last4,
-            updated_at=connection.updated_at if has_api_key else None,
-            updated_by=updated_by if has_api_key else None,
-            env_key_configured=bool(self.config.openrouter_api_key),
-        )
-
-    def replace_openrouter_key(
-        self, data: OpenRouterKeyUpdate, context: CurrentUserContext
-    ) -> OpenRouterConnectionRead:
-        self.replace_key(OPENROUTER_SLUG, LlmProviderKeyReplace(api_key=data.api_key), context)
-        return self.read_openrouter(context)

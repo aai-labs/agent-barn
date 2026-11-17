@@ -921,11 +921,6 @@
   ],
   [
     "GET",
-    "/platform/settings/llm-providers/openrouter",
-    "read_openrouter_connection_platform_settings_llm_providers_openrouter_get"
-  ],
-  [
-    "GET",
     "/platform/settings/organizations",
     "read_organization_settings_platform_settings_organizations_get"
   ],
@@ -1703,11 +1698,6 @@
     "PUT",
     "/platform/settings/billing",
     "update_billing_settings_platform_settings_billing_put"
-  ],
-  [
-    "PUT",
-    "/platform/settings/llm-providers/openrouter",
-    "replace_openrouter_key_platform_settings_llm_providers_openrouter_put"
   ],
   [
     "PUT",

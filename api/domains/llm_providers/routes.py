@@ -12,8 +12,6 @@ from api.domains.llm_providers.models import (
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
-    OpenRouterConnectionRead,
-    OpenRouterKeyUpdate,
 )
 from api.domains.llm_providers.service import PlatformLlmProviderService
 
@@ -70,20 +68,3 @@ def delete_connection(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     service.delete_connection(slug, context)
-
-
-@platform_llm_providers_router.get("/openrouter", response_model=OpenRouterConnectionRead)
-def read_openrouter_connection(
-    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
-    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
-):
-    return service.read_openrouter(context)
-
-
-@platform_llm_providers_router.put("/openrouter", response_model=OpenRouterConnectionRead)
-def replace_openrouter_key(
-    data: OpenRouterKeyUpdate,
-    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
-    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
-):
-    return service.replace_openrouter_key(data, context)

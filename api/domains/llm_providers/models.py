@@ -177,27 +177,3 @@ class LlmProviderKeyReplace(PydanticBaseModel):
         if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
             raise ValueError("Enter a key.")
         return SecretStr(trimmed)
-
-
-class OpenRouterConnectionRead(PydanticBaseModel):
-    """What a Platform Administrator sees of the OpenRouter key: never the key itself."""
-
-    has_api_key: bool
-    api_key_last4: str | None = None
-    updated_at: datetime | None = None
-    updated_by: str | None = None
-    env_key_configured: bool
-
-
-class OpenRouterKeyUpdate(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    api_key: SecretStr
-
-    @field_validator("api_key")
-    @classmethod
-    def _trimmed_and_bounded(cls, value: SecretStr) -> SecretStr:
-        trimmed = value.get_secret_value().strip()
-        if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
-            raise ValueError("Enter an OpenRouter key.")
-        return SecretStr(trimmed)

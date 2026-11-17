@@ -8,11 +8,18 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
-- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter can be deleted. The UI lists every connection, adds them, replaces any key and deletes any connection but OpenRouter; it no longer calls the `/openrouter` routes.
-- Next: the slice 1 demo on local k3d; slice 2, PR 12, removing the `/openrouter` routes.
+- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter can be deleted. The UI lists every connection, adds them, replaces any key and deletes any connection but OpenRouter. OpenRouter's key is read from the list and replaced through `PUT .../openrouter/key`; the OpenRouter-only routes are gone.
+- Next: the slice 1 demo on local k3d; slice 2, PR 13, the docs for slice 2 delivered.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 12
+
+- Removed: `GET` and `PUT /api/v1/platform/settings/llm-providers/openrouter`, with `OpenRouterConnectionRead`, `OpenRouterKeyUpdate` and the service's `read_openrouter` and `replace_openrouter_key`. OpenRouter's key status is its entry in `GET /platform/settings/llm-providers`, and its key is replaced through `PUT .../openrouter/key`, which checks it with OpenRouter and writes the LiteLLM route first as before. Both old paths now answer `405`, because `DELETE .../{slug}` matches them, and reach nothing.
+- Changed: `test_platform_llm_providers.py` reads OpenRouter's entry from the list and saves through `PUT .../openrouter/key`, and checks that the old paths change nothing. `test_openrouter_route_litellm_contract.py` saves through `PUT .../openrouter/key` and passes against LiteLLM. `operations-v1.json`, the RBAC brief and [`llm-providers.md`](../llm-providers.md) drop the two routes.
+- Release impact: an API client still calling `GET` or `PUT .../openrouter` gets `405`; the UI stopped calling them in PR 11.
+- Follow-up: PR 13 brings the feature doc, `docs/INDEX.md` and this change log up to slice 2 delivered.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 11
 
