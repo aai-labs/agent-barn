@@ -1,3 +1,5 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
@@ -63,7 +65,7 @@ class _FakeCoreApi:
         if key in self._raises_on:
             raise self._raises_on[key]
 
-    def list_namespaced_service(self, *_, label_selector=""):
+    def list_namespaced_service(self, *_, label_selector="", _request_timeout=None):
         return SimpleNamespace(items=[self._resource] if self._resource else [])
 
     def create_namespaced_service(self, _, body):
@@ -482,3 +484,26 @@ def test_runtime_diagnostics_does_not_expose_arbitrary_cluster_reason():
 def test_runtime_diagnostics_missing_pod_is_not_healthy():
     result = _make_client().get_runtime_diagnostics("agent-id", "agent-farm")
     assert_that(result["available"], equal_to(False))
+
+
+def test_first_calls_from_several_threads_configure_the_client_once_and_all_see_every_api():
+    config = SimpleNamespace(k8s_kubeconfig_path=None, k8s_namespace="agent-farm")
+    loads = []
+
+    def slow_load():
+        loads.append(1)
+        time.sleep(0.2)
+
+    with (
+        patch("kubernetes.config.load_incluster_config", side_effect=slow_load),
+        patch("kubernetes.client.AppsV1Api"),
+        patch("kubernetes.client.BatchV1Api"),
+        patch("kubernetes.client.CoreV1Api"),
+        patch("kubernetes.client.ApiClient"),
+    ):
+        k8s = KubernetesClient(cast(Config, config))
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            apis = list(pool.map(lambda _: (k8s._apps_v1, k8s._batch_v1, k8s._core_v1), range(8)))
+
+    assert_that(len(loads), equal_to(1))
+    assert_that(all(api is not None for triple in apis for api in triple), equal_to(True))

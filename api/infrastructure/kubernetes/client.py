@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Generator
 from dataclasses import dataclass, field
@@ -40,10 +41,18 @@ class KubernetesClient:
     _batch_v1_client: client.BatchV1Api | None = field(init=False, default=None)
     _stream_core_v1_client: client.CoreV1Api | None = field(init=False, default=None)
     _kubeconfig_path: str | None = field(init=False, default=None)
+    _configure_lock: threading.Lock = field(init=False, default_factory=threading.Lock, repr=False)
 
     def _ensure_configured(self) -> None:
+        # The environment health page reads from several threads at once, so the first calls
+        # can race. The core client is set last, so once it is set every client is.
         if self._core_v1_client is not None:
             return
+        with self._configure_lock:
+            if self._core_v1_client is None:
+                self._configure()
+
+    def _configure(self) -> None:
         if self.config.k8s_kubeconfig_path:
             self._kubeconfig_path = self._resolve_kubeconfig(self.config.k8s_kubeconfig_path)
             k8s_config.load_kube_config(config_file=self._kubeconfig_path)
@@ -60,13 +69,13 @@ class KubernetesClient:
                         "features need a real cluster; set K8S_KUBECONFIG_PATH to point at one."
                     ) from e
         self._apps_v1_client = client.AppsV1Api()
-        self._core_v1_client = client.CoreV1Api()
         self._batch_v1_client = client.BatchV1Api()
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
             stream_api_client = client.ApiClient()
         self._stream_core_v1_client = client.CoreV1Api(api_client=stream_api_client)
+        self._core_v1_client = client.CoreV1Api()
 
     @property
     def _apps_v1(self) -> client.AppsV1Api:
@@ -226,7 +235,9 @@ class KubernetesClient:
         return self._get_or_none(self._core_v1.read_namespaced_service, name, namespace)
 
     def list_services(self, namespace: str, label_selector: str = "") -> list[client.V1Service]:
-        return self._core_v1.list_namespaced_service(namespace, label_selector=label_selector).items
+        return self._core_v1.list_namespaced_service(
+            namespace, label_selector=label_selector, _request_timeout=10
+        ).items
 
     def create_pvc(self, namespace: str, manifest: client.V1PersistentVolumeClaim) -> client.V1PersistentVolumeClaim:
         return self._create_or_get(
@@ -307,8 +318,17 @@ class KubernetesClient:
     def list_stateful_sets(self, namespace: str) -> list[client.V1StatefulSet]:
         return self._apps_v1.list_namespaced_stateful_set(namespace, _request_timeout=10).items
 
+    def list_replica_sets(self, namespace: str) -> list[client.V1ReplicaSet]:
+        return self._apps_v1.list_namespaced_replica_set(namespace, _request_timeout=10).items
+
     def list_resource_quotas(self, namespace: str) -> list[client.V1ResourceQuota]:
         return self._core_v1.list_namespaced_resource_quota(namespace, _request_timeout=10).items
+
+    def list_cron_jobs(self, namespace: str) -> list[client.V1CronJob]:
+        return self._batch_v1.list_namespaced_cron_job(namespace, _request_timeout=10).items
+
+    def list_namespace_jobs(self, namespace: str) -> list[client.V1Job]:
+        return self._batch_v1.list_namespaced_job(namespace, _request_timeout=10).items
 
     def list_warning_events(self, namespace: str) -> list[client.CoreV1Event]:
         return self._core_v1.list_namespaced_event(namespace, field_selector="type=Warning", _request_timeout=10).items

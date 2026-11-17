@@ -9,7 +9,11 @@ export const EnvironmentSourceSchema = z.enum([
   "pods",
   "deployments",
   "stateful_sets",
+  "replica_sets",
   "volume_claims",
+  "services",
+  "cron_jobs",
+  "jobs",
   "resource_quotas",
   "events",
   "prometheus",
@@ -38,8 +42,65 @@ export const CoreServiceSchema = z.object({
   desiredReplicas: z.number().int(),
   readyReplicas: z.number().int(),
   level: HealthLevelSchema,
+  /** The commit the service's image was built from. Deployments only. */
+  buildSha: z.string().nullable().default(null),
+  rollout: z.enum(["complete", "in_progress", "stuck"]).nullable().default(null),
+  /** When the last rollout finished. Null while one is under way or stuck. */
+  rolledOutAt: z.string().nullable().default(null),
 });
 export type CoreService = z.infer<typeof CoreServiceSchema>;
+
+/** The build the platform runs: the one rolled out most recently. */
+export const DeployedVersionSchema = z.object({
+  buildSha: z.string(),
+  rolledOutAt: z.string().nullable().default(null),
+  mixed: z.boolean().default(false),
+  /** The services on another build. */
+  behind: z.array(z.string()).default([]),
+});
+export type DeployedVersion = z.infer<typeof DeployedVersionSchema>;
+
+export const CronJobSchema = z.object({
+  name: z.string(),
+  schedule: z.string().nullable().default(null),
+  state: z.enum(["ok", "failing", "stalled", "suspended"]),
+  running: z.boolean().default(false),
+  lastScheduledAt: z.string().nullable().default(null),
+  lastSuccessfulAt: z.string().nullable().default(null),
+  lastFailedAt: z.string().nullable().default(null),
+});
+export type CronJob = z.infer<typeof CronJobSchema>;
+
+export const ScheduledBackupsSchema = z.object({
+  enabled: z.boolean().default(false),
+  intervalMinutes: z.number().int().default(0),
+  failureWindowHours: z.number().int().default(24),
+  /** Running agents: the ones the schedule backs up. */
+  runningAgents: z.number().int().default(0),
+  /** How many agents fail or are overdue. The lists name only the worst few. */
+  failedTotal: z.number().int().default(0),
+  overdueTotal: z.number().int().default(0),
+  /** Most failures first. An agent named here is not named again under `overdue`. */
+  failed: z
+    .array(z.object({ agent: AgentRefSchema, failures: z.number().int(), lastFailedAt: z.string() }))
+    .default([]),
+  /** Running agents with no successful scheduled backup for two intervals or more. */
+  overdue: z.array(z.object({ agent: AgentRefSchema, lastBackupAt: z.string().nullable().default(null) })).default([]),
+});
+export type ScheduledBackups = z.infer<typeof ScheduledBackupsSchema>;
+
+/** A running or stopped agent no one has written to in `idleAfterDays`: a cleanup candidate. */
+export const IdleAgentSchema = z.object({
+  agent: AgentRefSchema,
+  lastUserMessageAt: z.string().nullable().default(null),
+  lastCallAt: z.string().nullable().default(null),
+  holdsPod: z.boolean().nullable().default(null),
+  volumeClaims: z.number().int().nullable().default(null),
+  requestedBytes: z.number().nullable().default(null),
+  restorePoints: z.number().int().default(0),
+  restorePointBytes: z.number().default(0),
+});
+export type IdleAgent = z.infer<typeof IdleAgentSchema>;
 
 export const FiringAlertSchema = z.object({
   name: z.string(),
@@ -61,6 +122,9 @@ export const CapacityLineSchema = z.object({
   used: z.number().nullable().default(null),
   hard: z.number().nullable().default(null),
   ratio: z.number().nullable().default(null),
+  /** The highest `used` over the last `peakWindowHours`, for CPU, memory and pods. Null when unknown. */
+  peak: z.number().nullable().default(null),
+  peakRatio: z.number().nullable().default(null),
   level: CapacityLevelSchema,
 });
 export type CapacityLine = z.infer<typeof CapacityLineSchema>;
@@ -104,8 +168,13 @@ export const PodIssueSchema = z.object({
   phase: z.string().nullable().default(null),
   ready: z.boolean(),
   unschedulable: z.boolean().default(false),
+  /** Since the pod was created. Never reset, so a high count may be old news. */
   restartCount: z.number().int().default(0),
+  /** Within the last `restartWindowDays`. Null when the restart history could not be read. */
+  restartsInWindow: z.number().int().nullable().default(null),
   repeatedlyRestarting: z.boolean().default(false),
+  /** A container ran out of memory within the last `restartWindowDays`. */
+  oomKilled: z.boolean().default(false),
   waitingReason: z.string().nullable().default(null),
   terminationReason: z.string().nullable().default(null),
   lastRestartAt: z.string().nullable().default(null),
@@ -146,9 +215,23 @@ export const EnvironmentHealthSchema = z.object({
   observedAt: z.string(),
   namespace: z.string(),
   level: HealthLevelSchema,
+  peakWindowHours: z.number().int().default(24),
+  restartWindowDays: z.number().int().default(7),
   sources: z.array(z.object({ source: EnvironmentSourceSchema, state: SourceStateSchema })).default([]),
+  deployed: DeployedVersionSchema.nullable().default(null),
   ceilings: ResourceLimitsSchema,
   services: z.array(CoreServiceSchema).default([]),
+  cronJobs: z.array(CronJobSchema).default([]),
+  backups: ScheduledBackupsSchema.default({
+    enabled: false,
+    intervalMinutes: 0,
+    failureWindowHours: 24,
+    runningAgents: 0,
+    failedTotal: 0,
+    overdueTotal: 0,
+    failed: [],
+    overdue: [],
+  }),
   alerts: z.array(FiringAlertSchema).default([]),
   capacity: z.array(CapacityLineSchema).default([]),
   volumes: VolumeAllocationSchema,
@@ -159,6 +242,19 @@ export const EnvironmentHealthSchema = z.object({
   }),
   unhealthyRuntimes: z.array(UnhealthyRuntimeSchema).default([]),
   failedAgents: z.array(FailedAgentSchema).default([]),
+  idleAgents: z.array(IdleAgentSchema).default([]),
+  idleAfterDays: z.number().int().default(14),
+  /** How many rows each list has; a list carries at most a hundred of them, worst first. */
+  totals: z
+    .object({
+      failedAgents: z.number().int().default(0),
+      unhealthyRuntimes: z.number().int().default(0),
+      podIssues: z.number().int().default(0),
+      idleAgents: z.number().int().default(0),
+      volumeClaims: z.number().int().default(0),
+      events: z.number().int().default(0),
+    })
+    .default({ failedAgents: 0, unhealthyRuntimes: 0, podIssues: 0, idleAgents: 0, volumeClaims: 0, events: 0 }),
   events: z.array(WarningEventSchema).default([]),
 });
 export type EnvironmentHealth = z.infer<typeof EnvironmentHealthSchema>;

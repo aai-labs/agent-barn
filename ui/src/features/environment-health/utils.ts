@@ -21,7 +21,11 @@ export const SOURCE_LABELS: Record<EnvironmentSource, string> = {
   pods: "Pods",
   deployments: "Deployments",
   stateful_sets: "StatefulSets",
+  replica_sets: "ReplicaSets",
   volume_claims: "Volume claims",
+  services: "Services",
+  cron_jobs: "Scheduled jobs",
+  jobs: "Job runs",
   resource_quotas: "Resource quota",
   events: "Events",
   prometheus: "Monitoring",
@@ -80,6 +84,18 @@ export function formatAgo(iso: string | null, now: Date = new Date()): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** The short form of a commit, as Git prints it. */
+export function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
+
+/** How long ago, in days once it is a day or more, so a stale deploy reads as stale. */
+export function formatAge(iso: string, now: Date = new Date()): string {
+  const days = Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
+  if (days < 1) return formatAgo(iso, now);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
 }
 
 export function formatTime(iso: string): string {

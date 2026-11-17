@@ -16,6 +16,8 @@ from api.domains.resource_usage.promql import (
     group_totals,
     instant_query,
     namespace_commitments_query,
+    namespace_peak_commitments_query,
+    namespace_peak_pods_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -190,6 +192,23 @@ def test_an_agent_request_query_with_no_agents_is_refused_rather_than_asking_abo
 
 def test_the_namespace_query_is_not_limited_to_agent_pods():
     assert "agent-[0-9a-f]" not in namespace_commitments_query()
+
+
+def test_the_peak_commitment_is_the_highest_of_the_same_figure_sampled_every_scrape():
+    query = namespace_peak_commitments_query(window_seconds=86_400, step_seconds=30)
+
+    # The very figure held against the ceilings, sampled at the scrape interval, so a
+    # minute-long burst of cron jobs lands in at least one sample.
+    assert query == f"max_over_time(({namespace_commitments_query()})[86400s:30s])"
+
+
+def test_the_peak_pod_count_counts_live_pods_as_the_pods_quota_does():
+    query = namespace_peak_pods_query(window_seconds=86_400, step_seconds=30)
+
+    assert query == (
+        'max_over_time(count(kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1)'
+        "[86400s:30s])"
+    )
 
 
 # --- mapping results back to agents ----------------------------------------

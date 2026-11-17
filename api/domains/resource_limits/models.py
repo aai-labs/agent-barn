@@ -6,8 +6,9 @@ when any one of those four would go over, so a Platform Administrator types all 
 as the quota names them (`limits.memory`, `limits.cpu`, `requests.memory`, `requests.cpu`), and
 the Platform resource usage page compares them with what the namespace has committed (see
 `docs/adr/2026-10-01-capacity-limits-entered-by-hand.md`). The quota also caps the storage every
-volume claim requests (`requests.storage`) and the number of pods (`pods`); those two are compared
-on the environment health page with the claims and pods the API lists itself.
+volume claim requests (`requests.storage`), the number of pods (`pods`), of volume claims
+(`persistentvolumeclaims`) and of Services (`services`); those are compared on the environment
+health page with what the API lists itself.
 
 This is the one thing the resource usage feature stores. Usage itself is never stored.
 """
@@ -32,6 +33,8 @@ MAX_MEMORY_LIMIT_BYTES = 2**50
 MAX_CPU_LIMIT_CORES = 100_000.0
 MAX_STORAGE_LIMIT_BYTES = 2**60
 MAX_POD_LIMIT = 1_000_000
+# Volume claims and Services, like pods, are counted objects.
+MAX_OBJECT_COUNT_LIMIT = 1_000_000
 
 SUBJECT_DISPLAY = "Platform resource limits"
 
@@ -54,6 +57,8 @@ class PlatformResourceLimits(BaseModel, table=True):
     requests_cpu_cores: float | None = SqlField(default=None, nullable=True)
     requests_storage_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     pods: int | None = SqlField(default=None, nullable=True)
+    persistentvolumeclaims: int | None = SqlField(default=None, nullable=True)
+    services: int | None = SqlField(default=None, nullable=True)
 
 
 class ResourceLimitsRead(PydanticBaseModel):
@@ -63,6 +68,8 @@ class ResourceLimitsRead(PydanticBaseModel):
     requests_cpu_cores: float | None = None
     requests_storage_bytes: int | None = None
     pods: int | None = None
+    persistentvolumeclaims: int | None = None
+    services: int | None = None
     # None until the first save.
     updated_at: datetime | None = None
 
@@ -77,3 +84,5 @@ class ResourceLimitsUpdate(PydanticBaseModel):
     requests_cpu_cores: float | None = Field(default=None, gt=0, le=MAX_CPU_LIMIT_CORES, allow_inf_nan=False)
     requests_storage_bytes: int | None = Field(default=None, gt=0, le=MAX_STORAGE_LIMIT_BYTES)
     pods: int | None = Field(default=None, gt=0, le=MAX_POD_LIMIT)
+    persistentvolumeclaims: int | None = Field(default=None, gt=0, le=MAX_OBJECT_COUNT_LIMIT)
+    services: int | None = Field(default=None, gt=0, le=MAX_OBJECT_COUNT_LIMIT)
