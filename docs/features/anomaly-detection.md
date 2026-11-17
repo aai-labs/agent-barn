@@ -148,6 +148,15 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   succeeds, so it is not restarted to check every Agent again. The next run, 15 minutes
   later, retries the failed Agent. A run that cannot check at all (no database) fails.
 
+### Trying it locally
+
+A fresh Agent is flagged for nothing until it has been active on three days.
+`make seed-anomaly-history SEED_AGENT_ID=<id>` (`api/scripts/seed_anomaly_history.py`)
+gives a local Agent five days of steady history and runs a check that learns it, so what
+the Agent does next is judged at once; ask it to fetch a new host and run
+`make run-anomaly-checks`. `SEED_ARGS=--spike` also seeds and flags an unusual few
+minutes on every rate; `SEED_ARGS=--clear` removes the seed and the Agent's Anomalies.
+
 ## Anomaly records
 
 `agent_anomaly` keeps the signal, the subject (first use) or none (rates), the observed
