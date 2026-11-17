@@ -261,9 +261,10 @@ name to its first line, whitespace collapsed and cut at a word to 80 characters,
 which run lists and the step timeline show. A step whose prompt is not edited
 keeps its saved name, and the API still requires one. Each input is a card with one field, its
 description, above a footer holding a Text / File / Number / Yes or no segmented
-type control, a Required checkbox and a remove control. Editing the description
-sets the stored label to its first line (as for step names) and the key from that
-label; the API still stores all three. The start-run form and saved overview show
+type control, a Required checkbox and a remove control. The description may run
+over several lines. Editing its first line sets the stored label to that line (as
+for step names) and the key from that label; editing only later lines keeps the
+saved label and key. The API still stores all three. The start-run form and saved overview show
 the label, and the description under it only when it says more than the label. Steps have no type selector. Opening a version saved with a legacy
 step output description folds that text into the step's text, as the API does on
 save; no new version is written unless the author changes the plan. A change to
@@ -410,9 +411,9 @@ single-run read includes `attempt` (number, start, deadline and
 skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
 not accepted the step after 60 seconds). The
 rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
-shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
-Runs control clears only the selected run and selects the owning workflow’s Runs
-view. Overview, Runs and Version history use `workflowView=overview|runs|history`
+shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row, "Workflows / Run detail"; the workflow's name
+is in the run header. Its Workflows control clears the selected run and returns to
+the Runs tab of the Workflows page. Overview, Runs and Version history use `workflowView=overview|runs|history`
 as their source of truth; an absent or invalid view falls back to Overview. Tab
 changes and opening/closing runs add browser-history entries without scrolling.
 Run-list pagination uses `workflowRunPage`; returning from a run retains that page.
@@ -520,11 +521,16 @@ progress/history and cancellation confirmation. `workflowRun` retains the run in
 the URL. Queries include Organization identity, refetch on focus, poll
 queued/running/cancelling mounted views every three seconds and stop on parked
 (paused/blocked/awaiting approval), terminal, error or unmounted views. Focus refetch and mutations
-still refresh parked views. Start retries retain their identity and inputs. Access errors replace
+still refresh parked views. The Runs tab's Active list is paged 50 at a time. The
+approvals inbox and the navigation badge read one page of 100 runs awaiting a
+decision, so the badge counts at most 100. Starting or re-running a run also
+refreshes the workflow list, whose cards carry run counts. A run whose Agent was
+deleted names its files without download controls, because that Agent's files
+are gone. Run again is hidden when the Tier leaves out workflows. Start retries retain their identity and inputs. Access errors replace
 protected run content. Authoring retains its existing cache behavior.
 
-Run screens use the agreed Workflow Playbook layout: full-page start/run views,
-a breadcrumb, run header with status badge, a Steps rail, summaries, run activity
+Run screens use the agreed Workflow Playbook layout: a start-run dialog, a
+full-page run view, a breadcrumb, run header with status badge, a Steps rail, summaries, run activity
 and Keep running/Cancel run confirmation. The shell owns the page frame and section navigation. The Agent mobile header
 and section title remain mounted but hidden while a run or its start screen is open. Run detail returns
 each completed step's `summary`, shown under “What each step did”, and a
