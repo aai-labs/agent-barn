@@ -9,10 +9,16 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
 - In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom; no connection can be deleted yet. There is no UI for any of this yet.
-- Next: the slice 1 demo on local k3d; slice 2, PR 8, the `platform.llm_provider.deleted` event.
+- Next: the slice 1 demo on local k3d; slice 2, PR 9, deleting a connection.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 8
+
+- Delivered: the Platform-scoped `platform.llm_provider.deleted` event, version 1, projected by `security_audit.projection` and by no other handler. Its payload is `connection_id`, `slug`, `provider_type`, `base_url` (null for a known provider), `key_purged` (whether a stored key was removed) and the actor and subject display names. Any other field is refused, so no part of the key can be added to it. Nothing emits it yet.
+- Changed: [`domain-events.md`](../domain-events.md) describes the event.
+- Follow-up: PR 9 emits it when a Platform Administrator deletes a connection.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 7
 
