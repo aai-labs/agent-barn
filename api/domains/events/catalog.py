@@ -355,6 +355,8 @@ class PlatformDecisionModelChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     previous: str
     current: str
+    actor_display: str
+    subject_display: str
 
 
 class PlatformLlmProviderChangedPayload(BaseModel):
