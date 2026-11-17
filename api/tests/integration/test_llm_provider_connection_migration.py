@@ -1,4 +1,4 @@
-"""The migration that creates LLM Provider Connections, run against a database of its own."""
+"""The migrations that create LLM Provider Connections and add more providers, each run against a database of its own."""
 
 import os
 from pathlib import Path
@@ -28,10 +28,13 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 
 PRE_MIGRATION_REVISION = "38de1199ae19"
 CONNECTIONS_REVISION = "22b93965859f"
+PROVIDERS_REVISION = "91ad0093c626"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 TABLE = LlmProviderConnection.__tablename__
 SEEDED_ROW = (OPENROUTER_CONNECTION_ID, OPENROUTER_SLUG, OPENROUTER_NAME, "openrouter", None, None, None, None)
 ROW_COLUMNS = "id, slug, name, provider_type, api_key_encrypted, api_key_last4, updated_by, deleted_at"
+KNOWN_PROVIDER_TYPES = ["anthropic", "openai", "gemini", "xai", "deepseek", "fireworks", "novita"]
+BASE_URL = "https://models.example.com/v1"
 
 
 @pytest.fixture
@@ -74,13 +77,10 @@ def _insert(connection, **overrides):
         "deleted_at": None,
         **overrides,
     }
+    columns = ", ".join(row)
+    values = ", ".join(f":{column}" for column in row)
     connection.execute(
-        text(
-            f"INSERT INTO {TABLE} (id, created_at, updated_at, slug, name, provider_type, api_key_encrypted,"
-            " api_key_last4, deleted_at) VALUES (:id, now(), now(), :slug, :name, :provider_type,"
-            " :api_key_encrypted, :api_key_last4, :deleted_at)"
-        ),
-        row,
+        text(f"INSERT INTO {TABLE} (created_at, updated_at, {columns}) VALUES (now(), now(), {values})"), row
     )
 
 
@@ -127,9 +127,9 @@ def test_the_database_refuses_a_connection_that_could_not_be_used(database_befor
         _insert(connection, **overrides)
 
 
-def test_the_model_matches_the_migration(database_before_connections):
+def test_the_model_matches_the_migrations(database_before_connections):
     database = database_before_connections
-    command.upgrade(database.config, CONNECTIONS_REVISION)
+    command.upgrade(database.config, "head")
 
     with database.engine.connect() as connection:
         context = MigrationContext.configure(connection, opts={"compare_type": True})
@@ -147,6 +147,96 @@ def test_the_downgrade_removes_the_table(database_before_connections):
     assert_that(inspect(database.engine).has_table(TABLE), equal_to(False))
 
 
+def test_adding_providers_keeps_openrouter_without_a_base_url(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, PROVIDERS_REVISION)
+
+    with database.engine.connect() as connection:
+        rows = connection.execute(text(f"SELECT {ROW_COLUMNS}, base_url FROM {TABLE}")).all()
+    assert_that([tuple(row) for row in rows], equal_to([(*SEEDED_ROW, None)]))
+
+
+@pytest.mark.parametrize("provider_type", KNOWN_PROVIDER_TYPES)
+def test_a_known_provider_is_accepted_under_its_own_name(database_before_connections, provider_type):
+    database = database_before_connections
+    command.upgrade(database.config, PROVIDERS_REVISION)
+
+    with database.engine.begin() as connection:
+        _insert(connection, slug=provider_type, provider_type=provider_type)
+
+        count = connection.execute(text(f"SELECT count(*) FROM {TABLE}")).scalar_one()
+    assert_that(count, equal_to(2))
+
+
+@pytest.mark.parametrize("provider_type", ["azure", "custom"])
+def test_an_azure_or_custom_connection_is_accepted_with_its_own_slug_and_a_base_url(
+    database_before_connections, provider_type
+):
+    database = database_before_connections
+    command.upgrade(database.config, PROVIDERS_REVISION)
+
+    with database.engine.begin() as connection:
+        _insert(connection, slug=f"{provider_type}-eu", provider_type=provider_type, base_url=BASE_URL)
+        _insert(connection, slug=f"{provider_type}-us", provider_type=provider_type, base_url=BASE_URL)
+
+        count = connection.execute(text(f"SELECT count(*) FROM {TABLE}")).scalar_one()
+    assert_that(count, equal_to(3))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "check"),
+    [
+        ({"slug": "anthropic", "provider_type": "anthropic", "base_url": BASE_URL}, "base_url_by_type"),
+        ({"slug": "azure-eu", "provider_type": "azure"}, "base_url_by_type"),
+        ({"slug": "custom-lab", "provider_type": "custom"}, "base_url_by_type"),
+        ({"slug": "anthropic-main", "provider_type": "anthropic"}, "known_slug_is_type"),
+        ({"slug": "openai", "provider_type": "custom", "base_url": BASE_URL}, "own_slug_not_a_type"),
+        ({"slug": "anthropic", "provider_type": "azure", "base_url": BASE_URL}, "own_slug_not_a_type"),
+        ({"slug": "azure", "provider_type": "azure", "base_url": BASE_URL}, "own_slug_not_a_type"),
+        ({"slug": "custom", "provider_type": "custom", "base_url": BASE_URL}, "own_slug_not_a_type"),
+        ({"slug": "mistral", "provider_type": "mistral"}, "provider_type_known"),
+    ],
+)
+def test_the_database_refuses_a_connection_that_does_not_fit_its_provider(
+    database_before_connections, overrides, check
+):
+    database = database_before_connections
+    command.upgrade(database.config, PROVIDERS_REVISION)
+
+    with (
+        pytest.raises(IntegrityError, match=f"ck_llm_provider_connection_{check}"),
+        database.engine.begin() as connection,
+    ):
+        _insert(connection, **overrides)
+
+
+def test_removing_providers_deletes_every_other_connection_and_keeps_openrouter(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, PROVIDERS_REVISION)
+    with database.engine.begin() as connection:
+        connection.execute(text(f"UPDATE {TABLE} SET api_key_encrypted = 'ciphertext', api_key_last4 = 'a1b2'"))
+        _insert(
+            connection, slug="anthropic", provider_type="anthropic", api_key_encrypted="secret", api_key_last4="c3d4"
+        )
+        _insert(
+            connection, slug="azure-eu", provider_type="azure", base_url=BASE_URL, deleted_at="2026-11-17T00:00:00Z"
+        )
+
+    command.downgrade(database.config, CONNECTIONS_REVISION)
+
+    with database.engine.connect() as connection:
+        rows = connection.execute(text(f"SELECT {ROW_COLUMNS} FROM {TABLE}")).all()
+    openrouter_with_its_key = (*SEEDED_ROW[:4], "ciphertext", "a1b2", None, None)
+    assert_that([tuple(row) for row in rows], equal_to([openrouter_with_its_key]))
+    columns = [column["name"] for column in inspect(database.engine).get_columns(TABLE)]
+    assert_that("base_url" in columns, equal_to(False))
+    with (
+        pytest.raises(IntegrityError, match="ck_llm_provider_connection_provider_type_known"),
+        database.engine.begin() as connection,
+    ):
+        _insert(connection, slug="anthropic", provider_type="anthropic")
+
+
 def test_a_clean_database_has_only_the_seeded_openrouter_connection():
     with given([prepare_injector(), database_repo_is_ready(), database_is_clean()]) as context:
         engine = context.postgres_delegate.engine
@@ -154,7 +244,7 @@ def test_a_clean_database_has_only_the_seeded_openrouter_connection():
             connection.execute(
                 text(f"UPDATE {TABLE} SET api_key_encrypted = 'ciphertext', api_key_last4 = 'a1b2', deleted_at = now()")
             )
-            _insert(connection)
+            _insert(connection, slug="azure-eu", provider_type="azure", base_url=BASE_URL)
 
         database_is_clean()(context)
 
