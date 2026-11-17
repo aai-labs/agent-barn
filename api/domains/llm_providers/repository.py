@@ -8,7 +8,12 @@ from injector import inject, singleton
 from sqlmodel import Session, col, select
 
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
-from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_LLM_PROVIDER_CHANGED, PLATFORM_LLM_PROVIDER_CREATED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    PLATFORM_LLM_PROVIDER_CHANGED,
+    PLATFORM_LLM_PROVIDER_CREATED,
+    PLATFORM_LLM_PROVIDER_DELETED,
+)
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.llm_providers.models import (
     BASE_URL_PROVIDER_TYPES,
@@ -178,6 +183,42 @@ class LlmProviderRepository:
                     "provider_type": connection.provider_type.value,
                     "base_url": connection.base_url,
                     "revived": existing is not None,
+                    "actor_display": actor_display,
+                },
+            )
+            session.commit()
+            return ids
+
+    def delete(self, slug: str, actor_id: UUID, actor_display: str) -> list[UUID]:
+        """Soft-delete the connection and purge its key under the connection's lock.
+
+        Raises ConnectionNotFound when no connection with this slug is live.
+        """
+        with Session(self.delegate.engine) as session:
+            self._lock(session, slug)
+            connection = session.exec(
+                select(LlmProviderConnection).where(
+                    LlmProviderConnection.slug == slug, col(LlmProviderConnection.deleted_at).is_(None)
+                )
+            ).one_or_none()
+            if connection is None:
+                raise ConnectionNotFound(slug)
+            key_purged = connection.api_key_encrypted is not None
+            now = datetime.now(UTC)
+            connection.api_key_encrypted = None
+            connection.api_key_last4 = None
+            connection.deleted_at = now
+            session.add(connection)
+            ids = self._stage(
+                session,
+                PLATFORM_LLM_PROVIDER_DELETED,
+                connection,
+                actor_id,
+                now,
+                {
+                    "provider_type": connection.provider_type.value,
+                    "base_url": connection.base_url,
+                    "key_purged": key_purged,
                     "actor_display": actor_display,
                 },
             )

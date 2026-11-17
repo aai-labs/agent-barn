@@ -56,6 +56,7 @@ BASE_URL_EXTRAS = "The base URL can't contain credentials, a query or a fragment
 BASE_URL_NOT_AN_API = "The base URL did not answer like a model API. Nothing was saved."
 BASE_URL_NOT_TAKEN = "Only Azure and Custom connections take a base URL."
 NOT_FOUND = "That connection does not exist."
+OPENROUTER_FIXED = "OpenRouter can't be deleted."
 CHANGED_WHILE_CHECKING = "The connection changed while the key was checked. Nothing was saved."
 PROVIDER_TYPE_NAMES = frozenset(provider_type.value for provider_type in ProviderType)
 
@@ -186,6 +187,16 @@ class PlatformLlmProviderService:
         if found is None:
             raise HTTPException(404, NOT_FOUND)
         return self._to_read(*found)
+
+    def delete_connection(self, slug: str, context: CurrentUserContext) -> None:
+        self.authority.require_platform_admin(context.user)
+        if slug == OPENROUTER_SLUG:
+            raise HTTPException(409, OPENROUTER_FIXED)
+        try:
+            ids = self.repository.delete(slug, context.user.id, context.user.full_name or context.user.email)
+        except ConnectionNotFound:
+            raise HTTPException(404, NOT_FOUND) from None
+        self.dispatcher.enqueue_immediate(ids)
 
     @staticmethod
     def _check_key(name: str, check: Callable[[], bool]) -> None:

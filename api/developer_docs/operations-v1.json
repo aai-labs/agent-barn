@@ -116,6 +116,11 @@
   ],
   [
     "DELETE",
+    "/platform/settings/llm-providers/{slug}",
+    "delete_connection_platform_settings_llm_providers__slug__delete"
+  ],
+  [
+    "DELETE",
     "/platform/skills/{skill_id}",
     "delete_platform_skill_platform_skills__skill_id__delete"
   ],

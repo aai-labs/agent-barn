@@ -8,11 +8,17 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
-- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom; no connection can be deleted yet. There is no UI for any of this yet.
-- Next: the slice 1 demo on local k3d; slice 2, PR 9, deleting a connection.
+- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter can be deleted. There is no UI for any of this yet.
+- Next: the slice 1 demo on local k3d; slice 2, PR 10, the connection list and add dialog in the UI.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 9
+
+- Delivered: `DELETE /api/v1/platform/settings/llm-providers/{slug}` deletes a connection and answers `204`. Under the per-slug advisory lock it sets `deleted_at`, purges the encrypted key and its last four characters, and records `platform.llm_provider.deleted` in the same transaction, with `key_purged` saying whether a key was stored. The row keeps its slug, name and base URL. OpenRouter is `409`, and an unknown or already deleted slug `404`. A read-only Personal API Key is refused. Afterwards a known provider can be added again, bringing the same row back, while an Azure or Custom slug stays refused, and the deleted connection's key can't be replaced. No LiteLLM route is removed, because only OpenRouter has one and it can't be deleted.
+- Changed: `operations-v1.json`, the RBAC brief, [`llm-providers.md`](../llm-providers.md) and [`domain-events.md`](../domain-events.md) describe the route and that the event is now emitted.
+- Follow-up: PR 10 adds the connection list and add dialog to the UI.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 8
 

@@ -63,6 +63,15 @@ def replace_key(
     return service.replace_key(slug, data, context)
 
 
+@platform_llm_providers_router.delete("/{slug}", status_code=204)
+def delete_connection(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    service.delete_connection(slug, context)
+
+
 @platform_llm_providers_router.get("/openrouter", response_model=OpenRouterConnectionRead)
 def read_openrouter_connection(
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],

@@ -955,3 +955,150 @@ def test_a_malformed_key_replacement_is_refused_without_echoing_it(body):
         assert_that(response.json(), equal_to({"detail": "Invalid LLM provider key request"}))
         context.check.assert_not_called()
         _assert_unchanged(context, response, "anthropic", ANTHROPIC_KEY, None)
+
+
+DELETED_EVENT = "platform.llm_provider.deleted"
+OPENROUTER_FIXED = "OpenRouter can't be deleted."
+
+
+def _delete(context, slug: str, headers: dict | None = None):
+    return context.client.delete(f"{BASE}/{slug}", headers=headers or auth(context))
+
+
+def _deleted_events(context) -> list[OutboxMessage]:
+    with _session(context) as session:
+        return list(session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name) == DELETED_EVENT)).all())
+
+
+def test_an_organization_owner_cannot_delete_a_connection():
+    with given(_setup(anthropic_connected)) as context:
+        response = _delete(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+        assert_that(_stored(context, "anthropic"), equal_to((ANTHROPIC_KEY, None)))
+        assert_that(_deleted_events(context), has_length(0))
+
+
+def test_a_read_only_api_key_cannot_delete_a_connection():
+    with given(_setup(admin, anthropic_connected)) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _delete(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(403))
+        assert_that(_stored(context, "anthropic"), equal_to((ANTHROPIC_KEY, None)))
+        assert_that(_deleted_events(context), has_length(0))
+
+
+def test_a_platform_admin_deletes_a_connection_and_its_key_is_purged():
+    with given(_setup(admin, azure_connected)) as context:
+        response = _delete(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(204), response.text)
+        assert_that(response.content, equal_to(b""))
+        [row] = _rows(context, "azure-eu")
+        assert_that(row.deleted_at, is_not(none()))
+        assert_that((row.api_key_encrypted, row.api_key_last4), equal_to((None, None)))
+        assert_that(row.base_url, equal_to(AZURE_BASE_URL))
+        listed = context.client.get(BASE, headers=auth(context)).json()
+        assert_that([item["slug"] for item in listed], equal_to(["openrouter"]))
+
+
+def test_deleting_a_connection_is_audited_with_no_part_of_its_key():
+    with given(_setup(admin, azure_connected)) as context:
+        _delete(context, "azure-eu")
+
+        events = _deleted_events(context)
+        assert_that(events, has_length(1))
+        assert_that(
+            events[0].payload,
+            equal_to(
+                {
+                    "connection_id": str(context.connection.id),
+                    "slug": "azure-eu",
+                    "provider_type": "azure",
+                    "base_url": AZURE_BASE_URL,
+                    "key_purged": True,
+                    "actor_display": ADMIN_NAME,
+                    "subject_display": "Azure Europe",
+                }
+            ),
+        )
+        assert_that(events[0].subject, has_entries(type="SYSTEM", id=str(context.connection.id)))
+        for secret in (AZURE_KEY, "e5f6"):
+            assert secret not in str(events[0].payload)
+
+
+def test_deleting_a_connection_without_a_key_records_that_none_was_purged():
+    with given(_setup(admin)) as context:
+        _connection(context, "deepseek", "DeepSeek", ProviderType.DEEPSEEK)
+
+        response = _delete(context, "deepseek")
+
+        assert_that(response.status_code, equal_to(204), response.text)
+        assert_that(
+            _deleted_events(context)[0].payload, has_entries(provider_type="deepseek", base_url=None, key_purged=False)
+        )
+
+
+def test_openrouter_cannot_be_deleted():
+    with given(_setup(admin)) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY)
+
+        response = _delete(context, "openrouter")
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": OPENROUTER_FIXED}))
+        [row] = _rows(context, "openrouter")
+        assert_that(row.deleted_at, none())
+        assert_that(_stored(context, "openrouter"), equal_to((OPENROUTER_KEY, None)))
+        assert_that(_deleted_events(context), has_length(0))
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_deleting_a_missing_connection_is_not_found(deleted):
+    with given(_setup(admin)) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _delete(context, "xai")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        assert_that(_deleted_events(context), has_length(0))
+
+
+def test_a_deleted_azure_slug_cannot_be_used_again():
+    with given(_setup(admin, provider_answers(True), azure_connected)) as context:
+        _delete(context, "azure-eu")
+
+        response = _add_own(context, "custom", slug="azure-eu", base_url="https://lab.example.com/v1")
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": SLUG_TAKEN}))
+        context.check.assert_not_called()
+
+
+def test_a_deleted_known_provider_can_be_added_again_with_a_new_key():
+    with given(_setup(admin, provider_answers(True), anthropic_connected)) as context:
+        _delete(context, "anthropic")
+
+        response = _add(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(201), response.text)
+        [row] = _rows(context, "anthropic")
+        assert_that(row.id, equal_to(context.connection.id))
+        assert_that(_stored(context, "anthropic"), equal_to((NEW_KEY, None)))
+
+
+def test_a_deleted_connection_has_no_key_to_replace():
+    with given(_setup(admin, provider_answers(True), anthropic_connected)) as context:
+        _delete(context, "anthropic")
+
+        response = _replace(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(404))
+        context.check.assert_not_called()
