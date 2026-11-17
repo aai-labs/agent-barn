@@ -124,6 +124,8 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
 - The checked hour ends two minutes before the run, because rows are stamped when
   inserted but seen only once committed. LLM figures stop at the last completed cost sync
   (they arrive up to about 30 minutes late), and are skipped entirely before any sync.
+  When the last sync is more than an hour old, the sync has stopped: LLM signals are not
+  checked, and ongoing LLM Anomalies end where the synced figures stop.
 - Rates: an Anomaly starts when a check sees the value above the threshold. While later
   checks keep seeing it, the same row is kept up to date (`last_observed_at`, the highest
   observed value, the latest usual value and threshold); the first check that does not

@@ -626,3 +626,18 @@ def test_the_oldest_hour_of_the_baseline_window_counts_whole():
         history = service.history(context.agent.id, *service.windows(NOW))
 
         assert_that(history.tool_calls, equal_to([2.0]))
+
+
+def test_llm_anomalies_end_when_the_cost_sync_has_stopped():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _save(context, *[_cost(context.agent, at, tokens=50_000) for at in _spread(_in_last_hour(), 10, minutes=30)])
+        _check(context)
+
+        with when("checks go on for hours with no cost sync since"):
+            _check(context, NOW + timedelta(hours=3))
+
+        with then("the Anomaly ends where the synced figures stop, rather than staying open"):
+            assert_that(
+                _anomalies(context, AnomalySignal.LLM_TOKENS_PER_HOUR),
+                contains_exactly(has_properties(ended_at=NOW)),
+            )

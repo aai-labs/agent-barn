@@ -79,6 +79,15 @@ BASELINE = timedelta(days=BASELINE_DAYS)
 # Anything older (a backfill, a replay) is learned instead, since it was not new when
 # it happened, or nobody saw it then.
 LATE_USE = timedelta(hours=1)
+# The cost sync runs every 15 minutes. Past this, it has stopped, and its last figures
+# say nothing about what the Agent is doing now.
+COST_SYNC_STALE = timedelta(hours=1)
+LLM_SIGNALS = (
+    AnomalySignal.LLM_CALLS_PER_HOUR,
+    AnomalySignal.LLM_TOKENS_PER_HOUR,
+    AnomalySignal.LLM_CALLS_CAP,
+    AnomalySignal.LLM_TOKENS_CAP,
+)
 # Every argument key `destination_hosts` reads, on either runtime.
 DESTINATION_ARGUMENT_KEYS = ("url", "urls", "targetUrl", "action", "command")
 
@@ -178,10 +187,15 @@ class AnomalyCheckService:
             until,
         )
         rate(RateSignal.WRITES_PER_HOUR, history.observed_writes, history.writes, until)
-        if cost_until is not None:
+        if cost_until is not None and until - cost_until <= COST_SYNC_STALE:
             rate(RateSignal.LLM_CALLS_PER_HOUR, history.observed_llm_calls, history.llm_calls, cost_until)
             rate(RateSignal.LLM_TOKENS_PER_HOUR, history.observed_llm_tokens, history.llm_tokens, cost_until)
             self._check_caps(organization_id, agent_id, override, history, cost_until)
+        elif cost_until is not None:
+            # The cost sync has stopped: nothing shows an LLM deviation still going, so
+            # it ends where the synced figures do instead of staying open on them.
+            for signal in LLM_SIGNALS:
+                self.repository.end_ongoing(agent_id, signal, cost_until)
         self._check_first_use(organization_id, agent_id, until, enough)
 
     def _record(self, organization_id: UUID, agent_id: UUID, signal: AnomalySignal, verdict, at: datetime) -> None:
