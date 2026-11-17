@@ -57,11 +57,17 @@ export function formatSignalValue(signal: AnomalySignal | RateSignal, value: num
 }
 
 /** A positive whole number, empty for none, or an error to show next to the field. */
+// The largest cap the server keeps.
+const MAX_CAP = 2_147_483_647;
+
 export function parseCap(value: string): { cap: number | null; error: string | null } {
   const trimmed = value.trim().replace(/,/g, "");
   if (trimmed === "") return { cap: null, error: null };
-  if (!/^\d+$/.test(trimmed) || Number(trimmed) <= 0) {
-    return { cap: null, error: "Enter a whole number above zero, or leave it empty for no cap." };
+  if (!/^\d+$/.test(trimmed) || Number(trimmed) <= 0 || Number(trimmed) > MAX_CAP) {
+    return {
+      cap: null,
+      error: `Enter a whole number from 1 to ${MAX_CAP.toLocaleString("en-US")}, or leave it empty for no cap.`,
+    };
   }
   return { cap: Number(trimmed), error: null };
 }

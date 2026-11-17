@@ -130,6 +130,16 @@ test.describe("Agent · Anomalies", () => {
     expect(put?.body).toEqual({ sensitivity: "HIGH", max_llm_tokens_per_hour: 200000, max_llm_calls_per_hour: null });
     await expect(anomaliesPage.normal()).toContainText("High sensitivity");
   });
+
+  test("a cap too large to keep is refused before saving", async ({ page }) => {
+    const { anomaliesPage } = await openTab(page);
+
+    await anomaliesPage.edit(anomaliesPage.normal());
+    await anomaliesPage.normal().getByRole("textbox", { name: "Most tokens per hour" }).fill("3000000000");
+
+    await expect(anomaliesPage.normal()).toContainText("Enter a whole number from 1 to 2,147,483,647");
+    await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  });
 });
 
 test.describe("Settings · Unusual activity", () => {
