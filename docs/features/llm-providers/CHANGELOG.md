@@ -8,11 +8,31 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection.
-- Next: the slice 1 demo on local k3d; slice 2, PR 2, the provider key checker.
+- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection. `LlmProviderKeyChecker` can check their keys, but nothing calls it yet.
+- Next: the slice 1 demo on local k3d; slice 2, PR 3, listing the connections.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 2
+
+- Delivered: `LlmProviderKeyChecker` in `api/infrastructure/llm_provider_keys/` asks a provider whether it accepts a key. It sends one `GET`, pinned to a checked public address, with redirects off and a 10-second timeout, and uses only the status code; it never reads the body. `200` accepts the key; `401` or `403` refuses it, and for Gemini so does `400`; any other answer, or none, raises `LlmProviderUnreachable`. An Azure or Custom base URL that is not a public HTTPS address raises `BaseUrlNotPublic` before any request. Error messages are fixed and never carry the key. OpenRouter keys are still checked by `OpenRouterClient.check_key`. Nothing calls the checker yet.
+- Changed: each provider is checked at this endpoint, checked against its official docs on 2026-11-17:
+
+  | Provider | Request | Key header | Bad-key answer in the docs |
+  | --- | --- | --- | --- |
+  | Anthropic | `GET https://api.anthropic.com/v1/models` | `x-api-key` | `401` `authentication_error`; `403` `permission_error` |
+  | OpenAI | `GET https://api.openai.com/v1/models` | `Authorization: Bearer` | `401`; `403` is an unsupported country or region |
+  | Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models` | `x-goog-api-key` | `400` `INVALID_ARGUMENT` (`API_KEY_INVALID`); `403` for a wrong, blocked or leaked key |
+  | xAI | `GET https://api.x.ai/v1/models` | `Authorization: Bearer` | `401` |
+  | DeepSeek | `GET https://api.deepseek.com/models` | `Authorization: Bearer` | `401` |
+  | Fireworks | `GET https://api.fireworks.ai/v1/accounts` | `Authorization: Bearer` | `401`, `403` (inference error codes; the accounts endpoint documents only `200`) |
+  | Novita | `GET https://api.novita.ai/openai/v1/models` | `Authorization: Bearer` | `401` `FAILED_TO_AUTH`; `403` `INVALID_API_KEY` |
+  | Azure | `GET {base_url}/openai/v1/models`, the base URL being the resource endpoint such as `https://<resource>.openai.azure.com` | `api-key` | Not documented |
+  | Custom | `GET {base_url}/models` | `Authorization: Bearer` | — |
+
+  Decided with the maintainer where the docs did not settle it: Fireworks uses the account list, because its model list needs an account id; Gemini's `400` refuses the key, because the request is a fixed `GET` with no body; an Azure base URL is the resource endpoint; and Novita's model list path follows its documented OpenAI-compatible base `https://api.novita.ai/openai`. Gemini's model list reference passes the key as a `key=` query parameter; the checker sends the `x-goog-api-key` header that Gemini's API key page documents for the same host, so the key stays out of the URL.
+- Follow-up: PR 5 calls the checker when a known provider is added.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 1
 
