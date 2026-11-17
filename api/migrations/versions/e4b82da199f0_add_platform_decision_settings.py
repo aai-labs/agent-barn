@@ -1,14 +1,14 @@
 """Persist the platform-wide decision model.
 
 Revision ID: e4b82da199f0
-Revises: a9d2e7c4b1f8
+Revises: 22b93965859f
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision = "e4b82da199f0"
-down_revision = "a9d2e7c4b1f8"
+down_revision = "22b93965859f"
 branch_labels = None
 depends_on = None
 

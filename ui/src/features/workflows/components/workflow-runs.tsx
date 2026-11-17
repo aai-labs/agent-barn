@@ -4,17 +4,13 @@ import { WorkflowFiles } from "./workflow-files";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, Clock3, FileCheck2, Files, LayoutDashboard } from "lucide-react";
-import { useQueryState } from "nuqs";
-import { workflowPageParser } from "../url-state";
 import { AppErrorState } from "@/components/app-error-state";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import {
   useWorkflowRun,
   useWorkflowRunActions,
-  useWorkflowRuns,
 } from "../hooks/use-workflow-runs";
 import type { WorkflowFile, WorkflowRun } from "../run-schemas";
-import { WorkflowPager } from "./workflow-pager";
 import { WorkflowMarkdown } from "./workflow-markdown";
 import { WorkflowRunTiming, stepTiming } from "./workflow-run-timing";
 import { AttemptStatus, WorkflowRunActivity } from "./workflow-run-activity";
@@ -23,72 +19,10 @@ import {
   RunPageHeader,
   RunStatusBadge,
   RunViewConnector,
-  StatusBadge,
   StepRail,
-  runTone,
 } from "./workflow-run-parts";
-import { runStateLabel } from "../run-schemas";
-
-export function WorkflowRuns({
-  agentId,
-  workflowId,
-  onOpen,
-}: {
-  agentId: string;
-  workflowId: string;
-  onOpen: (id: string) => void;
-}) {
-  const [page, setPage] = useQueryState("workflowRunPage", workflowPageParser);
-  const runs = useWorkflowRuns(agentId, workflowId, page);
-  if (runs.error)
-    return (
-      <AppErrorState
-        error={runs.error}
-        title="Couldn’t load runs"
-        onRetry={() => void runs.refetch()}
-      />
-    );
-  if (!runs.data) return <p role="status">Loading runs…</p>;
-  return (
-    <section aria-label="Workflow runs" className="space-y-4">
-      {runs.data.items.length === 0 && (
-        <p>
-          No runs yet. Run a saved version to see progress and text results
-          here.
-        </p>
-      )}
-      {runs.data.items.map((run) => (
-        <button
-          key={run.id}
-          className="w-full rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-5 text-left flex flex-wrap items-center justify-between gap-3 hover:border-[var(--line-strong)]"
-          onClick={() => onOpen(run.id)}
-        >
-          <span>
-            <strong>{run.name}</strong>
-            <span className="block text-sm text-[var(--ink-3)]">
-              Version {run.versionNumber} ·{" "}
-              {new Date(run.createdAt).toLocaleString()}
-              {run.rerunOfRunId && " · Re-run"}
-            </span>
-          </span>
-          <span className="flex items-center gap-3 text-sm text-[var(--ink-3)]">
-            {run.nextStep}/{run.steps.length} steps
-            <StatusBadge tone={runTone(run.state)}>
-              {runStateLabel(run.state)}
-            </StatusBadge>
-          </span>
-        </button>
-      ))}
-      <WorkflowPager
-        page={page}
-        pageSize={runs.data.pageSize}
-        total={runs.data.total}
-        onChange={setPage}
-        noun="runs"
-      />
-    </section>
-  );
-}
+import { pendingApproval } from "../run-schemas";
+import { StepApprovals, WorkflowApproval } from "./workflow-approval";
 
 export function WorkflowRunDetail({
   agentId,
@@ -221,7 +155,9 @@ function RunSummary({
           ? "Waiting to start"
           : run.state === "CANCELLING"
             ? "Stopping work"
-            : `${agentName} is working on this run`
+            : run.state === "AWAITING_APPROVAL"
+              ? "This run is waiting for approval"
+              : `${agentName} is working on this run`
       }
     >
       <div className="space-y-4">
@@ -249,7 +185,7 @@ function StepDetail({
   step: WorkflowRun["steps"][number];
 }) {
   const index = run.steps.findIndex((item) => item.id === step.id);
-  const stopped = ["CANCELLED", "FAILED", "BLOCKED", "PAUSED"].includes(
+  const stopped = ["CANCELLED", "FAILED", "BLOCKED", "PAUSED", "AWAITING_APPROVAL"].includes(
     run.state,
   );
   if (step.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state))
@@ -280,6 +216,7 @@ function StepDetail({
           Completed in {stepTiming(step, run.state)}
         </p>
       )}
+      <StepApprovals run={run} stepIndex={index} />
       {step.summary ? (
         <WorkflowMarkdown text={step.summary} />
       ) : (
@@ -327,7 +264,7 @@ function RunContents({
       <RunPageHeader
         eyebrow={`${run.name} · v${run.versionNumber} · run ${run.id.slice(0, 8)}`}
         title={run.name}
-        badge={<RunStatusBadge state={run.state} />}
+        badge={<RunStatusBadge state={run.state} approval={pendingApproval(run)} />}
         agent={agent}
         agentHref={agentHref}
         detail={`Started ${started}`}
@@ -374,6 +311,11 @@ function RunContents({
           title="Cancellation could not be recorded"
         />
       )}
+      {pendingApproval(run) && (
+        <div className="mb-6">
+          <WorkflowApproval agentId={agentId} agentName={agent.name} run={run} />
+        </div>
+      )}
       <div className="grid gap-x-8 gap-y-4 md:grid-cols-[minmax(200px,260px)_minmax(0,1fr)]">
         <nav aria-label="Run views" className="self-start md:sticky md:top-4">
           <button
@@ -416,6 +358,8 @@ function RunContents({
           <StepRail
             steps={run.steps}
             runState={run.state}
+            approvals={run.approvals}
+            pending={pendingApproval(run)}
             attempt={run.attempt}
             selectedStepId={selectedStep?.id}
             onSelectStep={setSelectedView}

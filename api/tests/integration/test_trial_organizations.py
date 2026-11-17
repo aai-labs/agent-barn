@@ -29,7 +29,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, use_org_for_auth
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.events import event_delivery_tables_are_clean
-from api.tests.steps.onboarding import trial_settings_are_configured
+from api.tests.steps.onboarding import the_free_tier_has, trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -118,9 +118,7 @@ def _end_trial(context, organization_id=None, body=None):
 
 def the_trial_agent_limit_is(limit: int):
     def step(context):
-        context.injector.get(TrialSettingsRepository).set_settings(
-            {"agent_limit": limit}, context.user.id, "Platform Admin"
-        )
+        the_free_tier_has(context, agent_limit=limit)
 
     return step
 

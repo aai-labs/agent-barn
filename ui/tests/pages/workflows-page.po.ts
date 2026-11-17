@@ -5,7 +5,7 @@ export class WorkflowsPage {
   constructor(readonly page: Page) {}
   async goto(agentId: string, organizationId: string, workflowId?: string) {
     await this.page.goto(
-      `/dashboard/${organizationId}/agents/${agentId}?tab=workflows${workflowId ? `&workflow=${workflowId}` : ""}`,
+      `/dashboard/${organizationId}/agents/${agentId}?tab=workflows${workflowId ? `&workflow=${workflowId}` : "&workflowsTab=workflows"}`,
     );
   }
   async create(outcome: string) {

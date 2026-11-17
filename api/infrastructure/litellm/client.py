@@ -405,6 +405,50 @@ class LiteLLMClient:
             raise LiteLLMError(f"LiteLLM returned no key: {resp.text}")
         return key
 
+    def _has_model_deployment(self, model_id: str, headers: dict[str, str]) -> bool:
+        try:
+            response = httpx.get(
+                f"{self.config.litellm_base_url}/model/info",
+                params={"litellm_model_id": model_id},
+                headers=headers,
+                timeout=self._TIMEOUT,
+            )
+            if response.status_code == 400:
+                return False
+            response.raise_for_status()
+        except httpx.HTTPError:
+            raise LiteLLMError("Failed to look up the model route") from None
+        return True
+
+    def upsert_model_deployment(self, model_name: str, litellm_params: dict, model_info: dict) -> None:
+        headers = self._headers(self._master_key())
+        endpoint = "update" if self._has_model_deployment(model_info["id"], headers) else "new"
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/model/{endpoint}",
+                json={"model_name": model_name, "litellm_params": litellm_params, "model_info": model_info},
+                headers=headers,
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            raise LiteLLMError("Failed to write the model route") from None
+
+    def delete_model_deployment(self, model_id: str) -> bool:
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/model/delete",
+                json={"id": model_id},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            if response.status_code == 400:
+                return False
+            response.raise_for_status()
+        except httpx.HTTPError:
+            raise LiteLLMError("Failed to delete the model route") from None
+        return True
+
     def delete_key(self, key: str) -> bool:
         """Deletes a LiteLLM virtual key outright. Returns True only for a
         successful LiteLLM response; callers should treat False as failure and
@@ -565,7 +609,7 @@ class LiteLLMClient:
         This is LiteLLM's paginated public spend API. `/spend/logs` is deprecated and
         aggregates rather than listing rows; `/spend/logs/ui` is internal and absent
         from the OpenAPI schema, so neither is safe to depend on in client-deployed
-        installs. `/spend/logs/v2` is present in v1.83 and v1.96 alike.
+        installs. `/spend/logs/v2` is present in v1.83, v1.96, v1.101 and v1.108 alike.
 
         Dates must be `YYYY-MM-DD HH:MM:SS` — a bare date returns HTTP 400.
 

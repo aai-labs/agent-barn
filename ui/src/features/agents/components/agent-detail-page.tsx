@@ -81,7 +81,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
   const [workflowRun, setWorkflowRun] = useQueryState("workflowRun", parseAsString.withOptions({ history: "replace" }));
   const [, setWorkflowView] = useQueryState("workflowView", parseAsString.withOptions({ history: "replace", scroll: false }));
-  const [, setWorkflowRunPage] = useQueryState("workflowRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [, setWorkflowsTab] = useQueryState("workflowsTab", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [, setAgentRunPage] = useQueryState("agentRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
   const [startingRun, setStartingRun] = useState(false);
 
   function selectTab(next: AgentPageTab) {
@@ -95,7 +96,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       void setWorkflow(null);
       void setWorkflowRun(null);
       void setWorkflowView(null);
-      void setWorkflowRunPage(null);
+      void setWorkflowsTab(null);
+      void setAgentRunPage(null);
     }
   }
 

@@ -22,6 +22,9 @@ RESUME = '''        # Agent Barn: resume persisted DM/thread context without fla
             # summary markers. Read errors must fail, never start an empty turn.
             session_id = await asyncio.to_thread(db.resolve_resume_session_id, session_id)
             conversation_history = await asyncio.to_thread(db.get_messages_as_conversation, session_id)
+            # A caller continuing known work can refuse an empty history instead of starting blind.
+            if body.get("resume_require_history") is True and not conversation_history:
+                return web.json_response(_openai_error("resume_session found no history for this session"), status=409)
 '''
 
 

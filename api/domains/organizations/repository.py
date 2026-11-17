@@ -63,6 +63,9 @@ _CREDIT_REASONS = {
     CreditGrantKind.REFUND: "Purchase refunded.",
     CreditGrantKind.CHARGEBACK: "Payment disputed.",
     CreditGrantKind.ADJUSTMENT: "Credit adjusted.",
+    CreditGrantKind.TIER_CREDIT: "Tier credit granted.",
+    CreditGrantKind.ALLOWANCE: "Monthly usage granted.",
+    CreditGrantKind.ALLOWANCE_EXPIRY: "Unused monthly usage expired.",
 }
 
 
@@ -141,6 +144,8 @@ class OrganizationRepository:
                 ).label("agent_size_ids"),
                 col(Organization.trial_expired_at).label("trial_expired_at"),
                 col(Organization.agent_limit).label("agent_limit"),
+                col(Organization.tier_id).label("tier_id"),
+                col(Organization.tier_assigned_by_platform).label("tier_assigned_by_platform"),
             )
             .select_from(Organization)
             .outerjoin(
@@ -663,10 +668,11 @@ class OrganizationRepository:
             return delivery_ids
 
     def end_trial_with_event(
-        self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str
+        self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str, leave_tier: bool = False
     ) -> tuple[Organization, list[UUID]] | None:
         """Make a trial an ordinary Organization, with its audit Event in the same commit.
-        None when the Organization does not exist; no Event when it was not a trial."""
+        None when the Organization does not exist; no Event when it was not a trial.
+        `leave_tier` takes it off the Free Tier too, back to platform-managed."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             organization = self._locked(session, organization_id)
             if organization is None:
@@ -675,6 +681,10 @@ class OrganizationRepository:
                 return organization, []
             organization.is_trial = False
             organization.trial_expired_at = None
+            if leave_tier:
+                organization.tier_id = None
+                organization.tier_assigned_by_platform = False
+                organization.tier_holds_due_at = None
             organization.updated_at = datetime.now(UTC)
             session.add(organization)
             # The trial's creator may now create Organizations of their own.

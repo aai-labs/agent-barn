@@ -38,6 +38,8 @@ export type NavItem = {
   icon: LucideIcon;
   active: boolean;
   tone?: "danger";
+  /** A count of things waiting on the viewer here, such as workflow approvals. */
+  badge?: number;
   /** Shown nested under the item while it is active, or always when `expanded`. */
   children?: NavItem[];
   expanded?: boolean;

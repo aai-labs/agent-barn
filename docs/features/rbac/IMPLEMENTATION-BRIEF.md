@@ -35,6 +35,16 @@ Organization roles confer no authority on these Platform routes.
 The Platform Playbook Extraction model (`/platform/settings/playbooks`) follows the
 same rule; see [Playbooks](../playbooks.md#model-and-billing).
 
+### Platform LLM Provider settings
+
+`/platform/settings/llm-providers` routes require a current Platform Administrator
+(`require_platform_admin` and `PlatformAdminService.require_platform_admin`);
+Organization roles confer no authority on them. `GET .../openrouter` reports whether a
+key is stored, its last four characters, who last changed it and when, and
+whether `OPENROUTER_API_KEY` is still configured. It never returns the key or its
+ciphertext. `PUT .../openrouter` replaces the key; a read-only Personal API Key is
+refused, and a malformed request gets a fixed `422` that does not echo the body.
+
 ### Organization Roles
 
 | Role                | Authority                                                                                                                          |
@@ -83,6 +93,12 @@ An Agent remains owned by its Organization. Agent Creator is immutable provenanc
 - Assignment, Agent General Access, Membership, and Agent Access Role Permission changes take effect on the next request.
 
 Explicit Agent Access and Agent General Access scope the complete Agent aggregate: lifecycle, configuration, conversations, tool calls, activity, costs, logs, Skills, Agent Secrets, and platform/integration configuration. Secret plaintext is never returned.
+
+### Tier Entitlements
+
+An Organization's [Tier](../tiers.md#tier-entitlements) can refuse an action that authorization allowed. The check runs after the Permission checks above, against the Organization the authorized request already resolved, so a concealed or unauthorized resource still answers `404` or `403` as before and a Tier never reveals one. It is not a Permission, no role carries it, and it never widens access: it only refuses new or more use of a feature or Platform, with `403` `TIER_FEATURE_UNAVAILABLE`. An Organization without a Tier is never refused.
+
+Choosing which Agents stay on a [Tier Hold](../tiers.md#tier-holds) uses the Organization Permission `tier_hold.manage`, held only by Owners and Admins, like `agent.size.manage`: which Agents keep the Organization's places is its decision, not an Agent Owner's. Holding or releasing an Agent resolves it through `AgentAuthorization.require_action` with `agent.lifecycle.manage` first, so a concealed Agent is `404`, then checks the Organization grant. A held Connection, Agent Webhook or Agent Memory is released by enabling it through its own route and Permission, which the Tier Entitlement check then allows.
 
 ## Data-access enforcement
 

@@ -104,6 +104,9 @@ class Config(BaseSettings):
     # payments made before payments were turned off, and their refunds and disputes, still land.
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
+    # Lets an Owner subscribe to a paid Tier with a pretend payment, for demonstrations
+    # without a payment provider. Off by default; never turn it on where customers pay.
+    tiers_mock_payments: bool = False
     # How many Agents an Organization that is not a trial may run, unless a Platform
     # Administrator sets its own limit, until a Platform Administrator saves a default
     # on the platform settings page. Unset (or empty) is 10.

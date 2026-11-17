@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 
@@ -15,8 +16,16 @@ from api.domains.auth.repository import (
     PasswordResetTokenRepository,
     RefreshTokenRepository,
 )
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    OPENROUTER_NAME,
+    OPENROUTER_SLUG,
+    LlmProviderConnection,
+    ProviderType,
+)
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.tiers.models import SEED_TIERS, Tier
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -84,6 +93,28 @@ def database_is_clean():
                     "cpu_limit": STANDARD_CPU_LIMIT_MILLICORES,
                     "memory_request": STANDARD_MEMORY_REQUEST_BYTES,
                     "memory_limit": STANDARD_MEMORY_LIMIT_BYTES,
+                },
+            )
+            # The Tier catalog back to what the migration seeded.
+            conn.execute(text("DELETE FROM organization_subscription"))
+            conn.execute(text("UPDATE organization SET tier_id = NULL WHERE tier_id IS NOT NULL"))
+            conn.execute(text("DELETE FROM tier"))
+            now = datetime.now(UTC)
+            conn.execute(
+                Tier.__table__.insert(),  # ty: ignore[unresolved-attribute]
+                [{**seed, "enabled": False, "created_at": now, "updated_at": now} for seed in SEED_TIERS],
+            )
+            # The LLM Provider Connections back to what the migration seeded: OpenRouter, no key.
+            conn.execute(text("DELETE FROM llm_provider_connection"))
+            conn.execute(
+                LlmProviderConnection.__table__.insert(),  # ty: ignore[unresolved-attribute]
+                {
+                    "id": OPENROUTER_CONNECTION_ID,
+                    "slug": OPENROUTER_SLUG,
+                    "name": OPENROUTER_NAME,
+                    "provider_type": ProviderType.OPENROUTER,
+                    "created_at": now,
+                    "updated_at": now,
                 },
             )
             conn.commit()

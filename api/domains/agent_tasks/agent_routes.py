@@ -19,6 +19,7 @@ from api.domains.agent_tasks.models import (
     AgentTaskRead,
     AgentTaskStatus,
     AgentTaskStatusUpdate,
+    AgentTaskSummary,
 )
 from api.domains.agent_tasks.service import AgentTaskService
 from api.domains.agents.models import Agent
@@ -37,7 +38,7 @@ def create_task(
     return service.create_task(agent.organization_id, agent.id, data)
 
 
-@agent_task_router.get("/{agent_id}/tasks", response_model=PaginatedItems[AgentTaskRead])
+@agent_task_router.get("/{agent_id}/tasks", response_model=PaginatedItems[AgentTaskSummary])
 def list_tasks(
     agent: Annotated[Agent, Depends(authenticated_agent)],
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],

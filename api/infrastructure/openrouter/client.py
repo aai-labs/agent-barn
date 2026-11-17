@@ -1,4 +1,5 @@
 import enum
+import hashlib
 import logging
 import threading
 import time
@@ -45,7 +46,7 @@ class OpenRouterCredits:
 
 # Remaining credit, cached separately from the catalogue: it changes constantly,
 # whereas the catalogue barely moves, so they cannot share a TTL.
-_credits_cache: tuple[float, OpenRouterCredits] | None = None
+_credits_cache: tuple[float, str, OpenRouterCredits] | None = None
 _credits_lock = threading.Lock()
 
 
@@ -142,7 +143,7 @@ class OpenRouterClient:
         """Returns the OpenRouter catalogue as {id, name, context_length, pricing}."""
         return _cached(self.config.openrouter_base_url, self._fetch_models)
 
-    def get_credits(self) -> OpenRouterCredits:
+    def get_credits(self, api_key: str) -> OpenRouterCredits:
         """The key's credit limit and what is left of it.
 
         Reads GET /key rather than the account-wide /credits endpoint, which needs a
@@ -151,17 +152,18 @@ class OpenRouterClient:
         """
         global _credits_cache
         ttl = self.config.openrouter_credits_cache_ttl_seconds
+        fingerprint = hashlib.sha256(api_key.encode()).hexdigest()
         now = time.monotonic()
         with _credits_lock:
-            if _credits_cache is not None and now - _credits_cache[0] < ttl:
-                return _credits_cache[1]
+            if _credits_cache is not None and _credits_cache[1] == fingerprint and now - _credits_cache[0] < ttl:
+                return _credits_cache[2]
 
         credits = OpenRouterCredits(status=CreditsStatus.UNAVAILABLE)
-        if self.config.openrouter_api_key:
+        if api_key:
             try:
                 resp = httpx.get(
                     f"{self.config.openrouter_base_url.rstrip('/')}/key",
-                    headers={"Authorization": f"Bearer {self.config.openrouter_api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                     timeout=10,
                 )
                 resp.raise_for_status()
@@ -172,10 +174,32 @@ class OpenRouterClient:
                 logger.warning("Failed to read OpenRouter credit balance", exc_info=True)
 
         with _credits_lock:
-            _credits_cache = (time.monotonic(), credits)
+            _credits_cache = (time.monotonic(), fingerprint, credits)
         return credits
 
-    def get_generation(self, generation_id: str) -> dict | None:
+    def check_key(self, api_key: str) -> bool:
+        """Whether OpenRouter accepts the key. Raises OpenRouterError when it cannot tell."""
+        try:
+            resp = httpx.get(
+                f"{self.config.openrouter_base_url.rstrip('/')}/key",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+        except httpx.HTTPError:
+            raise OpenRouterError("OpenRouter could not be reached to check the key") from None
+        if resp.status_code in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+            return False
+        if resp.status_code != httpx.codes.OK:
+            raise OpenRouterError(f"OpenRouter key check failed with {resp.status_code}")
+        try:
+            data = resp.json().get("data")
+        except ValueError, AttributeError:
+            data = None
+        if not isinstance(data, dict):
+            raise OpenRouterError("Unexpected OpenRouter key check response")
+        return True
+
+    def get_generation(self, generation_id: str, api_key: str) -> dict | None:
         """Return the true cost and token counts OpenRouter recorded for one call.
 
         Used to recover spend that LiteLLM dropped on streamed responses. Reading
@@ -190,8 +214,8 @@ class OpenRouterClient:
         """
         url = f"{self.config.openrouter_base_url}/generation"
         headers = {}
-        if self.config.openrouter_api_key:
-            headers["Authorization"] = f"Bearer {self.config.openrouter_api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         try:
             resp = httpx.get(url, params={"id": generation_id}, headers=headers, timeout=30)
             if resp.status_code == httpx.codes.NOT_FOUND:
@@ -209,11 +233,8 @@ class OpenRouterClient:
 
     def _fetch_models(self) -> list[dict]:
         url = f"{self.config.openrouter_base_url}/models"
-        headers = {}
-        if self.config.openrouter_api_key:
-            headers["Authorization"] = f"Bearer {self.config.openrouter_api_key}"
         try:
-            resp = httpx.get(url, headers=headers, timeout=15)
+            resp = httpx.get(url, timeout=15)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise OpenRouterError(f"Failed to fetch OpenRouter models: {exc}") from exc

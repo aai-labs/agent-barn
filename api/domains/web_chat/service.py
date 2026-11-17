@@ -27,6 +27,7 @@ from api.domains.communications.repository import (
 )
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.guard import UsageAction, UsageGuard, UsageSubject
 from api.domains.web_chat.models import MAIN_THREAD_ID, WebChatMessageRead, WebChatThreadRead
 from api.domains.web_chat.repository import WebChatDeliveryState, WebChatRepository
 from api.infrastructure.communication_signals import (
@@ -49,6 +50,7 @@ class WebChatService:
     web_chat_repository: WebChatRepository
     gateway: CommunicationsGatewayService
     signals: CommunicationSignalBus
+    usage: UsageGuard
 
     def send_message(
         self,
@@ -59,6 +61,11 @@ class WebChatService:
         approval_id: str | None = None,
     ) -> WebChatMessageRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        # Answering an approval the Agent already asked for stays possible without Web Chat.
+        if approval_id is None:
+            self.usage.check(
+                agent.organization_id, UsageAction.USE_CHANNEL, UsageSubject(platform_key=WebPlatformPlugin.key)
+            )
         connection = self._get_or_create_connection(agent.id, agent.organization_id)
         location = self._location(context, thread_id)
         self.web_chat_repository.restore_thread_if_deleted(

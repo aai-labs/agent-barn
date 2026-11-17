@@ -29,10 +29,13 @@ from api.domains.workflows import config as workflow_config
 from api.domains.workflows.models import Workflow, WorkflowVersion
 from api.domains.workflows.repository import WorkflowConflict
 from api.domains.workflows.run_models import (
+    DECIDABLE_APPROVAL_STATES,
     TERMINAL_STATES,
+    ApprovalRaised,
     AttemptFailure,
     AttemptRead,
     AttemptResult,
+    WorkflowApprovalRequest,
     WorkflowAttempt,
     WorkflowCheckpoint,
     WorkflowHistory,
@@ -166,12 +169,26 @@ class WorkflowRunRepository:
         )
 
     def list_runs(
-        self, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, workflow_id: UUID | None
+        self,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        page: int,
+        size: int,
+        workflow_id: UUID | None,
+        awaiting_decision: bool = False,
     ) -> tuple[list[tuple[WorkflowRun, WorkflowVersion]], int]:
         with Session(self.delegate.engine) as session:
             query = self.scoped(agent_id, scope)
             if workflow_id:
                 query = query.where(col(WorkflowRun.workflow_id) == workflow_id)
+            if awaiting_decision:
+                # Correlated per run, so the open-request partial index serves it within this Agent.
+                query = query.where(
+                    sa.exists().where(
+                        col(WorkflowApprovalRequest.run_id) == WorkflowRun.id,
+                        col(WorkflowApprovalRequest.state).in_(DECIDABLE_APPROVAL_STATES),
+                    )
+                )
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
             rows = session.exec(
                 select(WorkflowRun, WorkflowVersion)
@@ -328,6 +345,7 @@ class WorkflowRunRepository:
             run.state = "CANCELLING"
             run.reason = "Cancellation requested; claimed work is stopping"
             run.revision += 1
+            self._lapse(session, run.id)
             delivery_ids = self._event(session, run, "CANCEL_REQUESTED", run.reason)
             session.commit()
             return delivery_ids
@@ -338,6 +356,29 @@ class WorkflowRunRepository:
         )
         if membership is None or membership.user_id != run.initiating_user_id:
             return False
+        return self._may_update(session, run, membership)
+
+    def _decider_authorized(self, session: Session, run: WorkflowRun, user_id: UUID | None) -> bool:
+        """The person who decided a request must still hold `agent.update` when the session continues."""
+        if user_id is None:
+            return False
+        workflow = session.get_one(Workflow, run.workflow_id)
+        agent = session.get(Agent, workflow.agent_id)
+        membership = (
+            session.exec(
+                select(OrganizationUser).where(
+                    col(OrganizationUser.user_id) == user_id,
+                    col(OrganizationUser.organization_id) == agent.organization_id,
+                )
+            ).first()
+            if agent is not None
+            else None
+        )
+        return membership is not None and self._may_update(session, run, membership, running=False)
+
+    @staticmethod
+    def _may_update(session: Session, run: WorkflowRun, membership: OrganizationUser, *, running: bool = True) -> bool:
+        """Whether the member holds `agent.update` on the run's Agent (and, by default, the Agent is running)."""
         user = session.get(User, membership.user_id)
         if user is None:
             return False
@@ -356,7 +397,7 @@ class WorkflowRunRepository:
             session.exec(
                 select(Agent).where(
                     col(Agent.id) == workflow.agent_id,
-                    col(Agent.status) == AgentStatus.RUNNING,
+                    *([col(Agent.status) == AgentStatus.RUNNING] if running else []),
                     *agent_scope_predicates(scope),
                 )
             ).one_or_none()
@@ -443,6 +484,11 @@ class WorkflowRunRepository:
                 if attempt.step_index == len(version.snapshot["steps"]) - 1
                 else None,
             }
+            continued = self.continuation(session, attempt)
+            if continued is not None:
+                packet["continuation"] = continued.model_dump(
+                    mode="json", include={"session_id", "state", "command", "guidance"}
+                )
             session.commit()
             return run, attempt, packet
 
@@ -494,6 +540,8 @@ class WorkflowRunRepository:
             session.add(attempt)
             run.state = "BLOCKED" if failure.needs_attention or failure.retryable else "FAILED"
             run.reason = failure.reason
+            # The session that held any open request has ended; nothing is left to decide.
+            self._lapse(session, run.id)
             if run.state == "FAILED":
                 self._settle(session, run)
             delivery_ids = self._event(
@@ -511,6 +559,7 @@ class WorkflowRunRepository:
                 session.commit()
 
     def _settle(self, session: Session, run: WorkflowRun) -> None:
+        self._lapse(session, run.id)
         release(session, "run", run.id, self.config.artifact_retention_days)
         run.settled_at = datetime.now(UTC)
 
@@ -520,7 +569,285 @@ class WorkflowRunRepository:
 
     def parked_ids(self, limit: int = 100) -> list[UUID]:
         """Audit parked runs separately for lifecycle and authorization changes."""
-        return self._recovery_ids(("BLOCKED", "PAUSED"), limit)
+        return self._recovery_ids(("BLOCKED", "PAUSED", "AWAITING_APPROVAL"), limit)
+
+    # Approvals. A request is answered live while the step's session holds it, or after the
+    # session was stopped (parked); a late decision continues the same session in a new attempt.
+
+    @staticmethod
+    def _latest_request(session: Session, attempt_id: UUID) -> WorkflowApprovalRequest | None:
+        return session.exec(
+            select(WorkflowApprovalRequest)
+            .where(col(WorkflowApprovalRequest.attempt_id) == attempt_id)
+            .order_by(col(WorkflowApprovalRequest.created_at).desc())
+            .limit(1)
+        ).one_or_none()
+
+    @staticmethod
+    def _lapse(session: Session, run_id: UUID) -> None:
+        session.exec(
+            sa.update(WorkflowApprovalRequest)
+            .where(
+                col(WorkflowApprovalRequest.run_id) == run_id,
+                col(WorkflowApprovalRequest.state).in_(DECIDABLE_APPROVAL_STATES),
+            )
+            .values(state="LAPSED", updated_at=datetime.now(UTC))
+        )
+
+    def _park(self, session: Session, run: WorkflowRun, request: WorkflowApprovalRequest) -> None:
+        request.state = "PARKED"
+        session.add(request)
+        run.state = "AWAITING_APPROVAL"
+        run.reason = f"Waiting for approval to run {request.command[:500]}"
+
+    @staticmethod
+    def continuation(session: Session, attempt: WorkflowAttempt) -> WorkflowApprovalRequest | None:
+        """The late decision this attempt continues, claiming it on first sight."""
+        # Live declines continue inside their own attempt, so one attempt may claim several.
+        claimed = session.exec(
+            select(WorkflowApprovalRequest)
+            .where(col(WorkflowApprovalRequest.continued_by_attempt_id) == attempt.id)
+            .order_by(col(WorkflowApprovalRequest.created_at).desc())
+            .limit(1)
+        ).one_or_none()
+        if claimed is not None:
+            return claimed
+        request = session.exec(
+            select(WorkflowApprovalRequest)
+            .where(
+                col(WorkflowApprovalRequest.run_id) == attempt.run_id,
+                col(WorkflowApprovalRequest.step_index) == attempt.step_index,
+                col(WorkflowApprovalRequest.state).in_(("APPROVED", "DECLINED")),
+                col(WorkflowApprovalRequest.continued_by_attempt_id).is_(None),
+                col(WorkflowApprovalRequest.attempt_id) != attempt.id,
+            )
+            .order_by(col(WorkflowApprovalRequest.created_at).desc())
+            .limit(1)
+        ).one_or_none()
+        if request is not None:
+            request.continued_by_attempt_id = attempt.id
+            session.add(request)
+        return request
+
+    def raise_approval(
+        self, attempt_id: UUID, token: str, raised: ApprovalRaised
+    ) -> tuple[WorkflowApprovalRequest, list[UUID]]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            run, attempt = self._bound(session, attempt_id, token)
+            command_sha256 = hashlib.sha256(raised.command.encode()).hexdigest()
+            # A retried report is the same request in whatever state it reached meanwhile; only a
+            # released request was acted on, so the same command asked again after it is a new ask.
+            reported = session.exec(
+                select(WorkflowApprovalRequest)
+                .where(
+                    col(WorkflowApprovalRequest.attempt_id) == attempt.id,
+                    col(WorkflowApprovalRequest.runtime_run_id) == raised.runtime_run_id,
+                    col(WorkflowApprovalRequest.command_sha256) == command_sha256,
+                    col(WorkflowApprovalRequest.state) != "RELEASED",
+                )
+                .order_by(col(WorkflowApprovalRequest.created_at).desc())
+                .limit(1)
+            ).one_or_none()
+            if reported is not None:
+                session.commit()
+                return reported, []
+            latest = self._latest_request(session, attempt.id)
+            if latest is not None and latest.state == "LIVE":
+                raise WorkflowConflict("Another approval request is already live for this attempt")
+            continued = self.continuation(session, attempt)
+            now = datetime.now(UTC)
+            # Hermes's own approval clock started when it raised the event, not when it reached us.
+            live_seconds = max(workflow_config.APPROVAL_LIVE_SECONDS - raised.age_seconds, 0)
+            request = WorkflowApprovalRequest(
+                run_id=run.id,
+                attempt_id=attempt.id,
+                step_index=attempt.step_index,
+                session_id=continued.session_id if continued else f"workflow-{attempt.id}",
+                runtime_run_id=raised.runtime_run_id,
+                command=raised.command,
+                command_sha256=command_sha256,
+                live_until=now + timedelta(seconds=live_seconds),
+            )
+            session.add(request)
+            # The deadline covers the whole window; a decision gives back the part not waited.
+            attempt.expires_at += request.live_until - now + timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
+            session.add(attempt)
+            run.revision += 1
+            delivery_ids = self._event(
+                session, run, "APPROVAL_REQUESTED", f"Approval requested to run {raised.command[:500]}"
+            )
+            session.commit()
+            return request, delivery_ids
+
+    def _bound_request(
+        self, session: Session, attempt_id: UUID, token: str, request_id: UUID
+    ) -> tuple[WorkflowRun, WorkflowAttempt, WorkflowApprovalRequest]:
+        run, attempt = self._bound(session, attempt_id, token)
+        request = session.get(WorkflowApprovalRequest, request_id)
+        if request is None or request.attempt_id != attempt.id:
+            raise WorkflowConflict("Approval request belongs to another attempt")
+        return run, attempt, request
+
+    def approval_status(self, attempt_id: UUID, token: str, request_id: UUID) -> WorkflowApprovalRequest:
+        """Polled by the step while the request is live. A decline is claimed here for continuation."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            _, attempt, request = self._bound_request(session, attempt_id, token, request_id)
+            if request.state == "DECLINED" and request.continued_by_attempt_id is None:
+                request.continued_by_attempt_id = attempt.id
+                session.add(request)
+            session.commit()
+            return request
+
+    def park(self, attempt_id: UUID, token: str, request_id: UUID) -> tuple[WorkflowApprovalRequest, list[UUID]]:
+        """Close the live window; a decision that already arrived wins and is returned instead."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            run, attempt, request = self._bound_request(session, attempt_id, token, request_id)
+            if request.state != "LIVE":
+                session.commit()
+                return request, []
+            self._park(session, run, request)
+            attempt.state = "STOPPED"
+            session.add(attempt)
+            run.revision += 1
+            delivery_ids = self._event(session, run, "APPROVAL_PARKED", run.reason or "Waiting for approval")
+            session.commit()
+            return request, delivery_ids
+
+    def released(self, attempt_id: UUID, token: str, request_id: UUID) -> list[UUID]:
+        """The runtime confirmed it received the approval; until then the outcome is uncertain."""
+        with Session(self.delegate.engine) as session:
+            run, _, request = self._bound_request(session, attempt_id, token, request_id)
+            if request.state == "RELEASED":
+                return []
+            if request.state != "APPROVED":
+                raise WorkflowConflict("Approval request was not approved")
+            request.state = "RELEASED"
+            session.add(request)
+            run.revision += 1
+            delivery_ids = self._event(
+                session, run, "APPROVAL_RELEASED", f"Approved command released: {request.command[:500]}"
+            )
+            session.commit()
+            return delivery_ids
+
+    def decide(
+        self,
+        run_id: UUID,
+        request_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        user_id: UUID,
+        approve: bool,
+        guidance: str | None,
+    ) -> list[UUID]:
+        with Session(self.delegate.engine) as session:
+            run = session.exec(
+                self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
+            ).one_or_none()
+            if run is None:
+                raise WorkflowConflict("Run access changed")
+            request = session.get(WorkflowApprovalRequest, request_id)
+            if request is None or request.run_id != run.id or request.state not in DECIDABLE_APPROVAL_STATES:
+                raise WorkflowConflict("This approval request is no longer awaiting a decision")
+            now = datetime.now(UTC)
+            attempt = session.get_one(WorkflowAttempt, request.attempt_id)
+            if request.state == "LIVE" and (
+                run.state != "RUNNING" or attempt.state != "REASONING" or request.live_until <= now
+            ):
+                raise WorkflowConflict("This approval request is closing; refresh and decide again")
+            if request.state == "PARKED" and run.state != "AWAITING_APPROVAL":
+                raise WorkflowConflict("Run changed; refresh before deciding")
+            live = request.state == "LIVE"
+            request.state = "APPROVED" if approve else "DECLINED"
+            request.decided_by_user_id, request.decided_at = user_id, now
+            request.guidance = None if approve else (guidance or "").strip() or None
+            session.add(request)
+            session.flush()
+            declines = session.exec(
+                select(sa.func.count()).where(
+                    col(WorkflowApprovalRequest.run_id) == run.id,
+                    col(WorkflowApprovalRequest.step_index) == request.step_index,
+                    col(WorkflowApprovalRequest.state) == "DECLINED",
+                )
+            ).one()
+            run.revision += 1
+            if not approve and declines >= workflow_config.MAX_DECLINES_PER_STEP:
+                # The step's session sees its admission fenced and stops; nothing is continued.
+                request.continued_by_attempt_id = request.attempt_id
+                attempt.state = "STOPPED"
+                session.add(attempt)
+                run.state = "BLOCKED"
+                run.reason = (
+                    f"The Agent's commands were declined {declines} times in this step; cancel the run "
+                    "and revise the workflow"
+                )
+            elif live:
+                # Only the time actually spent waiting is added to the step's budget.
+                attempt.expires_at -= request.live_until - now
+                session.add(attempt)
+            else:
+                self._continue_when_ready(session, run)
+            verdict = "approved" if approve else "declined"
+            delivery_ids = self._event(session, run, "APPROVAL_DECIDED", f"Command {verdict}: {request.command[:500]}")
+            session.commit()
+            return delivery_ids
+
+    @staticmethod
+    def _decided(session: Session, run: WorkflowRun) -> WorkflowApprovalRequest | None:
+        """A late decision on the current step that no attempt has continued yet."""
+        return session.exec(
+            select(WorkflowApprovalRequest)
+            .where(
+                col(WorkflowApprovalRequest.run_id) == run.id,
+                col(WorkflowApprovalRequest.step_index) == run.next_step,
+                col(WorkflowApprovalRequest.state).in_(("APPROVED", "DECLINED")),
+                col(WorkflowApprovalRequest.continued_by_attempt_id).is_(None),
+            )
+            .order_by(col(WorkflowApprovalRequest.created_at).desc())
+            .limit(1)
+        ).one_or_none()
+
+    def _continue_when_ready(self, session: Session, run: WorkflowRun) -> None:
+        """Queue a late decision's continuation, or keep it waiting until the session may continue.
+
+        Lifecycle changes never lapse a parked or decided request: the run keeps Awaiting Approval
+        and continues once the Agent runs, the initiator keeps authority, and the decider still may.
+        """
+        decided = self._decided(session, run)
+        if decided is None:
+            return
+        if not self._decider_authorized(session, run, decided.decided_by_user_id):
+            # Authority is required when deciding and again when the session continues.
+            decided.state, decided.decided_by_user_id, decided.decided_at, decided.guidance = "PARKED", None, None, None
+            session.add(decided)
+            self._park(session, run, decided)
+            run.reason = f"The decider no longer has access; decide again on {decided.command[:500]}"
+        elif self._authorized(session, run):
+            run.state, run.reason = "QUEUED", None
+        else:
+            run.state = "AWAITING_APPROVAL"
+            run.reason = "Decided; continues once the Agent is running and the run's initiator still has access"
+
+    def approvals(self, run_ids: Iterable[UUID], states: Iterable[str] | None = None) -> list[WorkflowApprovalRequest]:
+        """Requests of these runs, oldest first. Callers must already have authorized the runs."""
+        query = select(WorkflowApprovalRequest).where(col(WorkflowApprovalRequest.run_id).in_(set(run_ids)))
+        if states is not None:
+            query = query.where(col(WorkflowApprovalRequest.state).in_(set(states)))
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            return list(session.exec(query.order_by(col(WorkflowApprovalRequest.created_at))))
+
+    def current_approval(self, run: WorkflowRun) -> WorkflowApprovalRequest | None:
+        """The latest request of the run's current step. Callers must already have authorized the run."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            return session.exec(
+                select(WorkflowApprovalRequest)
+                .where(
+                    col(WorkflowApprovalRequest.run_id) == run.id,
+                    col(WorkflowApprovalRequest.step_index) == run.next_step,
+                )
+                .order_by(col(WorkflowApprovalRequest.created_at).desc())
+                .limit(1)
+            ).one_or_none()
 
     def _recovery_ids(self, states: tuple[str, ...], limit: int) -> list[UUID]:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -571,9 +898,27 @@ class WorkflowRunRepository:
             ).one_or_none()
             if run.state == "PAUSED" and (attempt is None or attempt.state not in {"REASONING", "STOPPING"}):
                 return None, []
+            continuing = False
+            if run.state in {"QUEUED", "AWAITING_APPROVAL"} and self._decided(session, run) is not None:
+                # A late decision continues only while every authority it needs still holds.
+                before = (run.state, run.reason)
+                self._continue_when_ready(session, run)
+                if run.state != "QUEUED":
+                    if (run.state, run.reason) == before:
+                        return None, []
+                    run.revision += 1
+                    delivery_ids = self._event(session, run, "APPROVAL_WAITING", run.reason or "Awaiting approval")
+                    session.commit()
+                    return None, delivery_ids
+                continuing = True
+            elif run.state == "AWAITING_APPROVAL":
+                # A parked request survives Agent stops, updates and authority changes; it is
+                # checked again when someone decides and when the continuation starts.
+                return None, []
             authorized = self._authorized(session, run)
             if not authorized and run.state != "CANCELLING":
                 run.state, run.reason = "PAUSED", "Initiator authority or Agent lifecycle changed"
+                self._lapse(session, run.id)
             expired = (
                 attempt is not None
                 and attempt.state in {"REASONING", "STOPPING"}
@@ -591,6 +936,9 @@ class WorkflowRunRepository:
                     run.state, run.reason = "CANCELLED", "Cancelled; completed step summaries are preserved"
                     self._settle(session, run)
                 elif expired and attempt is not None and authorized and run.state != "PAUSED":
+                    # Even with a request still open, an ended session is no evidence that nothing ran:
+                    # Hermes may have denied the command itself and carried on.
+                    self._lapse(session, run.id)
                     run.state, run.reason = (
                         "BLOCKED",
                         (
@@ -618,7 +966,12 @@ class WorkflowRunRepository:
             )
             session.add(attempt)
             delivery_ids = self._event(
-                session, run, "ATTEMPT_STARTED", f"Step {run.next_step + 1} started in a fresh session"
+                session,
+                run,
+                "ATTEMPT_STARTED",
+                f"Step {run.next_step + 1} continued in its previous session after an approval decision"
+                if continuing
+                else f"Step {run.next_step + 1} started in a fresh session",
             )
             session.commit()
             return attempt, delivery_ids
@@ -646,5 +999,15 @@ class WorkflowRunRepository:
                     sa.update(WorkflowHistory)
                     .where(col(WorkflowHistory.run_id) == run.id)
                     .values(detail="Content expired under the installation retention policy")
+                )
+                # Commands and guidance are content too; who decided and when remain.
+                session.exec(
+                    sa.update(WorkflowApprovalRequest)
+                    .where(col(WorkflowApprovalRequest.run_id) == run.id)
+                    .values(
+                        command="Content expired under the installation retention policy",
+                        command_sha256="",
+                        guidance=None,
+                    )
                 )
             session.commit()

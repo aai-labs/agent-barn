@@ -280,6 +280,30 @@ def test_counting_is_per_session(tmp_path: Path):
 # --- open Tasks each turn ---
 
 
+def test_an_unfinished_tasks_latest_note_is_shown_with_it(tmp_path: Path):
+    plugin = _Plugin(
+        tmp_path,
+        open_tasks=[
+            {
+                "id": "task-1",
+                "title": "Weekly greetings",
+                "status": "in_progress",
+                "latest_note": "Greeting 5\nof 7 sent",
+            },
+            {"id": "task-2", "title": "Draft summary", "status": "open", "latest_note": None},
+            {"id": "task-3", "title": "Old work", "status": "done", "latest_note": "All sent"},
+            {"id": "task-4", "title": "Long", "status": "open", "latest_note": "x" * 400},
+        ],
+    )
+
+    context = _context(plugin.start_turn())
+
+    assert_that(context, contains_string('task-1 [in_progress] Weekly greetings (latest note: "Greeting 5 of 7 sent")'))
+    assert_that(context, contains_string("task-2 [open] Draft summary\n"))
+    assert_that(context, contains_string("task-3 [done] Old work\n"))
+    assert_that(context, contains_string('task-4 [open] Long (latest note: "' + "x" * 200 + '…")'))
+
+
 def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     plugin = _Plugin(
         tmp_path,
@@ -295,6 +319,8 @@ def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     assert_that(context, contains_string("task-1 [in_progress] Reconcile invoices"))
     assert_that(context, contains_string("task-2 [open] Draft summary"))
     assert_that(context, contains_string("task-3 [done] Old work"))
+    assert_that(context, contains_string("only when the request is the same piece of work"))
+    assert_that(context, contains_string("A new request gets its own Task, even while another is in progress"))
 
 
 def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path):
@@ -733,6 +759,85 @@ def test_every_task_left_in_progress_is_closed(tmp_path: Path):
     plugin.end_turn()
 
     assert_that(sorted(_statuses(plugin)), equal_to([["status", "task-1", "done"], ["status", "task-2", "done"]]))
+
+
+def _kept_task(plugin: _Plugin, call_id: str = "call-2", action: str = "create", keep=True):
+    args = {"action": action, "keep": keep, "status": "in_progress"}
+    args |= {"title": "States"} if action == "create" else {"task_id": _TASK_ID}
+    return plugin.tool_call(
+        call_id, tool_name="agentbarn_task", args=args, result=json.dumps({"id": _TASK_ID, "status": "in_progress"})
+    )
+
+
+@pytest.mark.parametrize("action", ["create", "status"])
+def test_a_task_the_agent_keeps_stays_in_progress_when_the_turn_ends(tmp_path: Path, action: str):
+    plugin = _Plugin(tmp_path)
+    _kept_task(plugin, action=action)
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_keep_given_as_text_is_honoured(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _kept_task(plugin, keep="true")
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_a_task_reopened_without_keep_is_marked_done_when_the_turn_ends(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call(
+        "call-1", tool_name="agentbarn_task", args={"action": "status", "task_id": _TASK_ID, "status": "in_progress"}
+    )
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_the_last_status_call_in_a_turn_wins_over_keep(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _kept_task(plugin)
+    plugin.tool_call(
+        "call-3", tool_name="agentbarn_task", args={"action": "status", "task_id": _TASK_ID, "status": "in_progress"}
+    )
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_kept_task_is_reopened_when_the_turn_did_not_complete(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _kept_task(plugin)
+
+    plugin.end_turn(completed=False)
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_keep_is_not_passed_to_the_task_command(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    plugin.tool(action="create", title="Report", keep=True)
+    created = plugin.calls()[-1]["argv"]
+    plugin.tool(action="status", task_id=_TASK_ID, status="in_progress", keep=True)
+
+    assert_that(created, equal_to(["create", "--title=Report", "--status=in_progress"]))
+    assert_that(plugin.calls()[-1]["argv"], equal_to(["status", _TASK_ID, "in_progress"]))
+
+
+def test_the_tool_offers_keep(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    schema = plugin.tools["agentbarn_task"]["schema"]
+
+    assert_that(schema["parameters"]["properties"]["keep"]["type"], equal_to("boolean"))
+    assert_that(schema["description"], contains_string("keep"))
 
 
 def test_files_are_attached_before_the_task_is_closed(tmp_path: Path):

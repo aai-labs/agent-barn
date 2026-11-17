@@ -33,16 +33,40 @@ The most an Organization may spend on model calls in one renewal period, set by 
 _Avoid_: allowance, plan limit, platform budget
 
 **Trial Organization**:
-The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A trial whose credit runs out is expired: it keeps its Agents but no longer counts as active. A Platform Administrator ends the trial, choosing the spend limit it goes on to, or buying credit converts it while it stays on Credit; either way it is then an ordinary Organization.
+The one Organization a self-signed-up user gets, on the Free Tier; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to Free's Agent limit, and its Model Spend Limit is its Trial Credit, Free's one-time credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A trial whose credit runs out is expired: it keeps its Agents but no longer counts as active. A Platform Administrator ends the trial, choosing the spend limit it goes on to, or subscribing to a paid Tier converts it; either way it is then an ordinary Organization.
 _Avoid_: free plan, trial account, demo org
 
 **Trial Credit**:
-The one-off Model Spend Limit a new Trial Organization starts with, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
+The one-off Model Spend Limit a new Trial Organization starts with: the Free Tier's one-time credit, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
 _Avoid_: free credits, balance, allowance
 
 **Agent Limit**:
-How many live Agents an Organization may run: its own, when a Platform Administrator has set one, otherwise the trial setting for a Trial Organization or the deployment's default for any other. Lowering it never removes Agents; it only refuses new hires.
+How many live Agents an Organization may run: its own, when a Platform Administrator has set one, otherwise its Tier's, otherwise the trial setting for a Trial Organization or the deployment's default for any other. Lowering it never removes Agents; it only refuses new hires.
 _Avoid_: seat count, agent quota, plan size
+
+**Tier**:
+A named package from the platform's catalog: what an Organization pays, the usage it is granted, its Agent Limit, the Platforms its Agents may be reached on, and the features it may use. Free is granted at sign-up, a paid Tier is kept by a monthly subscription, a contact-only Tier is assigned only by a Platform Administrator, and the system's none Tier allows nothing. An Organization without a Tier is platform-managed and may use everything; for now only a Platform Administrator puts an Organization on one. See [Tiers](docs/features/tiers.md).
+_Avoid_: plan, subscription level, package
+
+**Subscription**:
+What keeps an Organization on a paid Tier, one period at a time. Its provider takes the payment: Stripe where the platform takes payments, otherwise a demo provider that charges nothing. Each paid period grants the Tier's Monthly Usage Allowance; a failed payment leaves it past due through the payment grace period; when a subscription ends, the Organization drops to Free and keeps its credit.
+_Avoid_: plan, membership, recurring purchase
+
+**Monthly Usage Allowance**:
+The credit a paid Tier grants each subscription period. Spend is counted against it first, and what is left of it expires when the period ends; purchased, trial and one-time credit never expire.
+_Avoid_: monthly credit, quota, included usage
+
+**Tier Hold**:
+A Suspension whose reason is `tier`: an Agent, Connection, Agent Webhook or Agent Memory stopped or switched off because the Organization's Tier no longer covers it. Owners and Admins choose which Agents stay held, and switch the rest back on once the Tier covers them again.
+_Avoid_: frozen, disabled by plan
+
+**Suspension**:
+The state of an Agent, Connection, Agent Webhook or Agent Memory that was stopped or switched off without being deleted, recorded with when and why (`suspended_at`, `suspension_reason`). Each owns its own; a suspended Agent can't start and takes no place in the Agent Limit. A Tier Hold is the only reason so far.
+_Avoid_: paused, blocked
+
+**Tier Entitlement**:
+One feature or Platform an Organization's Tier lets it use. It is checked after authorization and is not a Permission: it refuses only new or more use, so what an Organization already has can still be read, edited, disabled and deleted.
+_Avoid_: tier permission, feature flag
 
 **Credit**:
 How an Organization on a one-off Model Spend Limit pays for model spend: in advance, never renewed. Its ceiling is the sum of its Credit Grants, and its Agents spend from it down to zero; no Organization or Agent limit sits beneath it. Trial Organizations start on Credit.
@@ -135,6 +159,10 @@ _Avoid_: model usage, observed model
 **Observed Model Usage**:
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
+
+**LLM Provider Connection**:
+A model provider account Agent Barn reaches models through, with the key it uses, kept by Platform Administrators for every Organization. Agents never hold its key; they reach it through the model proxy with their own keys.
+_Avoid_: provider key, LLM credential, model provider setting
 
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
@@ -509,6 +537,24 @@ _Avoid_: Agent Skill, native scheduled job
 An immutable saved snapshot of a Workflow. Editing and saving appends a new
 version; a future run pins the version it starts with.
 _Avoid_: mutable draft, runtime session
+
+**Workflow Approval Request**:
+One exact command a workflow step's Agent asks a person to allow or refuse,
+recorded with its run, step and attempt. Each time the Agent asks again is a new
+request.
+_Avoid_: chat approval, approval prompt, pending approval
+
+**Approval Decision**:
+One person's Approve or Decline on one Workflow Approval Request; a Decline may
+carry verbatim guidance. A late Decision does not release the command; it
+continues the step's session with that context, and the Agent may ask again.
+_Avoid_: grant, verdict, allowlist entry
+
+**Awaiting Approval**:
+The run state in which a step's session has been stopped with a Workflow Approval
+Request unanswered. Nothing runs while parked; a late Approval Decision continues
+the same session.
+_Avoid_: suspended, waiting session, resume
 
 **Agent Artifact**:
 An immutable published file owned by one Organization and Agent, with PostgreSQL

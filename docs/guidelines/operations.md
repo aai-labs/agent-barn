@@ -76,12 +76,37 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+### LiteLLM salt key
+
+LiteLLM's model store is on (`store_model_in_db: true`), so model routes the API registers persist in LiteLLM's database with their provider keys encrypted under `LITELLM_SALT_KEY`. The chart keeps the salt in its own `litellm-salt` Secret because the API reads the `litellm` Secret.
+
+- Generate one value per environment with `openssl rand -hex 32` and add it before the deploy that introduces it: GitHub secrets `LITELLM_SALT_KEY` (k3s), `STAGING_LITELLM_SALT_KEY` (staging) and `PUBLIC_LITELLM_SALT_KEY` (public), and `.env` locally. Helmfile fails with `LITELLM_SALT_KEY is required` without it.
+- Adding it does not affect running Agents: LiteLLM stores virtual keys as hashes, not encrypted.
+- Never change it. LiteLLM cannot decrypt stored provider keys under a different value. If it was changed, restore the previous value; otherwise every stored provider key must be saved again so LiteLLM re-encrypts it.
+- The config-file OpenRouter route (`OPENROUTER_API_KEY`) stays at `order: 2` and is rendered only while that key is set. LiteLLM sends requests to the lowest-order healthy route, so a healthy database route at `order: 1` is used instead.
+
+### OpenRouter key
+
+The OpenRouter key is saved by a Platform Administrator in Platform Admin settings. `OPENROUTER_API_KEY` is optional: while it is set, LiteLLM keeps a config-file route with it and the API falls back to it until a key is saved. A new environment leaves it unset and has no OpenRouter key until one is saved.
+
+Moving an environment off the GitHub secret needs a Platform Administrator of that environment and someone who can edit the repository's Actions secrets:
+
+1. Deploy as usual with the secret still set. Agents keep using it through LiteLLM's config-file route.
+2. The Platform Administrator opens Platform Admin settings at `/dashboard/platform/settings` on the environment's web app (`STAGING_WEB_APP_URL` for staging, `WEB_APP_URL` for k3s, https://cloud.agentbarn.dev/dashboard/platform/settings for public), pastes the key under OpenRouter and saves. OpenRouter checks the key and LiteLLM switches to it at once; the page then shows its last four characters.
+3. Once staging and k3s both show a saved key, delete `OPENROUTER_API_KEY` at https://github.com/aai-labs/agent-barn/settings/secrets/actions. Both environments read that one secret. Once public shows a saved key, delete `PUBLIC_OPENROUTER_API_KEY` there too.
+4. The next deploy of each environment renders LiteLLM without the config-file route, and the page no longer reports the environment key as configured.
+
+Deleting a secret before step 2 leaves LiteLLM with no OpenRouter route, so every Agent call fails until a Platform Administrator saves a key. Locally, `OPENROUTER_API_KEY` in `.env` is optional and works the same way.
+
 ## Public signup configuration
 
-Configure public self-signup and Trial Credit in **Platform settings → Signup & trials**.
-New installations default to signup disabled and $0 credit. A Platform Administrator
-must set positive credit before enabling signup; both can be saved together. These
-settings take effect without redeployment and are audited. They are no longer read
+Configure public self-signup in **Platform settings → Signup & trials**. Sign-up grants the
+Free Tier, so it also needs Free offered (**Tiers**, the **Offered** switch); the migration
+that made Free the trial offered it wherever self-signup was already on. The trial's credit
+and Agent limit are Free's: edit them in either section. New installations default to
+signup disabled and Free not offered. A Platform Administrator must keep Free's credit
+positive while signup is on. These settings take effect without redeployment and are
+audited. They are no longer read
 from environment variables, Helm values, or GitHub Variables. Google OAuth and the
 shared Telegram bot still require deployment credentials as described in
 [Trial onboarding](../features/trial-onboarding.md#trials).
@@ -591,13 +616,39 @@ Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a
 
 ## Payments (Stripe)
 
-Organizations on Credit buy more through Stripe Checkout (see `../features/credit.md`). Off until a Platform Administrator turns payments on.
+Organizations on Credit buy more through Stripe Checkout (see `../features/credit.md`), and Owners subscribe to paid Tiers through it ([Tiers](../features/tiers.md#subscriptions)). Off until a Platform Administrator turns payments on.
 
 - **Turning payments on** is a platform setting: **Take payments** under Billing on the platform settings page, off by default, and refused until the deployment has both Stripe secrets below. Off stops new purchases (checkout answers 404, and the Billing page offers no Buy credit); balances and history stay readable. The webhook is served whenever `STRIPE_WEBHOOK_SECRET` is set, so payments already made, refunds and disputes still land after payments are turned off. A webhook secret requires the secret key whether payments are on or off (the webhook reads refunds from Stripe): the API refuses to boot otherwise.
-- **`STRIPE_SECRET_KEY`** and **`STRIPE_WEBHOOK_SECRET`** are GitHub secrets with the same prefixes, flowing through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Give each environment its own: staging a Stripe sandbox, production the live account. The secret key may be a restricted key with write access to Customers and Checkout Sessions and read access to Refunds and PaymentIntents (the webhook reads a refund's current status, and whether a payment is a credit purchase, because Stripe doesn't deliver events in order).
-- **Webhook endpoint:** in the Stripe Dashboard, point an endpoint at `https://<API host>/api/v1/billing/stripe/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `refund.created`, `refund.updated`, `refund.failed`, `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated`, and store its signing secret as `STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --print-secret` prints a `whsec_` to use instead, and `stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,refund.created,refund.updated,refund.failed,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated --forward-to localhost:<API port>/api/v1/billing/stripe/webhook` relays them (recent Stripe CLIs refuse to listen without `--events`).
+- **`STRIPE_SECRET_KEY`** and **`STRIPE_WEBHOOK_SECRET`** are GitHub secrets with the same prefixes, flowing through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Give each environment its own: staging a Stripe sandbox, production the live account. The secret key may be a restricted key with write access to Customers, Checkout Sessions, Subscriptions, Subscription Schedules and the customer portal, and read access to Refunds, PaymentIntents, Prices, Products and Invoices (the webhook reads a refund's current status, whether a payment is a credit purchase, and a subscription's current state, because Stripe doesn't deliver events in order).
+- **Webhook endpoint:** in the Stripe Dashboard, point an endpoint at `https://<API host>/api/v1/billing/stripe/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `refund.created`, `refund.updated`, `refund.failed`, `charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid` and `invoice.payment_failed`, and store its signing secret as `STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --print-secret` prints a `whsec_` to use instead, and `stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,refund.created,refund.updated,refund.failed,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed --forward-to localhost:<API port>/api/v1/billing/stripe/webhook` relays them (recent Stripe CLIs refuse to listen without `--events`).
+- **Setting an account up for Tier subscriptions:** `make stripe-setup-tiers` (add `ARGS=--dry-run` to see what it would change) creates, from the Tier catalog, a Product and a monthly Price for each paid Tier with the Tier's key as its lookup key, and the customer portal's configuration (card, billing details and invoices; cancelling at the period's end; no plan switching). With `ARGS=--webhook-url=https://<API host>/api/v1/billing/stripe/webhook` it also adds any missing events to that endpoint. Run it with a key that can write Products, Prices, the customer portal and webhook endpoints: the sandbox first, then the live account. It changes only what differs, so it is safe to run again, and after changing a paid Tier's price it moves the lookup key to a new Price. Two settings aren't available through the API: in the Dashboard's billing settings, retry failed subscription payments for the payment grace period (7 days by default), then cancel the subscription.
+- **Testing subscriptions in the sandbox:** pay with `4242 4242 4242 4242`; `4000 0000 0000 0341` subscribes but fails every renewal. Renewals need a Customer on a Stripe test clock, advanced past the period's end.
 - Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
 - A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
+
+## Tier subscriptions and the Tier sweep
+
+Paid Tiers are kept by subscriptions ([Tiers](../features/tiers.md#subscriptions)). Stripe
+takes them wherever payments are on ([above](#payments-stripe)). Otherwise, for
+demonstrations, `TIERS_MOCK_PAYMENTS=true` lets an Owner subscribe with a pretend payment that
+charges nothing; it is a deployment setting (the `tiersMockPayments` API chart value), off by
+default, and must stay off wherever customers pay. Locally, set it in `.env` and restart the
+API. Subscriptions also need a paid Tier offered under **Tiers**.
+
+The `tier-sweep` CronJob (`tierSweep` chart values, every five minutes) finishes
+subscription activations that stopped partway, ends demo subscription periods that have run out (Stripe renews its own), ends subscriptions past due
+for longer than the payment grace period (cancelling them at Stripe), applies the Tier Holds
+of Organizations whose choosing time is up, and stops any held Agent still running. It needs the API's Secret and, like cost sync, the
+cluster access to stop and restart Agents and
+the LiteLLM master key to push credit. Locally, `./run.sh` runs it as Compose's
+`tier-sweep` service every five minutes; `make run-tier-sweep` runs one pass from the host.
+A Platform Administrator can end a demo subscription's period immediately from the Platform
+Organization page (**End period now**).
+
+Each change to an Organization's subscription holds a transaction-level advisory lock on a
+connection of its own for as long as it calls Stripe or stops Agents, so a transaction-pooling
+proxy is fine; the transaction turns `idle_in_transaction_session_timeout` off for itself, and
+a database-wide setting doesn't end it.
 
 ## Staging environment
 
@@ -683,13 +734,14 @@ kubeconfig portably with
 | `PUBLIC_POSTGRES_LITELLM_PASSWORD` | New |
 | `PUBLIC_POSTGRES_FIRECRAWL_PASSWORD` | New |
 | `PUBLIC_LITELLM_MASTER_KEY` | New (`sk-` + random) |
+| `PUBLIC_LITELLM_SALT_KEY` | New (`openssl rand -hex 32`). Never change it once set |
 | `PUBLIC_SECRET_SIGNING_KEY` | New |
 | `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
 | `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` (API policy: 8+, upper, lower, digit; `openssl rand -hex` is not enough) |
 | `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
 | `PUBLIC_MONITORING_WEB_PASSWORD` | Basic auth on Prometheus/Alertmanager; 12+ alphanumeric (`openssl rand -hex 16`) |
 | `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
-| `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
+| `PUBLIC_OPENROUTER_API_KEY` | Optional. Only until a Platform Administrator saves the key; see [OpenRouter key](#openrouter-key). Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
@@ -749,7 +801,7 @@ Documentation-only changes do not change a service image and do not require a se
   deployable on the shared cluster by the namespace-scoped deployer. Note the
   dashboards ConfigMap is deliberately not labeled `grafana_dashboard` — the
   cluster's central Grafana imports that label from every namespace.
-- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, and `MONITORING_WEB_PASSWORD` / `STAGING_MONITORING_WEB_PASSWORD` (basic auth on Prometheus and Alertmanager, which agent pods can otherwise reach in-namespace; 12+ alphanumeric, e.g. `openssl rand -hex 16`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
+- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, and `MONITORING_WEB_PASSWORD` / `STAGING_MONITORING_WEB_PASSWORD` (basic auth on Prometheus and Alertmanager, which agent pods can otherwise reach in-namespace; 12+ alphanumeric, e.g. `openssl rand -hex 16`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric polls `GET /key` for the key's `limit_remaining`, using the OpenRouter key saved in Platform Admin settings, or the `OPENROUTER_API_KEY` secret while none is saved; for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
 - Monitoring verification and its prerequisites live in
   [`testing.md`](testing.md#verification-commands). CI selects
   `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.

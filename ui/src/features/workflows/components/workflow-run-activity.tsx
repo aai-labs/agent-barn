@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { ScrollText } from "lucide-react";
 import { AppErrorState } from "@/components/app-error-state";
 import { useWorkflowRunHistory } from "../hooks/use-workflow-runs";
 import type { WorkflowRun } from "../run-schemas";
@@ -75,6 +76,46 @@ export function AttemptStatus({
   );
 }
 
+type Tone = "ok" | "warn" | "err" | "muted";
+
+/** How an event reads at a glance: green progress, amber waiting on a person, red trouble. */
+function eventTone(kind: string, detail: string): Tone {
+  if (kind === "APPROVAL_DECIDED") return detail.startsWith("Command declined") ? "err" : "ok";
+  if (["STEP_COMPLETED", "APPROVAL_RELEASED"].includes(kind)) return "ok";
+  if (["APPROVAL_REQUESTED", "APPROVAL_PARKED", "NEEDS_ATTENTION", "CANCEL_REQUESTED"].includes(kind))
+    return "warn";
+  if (["ATTEMPT_FAILED", "FENCED"].includes(kind)) return "err";
+  return "muted";
+}
+
+const dotColor: Record<Tone, string> = {
+  ok: "var(--ok)",
+  warn: "var(--warn)",
+  err: "var(--err)",
+  muted: "var(--ink-4)",
+};
+
+// Approval events end in the exact command, which reads better set apart as code.
+const COMMAND_EVENT = /^(Approval requested to run |Command (?:approved|declined): |Approved command released: |Waiting for approval to run )([\s\S]+)$/;
+
+function EventText({ kind, detail }: { kind: string; detail: string }) {
+  // The detail is the full Markdown summary, which belongs to the step.
+  if (kind === "STEP_COMPLETED") return <>Step completed</>;
+  const command = COMMAND_EVENT.exec(detail);
+  if (!command) return <>{detail}</>;
+  return (
+    <>
+      {command[1].replace(/:? $/, "")}{" "}
+      <code
+        title={command[2]}
+        className="inline-block max-w-full truncate rounded bg-[var(--bg-soft)] px-1.5 py-0.5 align-bottom font-mono text-xs"
+      >
+        {command[2]}
+      </code>
+    </>
+  );
+}
+
 /** Newest-first run history keeps failed attempts visible after they end. */
 export function WorkflowRunActivity({
   agentId,
@@ -86,33 +127,55 @@ export function WorkflowRunActivity({
   const history = useWorkflowRunHistory(agentId, run.id, run.revision);
   if (history.error)
     return (
-      <AppErrorState
-        error={history.error}
-        title="Couldn’t load run activity"
-        onRetry={() => void history.refetch()}
-        className="md:col-start-2"
-      />
+      <div className="border-t border-[var(--line)] px-6 py-4">
+        <AppErrorState
+          error={history.error}
+          title="Couldn’t load run activity"
+          onRetry={() => void history.refetch()}
+        />
+      </div>
     );
   const items = history.data?.items ?? [];
   if (items.length === 0) return null;
   return (
     <section
       aria-label="Run activity"
-      className="min-w-0 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] px-6 py-4 md:col-start-2"
+      className="min-w-0 border-t border-[var(--line)] px-6 py-4"
     >
-      <h4 className="mb-3 text-sm font-semibold">Activity</h4>
-      <ul className="space-y-2">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="flex items-center gap-2 text-sm font-semibold">
+          <ScrollText size={15} aria-hidden className="text-[var(--ink-3)]" />
+          Event log
+        </h4>
+        <p className="text-xs text-[var(--ink-3)]">Newest first · append-only</p>
+      </div>
+      <ul>
         {items.map((item) => (
-          <li key={item.id} className="flex gap-3 text-sm">
+          <li
+            key={item.id}
+            className="flex items-baseline gap-3 border-b border-[var(--line)] py-2.5 text-sm last:border-0"
+          >
             <time
               dateTime={item.createdAt}
-              className="w-20 shrink-0 tabular-nums text-[var(--ink-3)]"
+              title={new Date(item.createdAt).toLocaleString()}
+              className="w-12 shrink-0 font-mono text-xs tabular-nums text-[var(--ink-3)]"
             >
-              {new Date(item.createdAt).toLocaleTimeString()}
+              {new Date(item.createdAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              })}
             </time>
-            <span className="min-w-0">
-              {/* The detail is the full Markdown summary, which belongs to the step. */}
-              {item.kind === "STEP_COMPLETED" ? "Step completed" : item.detail}
+            <span
+              aria-hidden="true"
+              className="size-2 shrink-0 translate-y-[-1px] rounded-full"
+              style={{ background: dotColor[eventTone(item.kind, item.detail)] }}
+            />
+            <span className="min-w-0 flex-1">
+              <EventText kind={item.kind} detail={item.detail} />
+              <span className="ml-2 font-mono text-xs text-[var(--ink-4)]">
+                · {item.kind.toLowerCase()}
+              </span>
             </span>
           </li>
         ))}

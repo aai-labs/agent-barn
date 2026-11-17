@@ -139,8 +139,10 @@ releases:
     set:
       - name: masterKey
         value: {{ env "LITELLM_MASTER_KEY" | required "LITELLM_MASTER_KEY is required" | quote }}
+      - name: saltKey
+        value: {{ env "LITELLM_SALT_KEY" | required "LITELLM_SALT_KEY is required" | quote }}
       - name: openrouterApiKey
-        value: {{ env "OPENROUTER_API_KEY" | required "OPENROUTER_API_KEY is required" | quote }}
+        value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
       - name: databaseUrl
         value: {{ printf "postgresql://%s:%s@postgres-litellm:5432/%s" (env "POSTGRES_LITELLM_USER") (env "POSTGRES_LITELLM_PASSWORD") (env "POSTGRES_LITELLM_DB") | quote }}
     needs:

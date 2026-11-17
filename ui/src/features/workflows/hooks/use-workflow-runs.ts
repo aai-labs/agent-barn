@@ -6,7 +6,6 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
 import {
@@ -27,21 +26,19 @@ function useRunScope(agentId: string) {
   const organizationId =
     useOrganizationContext().selectedOrganization?.id ?? "";
   return {
-    base: `${useOrganizationApiBase()}/agents/${agentId}`,
+    // Not useOrganizationApiBase, which throws: the navigation badge also runs with no Organization.
+    base: `/api/v1/organizations/${organizationId}/agents/${agentId}`,
     key: [...workflowsKey.all, "runs", { organizationId, agentId }] as const,
     enabled: Boolean(organizationId && agentId),
   };
 }
 
-export function useWorkflowRuns(
-  agentId: string,
-  workflowId: string,
-  page: number,
-) {
+/** Every run of this Agent across its workflows, newest first. */
+export function useAgentRuns(agentId: string, page: number) {
   const scope = useRunScope(agentId);
   return useQuery({
-    queryKey: [...scope.key, "list", workflowId, page],
-    enabled: scope.enabled && Boolean(workflowId),
+    queryKey: [...scope.key, "list", "all", page],
+    enabled: scope.enabled,
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       !query.state.error &&
@@ -51,7 +48,26 @@ export function useWorkflowRuns(
     queryFn: async () =>
       (
         await api.get<WorkflowRunList>(
-          `${scope.base}/workflow-runs?workflow_id=${workflowId}&page=${page}`,
+          `${scope.base}/workflow-runs?page=${page}`,
+          { schema: WorkflowRunListSchema },
+        )
+      ).data,
+  });
+}
+
+/** Runs of this Agent with a request awaiting a decision: the approvals inbox and its badge. */
+export function useAwaitingApprovals(agentId: string, enabled = true) {
+  const scope = useRunScope(agentId);
+  return useQuery({
+    queryKey: [...scope.key, "awaiting-decision"],
+    enabled: scope.enabled && enabled,
+    refetchOnWindowFocus: true,
+    // A live request closes within minutes, so the inbox checks often.
+    refetchInterval: (query) => (query.state.error ? false : 10_000),
+    queryFn: async () =>
+      (
+        await api.get<WorkflowRunList>(
+          `${scope.base}/workflow-runs?awaiting_decision=true&page_size=20`,
           { schema: WorkflowRunListSchema },
         )
       ).data,
@@ -158,5 +174,26 @@ export function useWorkflowRunActions(agentId: string) {
     // A refused re-run may mean access was lost: refetch so errors replace cached content.
     onSettled: invalidate,
   });
-  return { start, cancel, rerun };
+  // One verdict on one exact request; a stale or repeated decision is refused by the server.
+  const decide = useMutation({
+    mutationFn: async ({
+      run,
+      decision,
+      guidance,
+    }: {
+      run: WorkflowRun;
+      decision: "approve" | "decline";
+      guidance?: string;
+    }) =>
+      (
+        await api.post<WorkflowRun>(
+          `${scope.base}/workflow-runs/${run.id}/approvals/${run.approval!.id}/decision`,
+          { decision, ...(guidance?.trim() ? { guidance: guidance.trim() } : {}) },
+          { schema: WorkflowRunSchema },
+        )
+      ).data,
+    onSuccess: (run) => client.setQueryData([...scope.key, run.id], run),
+    onSettled: invalidate,
+  });
+  return { start, cancel, rerun, decide };
 }
