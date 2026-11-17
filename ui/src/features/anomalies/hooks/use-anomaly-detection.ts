@@ -46,7 +46,7 @@ export function useUpdateAnomalyDetection() {
     },
     onSuccess: (settings) => {
       queryClient.setQueryData(anomaliesKey.detection(organizationId), settings);
-      // Each Agent's Anomalies tab says whether checks are on.
+      // Each Agent's Unusual activity tab says whether checks are on.
       void queryClient.invalidateQueries({ queryKey: anomaliesKey.all });
     },
   });

@@ -3,21 +3,21 @@ import { Locator, Page } from "@playwright/test";
 import { TEST_ORG_ID } from "../constants";
 import { MOCK_AGENT_ID } from "./data-support/agent-data-support.po";
 
-/** Locators and user actions for the Agent Anomalies tab and the Unusual activity setting. */
+/** Locators and user actions for the Agent Unusual activity tab and the Unusual activity setting. */
 export class AgentAnomaliesPage {
   constructor(private page: Page) {}
 
   async goto(agentId = MOCK_AGENT_ID, orgId = TEST_ORG_ID) {
-    await this.page.goto(`/dashboard/${orgId}/agents/${agentId}?tab=anomalies`);
+    await this.page.goto(`/dashboard/${orgId}/agents/${agentId}?tab=unusual-activity`);
   }
 
   async gotoSettings(orgId = TEST_ORG_ID) {
     await this.page.goto(`/dashboard/${orgId}/settings?tab=unusual-activity`);
   }
 
-  /** The Anomalies section in the navigation panel. */
+  /** The Unusual activity section in the navigation panel. */
   tab(): Locator {
-    return this.page.getByRole("complementary").getByRole("link", { name: "Anomalies", exact: true });
+    return this.page.getByRole("complementary").getByRole("link", { name: "Unusual activity", exact: true });
   }
 
   anomalies(): Locator {

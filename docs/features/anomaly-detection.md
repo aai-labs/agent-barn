@@ -10,7 +10,7 @@ Anomaly records, the per-Agent override, or who may see any of it.
 
 An Organization may turn on checks that compare each of its Agents' activity with what
 is normal for that Agent, learned from its own last 14 days. A check that sees something
-unusual records an **Anomaly**, shown on the Agent's Anomalies tab. Detection is passive:
+unusual records an **Anomaly**, shown on the Agent's Unusual activity tab. Detection is passive:
 nobody is alerted and nothing is stopped.
 
 This is the first slice of anomaly detection (AF-453, epic AF-198). It finds candidates
@@ -171,7 +171,7 @@ features, not these records.
 
 `agent_anomaly_override`: sensitivity (default normal) and optional hard caps on model
 tokens and model calls per hour. Owners and Admins change it in the Normal behaviour
-section of the Agent's Anomalies tab. Each change records `agent.anomaly_override.changed`
+section of the Agent's Unusual activity tab. Each change records `agent.anomaly_override.changed`
 (the token cap is `max_llm_usage_per_hour` in the payload, since payload keys naming tokens
 are refused). An unchanged save records nothing.
 

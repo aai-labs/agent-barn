@@ -38,7 +38,7 @@ async function openTab(
   return { mock, anomaliesPage };
 }
 
-test.describe("Agent · Anomalies", () => {
+test.describe("Agent · Unusual activity", () => {
   test("Owners and Admins find the tab under Health", async ({ page }) => {
     const { anomaliesPage } = await openTab(page);
 
