@@ -8,7 +8,6 @@ for the reason the cost sync gives.
 
 import argparse
 import logging
-import sys
 import time
 
 from api.core.utils import create_injector
@@ -35,9 +34,9 @@ def main() -> None:
                 summary.organizations,
                 summary.failures,
             )
-            if summary.failures and not args.watch:
-                # One Agent failing does not stop the rest, but the Job should show it.
-                sys.exit(1)
+            # An Agent that failed is logged by the check and retried by the next run.
+            # Failing the Job would only make Kubernetes restart it and check every
+            # other Agent again.
         except Exception:
             if not args.watch:
                 raise
