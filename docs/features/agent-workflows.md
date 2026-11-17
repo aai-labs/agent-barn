@@ -600,7 +600,7 @@ an empty resumed session needs the updated Hermes base image; older images ignor
 
 ## Organization ownership migration (AF-439)
 
-Migration `e4b439a1c7d2` follows `d1a390e7b2c4`. Snapshots are not rewritten and
+Migration `e4b439a1c7d2` follows `3f9f88255e3b`. Snapshots are not rewritten and
 the schema version stays 1; the pod-facing `/workflow-runtime/v1` routes, the
 `workflow.run.changed` event, attempts, checkpoints, history and approval
 requests are unchanged. No Agent update or restart is needed.

@@ -462,7 +462,7 @@ def test_upgrade_moves_agent_workflows_to_their_organization_and_rolls_back(has_
         later_admin, earliest_admin = uuid4(), uuid4()
 
         with when("the schema is rolled back to Agent-owned workflows"):
-            command.downgrade(config, "d1a390e7b2c4")
+            command.downgrade(config, "3f9f88255e3b")
         try:
             with engine.begin() as connection:
                 with then("the workflow is the Agent's again"):

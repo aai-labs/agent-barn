@@ -25,6 +25,7 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
+from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
 from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
@@ -368,6 +369,13 @@ def test_gateway_config_delivers_scheduled_results_without_the_cron_header_and_f
     assert config["cron"] == {"wrap_response": False}
 
 
+def test_gateway_config_prunes_old_sessions_so_state_db_stays_bounded() -> None:
+    """Hermes keeps every session forever unless told otherwise, and its own 90-day
+    default outlives the cron churn that grew one Agent's state.db past 1 GB."""
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert config["sessions"] == {"auto_prune": True, "retention_days": 30}
+
+
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
     """Auxiliary tasks left on the openrouter lane reach the proxy without the
     agent's key; smart approval then escalates every flagged command to the user.
@@ -627,9 +635,10 @@ def test_artifact_command_and_instructions_are_available_without_memory() -> Non
     assert "agentbarn_artifacts.py" in config_map.data
     assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
     assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
-    assert "Do not wait for the user to mention artifacts, storage or the CLI" in config_map.data["AGENTS.md"]
-    assert "Do not publish scratch/intermediate files" in config_map.data["AGENTS.md"]
-    assert "Give the user a concise Markdown download link" in config_map.data["AGENTS.md"]
+    assert "When someone asks for a file" in config_map.data["AGENTS.md"]
+    assert "never a workspace path (people\ncan't open it)" in config_map.data["AGENTS.md"]
+    assert "Reply with\n`[Download <name>](<url>)`, the returned URL unchanged" in config_map.data["AGENTS.md"]
+    assert len(ARTIFACT_INSTRUCTIONS) < 1000
 
 
 def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:

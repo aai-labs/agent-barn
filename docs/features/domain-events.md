@@ -80,6 +80,14 @@ AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
 - `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
 - `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit, the amount paid and the reason (for example, the amount paid doesn't match the checkout we created), and names the Organization in `subject_display` (a Platform event carries no Organization id). Also emitted for a paid session that doesn't match a checkout we created.
 
+Tiers add, all projected by `security_audit.projection` (see [Tiers](tiers.md)):
+
+- `platform.tier.created` and `platform.tier.deleted` — emitted atomically when a Platform Administrator adds or deletes a Tier, carrying every value. Platform scope.
+- `platform.tier.changed` — emitted atomically for each setting of a Tier that moved, with its previous and current value; amounts are numbers. An unchanged save emits nothing. Platform scope.
+- `organization.tier.changed` — emitted atomically when a Platform Administrator puts an Organization on a Tier or takes it off any, with the Tier key before and after (`null` is no Tier) and `assigned_by_platform`. Organization scope; the actor is the administrator's Membership when they have one there, else their user. Not emitted when the Tier is unchanged.
+- `organization.subscription.started`, `.changed`, `.renewed` and `.ended` — emitted atomically with each step of a subscription ([Tiers](tiers.md#subscriptions)), carrying it as it stands after the step: Tier, provider, status, period end, whether it ends with the period, and for `.changed` what changed (`tier`, `cancel_scheduled`, `cancel_withdrawn`). The actor is the Owner, a Platform Administrator, or the system (`subscriptions`) for the Tier sweep. Organization scope.
+- `organization.tier_holds.changed` — emitted atomically when a Tier change holds what the Organization's Tier no longer covers (`reason: "tier"`), or an Owner or Admin holds or releases an Agent (`reason: "choice"`), with the held and released ids by kind. Organization scope. Not emitted when nothing moved. Re-enabling a held Connection, Webhook or Agent Memory goes through that resource's own route and is not recorded by this event.
+
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
 - `agent.updated` — emitted when `update_agent` changes a tracked scalar field (name, model, approval_mode, template pin); carries a generic `field_changes` diff and is not emitted when no tracked field actually changed.
@@ -105,11 +113,19 @@ behavior are owned by [Agent workflows](agent-workflows.md#platform-authoring-se
 
 Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
 
+LLM providers add the Platform-scoped `platform.llm_provider.changed` event, emitted atomically when a Platform Administrator replaces a connection's key and projected by `security_audit.projection`. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id and slug, whether a key was replaced, the provider type, the base URL before and after (`previous_base_url` and `base_url`, null for a provider without one), and actor/subject display snapshots, never the key or its last four characters. The provider type and base URLs are optional fields added in version 1, so events recorded before them stay valid.
+
+They also add the Platform-scoped `platform.llm_provider.created` event, projected by `security_audit.projection` and emitted atomically when a Platform Administrator adds a connection. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug, provider type, base URL (null for a known provider), whether a deleted connection was revived, and actor/subject display snapshots, never the key or any part of it.
+
+The Platform-scoped `platform.llm_provider.deleted` event is projected by `security_audit.projection` and emitted atomically when a Platform Administrator deletes a connection. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug, provider type, base URL (null for a known provider), whether a stored key was purged (`key_purged`), and actor/subject display snapshots, never the key or any part of it.
+
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 
 File Sync adds `agent.file_sync.enabled` and `agent.file_sync.disabled`, handled by `security_audit.projection`. The Subject is the Agent whose per-Agent File Sync switch changed. The payload carries the Organization and Agent ids and display snapshots of the actor and the Agent, and nothing about the folder or its files. See [Sync providers](sync-provider/README.md#agent-file-sync).
 
 Playbooks add the Platform-scoped `platform.playbook_model.changed` event, carrying previous/current model IDs and display snapshots, and the Organization-scoped `playbook.extraction.requested` event, both projected by `security_audit.projection`. It commits with the queued run; its Subject is the source Agent whose transcripts the run reads, and its payload carries IDs, the target Skill name, the window length, the session bound, and display snapshots, never transcript or playbook content. See [`Playbooks`](playbooks.md).
+
+Decisions add the Platform-scoped `platform.decision_model.changed` event, carrying the previous/current decision model names and display snapshots, projected by `security_audit.projection`. See [`Decisions`](decisions.md).
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 

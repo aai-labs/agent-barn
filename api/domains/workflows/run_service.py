@@ -13,6 +13,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.workflows.models import WorkflowDraft, WorkflowVersion
 from api.domains.workflows.repository import WorkflowConflict, WorkflowRepository
 from api.domains.workflows.run_models import (
@@ -65,6 +66,7 @@ class WorkflowRunService:
     definitions: WorkflowRepository
     authorization: AgentAuthorization
     dispatcher: EventDeliveryDispatcher
+    usage: UsageGuard
 
     def _read_scope(self, context: CurrentUserContext) -> AuthorizationScope:
         return self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
@@ -279,6 +281,7 @@ class WorkflowRunService:
         # Starting needs agent.update on the chosen Agent; the workflow itself is open to every Member.
         agent = self.authorization.require_action(context, payload.agent_id, PermissionKey.AGENT_UPDATE)
         scope = self._write_scope(context)
+        self.usage.check(membership.organization_id, UsageAction.RUN_WORKFLOW)
         if self.definitions.get(payload.workflow_id, membership.organization_id) is None:
             raise HTTPException(404, "Workflow not found")
         rerun_of_run_id = rerun_of.id if rerun_of else None

@@ -4,6 +4,8 @@ import { FileText, Loader2, Pencil, Plus } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { useTemplateLineages } from "../hooks/use-template-lineages";
 import {
@@ -43,6 +45,9 @@ export function TemplatesPanel({
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const { lineages, isLoading, error, refetch } = useTemplateLineages(scope);
   const newHref = templateNewHref(scope, orgId);
+  // An organization's tier says whether it may add templates; the platform's own are never gated.
+  const { tier, hasFeature } = useTierEntitlements();
+  const canAdd = scope.kind === "platform" || hasFeature("templates_and_skills");
 
   return (
     <>
@@ -58,11 +63,12 @@ export function TemplatesPanel({
           >
             {isLoading ? <Loader2 size={13} className="animate-spin" /> : "Refresh"}
           </button>
-          {canManage && (
+          {canManage && canAdd && (
             <button className="af-btn af-btn-primary" onClick={() => router.push(newHref)}>
               <Plus size={15} /> New template
             </button>
           )}
+          {canManage && !canAdd && <TierLockedNote tierName={tier?.name} what="new templates" />}
         </div>
       </div>
 
@@ -103,7 +109,7 @@ export function TemplatesPanel({
           <div className="text-[13.5px] mb-4" style={{ color: "var(--ink-3)" }}>
             Start a draft to create the first agent template.
           </div>
-          {canManage && (
+          {canManage && canAdd && (
             <button className="af-btn af-btn-primary" onClick={() => router.push(newHref)}>
               <Plus size={15} /> Create template
             </button>

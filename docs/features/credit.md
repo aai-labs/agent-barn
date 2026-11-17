@@ -24,8 +24,10 @@ delivery state of buying it is tracked in the [Credit change log](credit/CHANGEL
   the next grant pays that off first.
 - **A payment is granted once.** A grant's `external_ref` is unique; a grant whose
   reference was already granted changes nothing.
-- **Signs follow kinds.** A purchase adds credit, a refund or chargeback takes it off,
-  Trial Credit is zero or more; an adjustment may go either way.
+- **Signs follow kinds.** A purchase, a paid Tier's one-time credit (`tier_credit`) and a
+  period's allowance (`allowance`) add credit; a refund, a chargeback and an expired
+  allowance (`allowance_expiry`) take it off; Trial Credit is zero or more; an adjustment
+  may go either way. The Tier kinds are granted by subscriptions ([Tiers](tiers.md#subscriptions)).
 - **Only the balance limits spend.** No Organization own spend limit, per-Agent spend
   limit or default per-Agent spend limit applies on Credit
   ([Costs](costs.md#runtime-limit-management)). How many Agents it may run (its Agent
@@ -43,8 +45,12 @@ delivery state of buying it is tracked in the [Credit change log](credit/CHANGEL
 - **A proxy failure never refuses a grant.** The ledger is authoritative; the
   reconciler applies the ceiling to LiteLLM on its next pass.
 
-Buying credit is also what converts a trial ([Trial onboarding](trial-onboarding.md#trials)):
-it ends the trial without touching the ledger or the one-off window, and clears an expiry.
+Buying credit converts a trial ([Trial onboarding](trial-onboarding.md#trials)): it ends the
+trial without touching the ledger or the one-off window, and clears an expiry. A trial is
+on the Free Tier, though, and Free and none can't buy credit: the Billing read says
+`upgrade_required`, and Checkout answers `403` `TIER_UPGRADE_REQUIRED` until the
+Organization subscribes to a paid Tier ([Tiers](tiers.md#free-and-sign-up)). Subscribing
+converts the trial too.
 
 Ending a trial (by a purchase, or by a Platform Administrator) lets its owner create
 further Organizations. With self-signup on, only accounts a Platform Administrator set up
@@ -76,7 +82,8 @@ webhook secret.
 - `GET /organizations/{id}/billing` — whether it can buy credit (`available`), whether
   it runs on Credit at all (`on_credit`), its credit, spend and balance, the platform's
   purchase bounds, and its credit history, newest first, with who bought each purchase
-  (null when the buyer can't be named).
+  (null when the buyer can't be named). It also carries its Tier and subscription
+  ([Tiers](tiers.md#subscriptions)).
 - `POST /organizations/{id}/billing/checkout {credit_usd}` — within the platform's
   minimum and maximum; returns a Stripe Checkout URL. The charge is the credit plus the
   purchase fee, rounded up to the cent, computed in exact fractions: $1 of credit is
@@ -113,7 +120,8 @@ webhook secret.
     events that aren't ours (no credit purchase behind them), are acknowledged and
     ignored.
 - `GET`/`PUT /platform/settings/billing` — Platform Administrators set the minimum and
-  maximum purchase, whether payments are on, and the purchase fee percent;
+  maximum purchase, whether payments are on, the purchase fee percent, and the payment
+  grace period for subscriptions ([Tiers](tiers.md#payment-grace-period));
   each change is audited as `platform.billing_settings.changed`.
 - `GET /platform/billing/credit-history?kind=&organization_id=&page=&page_size=` —
   Platform Administrators read every Organization's Credit Grants, newest first, with

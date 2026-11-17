@@ -284,6 +284,26 @@ def test_an_agent_lists_its_tasks_most_recently_changed_first():
                 )
 
 
+def test_an_agent_lists_its_tasks_with_their_latest_note():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        noted_id = _create(context, title="Weekly greetings").json()["id"]
+        _create(context, title="No notes")
+        for body in ("Greeting 1 of 7 sent", "Greeting 2 of 7 sent"):
+            context.ingest_client.post(
+                f"{_tasks_url(context.agent)}/{noted_id}/notes",
+                json={"body": body},
+                headers=_headers(context.ingest_key),
+            )
+
+        with when("the Agent lists its Tasks"):
+            response = context.ingest_client.get(_tasks_url(context.agent), headers=_headers(context.ingest_key))
+
+            with then("each carries its latest note, so a later run can see where the work got to"):
+                by_title = {task["title"]: task for task in response.json()["items"]}
+                assert_that(by_title["Weekly greetings"], has_entries(note_count=2, latest_note="Greeting 2 of 7 sent"))
+                assert_that(by_title["No notes"], has_entries(note_count=0, latest_note=None))
+
+
 def test_an_agent_filters_its_tasks_by_status():
     with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
         done_id = _create(context, title="Finished").json()["id"]

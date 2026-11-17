@@ -18,24 +18,16 @@ MAX_ACTIVE_TRIALS_CAP = 100_000
 
 
 class PlatformTrialSettings(SQLModel, table=True):
-    """The one row of trial settings, created on first save. Without a row,
-    signup is disabled and trial credit is zero."""
+    """The one row of signup settings, created on first save. Without a row, signup is
+    disabled. The trial's credit and Agent limit are the Free Tier's, kept on its row."""
 
     __tablename__: str = "platform_trial_settings"
     __table_args__ = (
         sa.CheckConstraint("id = 1", name="ck_platform_trial_settings_singleton"),
-        sa.CheckConstraint("credit_usd >= 0", name="ck_platform_trial_settings_credit_non_negative"),
-        sa.CheckConstraint(
-            "NOT self_signup_enabled OR credit_usd > 0", name="ck_platform_trial_settings_signup_credit"
-        ),
-        sa.CheckConstraint("agent_limit >= 1", name="ck_platform_trial_settings_agent_limit_positive"),
         sa.CheckConstraint("max_active_trials >= 1", name="ck_platform_trial_settings_max_active_trials_positive"),
     )
     id: int = SqlField(default=1, primary_key=True)
     self_signup_enabled: bool = SqlField(default=False, sa_column_kwargs={"server_default": "false"})
-    credit_usd: float
-    # How many Agents a Trial Organization may run, checked whenever one is hired.
-    agent_limit: int = SqlField(default=DEFAULT_TRIAL_AGENT_LIMIT, sa_column_kwargs={"server_default": "1"})
     # How many Organizations may be on a trial at once, checked at sign-up. None: no cap.
     max_active_trials: int | None = SqlField(default=None, nullable=True)
     updated_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
@@ -54,8 +46,11 @@ class TrialGrant(SQLModel, table=True):
 
 class TrialSettingsRead(BaseModel):
     self_signup_enabled: bool = False
+    # The Free Tier's one-time credit and Agent limit: what a new trial gets.
     credit_usd: float = 0.0
     agent_limit: int = DEFAULT_TRIAL_AGENT_LIMIT
+    # Whether the Free Tier is offered; sign-up grants it, so it is closed without.
+    free_tier_offered: bool = False
     # None: any number of trials may be active at once.
     max_active_trials: int | None = None
     # Organizations on a trial right now, counted against `max_active_trials`.

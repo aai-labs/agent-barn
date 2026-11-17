@@ -216,6 +216,10 @@ publication triggers. Existing command approval and messaging policy still apply
 failed creation/upload must not be represented as successful delivery. Replies use
 the returned URL unchanged and briefly explain expiry, without dumping internal
 IDs/checksums or tool commands. Those identities remain available for handoffs.
+The section is kept under 1,000 characters: the platform's appended sections count
+toward OpenClaw's 20,000-character AGENTS.md budget, and a longer total leaves only a
+digest of the middle of an Agent's own template. Workflow checkpoints record published
+IDs/checksums themselves, so the instructions do not ask the model to carry them.
 Instruction changes require an Agent update/restart and a fresh-session natural
 language check on each runtime; generated-prompt tests alone do not prove live
 model/tool selection.

@@ -11,6 +11,7 @@ from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.workflows.models import (
     TEXT_LIMIT,
     Workflow,
@@ -65,6 +66,7 @@ class WorkflowService:
     policy: PermissionPolicy
     agents: AgentAuthorization
     settings: PlatformWorkflowRepository
+    usage: UsageGuard
 
     def _authoring_enabled(self) -> bool:
         return self.settings.read().authoring_enabled
@@ -244,6 +246,7 @@ class WorkflowService:
     def create(self, organization_id: UUID, payload: WorkflowCreate, context: CurrentUserContext) -> WorkflowRead:
         self._member(organization_id, context)
         self._require_authoring()
+        self.usage.check(organization_id, UsageAction.CREATE_WORKFLOW)
         workflow = self.repository.create(
             organization_id,
             context.require_current_user_organization().id,

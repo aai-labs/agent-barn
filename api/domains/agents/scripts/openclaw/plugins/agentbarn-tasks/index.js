@@ -9,7 +9,8 @@
 // the run still ends without a Task, the plugin records one itself, named after the
 // request, with origin `automatic`. It also does the bookkeeping that would otherwise cost
 // the model a call each: when a run ends, the files it wrote go to the Task it worked on
-// and a Task it left in progress is marked done, or reopened if the run failed. Only a Task
+// and a Task it left in progress is marked done, or reopened if the run failed; one it kept
+// (`keep`, for work that continues in a later turn) stays in progress. Only a Task
 // call that changed something counts as recording the work: reading the Tasks does not.
 // The startup checklist (BOOT.md) and subagent runs are left alone: they are not the
 // user's request.
@@ -19,6 +20,9 @@ import { resolve as resolvePath } from "node:path";
 
 const TOOL = "agentbarn_task";
 const STATUSES = ["open", "in_progress", "done", "failed"];
+// A Task the Agent left in_progress with keep: work that continues in a later turn. Only a run
+// that failed moves it (to open); otherwise it stays in_progress.
+const KEPT = "kept";
 const WORK_THRESHOLD = 3;
 // OpenClaw's file-writing tools. A run that produces a file is worth a Task however short it is.
 const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
@@ -30,6 +34,7 @@ const LIST_PAGE_SIZE = 100;
 const OPEN_TASKS_SHOWN = 10;
 // Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 const DONE_TASKS_SHOWN = 3;
+const LATEST_NOTE_CHARS = 200;
 const AUTOMATIC_TITLE_CHARS = 120;
 const AUTOMATIC_DESCRIPTION_CHARS = 2000;
 const COMMAND_TIMEOUT_MS = 150_000;
@@ -100,6 +105,13 @@ const PARAMETERS = {
       description: "The new status, a list filter, or the starting status for create (in_progress).",
     },
     body: { type: "string", description: "The note, for note; or one to add with create or status." },
+    keep: {
+      type: "boolean",
+      description:
+        "With create, or status in_progress: keep the Task in progress after this turn, because the job " +
+        "continues in a later turn (more parts or messages to come). Without it the Task is marked done when " +
+        "the turn ends.",
+    },
     path: { type: "string", description: "The file to attach, absolute or relative to your workspace." },
     name: { type: "string", description: "The file's name as shown on the Task, for attach." },
     content_type: { type: "string", description: "A bare type/subtype, for attach." },
@@ -310,9 +322,11 @@ function taskIdOf(toolName, params, result) {
 // The status a call of the Task tool left its Task in, if it set one.
 function statusSet(toolName, params) {
   if (toolName !== TOOL) return null;
-  if (params?.action === "create") return STATUSES.includes(params.status) ? params.status : "in_progress";
-  if (params?.action === "status" && STATUSES.includes(params.status)) return params.status;
-  return null;
+  let status;
+  if (params?.action === "create") status = STATUSES.includes(params.status) ? params.status : "in_progress";
+  else if (params?.action === "status" && STATUSES.includes(params.status)) status = params.status;
+  else return null;
+  return status === "in_progress" && (params.keep === true || params.keep === "true") ? KEPT : status;
 }
 
 function track(event, ctx) {
@@ -374,8 +388,10 @@ async function attachAutomatically(state) {
 }
 
 // Move each Task the Agent left in_progress this run to `status`; a status it chose itself stays.
+// A Task it kept stays in_progress, unless the run failed: then it is reopened too.
 async function settleInProgress(state, status) {
-  const inProgress = [...state.statuses].filter(([, current]) => current === "in_progress").map(([id]) => id).sort();
+  const settles = status === "open" ? ["in_progress", KEPT] : ["in_progress"];
+  const inProgress = [...state.statuses].filter(([, current]) => settles.includes(current)).map(([id]) => id).sort();
   for (const taskId of inProgress) await run(["status", taskId, status]);
   if (inProgress.length) forgetTaskList();
 }
@@ -408,6 +424,14 @@ function smallTalk(message) {
 }
 
 // The open Tasks, then the latest finished ones, from one listing (most recently changed first).
+// An unfinished Task is listed with the start of its latest note, so a later turn or scheduled run,
+// which has no memory of earlier ones, sees where the work got to.
+function notePreview(note) {
+  const text = typeof note === "string" ? note.split(/\s+/).filter(Boolean).join(" ") : "";
+  if (!text) return "";
+  return ` (latest note: "${text.slice(0, LATEST_NOTE_CHARS)}${text.length > LATEST_NOTE_CHARS ? "…" : ""}")`;
+}
+
 function taskLines(output) {
   let items;
   try {
@@ -420,7 +444,8 @@ function taskLines(output) {
   for (const status of ["in_progress", "open", "done"]) {
     const shown = items.filter((task) => task?.status === status);
     for (const task of shown.slice(0, status === "done" ? DONE_TASKS_SHOWN : OPEN_TASKS_SHOWN)) {
-      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}`);
+      const note = status === "done" ? "" : notePreview(task.latest_note);
+      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}${note}`);
     }
   }
   return lines;
@@ -447,9 +472,10 @@ export default {
       description:
         "Record work that uses tools or produces files as a Task the people you work for can follow. `create` " +
         "one before you start (it starts in_progress); when your run ends, files you wrote with your " +
-        "file-writing tool or published are attached and a Task still in_progress is marked done. Attach any " +
-        "other file that is part of the result yourself. Set `failed` (with a body saying why) or `open` (waiting on " +
-        "the user) yourself.",
+        "file-writing tool or published are attached and a Task still in_progress is marked done. If the work " +
+        "continues in a later turn and is not waiting on the user, set it in_progress with keep: true so it stays " +
+        "in progress. Attach any other file that is part of the result yourself. Set `failed` (with a body saying " +
+        "why), `open` (waiting on the user) or `done` yourself.",
       parameters: PARAMETERS,
       execute: executeTool,
     });
@@ -543,8 +569,10 @@ export default {
       const lines = await openTaskLines();
       if (lines.length) {
         parts.push(
-          `Your open and latest finished Tasks:\n${lines.join("\n")}\nIf the request continues one of these, ` +
-            "keep using it with the agentbarn_task tool (set a done one back to in_progress) rather than creating another.",
+          `Your open and latest finished Tasks:\n${lines.join("\n")}\nKeep using one of these only when the ` +
+            "request is the same piece of work: set it to in_progress with the agentbarn_task tool, with keep: true " +
+            "if the work still continues after this turn. A new request gets its own Task, even while another is " +
+            "in progress.",
         );
       }
       const reminder = nextTurnReminders.get(ctx.sessionKey ?? "");

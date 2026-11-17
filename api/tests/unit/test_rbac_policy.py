@@ -74,6 +74,8 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.BILLING_MANAGE,
         # Changing or archiving any workflow of the Organization.
         PermissionKey.WORKFLOW_MANAGE,
+        # Choosing which Agents a Tier keeps.
+        PermissionKey.TIER_HOLD_MANAGE,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

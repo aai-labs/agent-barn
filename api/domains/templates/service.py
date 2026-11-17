@@ -49,6 +49,7 @@ from api.domains.templates.predefined import PREDEFINED_TEMPLATES
 from api.domains.templates.repository import TemplateKeyCollisionError, TemplateRepository
 from api.domains.templates.seeding import build_predefined_templates
 from api.domains.templates.slug import generate_template_key, slugify
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ class TemplateService:
     skill_repository: SkillRepository
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
+    usage: UsageGuard
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -324,6 +326,7 @@ class TemplateService:
     ) -> AgentTemplateDraftRead:
         org_id = self._org_id(context)
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
+        self.usage.check(org_id, UsageAction.CREATE_TEMPLATE)
         skills_map = self._resolve_skill_map(
             data.required_skill_ids,
             data.required_skill_groups,
@@ -418,6 +421,9 @@ class TemplateService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
 
         is_platform_source = isinstance(source, PlatformTemplate)
+        # Customizing a platform Template makes a new Organization Template.
+        if is_platform_source and self.repository.get_latest_org_template(org_id, template_key) is None:
+            self.usage.check(org_id, UsageAction.CREATE_TEMPLATE)
         current_org = self.repository.get_latest_org_template(org_id, template_key) if is_platform_source else None
         fork_origin = (
             current_org.forked_from_platform_template_id

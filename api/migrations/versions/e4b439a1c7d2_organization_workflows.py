@@ -6,7 +6,7 @@ The downgrade is lossy: a workflow keeps only one Agent (its default, else the A
 its latest run), and workflows with neither are deleted.
 
 Revision ID: e4b439a1c7d2
-Revises: d1a390e7b2c4
+Revises: 3f9f88255e3b
 """
 
 from uuid import UUID
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e4b439a1c7d2"
-down_revision: str | None = "d1a390e7b2c4"
+down_revision: str | None = "3f9f88255e3b"
 branch_labels: str | None = None
 depends_on: str | None = None
 
