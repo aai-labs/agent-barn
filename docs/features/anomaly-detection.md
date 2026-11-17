@@ -131,7 +131,11 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   happened in the last 14 days; older ones would count as unseen anyway. Each tool,
   integration, action and host is looked up in the Agent's ledger
   (`agent_activity_seen`); one not seen since 14 days before its use is recorded as an
-  Anomaly that starts and ends at that use. The ledger then records the use.
+  Anomaly that starts and ends at that use. The ledger then records the use. Only uses
+  that happened since the previous check, with an hour's grace for late storage, are
+  flagged; rows
+  stored long after the activity (a Business Action backfill) are recorded in the ledger
+  without being flagged, since that activity was not new when it happened.
 - The first check of an Agent only fills its ledger from its last 14 days and flags no
   first use.
 - Each Agent is checked on its own: one failing is logged, the rest still run and the Job

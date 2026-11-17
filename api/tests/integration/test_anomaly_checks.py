@@ -540,3 +540,63 @@ def test_activity_from_before_the_baseline_window_is_not_read_even_when_stored_s
         )
 
         assert_that(_ledger_subjects(context, SeenKind.DESTINATION), equal_to([KNOWN_HOST]))
+
+
+def test_activity_stored_long_after_it_happened_is_learned_not_flagged():
+    # A backfill stores rows today for what the Agent did days ago.
+    with given([*_ENABLED, usual_activity()]) as context:
+        stored = NOW + timedelta(minutes=1)
+        _learned_then(
+            context,
+            [
+                _stored_late(
+                    _tool_call(context.agent, NOW - timedelta(days=5), arguments={"url": "https://backfilled.example"}),
+                    stored,
+                ),
+                *[
+                    _stored_late(row, stored)
+                    for row in _action(context.agent, NOW - timedelta(days=5), integration="erp", verb="export")
+                ],
+            ],
+        )
+
+        assert_that(_anomalies(context), empty())
+        assert_that(_ledger_subjects(context, SeenKind.DESTINATION), equal_to(["backfilled.example", KNOWN_HOST]))
+        assert_that(_ledger_subjects(context, SeenKind.INTEGRATION), equal_to(["crm", "erp"]))
+
+
+def test_a_use_backfilled_alongside_a_recent_one_is_not_new():
+    with given([*_ENABLED, usual_activity()]) as context:
+        stored = NOW + timedelta(minutes=1)
+        _learned_then(
+            context,
+            [
+                _stored_late(
+                    _tool_call(context.agent, NOW - timedelta(days=5), arguments={"url": "https://both.example"}),
+                    stored,
+                ),
+                _tool_call(context.agent, stored, arguments={"url": "https://both.example"}),
+            ],
+        )
+
+        assert_that(_anomalies(context, AnomalySignal.NEW_DESTINATION), empty())
+
+
+def test_a_new_use_stored_a_little_late_is_still_flagged():
+    with given([*_ENABLED, usual_activity()]) as context:
+        # Happened just before the previous check read through, stored just after.
+        happened = NOW - timedelta(minutes=10)
+        _learned_then(
+            context,
+            [
+                _stored_late(
+                    _tool_call(context.agent, happened, arguments={"url": "https://late.example"}),
+                    NOW + timedelta(minutes=1),
+                )
+            ],
+        )
+
+        assert_that(
+            _anomalies(context, AnomalySignal.NEW_DESTINATION),
+            contains_exactly(has_properties(subject="late.example", started_at=happened)),
+        )
