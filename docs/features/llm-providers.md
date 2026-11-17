@@ -2,19 +2,19 @@
 
 ## Read when
 
-Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection` table, the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
+Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection` table, how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
 
 ## Role in the system
 
 Agents never hold a provider key. They call LiteLLM with their own virtual keys, and LiteLLM calls the provider with the platform's key. An **LLM Provider Connection** is one of those platform accounts: a provider and the key Agent Barn reaches it with. It is a Platform Resource that Platform Administrators keep in Platform Admin settings.
 
-**OpenRouter** is seeded by migration `22b93965859f` with no key. A Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita, and any number of Azure and Custom connections, and delete any of them; Agents can't use them yet, because their keys don't reach LiteLLM. More is being added as the AF-447 epic ([`llm-providers/CHANGELOG.md`](llm-providers/CHANGELOG.md)). Why keys are platform data rather than deployment secrets is in [its ADR](../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md).
+**OpenRouter** is seeded by migration `22b93965859f` with no key. A Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita, and any number of Azure and Custom connections, replace any connection's key, and delete any connection but OpenRouter. Agents can't use the other providers yet, because only OpenRouter's key reaches LiteLLM; models and prices per connection, and Agents using them, come in later slices of the AF-447 epic ([`llm-providers/CHANGELOG.md`](llm-providers/CHANGELOG.md)). Why keys are platform data rather than deployment secrets is in [its ADR](../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md).
 
 ## The connection
 
 - Stored in `llm_provider_connection`: a unique `slug`, `name`, `provider_type`, `api_key_encrypted`, `api_key_last4`, `base_url`, `updated_by`, `updated_at` and `deleted_at`.
 - The provider types are `openrouter`, `anthropic`, `openai`, `gemini`, `xai`, `deepseek`, `fireworks`, `novita`, `azure` and `custom`. A known provider has at most one connection, whose slug is its provider type and which has no `base_url`. An Azure or Custom connection has a slug of its own, which can't be any provider type's name, and a `base_url`.
-- The key is Fernet-encrypted with `AGENT_TOKEN_ENCRYPTION_KEY`, as other stored secrets are. Its last four characters are kept apart, so the status never decrypts it.
+- The key is Fernet-encrypted with `AGENT_TOKEN_ENCRYPTION_KEY`, as other stored secrets are. Its last four characters are kept apart, so listing the connections never decrypts it.
 - Deleting a connection sets `deleted_at` and purges the key and its last four characters under the connection's lock; the row keeps its slug, name and `base_url`. OpenRouter can't be deleted.
 - Adding a known provider whose connection was deleted brings that row back, with the same id and the new key. An Azure or Custom connection is never brought back: a slug used before, deleted or not, is refused.
 - An Azure or Custom connection's name is chosen by the Platform Administrator, at most 64 characters. Its base URL is a public HTTPS address, at most 2048 characters, with no credentials, query or fragment, and stored without a trailing `/`.
@@ -22,12 +22,32 @@ Agents never hold a provider key. They call LiteLLM with their own virtual keys,
 
 ## Invariants
 
-- **Nobody reads the key back.** The status reports whether a key is saved, its last four characters, who saved it and when, never the key. A refused request's `422` never echoes the body (`CredentialSafeRoute`), and the audit event carries no part of the key.
-- **A key is checked before it is used.** OpenRouter's `GET /key` must accept it: a key it refuses (401 or 403) is `422`, no answer is `503`. Any other provider's key is checked with that provider by `LlmProviderKeyChecker` (`api/infrastructure/llm_provider_keys/`), with the same `422` and `503`. An Azure or Custom base URL must also answer like a model API: a redirect, a `404`, or a `200` that is not JSON is `422`, as is a base URL whose host does not resolve to a public address. A refused or unchecked key never reaches LiteLLM or the database.
+- **Nobody reads the key back.** The list reports whether each connection has a key saved, its last four characters, who saved it and when, never the key. A refused request's `422` never echoes the body (`CredentialSafeRoute`), and the audit event carries no part of the key.
+- **A key is checked before it is used.** The provider must accept it first ([Checking a key](#checking-a-key)). A key it refuses is `422` and no answer `503`; an Azure or Custom base URL that is not a public address, or does not answer like a model API, is `422`. A refused or unchecked key never reaches LiteLLM or the database.
 - **LiteLLM first, then the database, for OpenRouter.** Under a per-connection advisory lock, the API writes the LiteLLM route and only then stores the encrypted key with its event, in one transaction. A LiteLLM failure is `503` and leaves the stored key and the event log unchanged. If LiteLLM applied the write but the API saw a failure (a timeout after the write, or a failed commit afterwards), LiteLLM holds a key the database does not; saving the key again repairs it.
 - **No restart.** Saving the OpenRouter key registers or updates the LiteLLM route in the same request, so Agents use the new key at once. Adding another provider, or replacing its key, stores the key under the same lock, with its event, and writes no LiteLLM route.
 - **A base URL changes only with a new, checked key.** A replaced Azure or Custom key is checked at the new base URL if one is sent, else at the stored one. If the stored base URL changed while the key was checked, nothing is stored and the API answers `409`.
 - **API startup does not sync keys to LiteLLM**, so the API's readiness never depends on the proxy being reachable ([API architecture](../architecture/api.md#startup-data)). Nothing copies `OPENROUTER_API_KEY` into the table; each environment's key is saved by hand (see [Moving off the environment key](#moving-off-the-environment-key)).
+
+## Checking a key
+
+OpenRouter's key is checked by `OpenRouterClient.check_key` with `GET {openrouter_base_url}/key` (`https://openrouter.ai/api/v1/key` by default).
+
+Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_provider_keys/`). It sends one `GET`, pinned to a checked public address, with redirects off and a 10-second timeout, and reads only the status and headers, never the body.
+
+| Provider | Request | Key header |
+| --- | --- | --- |
+| Anthropic | `GET https://api.anthropic.com/v1/models` | `x-api-key` |
+| OpenAI | `GET https://api.openai.com/v1/models` | `Authorization: Bearer` |
+| Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models` | `x-goog-api-key` |
+| xAI | `GET https://api.x.ai/v1/models` | `Authorization: Bearer` |
+| DeepSeek | `GET https://api.deepseek.com/models` | `Authorization: Bearer` |
+| Fireworks | `GET https://api.fireworks.ai/v1/accounts` | `Authorization: Bearer` |
+| Novita | `GET https://api.novita.ai/openai/v1/models` | `Authorization: Bearer` |
+| Azure | `GET {base_url}/openai/v1/models`, the base URL being the resource endpoint such as `https://<resource>.openai.azure.com` | `api-key` |
+| Custom | `GET {base_url}/models` | `Authorization: Bearer` |
+
+`200` accepts the key. `401` or `403` refuses it, and for Gemini so does `400`. Any other answer, or none, means the provider could not be reached. For Azure and Custom, a base URL whose host is not a public address is refused before any request, and a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json` means the base URL does not answer like a model API. Why Fireworks, Gemini, Azure and Novita are checked this way is in the [change log](llm-providers/CHANGELOG.md) (slice 2, PR 2).
 
 ## LiteLLM routes
 
