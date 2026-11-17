@@ -141,7 +141,7 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Signup & trials")).toBeVisible();
       await expect(navigation.panelLink("Tiers")).toBeVisible();
       await expect(navigation.breadcrumb()).toContainText("Settings/Agent Memory");
-      await expect(navigation.panelSections()).toHaveCount(9);
+      await expect(navigation.panelSections()).toHaveCount(10);
       await expect(navigation.panelSections().nth(0)).toHaveText("Agent Memory");
 
       await navigation.gotoPlatform("/agents");
