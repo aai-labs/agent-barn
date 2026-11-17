@@ -34,11 +34,11 @@ The result also carries input and output tokens and `cost_usd` from LiteLLM (`No
 
 ## Calls, billing and failures
 
-- Calls go to LiteLLM's System One route (`POST /v1/systemone`) and from there to OpenRouter on `OPENROUTER_API_KEY`, so they appear in spend logs and `cost_record` like any other model call. The route needs LiteLLM v1.104.3 or later.
+- Calls go to LiteLLM's System One route (`POST /v1/systemone`) and from there to OpenRouter through LiteLLM's `openrouter/*` route, with the platform's key ([LLM Providers](llm-providers.md)), so they appear in spend logs and `cost_record` like any other model call. The route needs LiteLLM v1.104.3 or later.
 - Every call is billed to the Agent's own LiteLLM key, as Playbook Extraction is, so it counts against the Agent's and its Organization's limits. A deleted Agent, or one without a usable key, is `key_or_model_rejected` without a call.
 - Failures raise `DecisionError` with the same categories as chat completions: `budget_exceeded`, `key_or_model_rejected`, `unavailable`, `bad_response`. The error never carries request or response content.
 - Answers are untrusted. Every question must be answered, with the matching answer type, a choice from the offered set, probabilities and confidences in [0, 1] and a score within the scale; an answer to a question not asked or anything else malformed fails the whole call as `bad_response`.
 
 ## Data retention
 
-OpenRouter accepts `provider: {data_collection: "deny", zdr: true}` on its decisions route, but LiteLLM (v1.108.6) builds the upstream request from the model, state and questions only and drops it. Data collection and zero data retention are therefore set on the OpenRouter account, where they apply to every request on the key. With zero data retention enforced, OpenRouter serves `openai/gpt-6-luna-decisions` only through Azure.
+OpenRouter accepts `provider: {data_collection: "deny", zdr: true}` on its decisions route, but LiteLLM (v1.108.6) builds the upstream request from the model, state and questions only and drops it. Data collection and zero data retention are therefore set on the OpenRouter account, where they apply to every request on the platform's key. With zero data retention enforced, OpenRouter serves `openai/gpt-6-luna-decisions` only through Azure.
