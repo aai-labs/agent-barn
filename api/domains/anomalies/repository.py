@@ -74,10 +74,21 @@ class AnomalySettingsRepository:
                 return settings or OrganizationAnomalySettings(organization_id=organization_id), []
             if settings is None:
                 settings = OrganizationAnomalySettings(organization_id=organization_id)
+            now = datetime.now(UTC)
             settings.enabled = enabled
-            settings.updated_at = datetime.now(UTC)
+            settings.updated_at = now
             session.add(settings)
             if not enabled:
+                # Nothing watches an ongoing Anomaly once detection is off, so it ends
+                # now; a deviation still going when it is back on starts a new one.
+                session.exec(
+                    sa.update(AgentAnomaly)  # type: ignore[call-overload]
+                    .where(
+                        col(AgentAnomaly.organization_id) == organization_id,
+                        col(AgentAnomaly.ended_at).is_(None),
+                    )
+                    .values(ended_at=now, updated_at=now)
+                )
                 # The check stops reading while detection is off. Forgetting how far it
                 # got makes it learn the gap when turned back on, rather than flag
                 # everything the Agents did meanwhile as a first use.
@@ -363,6 +374,21 @@ class AnomalyRepository:
                 .where(
                     col(AgentAnomaly.agent_id) == agent_id,
                     col(AgentAnomaly.signal) == signal.value,
+                    col(AgentAnomaly.ended_at).is_(None),
+                )
+                .values(ended_at=at, updated_at=datetime.now(UTC))
+            )
+            session.commit()
+
+    def end_ongoing_except(self, organization_id: UUID, agent_ids: Collection[UUID], at: datetime) -> None:
+        """End the ongoing Anomalies of an Organization's Agents other than `agent_ids`
+        (the ones still checked), such as Agents deleted since the last check."""
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentAnomaly)  # type: ignore[call-overload]
+                .where(
+                    col(AgentAnomaly.organization_id) == organization_id,
+                    col(AgentAnomaly.agent_id).not_in(list(agent_ids)),
                     col(AgentAnomaly.ended_at).is_(None),
                 )
                 .values(ended_at=at, updated_at=datetime.now(UTC))

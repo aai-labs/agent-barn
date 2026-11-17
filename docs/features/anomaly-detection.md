@@ -38,7 +38,8 @@ model that classifies candidates, alerts with acknowledge and resolve, and quara
   each Agent, so turning on classification later needs no second consent.
 - Turning it off stops the checks and forgets how far they had read each Agent
   (`agent_anomaly_state`). Turning it back on makes the next check learn what the Agents
-  did meanwhile rather than flag all of it as a first use. Anomalies already recorded stay.
+  did meanwhile rather than flag all of it as a first use. Anomalies already recorded stay;
+  ongoing ones end when it is turned off, since nothing watches them any more.
 - Each change records `organization.anomaly_detection.changed` in the security audit log.
 
 ## What is checked
@@ -123,7 +124,8 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   checks keep seeing it, the same row is kept up to date (`last_observed_at`, the highest
   observed value, the latest usual value and threshold); the first check that does not
   ends it (`ended_at`). A later deviation starts a new row. At most one ongoing Anomaly
-  exists per Agent, signal and subject (`uq_agent_anomaly_ongoing`).
+  exists per Agent, signal and subject (`uq_agent_anomaly_ongoing`). The ongoing
+  Anomalies of an Agent deleted since the last check end with that check.
 - First use: the check reads tool calls and Business Actions stored since its last
   cursor (`agent_anomaly_state`, by `created_at`, so late rows are read once). Each tool,
   integration, action and host is looked up in the Agent's ledger
