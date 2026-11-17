@@ -1,6 +1,7 @@
 import { Locator, Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
+import { UsageDatePickerPage } from "./usage-date-picker.po";
 
 export class AgentsOverviewPage {
   constructor(private page: Page) {}
@@ -39,9 +40,8 @@ export class AgentsOverviewPage {
     return this.page.getByTestId("agent-overview-details");
   }
 
-  async choosePeriod(label: string) {
-    await this.page.getByTestId("agents-overview-period").click();
-    await this.page.getByRole("option", { name: label }).click();
+  dates(): UsageDatePickerPage {
+    return new UsageDatePickerPage(this.page);
   }
 
   /** A destination on the navigation rail. */

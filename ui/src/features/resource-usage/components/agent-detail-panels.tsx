@@ -9,7 +9,7 @@ import type { AgentHealth } from "@/features/agents/schemas";
 import { formatModelName } from "@/features/agents/utils";
 import { formatPercent } from "@/features/costs/format";
 
-import { formatBytes, formatCores } from "../format";
+import { formatBytes, formatCores, formatUsageSpan } from "../format";
 import type { AgentResourceUsage } from "../schemas";
 import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
 import { LimitLabel } from "./limit-label";
@@ -178,6 +178,7 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
   const memoryRatio = usageRatio(usage.memoryWorkingSetBytes, usage.memoryLimitBytes);
   const cpuRatio = usageRatio(usage.cpuCores, usage.cpuLimitCores);
   const throttled = usage.cpuThrottledRatio;
+  const span = formatUsageSpan(usage.fromDate, usage.toDate);
 
   return (
     <div className="flex flex-col gap-3">
@@ -223,9 +224,9 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
         testId="usage-panel-cpu-request"
       />
       <div>
-        <Fact label="Peak memory, 24h" value={usage.memoryPeakBytes !== null ? formatBytes(usage.memoryPeakBytes) : "—"} />
+        <Fact label={`Peak memory, ${span}`} value={usage.memoryPeakBytes !== null ? formatBytes(usage.memoryPeakBytes) : "—"} />
         <Fact
-          label="CPU throttled, 24h"
+          label={`CPU throttled, ${span}`}
           value={
             <span style={{ color: throttled !== null && throttled >= THROTTLING_WARN_RATIO ? "var(--warn)" : undefined }}>
               {throttled !== null ? formatPercent(throttled) : "—"}
@@ -235,7 +236,6 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
       </div>
       <MemoryChart
         series={usage.series}
-        range={usage.range}
         limitBytes={usage.memoryLimitBytes}
         requestBytes={usage.memoryRequestBytes}
         compact

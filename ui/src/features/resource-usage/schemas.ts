@@ -2,8 +2,6 @@ import { z } from "zod";
 
 import { AgentHealthSchema, AgentPermissionKeySchema } from "@/features/agents/schemas";
 
-export const ResourceUsageRangeSchema = z.enum(["1h", "6h", "24h", "7d", "14d"]);
-export type ResourceUsageRange = z.infer<typeof ResourceUsageRangeSchema>;
 
 /** Whether the numbers could be fetched at all. About the source, not the Agent. */
 export const ResourceUsageAvailabilitySchema = z.enum([
@@ -32,7 +30,6 @@ export type ResourceUsagePoint = z.infer<typeof ResourceUsagePointSchema>;
 
 export const AgentResourceUsageSchema = z.object({
   agentId: z.string().uuid(),
-  range: ResourceUsageRangeSchema,
   fromDate: z.string(),
   toDate: z.string(),
   stepSeconds: z.number().int(),
@@ -181,7 +178,6 @@ export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
 export type ResourceLimitsUpdate = Partial<Omit<ResourceLimits, "updatedAt">>;
 
 export const PlatformResourceUsageSchema = z.object({
-  range: ResourceUsageRangeSchema,
   fromDate: z.string(),
   toDate: z.string(),
   stepSeconds: z.number().int(),

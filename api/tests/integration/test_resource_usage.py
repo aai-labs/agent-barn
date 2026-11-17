@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4, uuid7
 
 from fastapi import status
@@ -183,11 +184,16 @@ def test_a_deleted_agent_is_not_found():
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_an_unknown_range_is_rejected():
+def test_a_window_older_than_prometheus_keeps_is_rejected():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        with when("I ask for a range longer than Prometheus keeps"):
-            response = client.get(_url(context), params={"range": "30d"}, headers=_auth(context))
+        now = datetime.now(UTC)
+        with when("I ask for days that ended before the 15 days Prometheus keeps"):
+            params = {
+                "from_date": (now - timedelta(days=30)).isoformat(),
+                "to_date": (now - timedelta(days=20)).isoformat(),
+            }
+            response = client.get(_url(context), params=params, headers=_auth(context))
         with then("it is a validation error"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
@@ -216,7 +222,6 @@ def test_reports_current_usage_limits_and_history():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(body["availability"], equal_to("available"))
             assert_that(body["state"], equal_to("reporting"))
-            assert_that(body["range"], equal_to("24h"))
         with then("the current figures and the container's limits are reported"):
             assert_that(body["memory_working_set_bytes"], equal_to(358_617_088))
             assert_that(body["memory_limit_bytes"], equal_to(1_073_741_824))
@@ -281,14 +286,15 @@ def test_another_agents_request_in_the_answer_is_not_handed_over():
         assert_that(body["cpu_request_cores"], none())
 
 
-def test_a_longer_range_uses_a_coarser_step():
+def test_a_longer_window_uses_a_coarser_step():
     with given([*_GIVEN, prometheus_reports(_REPORTING)]) as context:
         client: TestClient = context.client
+        now = datetime.now(UTC)
         with when("I read the last seven days"):
-            response = client.get(_url(context), params={"range": "7d"}, headers=_auth(context))
+            params = {"from_date": (now - timedelta(days=7)).isoformat(), "to_date": now.isoformat()}
+            response = client.get(_url(context), params=params, headers=_auth(context))
         with then("the chart is drawn at half-hour steps"):
             body = response.json()
-            assert_that(body["range"], equal_to("7d"))
             assert_that(body["step_seconds"], equal_to(1800))
             assert_that(body["series"], has_length(337))
 

@@ -34,7 +34,7 @@ import { UserMenu } from "./user-menu";
 
 // Query parameters that name a place inside the page rather than one Agent's thing, so
 // they carry over to another Agent. A thread or channel id is one Agent's and does not.
-const PORTABLE_PARAMS = ["tab", "section", "range"];
+const PORTABLE_PARAMS = ["tab", "section", "usageFrom", "usageTo"];
 
 /**
  * The desktop path bar: where you are, as a path you can switch at each step. The

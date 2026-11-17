@@ -1,5 +1,7 @@
 import { Locator, Page } from "@playwright/test";
 
+import { UsageDatePickerPage } from "./usage-date-picker.po";
+
 export class PlatformResourceUsagePage {
   constructor(private page: Page) {}
 
@@ -40,9 +42,8 @@ export class PlatformResourceUsagePage {
     return this.agentRows().evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-id")));
   }
 
-  async chooseRange(label: string) {
-    await this.page.getByTestId("platform-usage-range").click();
-    await this.page.getByRole("option", { name: label }).click();
+  dates(): UsageDatePickerPage {
+    return new UsageDatePickerPage(this.page);
   }
 
   /** A destination on the navigation rail. */

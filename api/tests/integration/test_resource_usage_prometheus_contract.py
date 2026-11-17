@@ -32,7 +32,7 @@ import pytest
 from testcontainers.core.container import DockerContainer
 
 from api.core.config import get_config
-from api.domains.resource_usage.models import ResourceUsageRange, UsageWindow
+from api.domains.resource_usage.models import UsageWindow
 from api.domains.resource_usage.repository import ResourceUsageRepository
 from api.infrastructure.prometheus.client import PrometheusClient, PrometheusError
 
@@ -376,7 +376,6 @@ def test_history_comes_back_as_points_along_the_window(scraped: Scraped):
     def history() -> tuple[UsageWindow, dict[str, dict[int, float]]] | None:
         now = _now()
         window = UsageWindow(
-            usage_range=ResourceUsageRange.ONE_HOUR,
             start=now - timedelta(seconds=120),
             end=now,
             step_seconds=5,
@@ -407,7 +406,6 @@ def test_the_platform_chart_adds_the_agents_up_into_one_series_per_field(scraped
     def history(organization: tuple[UUID, list[UUID]] | None) -> dict[str, dict[int, float]] | None:
         now = _now()
         window = UsageWindow(
-            usage_range=ResourceUsageRange.ONE_HOUR,
             start=now - timedelta(seconds=120),
             end=now,
             step_seconds=5,

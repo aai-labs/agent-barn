@@ -87,8 +87,8 @@ export class AgentDetailPage {
     return this.sectionLink("Resource usage");
   }
 
-  async gotoResourceUsage(agentId = "33333333-3333-4333-8333-333333333333", range?: string) {
-    const query = range ? `&range=${range}` : "";
+  async gotoResourceUsage(agentId = "33333333-3333-4333-8333-333333333333", extraQuery?: string) {
+    const query = extraQuery ? `&${extraQuery}` : "";
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=resource-usage${query}`);
   }
 

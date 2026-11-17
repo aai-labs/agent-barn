@@ -16,7 +16,7 @@ import {
   OVERVIEW_HEALTH_REFETCH_MS,
   THROTTLING_WARN_RATIO,
   usageRatio,
-  type OverviewPeriod,
+  type UsageDates,
 } from "../utils";
 import { AgentOverviewDetails } from "./agent-overview-details";
 import { LimitLabel } from "./limit-label";
@@ -78,7 +78,8 @@ function compareItems(a: AgentOverviewItem, b: AgentOverviewItem, key: SortKey, 
 
 interface AgentsOverviewTableProps {
   items: AgentOverviewItem[];
-  period: OverviewPeriod;
+  /** The days spend and usage are read over. */
+  dates: UsageDates;
   orgId: string;
 }
 
@@ -89,7 +90,7 @@ interface AgentsOverviewTableProps {
  * exists to put in front of an evaluator. Sorting is client-side, since the page holds
  * every row it will ever show.
  */
-export function AgentsOverviewTable({ items, period, orgId }: AgentsOverviewTableProps) {
+export function AgentsOverviewTable({ items, dates, orgId }: AgentsOverviewTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [direction, setDirection] = useState<SortDirection>("desc");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -159,7 +160,7 @@ export function AgentsOverviewTable({ items, period, orgId }: AgentsOverviewTabl
               key={item.id}
               item={item}
               first={index === 0}
-              period={period}
+              dates={dates}
               orgId={orgId}
               expanded={expanded.has(item.id)}
               onToggle={() => toggleExpanded(item.id)}
@@ -174,14 +175,14 @@ export function AgentsOverviewTable({ items, period, orgId }: AgentsOverviewTabl
 function AgentRow({
   item,
   first,
-  period,
+  dates,
   orgId,
   expanded,
   onToggle,
 }: {
   item: AgentOverviewItem;
   first: boolean;
-  period: OverviewPeriod;
+  dates: UsageDates;
   orgId: string;
   expanded: boolean;
   onToggle: () => void;
@@ -263,7 +264,7 @@ function AgentRow({
       {expanded && (
         <tr id={detailsId} style={{ borderTop: "1px solid var(--line)", background: "var(--bg-soft)" }}>
           <td colSpan={COLUMN_COUNT}>
-            <AgentOverviewDetails item={item} health={health} period={period} agentHref={agentHref} />
+            <AgentOverviewDetails item={item} health={health} dates={dates} agentHref={agentHref} />
           </td>
         </tr>
       )}

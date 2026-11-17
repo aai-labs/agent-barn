@@ -1,38 +1,24 @@
 "use client";
 
-import { parseAsStringEnum, useQueryState } from "nuqs";
 import { TriangleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChartCard } from "@/features/costs/components/cost-charts-panel";
 import { formatPercent } from "@/features/costs/format";
 import { useAgentRuntimeDiagnostics } from "@/features/agents/hooks/use-agent-runtime-diagnostics";
 import type { Agent } from "@/features/agents/schemas";
 
-import { formatBytes, formatCores } from "../format";
+import { formatBytes, formatCores, formatUsageDates } from "../format";
 import { useAgentResourceUsage } from "../hooks/use-agent-resource-usage";
-import type { AgentResourceUsage, ResourceUsageRange } from "../schemas";
-import {
-  DEFAULT_USAGE_RANGE,
-  meterTone,
-  RESOURCE_USAGE_RANGES,
-  THROTTLING_WARN_RATIO,
-  usageRatio,
-} from "../utils";
+import { useUsageDates } from "../hooks/use-usage-dates";
+import type { AgentResourceUsage } from "../schemas";
+import { meterTone, THROTTLING_WARN_RATIO, usageRatio } from "../utils";
 import { CpuChart, MemoryChart, ThrottlingChart } from "./resource-usage-charts";
 import { ResourceUsageNotice } from "./resource-usage-notice";
+import { UsageDatePicker } from "./usage-date-picker";
 import { UsageStatCard } from "./usage-stat-card";
 
-const RANGE_VALUES = RESOURCE_USAGE_RANGES.map((range) => range.value);
 const STAT_GRID_STYLE = { gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" };
 // min(..., 100%) keeps a column from being wider than the screen it is on.
 const CHART_GRID_STYLE = { gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))" };
@@ -50,18 +36,9 @@ interface AgentResourceUsageTabProps {
  * the container is doing.
  */
 export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUsageTabProps) {
-  const [range, setRange] = useQueryState(
-    "range",
-    parseAsStringEnum<ResourceUsageRange>(RANGE_VALUES)
-      .withDefault(DEFAULT_USAGE_RANGE)
-      .withOptions({ scroll: false, history: "replace" }),
-  );
-  const { usage, isLoadingUsage, isFetching, error, refetch } = useAgentResourceUsage(
-    agent.id,
-    range,
-  );
-  const rangeLabel =
-    RESOURCE_USAGE_RANGES.find((option) => option.value === range)?.label.toLowerCase() ?? range;
+  const [dates, pickDates] = useUsageDates();
+  const { usage, isLoadingUsage, isFetching, error, refetch } = useAgentResourceUsage(agent.id, dates);
+  const rangeLabel = formatUsageDates(dates, "last 24 hours");
   // A stopped Agent has no container, so there is nothing for diagnostics to say.
   const hasContainer = agent.status === "RUNNING" || agent.status === "ERROR";
 
@@ -76,25 +53,7 @@ export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUs
             CPU and memory of this agent&apos;s container, against the limits it runs with.
           </p>
         </div>
-        <Select value={range} onValueChange={(value) => void setRange(value as ResourceUsageRange)}>
-          <SelectTrigger
-            className="af-input !h-auto"
-            style={{ width: "12rem" }}
-            aria-label="Time range"
-            data-testid="resource-usage-range"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {RESOURCE_USAGE_RANGES.map(({ value, label }) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        <UsageDatePicker dates={dates} onChange={pickDates} placeholder="Last 24 hours" />
       </div>
 
       {isLoadingUsage && <UsageSkeleton />}
@@ -144,7 +103,6 @@ export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUs
                 >
                   <MemoryChart
                     series={usage.series}
-                    range={usage.range}
                     limitBytes={usage.memoryLimitBytes}
                     requestBytes={usage.memoryRequestBytes}
                   />
@@ -160,7 +118,6 @@ export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUs
                 >
                   <CpuChart
                     series={usage.series}
-                    range={usage.range}
                     limitCores={usage.cpuLimitCores}
                     requestCores={usage.cpuRequestCores}
                   />
@@ -170,7 +127,7 @@ export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUs
                   subtitle="Share of the time the agent was held back at its CPU limit."
                   testId="resource-usage-throttling-chart"
                 >
-                  <ThrottlingChart series={usage.series} range={usage.range} />
+                  <ThrottlingChart series={usage.series} />
                 </ChartCard>
               </div>
             </>

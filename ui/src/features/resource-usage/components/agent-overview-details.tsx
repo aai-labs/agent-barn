@@ -11,13 +11,13 @@ import { formatCallSpend, formatSpend } from "@/features/costs/format";
 
 import { useAgentResourceUsage } from "../hooks/use-agent-resource-usage";
 import type { AgentOverviewItem } from "../schemas";
-import type { OverviewPeriod } from "../utils";
+import type { UsageDates } from "../utils";
 import { Fact, Muted, PANEL_GRID_STYLE, Panel, PanelSkeleton, StatusFacts, UsageFacts } from "./agent-detail-panels";
 
 interface AgentOverviewDetailsProps {
   item: AgentOverviewItem;
   health: AgentHealth | null;
-  period: OverviewPeriod;
+  dates: UsageDates;
   /** `/dashboard/<org>/agents/<id>`; the full tabs hang off it as `?tab=`. */
   agentHref: string;
 }
@@ -29,7 +29,7 @@ interface AgentOverviewDetailsProps {
  * ones behind the links. They load only once a row is opened, and only for the panels the
  * caller may see.
  */
-export function AgentOverviewDetails({ item, health, period, agentHref }: AgentOverviewDetailsProps) {
+export function AgentOverviewDetails({ item, health, dates, agentHref }: AgentOverviewDetailsProps) {
   return (
     <div className="grid gap-4 p-4" style={PANEL_GRID_STYLE} data-testid="agent-overview-details">
       <Panel title="Status" href={agentHref} linkLabel="Open agent" testId="agent-overview-status">
@@ -42,7 +42,7 @@ export function AgentOverviewDetails({ item, health, period, agentHref }: AgentO
         testId="agent-overview-cost"
       >
         {canAgent(item, "cost.read") ? (
-          <CostPanel item={item} period={period} />
+          <CostPanel item={item} dates={dates} />
         ) : (
           <Muted>You don&apos;t have access to this agent&apos;s cost.</Muted>
         )}
@@ -53,7 +53,7 @@ export function AgentOverviewDetails({ item, health, period, agentHref }: AgentO
         linkLabel="See resource usage"
         testId="agent-overview-usage"
       >
-        <UsagePanel item={item} />
+        <UsagePanel item={item} dates={dates} />
       </Panel>
     </div>
   );
@@ -82,9 +82,12 @@ function StatusPanel({ item, health }: { item: AgentOverviewItem; health: AgentH
   );
 }
 
-function CostPanel({ item, period }: { item: AgentOverviewItem; period: OverviewPeriod }) {
-  // The same period the row was totalled over, so the figure here is the row's figure.
-  const filters = useMemo(() => ({ sort: "newest_first" as const, period }), [period]);
+function CostPanel({ item, dates }: { item: AgentOverviewItem; dates: UsageDates }) {
+  // The same days the row was totalled over, so the figure here is the row's figure.
+  const filters = useMemo(
+    () => ({ sort: "newest_first" as const, fromDate: dates.from, toDate: dates.to }),
+    [dates.from, dates.to],
+  );
   const { agentCost, isLoadingAgentCost, error } = useAgentCost(item.id, filters);
 
   if (isLoadingAgentCost) return <PanelSkeleton />;
@@ -104,12 +107,16 @@ function CostPanel({ item, period }: { item: AgentOverviewItem; period: Overview
   );
 }
 
-function UsagePanel({ item }: { item: AgentOverviewItem }) {
+function UsagePanel({ item, dates }: { item: AgentOverviewItem; dates: UsageDates }) {
   const canRead = canAgent(item, "activity.read");
   const stopped = item.status === "STOPPED";
   // Only asked for what can be answered: a stopped Agent has no container, and a reader
   // without activity.read would be refused.
-  const { usage, isLoadingUsage, error } = useAgentResourceUsage(item.id, "24h", canRead && !stopped);
+  const { usage, isLoadingUsage, error } = useAgentResourceUsage(
+    item.id,
+    dates,
+    canRead && !stopped,
+  );
 
   return <UsageFacts canRead={canRead} stopped={stopped} isLoading={isLoadingUsage} failed={!!error} usage={usage} />;
 }

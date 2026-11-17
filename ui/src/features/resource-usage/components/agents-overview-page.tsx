@@ -2,27 +2,19 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { parseAsStringEnum, useQueryState } from "nuqs";
+import { useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatWindowLabel } from "@/features/costs/format";
 
 import { useAgentsOverview } from "../hooks/use-agents-overview";
-import { DEFAULT_OVERVIEW_PERIOD, OVERVIEW_PERIODS, type OverviewPeriod } from "../utils";
+import { useUsageDates } from "../hooks/use-usage-dates";
+import { lastUsageDays } from "../utils";
 import { AgentsOverviewTable } from "./agents-overview-table";
 import { ResourceUsageNotice } from "./resource-usage-notice";
-
-const PERIOD_VALUES: OverviewPeriod[] = OVERVIEW_PERIODS.map((period) => period.value);
+import { UsageDatePicker } from "./usage-date-picker";
 
 /**
  * Every Agent the viewer can read, in one table: status, what it cost, and what it is
@@ -34,13 +26,13 @@ const PERIOD_VALUES: OverviewPeriod[] = OVERVIEW_PERIODS.map((period) => period.
 export function AgentsOverviewPage() {
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : "";
-  const [period, setPeriod] = useQueryState(
-    "period",
-    parseAsStringEnum<OverviewPeriod>(PERIOD_VALUES)
-      .withDefault(DEFAULT_OVERVIEW_PERIOD)
-      .withOptions({ scroll: false, history: "replace" }),
+  const [dates, pickDates] = useUsageDates();
+  // Spend could go further back, but usage cannot, and one window keeps the two together.
+  const overviewDates = useMemo(
+    () => (dates.from ? { from: dates.from, to: dates.to } : lastUsageDays()),
+    [dates.from, dates.to],
   );
-  const { overview, isLoadingOverview, error, refetch } = useAgentsOverview(period);
+  const { overview, isLoadingOverview, error, refetch } = useAgentsOverview(overviewDates);
 
   return (
     <div data-testid="agents-overview-page">
@@ -57,25 +49,7 @@ export function AgentsOverviewPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={period} onValueChange={(value) => void setPeriod(value as OverviewPeriod)}>
-            <SelectTrigger
-              className="af-input !h-auto"
-              style={{ width: "10.5rem" }}
-              aria-label="Spend period"
-              data-testid="agents-overview-period"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {OVERVIEW_PERIODS.map(({ value, label }) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <UsageDatePicker dates={dates} onChange={pickDates} placeholder="Last 15 days" />
           <button className="af-btn flex-shrink-0" onClick={() => void refetch()}>
             <RefreshCw size={14} /> Refresh
           </button>
@@ -129,7 +103,7 @@ export function AgentsOverviewPage() {
               </div>
             ) : (
               <>
-                <AgentsOverviewTable items={overview.items} period={period} orgId={orgId} />
+                <AgentsOverviewTable items={overview.items} dates={overviewDates} orgId={orgId} />
                 <p className="m-0 mt-3 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
                   Spend covers the{" "}
                   {formatWindowLabel(overview.period, overview.fromDate, overview.toDate)}. CPU and

@@ -8,7 +8,7 @@ import { formatPercent } from "@/features/costs/format";
 
 import { formatBytes, formatCores } from "../format";
 import type { PlatformAgentUsage } from "../schemas";
-import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
+import { THROTTLING_WARN_RATIO, usageRatio, type UsageDates } from "../utils";
 import { LimitLabel } from "./limit-label";
 import { PlatformAgentDetails } from "./platform-agent-details";
 import { UsageMeter } from "./usage-meter";
@@ -40,10 +40,13 @@ function amount(agent: PlatformAgentUsage, key: SortKey): number {
 export function PlatformAgentsUsageTable({
   agents,
   needUpdate,
+  dates,
 }: {
   agents: PlatformAgentUsage[];
   /** Agents that cannot report until they are updated, for the empty state to say so. */
   needUpdate: number;
+  /** The page's days, which an opened row's peak, throttling and chart cover. */
+  dates: UsageDates;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("memory");
   const [showAll, setShowAll] = useState(false);
@@ -127,6 +130,7 @@ export function PlatformAgentsUsageTable({
             <AgentRow
               key={agent.agentId}
               agent={agent}
+              dates={dates}
               expanded={expanded.has(agent.agentId)}
               onToggle={() => toggleExpanded(agent.agentId)}
             />
@@ -151,10 +155,12 @@ export function PlatformAgentsUsageTable({
 
 function AgentRow({
   agent,
+  dates,
   expanded,
   onToggle,
 }: {
   agent: PlatformAgentUsage;
+  dates: UsageDates;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -289,7 +295,7 @@ function AgentRow({
           <td colSpan={COLUMN_COUNT}>
             {/* Held at the left edge while the table scrolls, so it is read without scrolling. */}
             <div className="sticky left-0 w-[100cqw]">
-              <PlatformAgentDetails agentId={agent.agentId} />
+              <PlatformAgentDetails agentId={agent.agentId} dates={dates} />
             </div>
           </td>
         </tr>
