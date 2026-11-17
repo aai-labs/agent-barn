@@ -75,6 +75,10 @@ def override_read(override: AgentAnomalyOverride | None) -> AgentAnomalyOverride
 STORAGE_LAG = timedelta(minutes=2)
 WINDOW = timedelta(hours=1)
 BASELINE = timedelta(days=BASELINE_DAYS)
+# A use stored up to this long after the check had read through still counts as new.
+# Anything older (a backfill, a replay) is learned instead, since it was not new when
+# it happened, or nobody saw it then.
+LATE_USE = timedelta(hours=1)
 # Every argument key `destination_hosts` reads, on either runtime.
 DESTINATION_ARGUMENT_KEYS = ("url", "urls", "targetUrl", "action", "command")
 
@@ -271,23 +275,28 @@ class AnomalyCheckService:
         actions = self.business_value_service.business_actions_stored_between(
             agent_id, after=actions_after, until=until, occurred_since=occurred_since
         )
-        observations: list[tuple[SeenKind, str, datetime]] = []
+        recent: list[tuple[SeenKind, str, datetime]] = []
+        old: list[tuple[SeenKind, str, datetime]] = []
+
+        def observe(kind: SeenKind, subject: str, at: datetime, read_after: datetime | None) -> None:
+            is_recent = read_after is not None and at >= read_after - LATE_USE
+            (recent if is_recent else old).append((kind, subject, at))
+
         for call in calls:
-            observations.append((SeenKind.TOOL, call.tool_name, call.occurred_at))
-            observations.extend(
-                (SeenKind.DESTINATION, host, call.occurred_at)
-                for host in sorted(destination_hosts(call.tool_name, call.arguments))
-            )
+            observe(SeenKind.TOOL, call.tool_name, call.occurred_at, tool_calls_after)
+            for host in sorted(destination_hosts(call.tool_name, call.arguments)):
+                observe(SeenKind.DESTINATION, host, call.occurred_at, tool_calls_after)
         for action in actions:
-            observations.append((SeenKind.INTEGRATION, action.integration, action.occurred_at))
-            observations.append(
-                (SeenKind.INTEGRATION_ACTION, f"{action.integration} {action.verb}", action.occurred_at)
+            observe(SeenKind.INTEGRATION, action.integration, action.occurred_at, actions_after)
+            observe(
+                SeenKind.INTEGRATION_ACTION, f"{action.integration} {action.verb}", action.occurred_at, actions_after
             )
-        uses, counts = _summarise(observations)
+        recent_uses, counts = _summarise(recent)
+        old_uses, _ = _summarise(old)
 
         if not learning and enough:
-            self._flag_first_uses(organization_id, agent_id, uses, counts)
-        self.repository.mark_seen(organization_id, agent_id, uses)
+            self._flag_first_uses(organization_id, agent_id, recent_uses, counts, also_seen=old_uses)
+        self.repository.mark_seen(organization_id, agent_id, [*recent_uses, *old_uses])
         self.repository.save_state(
             organization_id,
             agent_id,
@@ -296,17 +305,29 @@ class AnomalyCheckService:
         )
 
     def _flag_first_uses(
-        self, organization_id: UUID, agent_id: UUID, uses: list[SeenUse], counts: dict[tuple[SeenKind, str], int]
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        uses: list[SeenUse],
+        counts: dict[tuple[SeenKind, str], int],
+        *,
+        also_seen: list[SeenUse],
     ) -> None:
+        """Record `uses` not seen in the baseline window before them, counting the
+        ledger and `also_seen` (older uses read in the same check, not yet recorded)."""
         by_kind: dict[SeenKind, list[SeenUse]] = defaultdict(list)
         for use in uses:
             by_kind[use.kind].append(use)
+        older: dict[tuple[SeenKind, str], datetime] = {(use.kind, use.subject): use.last_at for use in also_seen}
         new_integrations: set[str] = set()
         for kind in (SeenKind.TOOL, SeenKind.DESTINATION, SeenKind.INTEGRATION, SeenKind.INTEGRATION_ACTION):
             kind_uses = by_kind.get(kind, [])
             last_seen = self.repository.last_seen(agent_id, kind, [use.subject for use in kind_uses])
             for use in kind_uses:
-                seen_at = last_seen.get(use.subject)
+                seen_at = max(
+                    (at for at in (last_seen.get(use.subject), older.get((kind, use.subject))) if at is not None),
+                    default=None,
+                )
                 if seen_at is not None and seen_at >= use.first_at - BASELINE:
                     continue
                 if kind is SeenKind.INTEGRATION:
