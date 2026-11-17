@@ -9,7 +9,10 @@ from api.infrastructure.public_http import NonPublicDestination, pin_to_public_a
 TIMEOUT_SECONDS = 10
 UNREACHABLE_MESSAGE = "The provider could not be reached to check the key"
 BASE_URL_NOT_PUBLIC_MESSAGE = "The base URL must be a public HTTPS address"
+BASE_URL_NOT_AN_API_MESSAGE = "The base URL did not answer like a model API"
 REFUSED_STATUSES = frozenset({httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
+JSON_MEDIA_TYPE = "application/json"
+JSON_MEDIA_TYPE_SUFFIX = "+json"
 
 
 @dataclass(frozen=True)
@@ -48,13 +51,25 @@ class BaseUrlNotPublic(LlmProviderKeyCheckError):
         super().__init__(BASE_URL_NOT_PUBLIC_MESSAGE)
 
 
+class BaseUrlNotAnApi(LlmProviderKeyCheckError):
+    def __init__(self) -> None:
+        super().__init__(BASE_URL_NOT_AN_API_MESSAGE)
+
+
+def _is_json(content_type: str | None) -> bool:
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    return media_type == JSON_MEDIA_TYPE or media_type.endswith(JSON_MEDIA_TYPE_SUFFIX)
+
+
 @singleton
 class LlmProviderKeyChecker:
     def check(self, provider_type: ProviderType, api_key: str, base_url: str | None = None) -> bool:
         """Whether the provider accepts the key.
 
         Raises ``LlmProviderUnreachable`` when the provider gives no answer that settles it,
-        and ``BaseUrlNotPublic`` when an Azure or Custom base URL is not a public HTTPS address.
+        ``BaseUrlNotPublic`` when an Azure or Custom base URL is not a public HTTPS address, and
+        ``BaseUrlNotAnApi`` when it answers with a redirect, a 404, or a success that is not JSON.
+        Only the status and headers are read, never the body.
         """
         endpoint = _ENDPOINTS.get(provider_type)
         if endpoint is None:
@@ -78,9 +93,16 @@ class LlmProviderKeyChecker:
                 client.stream("GET", pinned.url, headers=headers, extensions=pinned.extensions) as response,
             ):
                 status_code = response.status_code
+                content_type = response.headers.get("content-type")
         except httpx.HTTPError:
             raise LlmProviderUnreachable from None
 
+        if takes_base_url and (
+            status_code == httpx.codes.NOT_FOUND
+            or httpx.codes.is_redirect(status_code)
+            or (status_code == httpx.codes.OK and not _is_json(content_type))
+        ):
+            raise BaseUrlNotAnApi
         if status_code == httpx.codes.OK:
             return True
         if status_code in REFUSED_STATUSES | _EXTRA_REFUSED_STATUSES.get(provider_type, frozenset()):

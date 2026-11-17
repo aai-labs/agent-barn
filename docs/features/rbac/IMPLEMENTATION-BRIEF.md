@@ -42,7 +42,7 @@ same rule; see [Playbooks](../playbooks.md#model-and-billing).
 Organization roles confer no authority on them. `GET /platform/settings/llm-providers`
 lists the connections that are not deleted, each with its provider, base URL and key
 status, never the key or its ciphertext. `POST /platform/settings/llm-providers` adds a
-known provider's connection after the provider accepts its key. `GET .../openrouter` reports whether a
+known provider's, Azure or Custom connection after the provider accepts its key. `GET .../openrouter` reports whether a
 key is stored, its last four characters, who last changed it and when, and
 whether `OPENROUTER_API_KEY` is still configured. It never returns the key or its
 ciphertext. `PUT .../openrouter` replaces the key. Both writes refuse a read-only Personal

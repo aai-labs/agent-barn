@@ -10,6 +10,7 @@ from hamcrest import assert_that, equal_to, none
 
 from api.domains.llm_providers.models import ProviderType
 from api.infrastructure.llm_provider_keys.checker import (
+    BaseUrlNotAnApi,
     BaseUrlNotPublic,
     LlmProviderKeyChecker,
     LlmProviderUnreachable,
@@ -23,6 +24,7 @@ RESOLVE = "api.infrastructure.public_http.socket.getaddrinfo"
 HTTPX_CLIENT = "api.infrastructure.llm_provider_keys.checker.httpx.Client"
 BEARER = {"Authorization": f"Bearer {CANDIDATE_KEY}"}
 REAL_HTTPX_CLIENT = httpx.Client
+JSON = {"Content-Type": "application/json"}
 
 PROVIDER_REQUESTS = [
     (ProviderType.ANTHROPIC, None, "https://api.anthropic.com/v1/models", {"x-api-key": CANDIDATE_KEY}),
@@ -49,7 +51,7 @@ PROVIDERS = [(provider_type, base_url) for provider_type, base_url, _, _ in PROV
 
 
 class _Provider:
-    def __init__(self, status_code=200, headers=None, failure=None, stream=None):
+    def __init__(self, status_code=200, headers=JSON, failure=None, stream=None):
         self.status_code = status_code
         self.headers = headers
         self.failure = failure
@@ -159,13 +161,44 @@ def test_no_answer_is_unreachable_without_the_key(failure):
     assert_that(raised.value.__suppress_context__, equal_to(True))
 
 
-def test_a_redirect_is_not_followed():
+@pytest.mark.parametrize(
+    ("provider_type", "base_url", "error"),
+    [
+        (ProviderType.OPENAI, None, LlmProviderUnreachable),
+        (ProviderType.AZURE, AZURE_BASE_URL, BaseUrlNotAnApi),
+        (ProviderType.CUSTOM, CUSTOM_BASE_URL, BaseUrlNotAnApi),
+    ],
+)
+def test_a_redirect_is_not_followed(provider_type, base_url, error):
     provider = _Provider(302, headers={"Location": "https://elsewhere.example.com/models"})
 
-    with _answering(provider), pytest.raises(LlmProviderUnreachable):
-        _check(ProviderType.CUSTOM, CUSTOM_BASE_URL)
+    with _answering(provider), pytest.raises(error):
+        _check(provider_type, base_url)
 
     assert_that(len(provider.requests), equal_to(1))
+
+
+@pytest.mark.parametrize("provider_type", [ProviderType.AZURE, ProviderType.CUSTOM])
+@pytest.mark.parametrize(
+    ("status_code", "headers"),
+    [(200, {"Content-Type": "text/html; charset=utf-8"}), (200, {}), (404, JSON)],
+)
+def test_a_base_url_that_does_not_answer_like_an_api_is_refused(provider_type, status_code, headers):
+    with _answering(_Provider(status_code, headers=headers)), pytest.raises(BaseUrlNotAnApi) as raised:
+        _check(provider_type, CUSTOM_BASE_URL)
+
+    assert_that(CANDIDATE_KEY in str(raised.value), equal_to(False))
+
+
+@pytest.mark.parametrize("content_type", ["application/json; charset=utf-8", "application/problem+json"])
+def test_a_json_answer_from_a_base_url_accepts_the_key(content_type):
+    with _answering(_Provider(200, headers={"Content-Type": content_type})):
+        assert_that(_check(ProviderType.CUSTOM, CUSTOM_BASE_URL), equal_to(True))
+
+
+def test_a_known_provider_is_not_judged_by_its_content_type():
+    with _answering(_Provider(200, headers={"Content-Type": "text/html"})):
+        assert_that(_check(ProviderType.OPENAI, None), equal_to(True))
 
 
 def test_the_response_body_is_never_read():

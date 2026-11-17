@@ -11,7 +11,12 @@ from api.domains.events.models import OutboxMessage
 from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, LlmProviderConnection, ProviderType
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
-from api.infrastructure.llm_provider_keys.checker import LlmProviderKeyChecker, LlmProviderUnreachable
+from api.infrastructure.llm_provider_keys.checker import (
+    BaseUrlNotAnApi,
+    BaseUrlNotPublic,
+    LlmProviderKeyChecker,
+    LlmProviderUnreachable,
+)
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -398,6 +403,11 @@ def test_a_deleted_provider_is_revived_with_its_new_key():
         {"provider_type": "anthropic"},
         {"provider_type": "anthropic", "api_key": "   "},
         {"provider_type": "anthropic", "api_key": NEW_KEY, "base_url": AZURE_BASE_URL},
+        {"provider_type": "anthropic", "api_key": NEW_KEY, "slug": "anthropic-2"},
+        {"provider_type": "anthropic", "api_key": NEW_KEY, "name": "Claude"},
+        {"provider_type": "azure", "api_key": NEW_KEY, "name": "Azure", "base_url": AZURE_BASE_URL},
+        {"provider_type": "azure", "api_key": NEW_KEY, "slug": "azure-eu", "base_url": AZURE_BASE_URL},
+        {"provider_type": "custom", "api_key": NEW_KEY, "slug": "lab", "name": "Lab"},
         {"provider_type": "mistral", "api_key": NEW_KEY},
         {"provider_type": "azure", "api_key": NEW_KEY},
         {"provider_type": "custom", "api_key": NEW_KEY},
@@ -410,3 +420,203 @@ def test_a_malformed_request_is_refused_without_echoing_it(body):
         assert_that(response.status_code, equal_to(422))
         assert_that(response.json(), equal_to({"detail": "Invalid LLM provider key request"}))
         context.check.assert_not_called()
+
+
+SLUG_FORMAT = "The slug must be at most 32 lowercase letters, digits and single hyphens."
+SLUG_IS_A_PROVIDER = "The slug can't be a provider's name."
+SLUG_TAKEN = "That slug is in use or was used before. Choose another."
+NAME_FORMAT = "Enter a name of at most 64 characters."
+NOT_PUBLIC = "The base URL must be a public HTTPS address. Nothing was saved."
+URL_EXTRAS = "The base URL can't contain credentials, a query or a fragment. Nothing was saved."
+NOT_AN_API = "The base URL did not answer like a model API. Nothing was saved."
+
+
+def _add_own(
+    context,
+    provider_type: str,
+    slug: str = "azure-eu",
+    name: str = "Azure Europe",
+    base_url: str = AZURE_BASE_URL,
+    key: str = NEW_KEY,
+):
+    return context.client.post(
+        BASE,
+        headers=auth(context),
+        json={"provider_type": provider_type, "slug": slug, "name": name, "base_url": base_url, "api_key": key},
+    )
+
+
+def _assert_refused(context, response, status_code: int, detail: str, slug: str = "azure-eu") -> None:
+    assert_that(response.status_code, equal_to(status_code), response.text)
+    assert_that(response.json(), equal_to({"detail": detail}))
+    assert NEW_KEY not in response.text
+    stored_keys = [
+        decrypt_token(row.api_key_encrypted, TEST_ENCRYPTION_KEY)
+        for row in _rows(context, slug)
+        if row.api_key_encrypted is not None
+    ]
+    assert NEW_KEY not in stored_keys
+    assert_that(_events(context), has_length(0))
+
+
+@pytest.mark.parametrize("provider_type", [ProviderType.AZURE, ProviderType.CUSTOM])
+def test_a_platform_admin_adds_an_azure_or_custom_connection(provider_type):
+    with given(_setup(admin, provider_answers(True))) as context:
+        response = _add_own(
+            context, provider_type.value, slug="eu-models", name="  EU models  ", base_url=f"{AZURE_BASE_URL}//"
+        )
+
+        assert_that(response.status_code, equal_to(201), response.text)
+        assert_that(
+            response.json(),
+            has_entries(
+                slug="eu-models",
+                name="EU models",
+                provider_type=provider_type.value,
+                base_url=AZURE_BASE_URL,
+                has_api_key=True,
+                api_key_last4="g7h8",
+                updated_by=ADMIN_NAME,
+            ),
+        )
+        context.check.assert_called_once_with(provider_type, NEW_KEY, AZURE_BASE_URL)
+        [row] = _rows(context, "eu-models")
+        assert_that(row.base_url, equal_to(AZURE_BASE_URL))
+        assert_that(
+            _events(context)[0].payload,
+            has_entries(slug="eu-models", provider_type=provider_type.value, base_url=AZURE_BASE_URL, revived=False),
+        )
+
+
+def test_several_azure_connections_can_be_added():
+    with given(_setup(admin, provider_answers(True))) as context:
+        first = _add_own(context, "azure", slug="azure-eu", name="Azure Europe")
+        second = _add_own(
+            context, "azure", slug="azure-us", name="Azure US", base_url="https://fabrikam.openai.azure.com"
+        )
+
+        assert_that((first.status_code, second.status_code), equal_to((201, 201)))
+        listed = context.client.get(BASE, headers=auth(context)).json()
+        assert_that([item["slug"] for item in listed], equal_to(["openrouter", "azure-eu", "azure-us"]))
+
+
+@pytest.mark.parametrize(
+    ("slug", "detail"),
+    [
+        ("Azure-EU", SLUG_FORMAT),
+        ("-azure", SLUG_FORMAT),
+        ("azure--eu", SLUG_FORMAT),
+        ("azure/eu", SLUG_FORMAT),
+        ("", SLUG_FORMAT),
+        ("a" * 33, SLUG_FORMAT),
+        ("openai", SLUG_IS_A_PROVIDER),
+        ("openrouter", SLUG_IS_A_PROVIDER),
+        ("azure", SLUG_IS_A_PROVIDER),
+        ("custom", SLUG_IS_A_PROVIDER),
+    ],
+)
+def test_a_slug_that_breaks_the_rules_is_refused_before_the_key_is_checked(slug, detail):
+    with given(_setup(admin, provider_answers(True))) as context:
+        response = _add_own(context, "custom", slug=slug)
+
+        _assert_refused(context, response, 422, detail, slug=slug)
+        context.check.assert_not_called()
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_a_slug_already_used_is_refused_before_the_key_is_checked(deleted):
+    with given(_setup(admin, provider_answers(True))) as context:
+        _connection(
+            context,
+            "azure-eu",
+            "Azure Europe",
+            ProviderType.AZURE,
+            base_url=AZURE_BASE_URL,
+            deleted_at=datetime.now(UTC) if deleted else None,
+        )
+
+        response = _add_own(context, "custom", slug="azure-eu", base_url="https://lab.example.com/v1")
+
+        _assert_refused(context, response, 409, SLUG_TAKEN)
+        context.check.assert_not_called()
+        [row] = _rows(context, "azure-eu")
+        assert_that(row.provider_type, equal_to(ProviderType.AZURE))
+
+
+def test_a_slug_used_while_the_key_was_checked_is_refused():
+    with given(_setup(admin)) as context:
+
+        def check_while_another_admin_adds_the_slug(*_):
+            _connection(
+                context, "azure-eu", "Other", ProviderType.AZURE, base_url=AZURE_BASE_URL, deleted_at=datetime.now(UTC)
+            )
+            return True
+
+        context.injector.get(LlmProviderKeyChecker).check = Mock(side_effect=check_while_another_admin_adds_the_slug)
+
+        response = _add_own(context, "azure")
+
+        _assert_refused(context, response, 409, SLUG_TAKEN)
+        [row] = _rows(context, "azure-eu")
+        assert_that((row.name, row.api_key_encrypted, row.deleted_at is None), equal_to(("Other", None, False)))
+
+
+@pytest.mark.parametrize("name", ["", "   ", "n" * 65])
+def test_a_name_that_breaks_the_rules_is_refused(name):
+    with given(_setup(admin, provider_answers(True))) as context:
+        response = _add_own(context, "azure", name=name)
+
+        _assert_refused(context, response, 422, NAME_FORMAT)
+        context.check.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("base_url", "detail"),
+    [
+        ("http://models.example.com/v1", NOT_PUBLIC),
+        ("ftp://models.example.com/v1", NOT_PUBLIC),
+        ("models.example.com/v1", NOT_PUBLIC),
+        ("https:///v1", NOT_PUBLIC),
+        ("https://models.example.com:99999/v1", NOT_PUBLIC),
+        ("https://models.example.com:0/v1", NOT_PUBLIC),
+        ("https://[2001:db8::1/v1", NOT_PUBLIC),
+        ("https://models.example.com/v 1", NOT_PUBLIC),
+        pytest.param(f"https://models.example.com/{'v' * 2048}", NOT_PUBLIC, id="too-long"),
+        ("https://admin:hunter2@models.example.com/v1", URL_EXTRAS),
+        ("https://models.example.com/v1?api-version=v1", URL_EXTRAS),
+        ("https://models.example.com/v1?", URL_EXTRAS),
+        ("https://models.example.com/v1#models", URL_EXTRAS),
+    ],
+)
+def test_a_base_url_that_breaks_the_rules_is_refused_before_the_key_is_checked(base_url, detail):
+    with given(_setup(admin, provider_answers(True))) as context:
+        response = _add_own(context, "custom", base_url=base_url)
+
+        _assert_refused(context, response, 422, detail)
+        assert "hunter2" not in response.text
+        context.check.assert_not_called()
+
+
+def test_a_base_url_at_a_private_address_is_refused():
+    with given(_setup(admin, provider_answers(BaseUrlNotPublic()))) as context:
+        response = _add_own(context, "custom", base_url="https://internal.example.com/v1")
+
+        _assert_refused(context, response, 422, NOT_PUBLIC)
+
+
+def test_a_custom_server_that_is_not_an_api_is_refused():
+    with given(_setup(admin, provider_answers(BaseUrlNotAnApi()))) as context:
+        response = _add_own(context, "custom", base_url="https://www.example.com")
+
+        _assert_refused(context, response, 422, NOT_AN_API)
+
+
+@pytest.mark.parametrize(("answer", "status_code"), [(False, 422), (LlmProviderUnreachable(), 503)])
+def test_an_azure_key_that_is_refused_or_unchecked_stores_nothing(answer, status_code):
+    with given(_setup(admin, provider_answers(answer))) as context:
+        response = _add_own(context, "azure")
+
+        assert_that(response.status_code, equal_to(status_code))
+        assert NEW_KEY not in response.text
+        assert_that(_rows(context, "azure-eu"), equal_to([]))
+        assert_that(_events(context), has_length(0))

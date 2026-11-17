@@ -1,4 +1,7 @@
+import re
 from dataclasses import dataclass
+from functools import partial
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from injector import inject, singleton
@@ -7,12 +10,17 @@ from api.core.config import Config
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher
 from api.domains.llm_providers.models import (
+    BASE_URL_PROVIDER_TYPES,
     KNOWN_PROVIDER_NAMES,
+    MAX_BASE_URL_LENGTH,
+    MAX_NAME_LENGTH,
+    MAX_SLUG_LENGTH,
     OPENROUTER_ROUTE_API_BASE,
     OPENROUTER_ROUTE_ID,
     OPENROUTER_ROUTE_MODEL,
     OPENROUTER_ROUTE_ORDER,
     OPENROUTER_SLUG,
+    SLUG_PATTERN,
     LlmProviderConnection,
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
@@ -24,8 +32,46 @@ from api.domains.llm_providers.repository import ConnectionAlreadyExists, Connec
 from api.domains.platform_admin.service import PlatformAdminService
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
-from api.infrastructure.llm_provider_keys.checker import LlmProviderKeyChecker, LlmProviderUnreachable
+from api.infrastructure.llm_provider_keys.checker import (
+    BaseUrlNotAnApi,
+    BaseUrlNotPublic,
+    LlmProviderKeyChecker,
+    LlmProviderUnreachable,
+)
 from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterError
+
+SLUG_FORMAT = f"The slug must be at most {MAX_SLUG_LENGTH} lowercase letters, digits and single hyphens."
+SLUG_IS_A_PROVIDER = "The slug can't be a provider's name."
+SLUG_TAKEN = "That slug is in use or was used before. Choose another."
+NAME_FORMAT = f"Enter a name of at most {MAX_NAME_LENGTH} characters."
+BASE_URL_NOT_PUBLIC = "The base URL must be a public HTTPS address. Nothing was saved."
+BASE_URL_EXTRAS = "The base URL can't contain credentials, a query or a fragment. Nothing was saved."
+BASE_URL_NOT_AN_API = "The base URL did not answer like a model API. Nothing was saved."
+PROVIDER_TYPE_NAMES = frozenset(provider_type.value for provider_type in ProviderType)
+
+
+def _own_connection_fields(data: LlmProviderConnectionCreate) -> tuple[str, str, str]:
+    """The slug, trimmed name and base URL of an Azure or Custom connection, or a 422 naming the
+    rule one of them breaks. The messages are fixed, so a refusal never echoes what was sent."""
+    slug, name, base_url = data.slug or "", (data.name or "").strip(), (data.base_url or "").strip().rstrip("/")
+    if len(slug) > MAX_SLUG_LENGTH or re.fullmatch(SLUG_PATTERN, slug) is None:
+        raise HTTPException(422, SLUG_FORMAT)
+    if slug in PROVIDER_TYPE_NAMES:
+        raise HTTPException(422, SLUG_IS_A_PROVIDER)
+    if not name or len(name) > MAX_NAME_LENGTH:
+        raise HTTPException(422, NAME_FORMAT)
+    if len(base_url) > MAX_BASE_URL_LENGTH or any(char.isspace() or not char.isprintable() for char in base_url):
+        raise HTTPException(422, BASE_URL_NOT_PUBLIC)
+    try:
+        parts = urlsplit(base_url)
+        https_with_host = parts.scheme == "https" and bool(parts.hostname) and parts.port != 0
+    except ValueError:
+        raise HTTPException(422, BASE_URL_NOT_PUBLIC) from None
+    if not https_with_host:
+        raise HTTPException(422, BASE_URL_NOT_PUBLIC)
+    if parts.username is not None or parts.password is not None or "?" in base_url or "#" in base_url:
+        raise HTTPException(422, BASE_URL_EXTRAS)
+    return slug, name, base_url
 
 
 @inject
@@ -49,15 +95,27 @@ class PlatformLlmProviderService:
     ) -> LlmProviderConnectionRead:
         self.authority.require_platform_admin(context.user)
         provider_type = data.provider_type
-        slug = provider_type.value
-        name = KNOWN_PROVIDER_NAMES[provider_type]
-        if provider_type == ProviderType.OPENROUTER or self.repository.find_active(slug) is not None:
-            raise HTTPException(409, f"{name} is already connected.")
         api_key = data.api_key.get_secret_value()
+        if provider_type in BASE_URL_PROVIDER_TYPES:
+            slug, name, base_url = _own_connection_fields(data)
+            already_used = SLUG_TAKEN
+            if self.repository.slug_used(slug):
+                raise HTTPException(409, already_used)
+            check = partial(self.key_checker.check, provider_type, api_key, base_url)
+        else:
+            slug, name, base_url = provider_type.value, KNOWN_PROVIDER_NAMES[provider_type], None
+            already_used = f"{name} is already connected."
+            if provider_type == ProviderType.OPENROUTER or self.repository.find_active(slug) is not None:
+                raise HTTPException(409, already_used)
+            check = partial(self.key_checker.check, provider_type, api_key)
         try:
-            accepted = self.key_checker.check(provider_type, api_key)
+            accepted = check()
         except LlmProviderUnreachable:
             raise HTTPException(503, f"{name} could not be reached to check the key. Nothing was saved.") from None
+        except BaseUrlNotPublic:
+            raise HTTPException(422, BASE_URL_NOT_PUBLIC) from None
+        except BaseUrlNotAnApi:
+            raise HTTPException(422, BASE_URL_NOT_AN_API) from None
         if not accepted:
             raise HTTPException(422, f"{name} did not accept this key. Nothing was saved.")
         try:
@@ -65,13 +123,14 @@ class PlatformLlmProviderService:
                 slug,
                 name,
                 provider_type,
+                base_url,
                 encrypt_token(api_key, self.config.agent_token_encryption_key),
                 api_key[-4:],
                 context.user.id,
                 context.user.full_name or context.user.email,
             )
         except ConnectionAlreadyExists:
-            raise HTTPException(409, f"{name} is already connected.") from None
+            raise HTTPException(409, already_used) from None
         self.dispatcher.enqueue_immediate(ids)
         found = self.repository.find_active(slug)
         if found is None:

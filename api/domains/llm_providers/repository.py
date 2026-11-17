@@ -10,7 +10,12 @@ from sqlmodel import Session, col, select
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_LLM_PROVIDER_CHANGED, PLATFORM_LLM_PROVIDER_CREATED
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.llm_providers.models import OPENROUTER_SLUG, LlmProviderConnection, ProviderType
+from api.domains.llm_providers.models import (
+    BASE_URL_PROVIDER_TYPES,
+    OPENROUTER_SLUG,
+    LlmProviderConnection,
+    ProviderType,
+)
 from api.domains.users.models import User
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -59,6 +64,14 @@ class LlmProviderRepository:
             ).all()
         return [(connection, full_name or email) for connection, full_name, email in rows]
 
+    def slug_used(self, slug: str) -> bool:
+        """Whether any connection, deleted or not, has this slug."""
+        with Session(self.delegate.engine) as session:
+            return (
+                session.exec(select(LlmProviderConnection.id).where(LlmProviderConnection.slug == slug)).first()
+                is not None
+            )
+
     def replace_key(
         self,
         slug: str,
@@ -105,24 +118,28 @@ class LlmProviderRepository:
         slug: str,
         name: str,
         provider_type: ProviderType,
+        base_url: str | None,
         api_key_encrypted: str,
         api_key_last4: str,
         actor_id: UUID,
         actor_display: str,
     ) -> list[UUID]:
-        """Store a new connection with its key, or bring a deleted one with this slug back.
+        """Store a new connection with its key, or bring a deleted known provider's connection back.
 
-        Raises ConnectionAlreadyExists when a connection with this slug is not deleted.
+        Raises ConnectionAlreadyExists when a connection with this slug is not deleted, or when an
+        Azure or Custom slug was used before, deleted or not.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
             existing = session.exec(
                 select(LlmProviderConnection).where(LlmProviderConnection.slug == slug)
             ).one_or_none()
-            if existing is not None and existing.deleted_at is None:
+            if existing is not None and (existing.deleted_at is None or provider_type in BASE_URL_PROVIDER_TYPES):
                 raise ConnectionAlreadyExists(slug)
             now = datetime.now(UTC)
-            connection = existing or LlmProviderConnection(slug=slug, name=name, provider_type=provider_type)
+            connection = existing or LlmProviderConnection(
+                slug=slug, name=name, provider_type=provider_type, base_url=base_url
+            )
             connection.name = name
             connection.api_key_encrypted = api_key_encrypted
             connection.api_key_last4 = api_key_last4

@@ -8,11 +8,17 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
-- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita through the API; each key is checked with its provider first and the addition is audited. Azure and Custom connections can't be added yet. There is no UI for any of this yet.
-- Next: the slice 1 demo on local k3d; slice 2, PR 6, adding Azure and Custom connections.
+- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita, or any number of Azure and Custom connections, through the API; each key is checked with its provider first and the addition is audited. Only OpenRouter's key can be replaced, and no connection can be deleted yet. There is no UI for any of this yet.
+- Next: the slice 1 demo on local k3d; slice 2, PR 7, replacing any connection's key.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 6
+
+- Delivered: `POST /api/v1/platform/settings/llm-providers` adds an Azure or Custom connection with `{provider_type, slug, name, base_url, api_key}`. The slug follows the slug pattern, is at most 32 characters and can't be any provider type's name. The name is trimmed, 1 to 64 characters. The base URL is a public HTTPS address of at most 2048 characters with no credentials, query or fragment, stored without a trailing `/`. Each broken rule is `422` with a fixed message that names the rule and never echoes the request. A slug used before, deleted connections included, is `409` before the key is checked and again under the lock; an Azure or Custom connection is never brought back. The key is checked at the base URL, then stored with `platform.llm_provider.created` carrying the base URL, and the API answers `201`. A known provider with a slug, name or base URL, or Azure or Custom without all three, gets the fixed `422`.
+- Changed: `LlmProviderKeyChecker` raises `BaseUrlNotAnApi` when an Azure or Custom base URL answers with a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json`. Before, a redirect or `404` raised `LlmProviderUnreachable`, and any `200` accepted the key. The service turns it, and `BaseUrlNotPublic`, into `422`. Known providers are checked as before. The checker still reads only the status and headers, never the body. Decided with the maintainer: Azure and Custom take an admin-chosen name, and "not an API" is judged by status and content type. `LlmProviderRepository` gains `slug_used`, and its `add` takes the base URL. [`llm-providers.md`](../llm-providers.md) and the RBAC brief describe the request and its rules.
+- Follow-up: PR 7 replaces any connection's key.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 5
 

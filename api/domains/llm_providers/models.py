@@ -8,11 +8,12 @@ connection has a slug of its own, never a provider type, and a base URL.
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, SecretStr, field_validator
+from pydantic import ConfigDict, SecretStr, field_validator, model_validator
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -131,17 +132,26 @@ class LlmProviderConnectionRead(PydanticBaseModel):
 
 
 class LlmProviderConnectionCreate(PydanticBaseModel):
+    """A known provider takes only its key. Azure and Custom take a slug, name and base URL too,
+    whose rules the service checks so that a refusal can say which one was broken."""
+
     model_config = ConfigDict(extra="forbid")
 
     provider_type: ProviderType
     api_key: SecretStr
+    slug: str | None = None
+    name: str | None = None
+    base_url: str | None = None
 
-    @field_validator("provider_type")
-    @classmethod
-    def _known_provider(cls, value: ProviderType) -> ProviderType:
-        if value in BASE_URL_PROVIDER_TYPES:
-            raise ValueError("Azure and Custom connections need a slug and a base URL.")
-        return value
+    @model_validator(mode="after")
+    def _fields_match_the_provider_type(self) -> Self:
+        own_fields = (self.slug, self.name, self.base_url)
+        if self.provider_type in BASE_URL_PROVIDER_TYPES:
+            if None in own_fields:
+                raise ValueError("Azure and Custom connections need a slug, a name and a base URL.")
+        elif any(field is not None for field in own_fields):
+            raise ValueError("A known provider takes no slug, name or base URL.")
+        return self
 
     @field_validator("api_key")
     @classmethod
