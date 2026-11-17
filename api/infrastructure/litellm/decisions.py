@@ -147,7 +147,8 @@ class LiteLLMDecisionClient:
                 output_tokens=int(usage.get("output_tokens") or 0),
                 cost_usd=response_cost(response.headers.get("x-litellm-response-cost")),
             )
-        except ValueError, KeyError, TypeError, AttributeError:
+        # OverflowError: a number too large for a float, e.g. 10**400 or an infinite token count.
+        except ValueError, KeyError, TypeError, AttributeError, OverflowError:
             raise DecisionError(DecisionFailure.BAD_RESPONSE) from None
 
 

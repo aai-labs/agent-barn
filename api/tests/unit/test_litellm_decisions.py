@@ -164,6 +164,12 @@ def test_the_nearest_level_names_a_fractional_score():
         pytest.param(_answers(unusual={"type": "noul", "noul": True}), id="a boolean probability"),
         pytest.param(_answers(unusual={"type": "noul", "noul": "0.9"}), id="a text probability"),
         pytest.param(_answers(unusual={"type": "noul", "noul": float("nan")}), id="a probability that is not a number"),
+        pytest.param(_answers(unusual={"type": "noul", "noul": 10**400}), id="a probability too large for a float"),
+        pytest.param(
+            _answers(severity={"type": "score", "score": 10**400, "confidence": 0.7, "probabilities": {"2": 1}}),
+            id="a score too large for a float",
+        ),
+        pytest.param({**_answers(), "usage": {"input_tokens": float("inf")}}, id="an infinite token count"),
         pytest.param(
             _answers(cause={"type": "choice", "choice": "weather", "confidence": 0.8, "probabilities": {"volume": 1}}),
             id="a choice outside the offered set",
