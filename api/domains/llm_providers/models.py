@@ -52,6 +52,16 @@ class ProviderType(StrEnum):
 
 
 BASE_URL_PROVIDER_TYPES = (ProviderType.AZURE, ProviderType.CUSTOM)
+KNOWN_PROVIDER_NAMES = {
+    ProviderType.OPENROUTER: OPENROUTER_NAME,
+    ProviderType.ANTHROPIC: "Anthropic",
+    ProviderType.OPENAI: "OpenAI",
+    ProviderType.GEMINI: "Gemini",
+    ProviderType.XAI: "xAI",
+    ProviderType.DEEPSEEK: "DeepSeek",
+    ProviderType.FIREWORKS: "Fireworks",
+    ProviderType.NOVITA: "Novita",
+}
 
 
 def _sql_values(provider_types: tuple[ProviderType, ...]) -> str:
@@ -118,6 +128,28 @@ class LlmProviderConnectionRead(PydanticBaseModel):
     updated_at: datetime | None = None
     updated_by: str | None = None
     env_key_configured: bool
+
+
+class LlmProviderConnectionCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_type: ProviderType
+    api_key: SecretStr
+
+    @field_validator("provider_type")
+    @classmethod
+    def _known_provider(cls, value: ProviderType) -> ProviderType:
+        if value in BASE_URL_PROVIDER_TYPES:
+            raise ValueError("Azure and Custom connections need a slug and a base URL.")
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def _trimmed_and_bounded(cls, value: SecretStr) -> SecretStr:
+        trimmed = value.get_secret_value().strip()
+        if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
+            raise ValueError("Enter a key.")
+        return SecretStr(trimmed)
 
 
 class OpenRouterConnectionRead(PydanticBaseModel):

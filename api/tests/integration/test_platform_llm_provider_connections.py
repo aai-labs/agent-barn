@@ -1,12 +1,17 @@
 from datetime import UTC, datetime
+from unittest.mock import Mock
 from uuid import UUID, uuid7
 
-from hamcrest import assert_that, equal_to, has_entries, is_not, none
-from sqlmodel import Session
+import pytest
+from hamcrest import assert_that, equal_to, has_entries, has_length, is_not, none
+from sqlmodel import Session, col, select
 
 from api.core.config import Config
+from api.domains.events.models import OutboxMessage
 from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, LlmProviderConnection, ProviderType
-from api.infrastructure.crypto import encrypt_token
+from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.llm_provider_keys.checker import LlmProviderKeyChecker, LlmProviderUnreachable
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -22,6 +27,17 @@ AZURE_KEY = "azure-stored-key-e5f6"
 ENV_KEY = "sk-or-v1-environment-key-9z8y"
 ADMIN_NAME = "Platform Person"
 AZURE_BASE_URL = "https://contoso.openai.azure.com"
+NEW_KEY = "sk-new-provider-key-g7h8"
+CREATED_EVENT = "platform.llm_provider.created"
+KNOWN_PROVIDERS = [
+    (ProviderType.ANTHROPIC, "Anthropic"),
+    (ProviderType.OPENAI, "OpenAI"),
+    (ProviderType.GEMINI, "Gemini"),
+    (ProviderType.XAI, "xAI"),
+    (ProviderType.DEEPSEEK, "DeepSeek"),
+    (ProviderType.FIREWORKS, "Fireworks"),
+    (ProviderType.NOVITA, "Novita"),
+]
 
 
 def _setup(*steps):
@@ -211,3 +227,186 @@ def test_the_list_never_carries_a_key_or_its_ciphertext():
         assert_that(response.json()[0], has_entries(has_api_key=True, api_key_last4="a1b2", updated_by=ADMIN_NAME))
         for secret in (OPENROUTER_KEY, openrouter_ciphertext, ANTHROPIC_KEY, anthropic.api_key_encrypted, ENV_KEY):
             assert secret not in response.text
+
+
+def provider_answers(accepted: bool | Exception):
+    def step(context):
+        check = Mock(side_effect=accepted) if isinstance(accepted, Exception) else Mock(return_value=accepted)
+        context.injector.get(LlmProviderKeyChecker).check = check
+        context.check = check
+
+    return step
+
+
+def _rows(context, slug: str) -> list[LlmProviderConnection]:
+    with _session(context) as session:
+        return list(session.exec(select(LlmProviderConnection).where(LlmProviderConnection.slug == slug)).all())
+
+
+def _events(context) -> list[OutboxMessage]:
+    with _session(context) as session:
+        return list(session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name) == CREATED_EVENT)).all())
+
+
+def _add(context, provider_type: str, key: str = NEW_KEY, headers: dict | None = None):
+    return context.client.post(
+        BASE, headers=headers or auth(context), json={"provider_type": provider_type, "api_key": key}
+    )
+
+
+def test_an_organization_owner_cannot_add_a_provider():
+    with given(_setup(provider_answers(True))) as context:
+        response = _add(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+        context.check.assert_not_called()
+        assert_that(_rows(context, "anthropic"), equal_to([]))
+
+
+def test_a_read_only_api_key_cannot_add_a_provider():
+    with given(_setup(admin, provider_answers(True))) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _add(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(403))
+        context.check.assert_not_called()
+        assert_that(_rows(context, "anthropic"), equal_to([]))
+
+
+@pytest.mark.parametrize(("provider_type", "name"), KNOWN_PROVIDERS)
+def test_a_platform_admin_adds_a_known_provider_with_a_key_it_accepts(provider_type, name):
+    with given(_setup(admin, env_key(ENV_KEY), provider_answers(True))) as context:
+        response = _add(context, provider_type.value, key=f"  {NEW_KEY}  ")
+
+        assert_that(response.status_code, equal_to(201), response.text)
+        assert_that(
+            response.json(),
+            has_entries(
+                slug=provider_type.value,
+                name=name,
+                provider_type=provider_type.value,
+                base_url=None,
+                has_api_key=True,
+                api_key_last4="g7h8",
+                updated_by=ADMIN_NAME,
+                env_key_configured=False,
+            ),
+        )
+        assert NEW_KEY not in response.text
+        context.check.assert_called_once_with(provider_type, NEW_KEY)
+        context.injector.get(LiteLLMClient).upsert_model_deployment.assert_not_called()
+        [row] = _rows(context, provider_type.value)
+        assert row.api_key_encrypted is not None and NEW_KEY not in row.api_key_encrypted
+        assert_that(decrypt_token(row.api_key_encrypted, TEST_ENCRYPTION_KEY), equal_to(NEW_KEY))
+        assert_that(row.updated_by, equal_to(context.admin_id))
+        listed = context.client.get(BASE, headers=auth(context)).json()
+        assert_that([item["slug"] for item in listed], equal_to(["openrouter", provider_type.value]))
+
+
+def test_adding_a_provider_is_audited_with_no_part_of_the_key():
+    with given(_setup(admin, provider_answers(True))) as context:
+        _add(context, "anthropic")
+
+        [row] = _rows(context, "anthropic")
+        events = _events(context)
+        assert_that(events, has_length(1))
+        assert_that(
+            events[0].payload,
+            equal_to(
+                {
+                    "connection_id": str(row.id),
+                    "slug": "anthropic",
+                    "provider_type": "anthropic",
+                    "base_url": None,
+                    "revived": False,
+                    "actor_display": ADMIN_NAME,
+                    "subject_display": "Anthropic",
+                }
+            ),
+        )
+        assert_that(events[0].subject, has_entries(type="SYSTEM", id=str(row.id)))
+        for secret in (NEW_KEY, "g7h8"):
+            assert secret not in str(events[0].payload)
+
+
+def test_a_key_the_provider_refuses_stores_nothing():
+    with given(_setup(admin, provider_answers(False))) as context:
+        response = _add(context, "openai")
+
+        assert_that(response.status_code, equal_to(422))
+        assert NEW_KEY not in response.text
+        assert_that(_rows(context, "openai"), equal_to([]))
+        assert_that(_events(context), has_length(0))
+
+
+def test_an_unreachable_provider_stores_nothing():
+    with given(_setup(admin, provider_answers(LlmProviderUnreachable()))) as context:
+        response = _add(context, "gemini")
+
+        assert_that(response.status_code, equal_to(503))
+        assert NEW_KEY not in response.text
+        assert_that(_rows(context, "gemini"), equal_to([]))
+        assert_that(_events(context), has_length(0))
+
+
+def test_a_provider_already_connected_is_refused_without_checking_the_key():
+    with given(_setup(admin, provider_answers(True))) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = _add(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(409))
+        context.check.assert_not_called()
+        [row] = _rows(context, "anthropic")
+        assert row.api_key_encrypted is not None
+        assert_that(decrypt_token(row.api_key_encrypted, TEST_ENCRYPTION_KEY), equal_to(ANTHROPIC_KEY))
+        assert_that(_events(context), has_length(0))
+
+
+def test_openrouter_cannot_be_added_again():
+    with given(_setup(admin, provider_answers(True))) as context:
+        response = _add(context, "openrouter")
+
+        assert_that(response.status_code, equal_to(409))
+        context.check.assert_not_called()
+        assert_that(_rows(context, "openrouter"), has_length(1))
+        assert_that(_events(context), has_length(0))
+
+
+def test_a_deleted_provider_is_revived_with_its_new_key():
+    with given(_setup(admin, provider_answers(True))) as context:
+        deleted = _connection(context, "deepseek", "DeepSeek", ProviderType.DEEPSEEK, deleted_at=datetime.now(UTC))
+
+        response = _add(context, "deepseek")
+
+        assert_that(response.status_code, equal_to(201), response.text)
+        [row] = _rows(context, "deepseek")
+        assert_that(row.id, equal_to(deleted.id))
+        assert_that(row.deleted_at, none())
+        assert row.api_key_encrypted is not None
+        assert_that(decrypt_token(row.api_key_encrypted, TEST_ENCRYPTION_KEY), equal_to(NEW_KEY))
+        assert_that(_events(context)[0].payload, has_entries(connection_id=str(deleted.id), revived=True))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"provider_type": "anthropic"},
+        {"provider_type": "anthropic", "api_key": "   "},
+        {"provider_type": "anthropic", "api_key": NEW_KEY, "base_url": AZURE_BASE_URL},
+        {"provider_type": "mistral", "api_key": NEW_KEY},
+        {"provider_type": "azure", "api_key": NEW_KEY},
+        {"provider_type": "custom", "api_key": NEW_KEY},
+    ],
+)
+def test_a_malformed_request_is_refused_without_echoing_it(body):
+    with given(_setup(admin, provider_answers(True))) as context:
+        response = context.client.post(BASE, headers=auth(context), json=body)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": "Invalid LLM provider key request"}))
+        context.check.assert_not_called()

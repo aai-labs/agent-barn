@@ -8,14 +8,18 @@ from injector import inject, singleton
 from sqlmodel import Session, col, select
 
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
-from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_LLM_PROVIDER_CHANGED
+from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_LLM_PROVIDER_CHANGED, PLATFORM_LLM_PROVIDER_CREATED
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.llm_providers.models import OPENROUTER_SLUG, LlmProviderConnection
+from api.domains.llm_providers.models import OPENROUTER_SLUG, LlmProviderConnection, ProviderType
 from api.domains.users.models import User
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
 class ConnectionNotFound(LookupError):
+    pass
+
+
+class ConnectionAlreadyExists(Exception):
     pass
 
 
@@ -69,10 +73,7 @@ class LlmProviderRepository:
         `apply` pushes the key to LiteLLM; if it raises, nothing is stored.
         """
         with Session(self.delegate.engine) as session:
-            session.connection().execute(
-                sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-                {"key": f"llm_provider_connection:{slug}"},
-            )
+            self._lock(session, slug)
             connection = session.exec(
                 select(LlmProviderConnection).where(
                     LlmProviderConnection.slug == slug, col(LlmProviderConnection.deleted_at).is_(None)
@@ -88,23 +89,94 @@ class LlmProviderRepository:
             connection.updated_by = actor_id
             connection.updated_at = now
             session.add(connection)
-            event = EVENT_REGISTRY.build_event(
-                event_name=PLATFORM_LLM_PROVIDER_CHANGED,
-                schema_version=1,
-                occurred_at=now,
-                organization_id=None,
-                actor=ActorIdentity(type=ActorIdentityType.USER, id=actor_id),
-                subject=SubjectIdentity(type=SubjectIdentityType.SYSTEM, id=str(connection.id)),
-                correlation_id=uuid4(),
-                payload={
-                    "connection_id": connection.id,
-                    "slug": connection.slug,
-                    "replaced_existing": replaced_existing,
-                    "actor_display": actor_display,
-                    "subject_display": connection.name,
-                },
+            ids = self._stage(
+                session,
+                PLATFORM_LLM_PROVIDER_CHANGED,
+                connection,
+                actor_id,
+                now,
+                {"replaced_existing": replaced_existing, "actor_display": actor_display},
             )
-            self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return ids
+
+    def add(
+        self,
+        slug: str,
+        name: str,
+        provider_type: ProviderType,
+        api_key_encrypted: str,
+        api_key_last4: str,
+        actor_id: UUID,
+        actor_display: str,
+    ) -> list[UUID]:
+        """Store a new connection with its key, or bring a deleted one with this slug back.
+
+        Raises ConnectionAlreadyExists when a connection with this slug is not deleted.
+        """
+        with Session(self.delegate.engine) as session:
+            self._lock(session, slug)
+            existing = session.exec(
+                select(LlmProviderConnection).where(LlmProviderConnection.slug == slug)
+            ).one_or_none()
+            if existing is not None and existing.deleted_at is None:
+                raise ConnectionAlreadyExists(slug)
+            now = datetime.now(UTC)
+            connection = existing or LlmProviderConnection(slug=slug, name=name, provider_type=provider_type)
+            connection.name = name
+            connection.api_key_encrypted = api_key_encrypted
+            connection.api_key_last4 = api_key_last4
+            connection.updated_by = actor_id
+            connection.updated_at = now
+            connection.deleted_at = None
+            session.add(connection)
+            session.flush()
+            ids = self._stage(
+                session,
+                PLATFORM_LLM_PROVIDER_CREATED,
+                connection,
+                actor_id,
+                now,
+                {
+                    "provider_type": connection.provider_type.value,
+                    "base_url": connection.base_url,
+                    "revived": existing is not None,
+                    "actor_display": actor_display,
+                },
+            )
+            session.commit()
+            return ids
+
+    @staticmethod
+    def _lock(session: Session, slug: str) -> None:
+        session.connection().execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"llm_provider_connection:{slug}"},
+        )
+
+    def _stage(
+        self,
+        session: Session,
+        event_name: str,
+        connection: LlmProviderConnection,
+        actor_id: UUID,
+        occurred_at: datetime,
+        payload: dict[str, object],
+    ) -> list[UUID]:
+        event = EVENT_REGISTRY.build_event(
+            event_name=event_name,
+            schema_version=1,
+            occurred_at=occurred_at,
+            organization_id=None,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=actor_id),
+            subject=SubjectIdentity(type=SubjectIdentityType.SYSTEM, id=str(connection.id)),
+            correlation_id=uuid4(),
+            payload={
+                "connection_id": connection.id,
+                "slug": connection.slug,
+                **payload,
+                "subject_display": connection.name,
+            },
+        )
+        self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))

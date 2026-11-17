@@ -9,6 +9,7 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import require_platform_admin
 from api.domains.llm_providers.models import (
+    LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     OpenRouterConnectionRead,
     OpenRouterKeyUpdate,
@@ -40,6 +41,15 @@ def list_connections(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     return service.list_connections(context)
+
+
+@platform_llm_providers_router.post("", response_model=LlmProviderConnectionRead, status_code=201)
+def add_connection(
+    data: LlmProviderConnectionCreate,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.add_connection(data, context)
 
 
 @platform_llm_providers_router.get("/openrouter", response_model=OpenRouterConnectionRead)

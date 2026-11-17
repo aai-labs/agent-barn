@@ -41,11 +41,12 @@ same rule; see [Playbooks](../playbooks.md#model-and-billing).
 (`require_platform_admin` and `PlatformAdminService.require_platform_admin`);
 Organization roles confer no authority on them. `GET /platform/settings/llm-providers`
 lists the connections that are not deleted, each with its provider, base URL and key
-status, never the key or its ciphertext. `GET .../openrouter` reports whether a
+status, never the key or its ciphertext. `POST /platform/settings/llm-providers` adds a
+known provider's connection after the provider accepts its key. `GET .../openrouter` reports whether a
 key is stored, its last four characters, who last changed it and when, and
 whether `OPENROUTER_API_KEY` is still configured. It never returns the key or its
-ciphertext. `PUT .../openrouter` replaces the key; a read-only Personal API Key is
-refused, and a malformed request gets a fixed `422` that does not echo the body.
+ciphertext. `PUT .../openrouter` replaces the key. Both writes refuse a read-only Personal
+API Key, and a malformed request gets a fixed `422` that does not echo the body.
 
 ### Organization Roles
 

@@ -1561,6 +1561,11 @@
   ],
   [
     "POST",
+    "/platform/settings/llm-providers",
+    "add_connection_platform_settings_llm_providers_post"
+  ],
+  [
+    "POST",
     "/platform/skills",
     "create_platform_skill_platform_skills_post"
   ],

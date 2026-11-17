@@ -7,12 +7,18 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 ## Current state
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
-- In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection. `LlmProviderKeyChecker` can check their keys, but nothing calls it yet. `GET /api/v1/platform/settings/llm-providers` lists the connections. The `platform.llm_provider.created` event is registered, but nothing emits it yet.
-- Next: the slice 1 demo on local k3d; slice 2, PR 5, adding a known provider.
+- In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
+- In progress: slice 2, connections to other providers. A Platform Administrator can list the connections and add Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks or Novita through the API; each key is checked with its provider first and the addition is audited. Azure and Custom connections can't be added yet. There is no UI for any of this yet.
+- Next: the slice 1 demo on local k3d; slice 2, PR 6, adding Azure and Custom connections.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 5
+
+- Delivered: `POST /api/v1/platform/settings/llm-providers` with `{provider_type, api_key}` adds a known provider's connection, with its slug equal to the provider type and a fixed name. A provider already connected, or OpenRouter, is `409` before the key is checked. `LlmProviderKeyChecker` then checks the key: a refused key is `422` and no answer `503`, and nothing is stored. Under the per-slug advisory lock the API checks for a live connection again, then stores the encrypted key with `platform.llm_provider.created` in one transaction and answers `201` with the connection. A deleted connection with that slug is brought back with the same id, and the event says `revived: true`. No LiteLLM route is written. A read-only Personal API Key is refused, and Azure, Custom or a malformed request get the fixed `422`.
+- Changed: `LlmProviderRepository.replace_key` shares the lock and event staging with the new `add`; its behaviour is unchanged, and `test_platform_llm_providers.py` and `test_openrouter_route_litellm_contract.py` pass. `operations-v1.json`, the RBAC brief, [`llm-providers.md`](../llm-providers.md) and [`domain-events.md`](../domain-events.md) describe the route and the event.
+- Follow-up: PR 6 adds Azure and Custom connections.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 4
 

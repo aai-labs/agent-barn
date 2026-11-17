@@ -8,21 +8,22 @@ Read before changing where provider keys come from, the LLM providers section of
 
 Agents never hold a provider key. They call LiteLLM with their own virtual keys, and LiteLLM calls the provider with the platform's key. An **LLM Provider Connection** is one of those platform accounts: a provider and the key Agent Barn reaches it with. It is a Platform Resource that Platform Administrators keep in Platform Admin settings.
 
-Today there is one connection, **OpenRouter**, seeded by migration `22b93965859f` with no key. More providers are being added as the AF-447 epic ([`llm-providers/CHANGELOG.md`](llm-providers/CHANGELOG.md)). Why keys are platform data rather than deployment secrets is in [its ADR](../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md).
+**OpenRouter** is seeded by migration `22b93965859f` with no key. A Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita; Agents can't use them yet, because their keys don't reach LiteLLM. More is being added as the AF-447 epic ([`llm-providers/CHANGELOG.md`](llm-providers/CHANGELOG.md)). Why keys are platform data rather than deployment secrets is in [its ADR](../adr/2026-11-16-provider-keys-are-platform-data-synced-to-litellm.md).
 
 ## The connection
 
 - Stored in `llm_provider_connection`: a unique `slug`, `name`, `provider_type`, `api_key_encrypted`, `api_key_last4`, `base_url`, `updated_by`, `updated_at` and `deleted_at`.
 - The provider types are `openrouter`, `anthropic`, `openai`, `gemini`, `xai`, `deepseek`, `fireworks`, `novita`, `azure` and `custom`. A known provider has at most one connection, whose slug is its provider type and which has no `base_url`. An Azure or Custom connection has a slug of its own, which can't be any provider type's name, and a `base_url`.
 - The key is Fernet-encrypted with `AGENT_TOKEN_ENCRYPTION_KEY`, as other stored secrets are. Its last four characters are kept apart, so the status never decrypts it.
+- Adding a known provider whose connection was deleted brings that row back, with the same id and the new key.
 - A slug stays unique among deleted connections too, so it is never reused. The database refuses a malformed slug, an unknown provider type, a key without its last four characters or the reverse, and a connection that breaks its provider type's slug or `base_url` rule.
 
 ## Invariants
 
 - **Nobody reads the key back.** The status reports whether a key is saved, its last four characters, who saved it and when, never the key. A refused request's `422` never echoes the body (`CredentialSafeRoute`), and the audit event carries no part of the key.
-- **A key is checked before it is used.** OpenRouter's `GET /key` must accept it: a key it refuses (401 or 403) is `422`, no answer is `503`. A refused or unchecked key never reaches LiteLLM or the database.
-- **LiteLLM first, then the database.** Under a per-connection advisory lock, the API writes the LiteLLM route and only then stores the encrypted key with its event, in one transaction. A LiteLLM failure is `503` and leaves the stored key and the event log unchanged. If LiteLLM applied the write but the API saw a failure (a timeout after the write, or a failed commit afterwards), LiteLLM holds a key the database does not; saving the key again repairs it.
-- **No restart.** Saving registers or updates the LiteLLM route in the same request, so Agents use the new key at once.
+- **A key is checked before it is used.** OpenRouter's `GET /key` must accept it: a key it refuses (401 or 403) is `422`, no answer is `503`. Any other provider's key is checked with that provider by `LlmProviderKeyChecker` (`api/infrastructure/llm_provider_keys/`), with the same `422` and `503`. A refused or unchecked key never reaches LiteLLM or the database.
+- **LiteLLM first, then the database, for OpenRouter.** Under a per-connection advisory lock, the API writes the LiteLLM route and only then stores the encrypted key with its event, in one transaction. A LiteLLM failure is `503` and leaves the stored key and the event log unchanged. If LiteLLM applied the write but the API saw a failure (a timeout after the write, or a failed commit afterwards), LiteLLM holds a key the database does not; saving the key again repairs it.
+- **No restart.** Saving the OpenRouter key registers or updates the LiteLLM route in the same request, so Agents use the new key at once. Adding another provider stores its key under the same lock, with its event, and writes no LiteLLM route.
 - **API startup does not sync keys to LiteLLM**, so the API's readiness never depends on the proxy being reachable ([API architecture](../architecture/api.md#startup-data)). Nothing copies `OPENROUTER_API_KEY` into the table; each environment's key is saved by hand (see [Moving off the environment key](#moving-off-the-environment-key)).
 
 ## LiteLLM routes
@@ -49,10 +50,11 @@ Every route is under `require_platform_admin`, which refuses writes from a read-
 | Route | Does |
 | --- | --- |
 | `GET /api/v1/platform/settings/llm-providers` | Lists the connections that are not deleted, OpenRouter first and then by name. Each has `slug`, `name`, `provider_type`, `base_url`, the key status (`has_api_key`, `api_key_last4`, `updated_at`, `updated_by`) and `env_key_configured`, which is true only for OpenRouter while `OPENROUTER_API_KEY` is set |
+| `POST /api/v1/platform/settings/llm-providers` | Adds a known provider, `{provider_type, api_key}`, the key trimmed and at most 512 characters; answers `201` with the connection. A provider already connected, or OpenRouter, is `409` before the key is checked; a refused key is `422` and no answer `503`, and nothing is stored |
 | `GET /api/v1/platform/settings/llm-providers/openrouter` | The status: `has_api_key`, `api_key_last4`, `updated_at`, `updated_by` (a name) and `env_key_configured` (whether `OPENROUTER_API_KEY` is set) |
 | `PUT /api/v1/platform/settings/llm-providers/openrouter` | Replaces the key, `{api_key}`, trimmed and at most 512 characters; answers with the status |
 
-A saved key records `platform.llm_provider.changed`, Platform scope, projected to Security Audit. Its payload is the connection id and slug, whether a key was replaced, and display names. See [domain events](domain-events.md).
+A saved key records `platform.llm_provider.changed`, Platform scope, projected to Security Audit. Its payload is the connection id and slug, whether a key was replaced, and display names. An added provider records `platform.llm_provider.created` the same way, with the provider type, base URL and whether a deleted connection was brought back. See [domain events](domain-events.md).
 
 ## UI
 

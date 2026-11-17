@@ -7,19 +7,24 @@ from api.core.config import Config
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher
 from api.domains.llm_providers.models import (
+    KNOWN_PROVIDER_NAMES,
     OPENROUTER_ROUTE_API_BASE,
     OPENROUTER_ROUTE_ID,
     OPENROUTER_ROUTE_MODEL,
     OPENROUTER_ROUTE_ORDER,
     OPENROUTER_SLUG,
+    LlmProviderConnection,
+    LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     OpenRouterConnectionRead,
     OpenRouterKeyUpdate,
+    ProviderType,
 )
-from api.domains.llm_providers.repository import ConnectionNotFound, LlmProviderRepository
+from api.domains.llm_providers.repository import ConnectionAlreadyExists, ConnectionNotFound, LlmProviderRepository
 from api.domains.platform_admin.service import PlatformAdminService
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.llm_provider_keys.checker import LlmProviderKeyChecker, LlmProviderUnreachable
 from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterError
 
 
@@ -33,27 +38,59 @@ class PlatformLlmProviderService:
     openrouter: OpenRouterClient
     litellm: LiteLLMClient
     dispatcher: EventDeliveryDispatcher
+    key_checker: LlmProviderKeyChecker
 
     def list_connections(self, context: CurrentUserContext) -> list[LlmProviderConnectionRead]:
         self.authority.require_platform_admin(context.user)
-        env_key_configured = bool(self.config.openrouter_api_key)
-        listed = []
-        for connection, updated_by in self.repository.list_active():
-            has_api_key = connection.api_key_encrypted is not None
-            listed.append(
-                LlmProviderConnectionRead(
-                    slug=connection.slug,
-                    name=connection.name,
-                    provider_type=connection.provider_type,
-                    base_url=connection.base_url,
-                    has_api_key=has_api_key,
-                    api_key_last4=connection.api_key_last4,
-                    updated_at=connection.updated_at if has_api_key else None,
-                    updated_by=updated_by if has_api_key else None,
-                    env_key_configured=env_key_configured and connection.slug == OPENROUTER_SLUG,
-                )
+        return [self._to_read(connection, updated_by) for connection, updated_by in self.repository.list_active()]
+
+    def add_connection(
+        self, data: LlmProviderConnectionCreate, context: CurrentUserContext
+    ) -> LlmProviderConnectionRead:
+        self.authority.require_platform_admin(context.user)
+        provider_type = data.provider_type
+        slug = provider_type.value
+        name = KNOWN_PROVIDER_NAMES[provider_type]
+        if provider_type == ProviderType.OPENROUTER or self.repository.find_active(slug) is not None:
+            raise HTTPException(409, f"{name} is already connected.")
+        api_key = data.api_key.get_secret_value()
+        try:
+            accepted = self.key_checker.check(provider_type, api_key)
+        except LlmProviderUnreachable:
+            raise HTTPException(503, f"{name} could not be reached to check the key. Nothing was saved.") from None
+        if not accepted:
+            raise HTTPException(422, f"{name} did not accept this key. Nothing was saved.")
+        try:
+            ids = self.repository.add(
+                slug,
+                name,
+                provider_type,
+                encrypt_token(api_key, self.config.agent_token_encryption_key),
+                api_key[-4:],
+                context.user.id,
+                context.user.full_name or context.user.email,
             )
-        return listed
+        except ConnectionAlreadyExists:
+            raise HTTPException(409, f"{name} is already connected.") from None
+        self.dispatcher.enqueue_immediate(ids)
+        found = self.repository.find_active(slug)
+        if found is None:
+            raise HTTPException(404, f"The {name} connection does not exist.")
+        return self._to_read(*found)
+
+    def _to_read(self, connection: LlmProviderConnection, updated_by: str | None) -> LlmProviderConnectionRead:
+        has_api_key = connection.api_key_encrypted is not None
+        return LlmProviderConnectionRead(
+            slug=connection.slug,
+            name=connection.name,
+            provider_type=connection.provider_type,
+            base_url=connection.base_url,
+            has_api_key=has_api_key,
+            api_key_last4=connection.api_key_last4,
+            updated_at=connection.updated_at if has_api_key else None,
+            updated_by=updated_by if has_api_key else None,
+            env_key_configured=bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG,
+        )
 
     def read_openrouter(self, context: CurrentUserContext) -> OpenRouterConnectionRead:
         self.authority.require_platform_admin(context.user)
