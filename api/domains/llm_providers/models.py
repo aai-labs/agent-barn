@@ -2,15 +2,18 @@
 
 The key is stored Fernet-encrypted, with its last four characters kept apart for display.
 A slug stays unique among deleted connections too, so it is never reused.
+A known provider has one connection, whose slug is its provider type. An Azure or Custom
+connection has a slug of its own, never a provider type, and a base URL.
 """
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, SecretStr, field_validator
+from pydantic import ConfigDict, SecretStr, field_validator, model_validator
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -19,6 +22,7 @@ from api.infrastructure.postgres.models import BaseModel
 MAX_SLUG_LENGTH = 32
 MAX_NAME_LENGTH = 64
 MAX_API_KEY_LENGTH = 512
+MAX_BASE_URL_LENGTH = 2048
 SLUG_PATTERN = "^[a-z0-9]+(-[a-z0-9]+)*$"
 
 # The connection the migration seeds. Kept here for tests that reset the table to it; the
@@ -37,6 +41,36 @@ OPENROUTER_ROUTE_ORDER = 1
 
 class ProviderType(StrEnum):
     OPENROUTER = "openrouter"
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GEMINI = "gemini"
+    XAI = "xai"
+    DEEPSEEK = "deepseek"
+    FIREWORKS = "fireworks"
+    NOVITA = "novita"
+    AZURE = "azure"
+    CUSTOM = "custom"
+
+
+BASE_URL_PROVIDER_TYPES = (ProviderType.AZURE, ProviderType.CUSTOM)
+KNOWN_PROVIDER_NAMES = {
+    ProviderType.OPENROUTER: OPENROUTER_NAME,
+    ProviderType.ANTHROPIC: "Anthropic",
+    ProviderType.OPENAI: "OpenAI",
+    ProviderType.GEMINI: "Gemini",
+    ProviderType.XAI: "xAI",
+    ProviderType.DEEPSEEK: "DeepSeek",
+    ProviderType.FIREWORKS: "Fireworks",
+    ProviderType.NOVITA: "Novita",
+}
+
+
+def _sql_values(provider_types: tuple[ProviderType, ...]) -> str:
+    return ", ".join(f"'{provider_type.value}'" for provider_type in provider_types)
+
+
+_ALL_TYPES_SQL = _sql_values(tuple(ProviderType))
+_BASE_URL_TYPES_SQL = _sql_values(BASE_URL_PROVIDER_TYPES)
 
 
 def _string_enum(enum: type[StrEnum], length: int) -> sa.Enum:
@@ -53,9 +87,23 @@ class LlmProviderConnection(BaseModel, table=True):
     __tablename__: str = "llm_provider_connection"
     __table_args__ = (
         sa.CheckConstraint(f"slug ~ '{SLUG_PATTERN}'", name="ck_llm_provider_connection_slug_format"),
-        sa.CheckConstraint("provider_type IN ('openrouter')", name="ck_llm_provider_connection_provider_type_known"),
+        sa.CheckConstraint(
+            f"provider_type IN ({_ALL_TYPES_SQL})", name="ck_llm_provider_connection_provider_type_known"
+        ),
         sa.CheckConstraint(
             "(api_key_encrypted IS NULL) = (api_key_last4 IS NULL)", name="ck_llm_provider_connection_key_complete"
+        ),
+        sa.CheckConstraint(
+            f"(base_url IS NOT NULL) = (provider_type IN ({_BASE_URL_TYPES_SQL}))",
+            name="ck_llm_provider_connection_base_url_by_type",
+        ),
+        sa.CheckConstraint(
+            f"provider_type IN ({_BASE_URL_TYPES_SQL}) OR slug = provider_type",
+            name="ck_llm_provider_connection_known_slug_is_type",
+        ),
+        sa.CheckConstraint(
+            f"provider_type NOT IN ({_BASE_URL_TYPES_SQL}) OR slug NOT IN ({_ALL_TYPES_SQL})",
+            name="ck_llm_provider_connection_own_slug_not_a_type",
         ),
     )
 
@@ -64,13 +112,18 @@ class LlmProviderConnection(BaseModel, table=True):
     provider_type: ProviderType = SqlField(sa_column=Column(_string_enum(ProviderType, 32), nullable=False))
     api_key_encrypted: str | None = SqlField(default=None, repr=False)
     api_key_last4: str | None = SqlField(default=None, max_length=4)
+    base_url: str | None = SqlField(default=None, max_length=MAX_BASE_URL_LENGTH)
     updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
     deleted_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
 
 
-class OpenRouterConnectionRead(PydanticBaseModel):
-    """What a Platform Administrator sees of the OpenRouter key: never the key itself."""
+class LlmProviderConnectionRead(PydanticBaseModel):
+    """What a Platform Administrator sees of a connection: never the key itself."""
 
+    slug: str
+    name: str
+    provider_type: ProviderType
+    base_url: str | None = None
     has_api_key: bool
     api_key_last4: str | None = None
     updated_at: datetime | None = None
@@ -78,15 +131,49 @@ class OpenRouterConnectionRead(PydanticBaseModel):
     env_key_configured: bool
 
 
-class OpenRouterKeyUpdate(PydanticBaseModel):
+class LlmProviderConnectionCreate(PydanticBaseModel):
+    """A known provider takes only its key. Azure and Custom take a slug, name and base URL too,
+    whose rules the service checks so that a refusal can say which one was broken."""
+
     model_config = ConfigDict(extra="forbid")
 
+    provider_type: ProviderType
     api_key: SecretStr
+    slug: str | None = None
+    name: str | None = None
+    base_url: str | None = None
+
+    @model_validator(mode="after")
+    def _fields_match_the_provider_type(self) -> Self:
+        own_fields = (self.slug, self.name, self.base_url)
+        if self.provider_type in BASE_URL_PROVIDER_TYPES:
+            if None in own_fields:
+                raise ValueError("Azure and Custom connections need a slug, a name and a base URL.")
+        elif any(field is not None for field in own_fields):
+            raise ValueError("A known provider takes no slug, name or base URL.")
+        return self
 
     @field_validator("api_key")
     @classmethod
     def _trimmed_and_bounded(cls, value: SecretStr) -> SecretStr:
         trimmed = value.get_secret_value().strip()
         if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
-            raise ValueError("Enter an OpenRouter key.")
+            raise ValueError("Enter a key.")
+        return SecretStr(trimmed)
+
+
+class LlmProviderKeyReplace(PydanticBaseModel):
+    """A new key and, for Azure or Custom only, a new base URL, whose rules the service checks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: SecretStr
+    base_url: str | None = None
+
+    @field_validator("api_key")
+    @classmethod
+    def _trimmed_and_bounded(cls, value: SecretStr) -> SecretStr:
+        trimmed = value.get_secret_value().strip()
+        if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
+            raise ValueError("Enter a key.")
         return SecretStr(trimmed)

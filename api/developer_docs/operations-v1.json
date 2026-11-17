@@ -116,6 +116,11 @@
   ],
   [
     "DELETE",
+    "/platform/settings/llm-providers/{slug}",
+    "delete_connection_platform_settings_llm_providers__slug__delete"
+  ],
+  [
+    "DELETE",
     "/platform/skills/{skill_id}",
     "delete_platform_skill_platform_skills__skill_id__delete"
   ],
@@ -921,8 +926,8 @@
   ],
   [
     "GET",
-    "/platform/settings/llm-providers/openrouter",
-    "read_openrouter_connection_platform_settings_llm_providers_openrouter_get"
+    "/platform/settings/llm-providers",
+    "list_connections_platform_settings_llm_providers_get"
   ],
   [
     "GET",
@@ -1566,6 +1571,11 @@
   ],
   [
     "POST",
+    "/platform/settings/llm-providers",
+    "add_connection_platform_settings_llm_providers_post"
+  ],
+  [
+    "POST",
     "/platform/skills",
     "create_platform_skill_platform_skills_post"
   ],
@@ -1706,8 +1716,8 @@
   ],
   [
     "PUT",
-    "/platform/settings/llm-providers/openrouter",
-    "replace_openrouter_key_platform_settings_llm_providers_openrouter_put"
+    "/platform/settings/llm-providers/{slug}/key",
+    "replace_key_platform_settings_llm_providers__slug__key_put"
   ],
   [
     "PUT",
