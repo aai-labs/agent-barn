@@ -234,14 +234,18 @@ class AgentAnomalyOverrideRead(PydanticBaseModel):
     max_llm_calls_per_hour: int | None
 
 
+# The cap columns are 32-bit integers.
+MAX_HOURLY_CAP = 2**31 - 1
+
+
 class AgentAnomalyOverrideUpdate(PydanticBaseModel):
     """A full replacement: omitted caps are cleared."""
 
     model_config = ConfigDict(extra="forbid")
 
     sensitivity: Sensitivity = Sensitivity.NORMAL
-    max_llm_tokens_per_hour: int | None = Field(default=None, gt=0)
-    max_llm_calls_per_hour: int | None = Field(default=None, gt=0)
+    max_llm_tokens_per_hour: int | None = Field(default=None, gt=0, le=MAX_HOURLY_CAP)
+    max_llm_calls_per_hour: int | None = Field(default=None, gt=0, le=MAX_HOURLY_CAP)
 
 
 class RateBaselineRead(PydanticBaseModel):

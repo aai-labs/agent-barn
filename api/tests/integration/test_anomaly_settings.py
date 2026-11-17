@@ -169,6 +169,13 @@ def test_a_cap_must_be_positive():
         assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
 
 
+def test_a_cap_must_fit_what_can_be_stored():
+    with given([*signed_in(), there_is_an_agent()]) as context:
+        response = put_override(context, {"sensitivity": "NORMAL", "max_llm_tokens_per_hour": 2**31})
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
 def test_changing_an_override_is_audited():
     with given([*signed_in(), there_is_an_agent()]) as context:
         put_override(context, {"sensitivity": "HIGH", "max_llm_calls_per_hour": 120})
