@@ -63,7 +63,7 @@ export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
 export function visibleAgentPageTabs(
   agent: Pick<Agent, "allowedActions"> | null | undefined,
   role: OrganizationRole | undefined,
-  /** Whether the platform offers workflow authoring to this Agent (its workflow capabilities). */
+  /** Whether this installation offers workflows (the Organization's workflow capabilities). */
   { workflowAuthoring = false }: { workflowAuthoring?: boolean } = {},
 ): AgentPageTab[] {
   const canReadActivity = canAgent(agent, "activity.read");
@@ -76,8 +76,8 @@ export function visibleAgentPageTabs(
     ...(canReadActivity
       ? (["chat", "conversations", "tool-calls", "logs", "memory"] as AgentPageTab[])
       : []),
-    // Workflows are part of the Agent itself, readable with agent.read, and only where the
-    // platform offers authoring.
+    // The Agent's workflow runs are readable with agent.read, and only where the platform
+    // offers workflows. Workflows themselves belong to the Organization.
     ...(workflowAuthoring && canAgent(agent, "agent.read") ? (["workflows"] as AgentPageTab[]) : []),
     ...(canAgent(agent, "agent.read") ? (["files"] as AgentPageTab[]) : []),
     ...(canExtractPlaybooks ? (["playbooks"] as AgentPageTab[]) : []),

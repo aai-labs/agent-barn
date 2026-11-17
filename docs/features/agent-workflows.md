@@ -69,7 +69,7 @@ start with a letter gain an `input-` prefix (or `input` when otherwise empty).
 Labels with non-ASCII letters/digits that cannot be folded, or keys exceeding 64
 characters, receive a deterministic eight-digit FNV-1a suffix; the key is truncated
 to fit. Blank labels remain invalid. Normalization collisions are reported on the
-later input label, naming the first matching input; suffixes reduce collisions
+later input's description, from which the label derives, naming the first matching input; suffixes reduce collisions
 but uniqueness is still validated rather than assumed. Keys stay hidden in both
 editing and saved inspection. Existing saved keys remain unchanged until their
 label is edited. Names cannot be blank. The workflow description is optional;
@@ -249,18 +249,34 @@ so an open editor and its draft stay.
 
 The editor is a dialog over the page. It holds the name, a description, the
 default Agent (any Agent the author can see, or none), the steps and the inputs.
-Each step is a card with its number, move up/down controls, a name, a remove
-control and one text box for what the Agent should do and produce; every step is
-open at once. Steps have no type selector. Opening a version saved with a legacy
+Default Agent choices are pills: No default, the first four Agents and the current
+default when it is past them. The rest sit behind a "+N more" pill that opens a
+searchable list. The Run dialog's "Run as" uses the same picker over the running
+Agents the viewer can update, without a No default pill. Both cover the first 50
+Agents the page loads.
+Each step is a card with its number, move up/down controls, a remove control and
+one text box, its prompt: what the Agent should do and produce. Every step is
+open at once. A step has no name field; editing the prompt sets the stored step
+name to its first line, whitespace collapsed and cut at a word to 80 characters,
+which run lists and the step timeline show. A step whose prompt is not edited
+keeps its saved name, and the API still requires one. Each input is a card with one field, its
+description, above a footer holding a Text / File / Number / Yes or no segmented
+type control, a Required checkbox and a remove control. The description may run
+over several lines. Editing its first line sets the stored label to that line (as
+for step names) and the key from that label; editing only later lines keeps the
+saved label and key. The API still stores all three. The start-run form and saved overview show
+the label, and the description under it only when it says more than the label. Steps have no type selector. Opening a version saved with a legacy
 step output description folds that text into the step's text, as the API does on
 save; no new version is written unless the author changes the plan. A change to
 the default Agent alone saves no version.
-The editor supports adding, removing, undoing and reordering steps.
-Removing the last step offers an empty state and disables saving; undo
-restores the most recently removed step and its edited fields. Saved overview and
+The editor supports adding, removing and reordering steps. Removing a step with a
+prompt asks first in the shared confirmation dialog; an empty step is removed at
+once. There is no undo. Removing the last step offers an empty state and disables
+saving. The step whose prompt or controls have focus shows its number in the
+accent colour. Saved overview and
 version history expose actual snapshots; a version saved with a legacy step
-output description still shows it. Closing a changed draft and archiving use the
-shared branded dialog. Run is disabled while execution admission is unavailable
+output description still shows it. Closing a changed draft, removing a step and
+archiving use the shared branded dialog. Run is disabled while execution admission is unavailable
 and for an archived workflow. Drafts are saved with Web review as their
 destination; the editor offers no other.
 
@@ -283,8 +299,7 @@ the visible field labels, scrolls to the first invalid field and links each erro
 to its field. Fields also show accessible inline feedback after blur, and all
 invalid fields are revealed after a save attempt; editing revalidates revealed
 fields without submitting. Both client and API validation retain the draft;
-client validation prevents submission of an invalid draft. Removing a step moves
-keyboard focus to Undo. If save authority disappears, the form is disabled and
+client validation prevents submission of an invalid draft. If save authority disappears, the form is disabled and
 keeps the retained edits visible.
 
 Definition query keys include Organization identity, with structured
@@ -396,9 +411,9 @@ single-run read includes `attempt` (number, start, deadline and
 skewed browser clock cannot distort them) and `agent_unresponsive`, true when the Agent has
 not accepted the step after 60 seconds). The
 rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
-shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
-Runs control clears only the selected run and selects the owning workflow’s Runs
-view. Overview, Runs and Version history use `workflowView=overview|runs|history`
+shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row, "Workflows / Run detail"; the workflow's name
+is in the run header. Its Workflows control clears the selected run and returns to
+the Runs tab of the Workflows page. Overview, Runs and Version history use `workflowView=overview|runs|history`
 as their source of truth; an absent or invalid view falls back to Overview. Tab
 changes and opening/closing runs add browser-history entries without scrolling.
 Run-list pagination uses `workflowRunPage`; returning from a run retains that page.
@@ -506,11 +521,16 @@ progress/history and cancellation confirmation. `workflowRun` retains the run in
 the URL. Queries include Organization identity, refetch on focus, poll
 queued/running/cancelling mounted views every three seconds and stop on parked
 (paused/blocked/awaiting approval), terminal, error or unmounted views. Focus refetch and mutations
-still refresh parked views. Start retries retain their identity and inputs. Access errors replace
+still refresh parked views. The Runs tab's Active list is paged 50 at a time. The
+approvals inbox and the navigation badge read one page of 100 runs awaiting a
+decision, so the badge counts at most 100. Starting or re-running a run also
+refreshes the workflow list, whose cards carry run counts. A run whose Agent was
+deleted names its files without download controls, because that Agent's files
+are gone. Run again is hidden when the Tier leaves out workflows. Start retries retain their identity and inputs. Access errors replace
 protected run content. Authoring retains its existing cache behavior.
 
-Run screens use the agreed Workflow Playbook layout: full-page start/run views,
-a breadcrumb, run header with status badge, a Steps rail, summaries, run activity
+Run screens use the agreed Workflow Playbook layout: a start-run dialog, a
+full-page run view, a breadcrumb, run header with status badge, a Steps rail, summaries, run activity
 and Keep running/Cancel run confirmation. The shell owns the page frame and section navigation. The Agent mobile header
 and section title remain mounted but hidden while a run or its start screen is open. Run detail returns
 each completed step's `summary`, shown under “What each step did”, and a

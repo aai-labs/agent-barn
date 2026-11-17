@@ -34,15 +34,13 @@ function useLiveCountdown(run: WorkflowRun, until: string | undefined) {
  * the session holds it, or after the session paused (parked) and waits for a person.
  */
 export function WorkflowApproval({
-  agentId,
   agentName,
   run,
 }: {
-  agentId: string;
   agentName: string;
   run: WorkflowRun;
 }) {
-  const { decide } = useWorkflowRunActions(agentId);
+  const { decide } = useWorkflowRunActions();
   const [guidance, setGuidance] = useState("");
   const approval = pendingApproval(run);
   const live = approval?.state === "LIVE";

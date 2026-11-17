@@ -26,7 +26,8 @@ export function AttemptStatus({
 }: {
   run: WorkflowRun;
   agentName: string;
-  agentHref: string;
+  /** Absent once the Agent was deleted. */
+  agentHref?: string;
 }) {
   const attempt = run.attempt;
   const live = Boolean(attempt);
@@ -61,9 +62,13 @@ export function AttemptStatus({
         >
           <strong>{agentName} hasn’t accepted this step yet.</strong> If this
           persists, restart the Agent from{" "}
-          <Link href={agentHref} className="underline">
-            its page
-          </Link>
+          {agentHref ? (
+            <Link href={agentHref} className="underline">
+              its page
+            </Link>
+          ) : (
+            "its page"
+          )}
           , then start a new run.
         </p>
       )}
@@ -117,14 +122,8 @@ function EventText({ kind, detail }: { kind: string; detail: string }) {
 }
 
 /** Newest-first run history keeps failed attempts visible after they end. */
-export function WorkflowRunActivity({
-  agentId,
-  run,
-}: {
-  agentId: string;
-  run: WorkflowRun;
-}) {
-  const history = useWorkflowRunHistory(agentId, run.id, run.revision);
+export function WorkflowRunActivity({ run }: { run: WorkflowRun }) {
+  const history = useWorkflowRunHistory(run.id, run.revision);
   if (history.error)
     return (
       <div className="border-t border-[var(--line)] px-6 py-4">
