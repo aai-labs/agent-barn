@@ -7,7 +7,7 @@ RUNTIME ?= hermes
 	reconcile-workflows \
 	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-sync-engine dev-monitoring reconcile reconcile-restore-points snapshot-restore-points reconcile-llm-budgets run-llm-budget-alerts run-tier-sweep run-anomaly-checks stripe-setup-tiers report-message-counts backfill-business-actions forward-teams forward-triggers forward-telegram forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-sync-engine dev-monitoring reconcile reconcile-restore-points snapshot-restore-points reconcile-llm-budgets run-llm-budget-alerts run-tier-sweep run-anomaly-checks stripe-setup-tiers report-message-counts backfill-business-actions forward-teams forward-triggers forward-telegram forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides seed-anomaly-history migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs purge-agent-memory
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -209,6 +209,12 @@ seed-event-deliveries:
 # exercising the org and platform Cost pages. Safe to re-run.
 seed-costs:
 	api/.venv/bin/python -m api.scripts.seed_cost_fixtures --count "$${SEED_COST_COUNT:-4000}"
+
+# Local-only: give an Agent five days of history so anomaly checks judge it straight
+# away. SEED_ARGS=--spike adds an unusual few minutes; SEED_ARGS=--clear undoes it.
+seed-anomaly-history:
+	api/.venv/bin/python -m api.scripts.seed_anomaly_history \
+		--agent-id "$${SEED_AGENT_ID:?Set SEED_AGENT_ID}" $(SEED_ARGS)
 
 # Local-only: create stopped Telegram Agents for manually exercising Agent-owned
 # template override authoring. Set SEED_AGENT_ORGANIZATION_ID before invoking.
