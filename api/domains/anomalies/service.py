@@ -111,6 +111,11 @@ def _floor_hour(at: datetime) -> datetime:
     return at.replace(minute=0, second=0, microsecond=0)
 
 
+def _baseline_window(until: datetime) -> tuple[datetime, datetime]:
+    """The whole hours of the baseline window for a checked hour ending at `until`."""
+    return _floor_hour(until - BASELINE), _floor_hour(until - WINDOW)
+
+
 @inject
 @singleton
 @dataclass
@@ -210,25 +215,33 @@ class AnomalyCheckService:
             self._record(organization_id, agent_id, signal, verdict, at)
 
     def history(self, agent_id: UUID, until: datetime, cost_until: datetime | None) -> AgentHistory:
-        """Hourly figures over the baseline window, which stops at the start of the hour
-        the checked hour begins in, so the two never overlap."""
-        tool_hours = self.tool_call_service.hourly_tool_activity(
-            agent_id, until - BASELINE, _floor_hour(until - WINDOW)
-        )
-        write_hours = {
-            row.hour: row.writes
-            for row in self.business_value_service.hourly_writes(
-                agent_id, until - BASELINE, _floor_hour(until - WINDOW)
-            )
+        """Hourly figures over the baseline window, in whole hours, ending at the start
+        of the hour the checked hour begins in, so the two never overlap.
+
+        LLM figures have their own window, ending where the cost sync has got to, so an
+        hour with tool calls whose LLM calls are not synced yet does not count as an
+        hour without LLM calls.
+        """
+        tool_since, tool_until = _baseline_window(until)
+        llm_window = _baseline_window(cost_until) if cost_until is not None else None
+        # Tool activity over both windows: it also marks the hours the LLM window counts.
+        activity_since = min(tool_since, llm_window[0]) if llm_window is not None else tool_since
+        tools_by_hour = {
+            row.hour: row for row in self.tool_call_service.hourly_tool_activity(agent_id, activity_since, tool_until)
         }
-        llm_hours = (
-            self.cost_service.hourly_llm_usage(agent_id, cost_until - BASELINE, _floor_hour(cost_until - WINDOW))
-            if cost_until is not None
-            else []
+        write_hours = {
+            row.hour: row.writes for row in self.business_value_service.hourly_writes(agent_id, tool_since, tool_until)
+        }
+        llm_by_hour = (
+            {row.hour: row for row in self.cost_service.hourly_llm_usage(agent_id, *llm_window)}
+            if llm_window is not None
+            else {}
         )
-        tools_by_hour = {row.hour: row for row in tool_hours}
-        llm_by_hour = {row.hour: row for row in llm_hours}
-        active = sorted(tools_by_hour.keys() | llm_by_hour.keys())
+        active = tools_by_hour.keys() | llm_by_hour.keys()
+        tool_active = sorted(hour for hour in active if tool_since <= hour < tool_until)
+        llm_active = (
+            sorted(hour for hour in active if llm_window[0] <= hour < llm_window[1]) if llm_window is not None else []
+        )
 
         observed_tools = self.tool_call_service.hourly_tool_activity(agent_id, until - WINDOW, until)
         observed_writes = self.business_value_service.hourly_writes(agent_id, until - WINDOW, until)
@@ -237,14 +250,19 @@ class AnomalyCheckService:
             if cost_until is not None
             else None
         )
-        error_rates = [rate for row in tool_hours if (rate := error_rate(row.errors, row.calls)) is not None]
+        error_rates = [
+            rate
+            for hour in tool_active
+            if hour in tools_by_hour
+            and (rate := error_rate(tools_by_hour[hour].errors, tools_by_hour[hour].calls)) is not None
+        ]
         return AgentHistory(
-            active_days=len({hour.date() for hour in active}),
-            tool_calls=[float(tools_by_hour[hour].calls) if hour in tools_by_hour else 0.0 for hour in active],
+            active_days=len({hour.date() for hour in [*tool_active, *llm_active]}),
+            tool_calls=[float(tools_by_hour[hour].calls) if hour in tools_by_hour else 0.0 for hour in tool_active],
             error_rates=error_rates,
-            writes=[float(write_hours.get(hour, 0)) for hour in active],
-            llm_calls=[float(llm_by_hour[hour].calls) if hour in llm_by_hour else 0.0 for hour in active],
-            llm_tokens=[float(llm_by_hour[hour].tokens) if hour in llm_by_hour else 0.0 for hour in active],
+            writes=[float(write_hours.get(hour, 0)) for hour in tool_active],
+            llm_calls=[float(llm_by_hour[hour].calls) if hour in llm_by_hour else 0.0 for hour in llm_active],
+            llm_tokens=[float(llm_by_hour[hour].tokens) if hour in llm_by_hour else 0.0 for hour in llm_active],
             observed_tool_calls=sum(row.calls for row in observed_tools),
             observed_errors=sum(row.errors for row in observed_tools),
             observed_writes=sum(row.writes for row in observed_writes),

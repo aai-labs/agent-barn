@@ -600,3 +600,29 @@ def test_a_new_use_stored_a_little_late_is_still_flagged():
             _anomalies(context, AnomalySignal.NEW_DESTINATION),
             contains_exactly(has_properties(subject="late.example", started_at=happened)),
         )
+
+
+def test_hours_the_cost_sync_has_not_reached_do_not_count_as_hours_without_llm_calls():
+    synced = NOW - timedelta(minutes=50)
+    with given([*_ENABLED, usual_activity(), costs_are_synced_until(synced)]) as context:
+        # Tool calls in an hour whose LLM calls are not all synced yet.
+        today_ten = NOW.replace(hour=10, minute=0)
+        _save(context, *[_tool_call(context.agent, at) for at in _spread(today_ten, 10)])
+        service = context.injector.get(AnomalyCheckService)
+
+        history = service.history(context.agent.id, *service.windows(NOW))
+
+        assert_that(history.llm_calls, equal_to([10.0] * 12))
+        assert_that(history.tool_calls, has_length(13))
+
+
+def test_the_oldest_hour_of_the_baseline_window_counts_whole():
+    with given(_ENABLED) as context:
+        until = NOW - timedelta(minutes=2)
+        oldest_hour = (until - timedelta(days=14)).replace(minute=0)
+        _save(context, *[_tool_call(context.agent, oldest_hour + timedelta(minutes=minute)) for minute in (5, 40)])
+        service = context.injector.get(AnomalyCheckService)
+
+        history = service.history(context.agent.id, *service.windows(NOW))
+
+        assert_that(history.tool_calls, equal_to([2.0]))

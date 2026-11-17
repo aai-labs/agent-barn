@@ -109,8 +109,12 @@ Pure functions in `api/domains/anomalies/detection.py`.
 - **Minimum history**: nothing is flagged until the Agent was active on at least 3
   different days in the window, for rates and first use alike. Hard caps apply straight
   away.
-- The window slides: every check uses the 14 days before the hour it checks, and the
-  hour being checked is not part of its own baseline. No time-of-day seasonality.
+- The window slides: every check uses the 14 days of whole hours before the hour it
+  checks, and the hour being checked is not part of its own baseline. No time-of-day
+  seasonality.
+- LLM figures use their own window, ending where the cost sync has got to, so an hour
+  with tool calls whose LLM calls are not synced yet is not counted as an hour without
+  LLM calls.
 
 ## The check
 
