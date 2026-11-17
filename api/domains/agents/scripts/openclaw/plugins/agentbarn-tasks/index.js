@@ -24,6 +24,10 @@ const STATUSES = ["open", "in_progress", "done", "failed"];
 // that failed moves it (to open); otherwise it stays in_progress.
 const KEPT = "kept";
 const WORK_THRESHOLD = 3;
+// OpenClaw's scheduler tool, under its current and its earlier name.
+const SCHEDULER_TOOLS = new Set(["automations", "cron"]);
+const INTENT_TIMEOUT_MS = 45_000;
+const RUN_NOTE_CHARS = 300;
 // OpenClaw's file-writing tools. A run that produces a file is worth a Task however short it is.
 const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const OPEN_TASKS_TTL_MS = 60_000;
@@ -130,6 +134,10 @@ const currentRun = new Map();
 const nextTurnReminders = new Map();
 // sessionKey -> the user's latest request, the title of a Task recorded automatically
 const requests = new Map();
+// runId -> the id of the scheduled job the run belongs to
+const runJobs = new Map();
+// Jobs removed while one of their runs was still going; that run finishes their Task when it ends.
+const removedMidRun = new Set();
 
 // Store a value as the newest entry, forgetting the oldest past SESSIONS_KEPT.
 function remember(map, key, value) {
@@ -339,10 +347,185 @@ function track(event, ctx) {
       // taskId -> the last status the Agent set this run
       statuses: new Map(),
       attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
+      // The Task the Agent touched last, and the titles it gave the Tasks it created.
+      lastTask: null, titles: new Map(),
+      // Schedules the Agent created this run, and the ids of those it removed.
+      schedules: [], removedJobs: new Set(),
     };
     remember(runs, runId, state);
   }
   return state;
+}
+
+const linksPath = () => `${process.env.HOME}/.openclaw/agentbarn-task-schedules.json`;
+
+// Job id -> {task_id, runs}: the Tasks that follow a schedule. Kept beside OpenClaw's own state.
+function readLinks() {
+  try {
+    const links = JSON.parse(fs.readFileSync(linksPath(), "utf8"));
+    return links && typeof links === "object" && !Array.isArray(links) ? links : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLinks(links) {
+  try {
+    fs.writeFileSync(`${linksPath()}.tmp`, JSON.stringify(links));
+    fs.renameSync(`${linksPath()}.tmp`, linksPath());
+  } catch {
+    // The link is a convenience; the Agent can still update the Task itself.
+  }
+}
+
+// Stop following a schedule; its Task is done unless another schedule still feeds it.
+async function endLink(jobId, setDone = true) {
+  const links = readLinks();
+  const link = links[jobId];
+  if (!link) return;
+  delete links[jobId];
+  saveLinks(links);
+  if (!setDone || Object.values(links).some((other) => other?.task_id === link.task_id)) return;
+  await run(["status", link.task_id, "done"]);
+  forgetTaskList();
+}
+
+function recurrenceOf(schedule) {
+  if (schedule?.kind === "every" && typeof schedule.everyMs === "number") return `every ${Math.round(schedule.everyMs / 1000)}s`;
+  if (schedule?.kind === "cron" && typeof schedule.expr === "string") return schedule.expr;
+  if (schedule?.kind === "at") return `once at ${schedule.at ?? ""}`.trim();
+  return String(schedule?.kind ?? "");
+}
+
+// Remember a schedule the Agent created or removed with OpenClaw's scheduler tool.
+function trackSchedule(state, event) {
+  const params = event.params ?? {};
+  if (failed(event)) return;
+  if (params.action === "remove") {
+    const jobId = params.jobId ?? params.id;
+    if (typeof jobId === "string") state.removedJobs.add(jobId);
+    return;
+  }
+  if (params.action !== "add") return;
+  const details = event.result?.details ?? {};
+  const job = details.job ?? details;
+  if (typeof job?.id !== "string") return;
+  const schedule = job.schedule ?? params.job?.schedule ?? params.schedule;
+  state.schedules.push({
+    jobId: job.id,
+    name: String(job.name ?? params.job?.name ?? ""),
+    recurrence: recurrenceOf(schedule).slice(0, 200),
+    // OpenClaw has no run limit: only a one-off is known to end.
+    runLimit: schedule?.kind === "at" ? 1 : null,
+  });
+}
+
+// Decide, for each schedule created this run, whether its runs are part of the Task for the request.
+// A decision model reads the request once. Without its answer, a Task the Agent kept follows the schedule.
+async function linkSchedules(sessionKey, state) {
+  const request = redacted(requests.get(sessionKey) ?? "");
+  for (const schedule of state.schedules) {
+    let taskId = state.lastTask;
+    const agentStatus = taskId ? state.statuses.get(taskId) : undefined;
+    const asked = {
+      request: request.slice(0, AUTOMATIC_DESCRIPTION_CHARS),
+      schedule: { recurrence: schedule.recurrence, run_limit: schedule.runLimit },
+      task: {
+        title: taskId ? (state.titles.get(taskId) ?? "").slice(0, 500) : "",
+        status: agentStatus === KEPT ? "in_progress" : (agentStatus ?? ""),
+      },
+    };
+    const answer = await run(["schedule-intent"], JSON.stringify(asked), INTENT_TIMEOUT_MS);
+    let intent = null;
+    try {
+      intent = answer.ok ? (JSON.parse(answer.output).intent ?? null) : null;
+    } catch {
+      intent = null;
+    }
+    if (intent === null) intent = agentStatus === KEPT ? "runs" : "setup";
+    if (intent !== "runs") {
+      // Setting up the schedule was the whole job: the Task settles like any other.
+      if (agentStatus === KEPT) state.statuses.set(taskId, "in_progress");
+      continue;
+    }
+    if (!taskId) {
+      const words = request.split(/\s+/).filter(Boolean).join(" ");
+      const title = (schedule.name || words || "Scheduled work").slice(0, AUTOMATIC_TITLE_CHARS);
+      const created = await run(["create", `--title=${title}`, "--status=in_progress", "--origin=automatic"]);
+      try {
+        taskId = created.ok ? JSON.parse(created.output).id : null;
+      } catch {
+        taskId = null;
+      }
+      if (typeof taskId !== "string") continue;
+      state.recorded = true;
+      state.taskIds.add(taskId);
+      state.lastTask = taskId;
+    } else if (agentStatus !== KEPT && agentStatus !== "in_progress") {
+      await run(["status", taskId, "in_progress"]);
+    }
+    state.statuses.set(taskId, KEPT);
+    const links = readLinks();
+    links[schedule.jobId] = { task_id: taskId };
+    saveLinks(links);
+    forgetTaskList();
+  }
+}
+
+// The Agent's final reply in a run's messages, as plain text.
+function lastReply(messages) {
+  if (!Array.isArray(messages)) return "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const content = message.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(" ")
+          : "";
+    if (text.trim()) return text;
+  }
+  return "";
+}
+
+// Note a scheduled run on the Task that follows its schedule. False when no Task does.
+async function recordScheduledRun(jobId, state, event) {
+  const links = readLinks();
+  const link = links[jobId];
+  if (typeof link?.task_id !== "string") return false;
+  const taskId = link.task_id;
+  const number = (Number.isInteger(link.runs) ? link.runs : 0) + 1;
+  const reply = redacted(lastReply(event.messages)).split(/\s+/).filter(Boolean).join(" ");
+  await run(["note", taskId], reply ? `Run ${number}: ${reply.slice(0, RUN_NOTE_CHARS)}` : `Run ${number}.`);
+  if (state) {
+    state.taskIds = new Set([taskId]);
+    await attachAutomatically(state);
+  }
+  if (state?.removedJobs.has(jobId) || removedMidRun.delete(jobId)) {
+    // The run ended its own schedule, so the job is finished.
+    await endLink(jobId);
+  } else {
+    links[jobId] = { ...link, runs: number };
+    saveLinks(links);
+    const set = state?.statuses.get(taskId);
+    // The schedule is still live, so the Task is not finished whatever this run set.
+    if (set && ![KEPT, "in_progress", "failed"].includes(set)) await run(["status", taskId, "in_progress"]);
+  }
+  forgetTaskList();
+  return true;
+}
+
+// The scheduled job a run belongs to. OpenClaw names it on the run, in an isolated run's session key
+// (agent:<id>:cron:<jobId>:run:<n>), and at the start of every scheduled prompt ([cron:<jobId> <name>]).
+function jobOf(ctx, prompt) {
+  if (ctx.trigger !== "cron") return undefined;
+  if (typeof ctx.jobId === "string" && ctx.jobId) return ctx.jobId;
+  const inKey = /(?:^|:)cron:([^:]+)(?::|$)/.exec(ctx.sessionKey ?? "");
+  if (inKey) return inKey[1];
+  const inPrompt = /^\[cron:(\S+)[ \]]/.exec(typeof prompt === "string" ? prompt : "");
+  return inPrompt ? inPrompt[1] : undefined;
 }
 
 const unrecordedWork = (state) =>
@@ -483,6 +666,7 @@ export default {
     api.on("after_tool_call", (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
       const state = track(event, ctx);
+      if (SCHEDULER_TOOLS.has(event.toolName)) trackSchedule(state, event);
       if (touchesTasks(event.toolName, event.params)) {
         if (!recordsTask(event.toolName, event.params, event.result, event)) return;
         state.recorded = true;
@@ -490,6 +674,8 @@ export default {
         const taskId = taskIdOf(event.toolName, event.params, event.result);
         if (taskId) {
           state.taskIds.add(taskId);
+          state.lastTask = taskId;
+          if (typeof event.params?.title === "string") state.titles.set(taskId, event.params.title);
           const status = statusSet(event.toolName, event.params);
           if (status) state.statuses.set(taskId, status);
         }
@@ -542,8 +728,17 @@ export default {
       runs.delete(runId);
       const sessionKey = ctx.sessionKey ?? state?.sessionKey ?? "";
       if (currentRun.get(sessionKey) === runId) currentRun.delete(sessionKey);
-      if (!state || ctx.trigger === "heartbeat" || sideRun(sessionKey)) return;
+      const jobId = runJobs.get(runId) ?? jobOf(ctx, requests.get(sessionKey));
+      runJobs.delete(runId);
+      if (ctx.trigger === "heartbeat" || sideRun(sessionKey)) return;
+      if (typeof jobId === "string" && (await recordScheduledRun(jobId, state, event))) return;
+      if (!state) return;
       const succeeded = event.success !== false;
+      if (succeeded && state.schedules.length) await linkSchedules(sessionKey, state);
+      // A status the Agent set itself while removing a schedule stands.
+      for (const removed of state.removedJobs) {
+        await endLink(removed, !state.statuses.has(readLinks()[removed]?.task_id));
+      }
       let failed;
       if (succeeded && unrecordedWork(state)) {
         failed = await recordAutomatically(sessionKey, state);
@@ -557,8 +752,21 @@ export default {
       if (failed.length) remember(nextTurnReminders, sessionKey, attachReminder(failed) + QUIET);
     });
 
+    // A schedule that is removed, or a one-off that has run, finishes the Task that follows it.
+    api.on("cron_changed", async (event) => {
+      const jobId = event?.jobId;
+      if (typeof jobId !== "string" || !readLinks()[jobId]) return;
+      const ended = event.action === "removed" || (event.action === "finished" && event.job?.schedule?.kind === "at");
+      if (!ended) return;
+      if ([...runJobs.values()].includes(jobId)) removedMidRun.add(jobId);
+      else await endLink(jobId);
+    });
+
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
+      const jobId = jobOf(ctx, event.prompt);
+      const runId = event.runId ?? ctx.runId;
+      if (jobId && runId) remember(runJobs, runId, jobId);
       const parts = [];
       if (ctx.trigger === "user" || ctx.trigger === "cron") {
         if (typeof event.prompt === "string") {

@@ -532,3 +532,24 @@ def test_a_value_that_looks_like_an_option_is_taken_as_written():
 
     assert_that(result.returncode, equal_to(0), result.stderr)
     assert_that(json.loads(stub.requests[0]["body"]), equal_to({"title": "-v", "description": "--help"}))
+
+
+def test_schedule_intent_sends_standard_input_and_prints_the_answer():
+    asked = {"request": "Post a greeting daily for a week", "schedule": {"recurrence": "every 1d", "run_limit": 7}}
+    with _IngestStub(body={"intent": "runs"}) as stub:
+        result = _run(stub, "schedule-intent", stdin=json.dumps(asked))
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    [request] = stub.requests
+    assert_that(
+        (request["method"], request["path"], json.loads(request["body"])),
+        equal_to(("POST", _tasks_path("/schedule-intent"), asked)),
+    )
+    assert_that(json.loads(result.stdout), equal_to({"intent": "runs"}))
+
+
+def test_schedule_intent_refuses_input_that_is_not_json_without_a_request():
+    with _IngestStub() as stub:
+        result = _run(stub, "schedule-intent", stdin="not json")
+
+    assert_that((result.returncode, stub.requests), equal_to((1, [])))
