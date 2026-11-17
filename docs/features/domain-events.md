@@ -115,6 +115,8 @@ Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, car
 
 LLM providers add the Platform-scoped `platform.llm_provider.changed` event, emitted atomically when a Platform Administrator replaces a connection's key and projected by `security_audit.projection`. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id and slug, whether a key was replaced, and actor/subject display snapshots, never the key or its last four characters.
 
+They also register the Platform-scoped `platform.llm_provider.created` event, projected by `security_audit.projection`, for a connection a Platform Administrator adds. Nothing emits it yet. The payload carries the connection id, slug, provider type, base URL (null for a known provider), whether a deleted connection was revived, and actor/subject display snapshots, never the key or any part of it.
+
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 
 File Sync adds `agent.file_sync.enabled` and `agent.file_sync.disabled`, handled by `security_audit.projection`. The Subject is the Agent whose per-Agent File Sync switch changed. The payload carries the Organization and Agent ids and display snapshots of the actor and the Agent, and nothing about the folder or its files. See [Sync providers](sync-provider/README.md#agent-file-sync).

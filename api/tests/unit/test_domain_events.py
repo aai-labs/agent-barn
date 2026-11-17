@@ -501,3 +501,51 @@ def test_file_sync_switch_payload_rejects_any_other_field(event_name):
         _build_file_sync_event(event_name, payload, organization_id, agent_id)
 
     assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+def _llm_provider_created_payload(**extra) -> dict[str, object]:
+    return {
+        "connection_id": str(uuid4()),
+        "slug": "azure-eu",
+        "provider_type": "azure",
+        "base_url": "https://contoso.openai.azure.com",
+        "revived": False,
+        "actor_display": "Platform Person",
+        "subject_display": "Azure Europe",
+        **extra,
+    }
+
+
+def _build_llm_provider_created_event(payload: dict[str, object]):
+    return EVENT_REGISTRY.build_event(
+        event_name="platform.llm_provider.created",
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=None,
+        actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+        subject=SubjectIdentity(type=SubjectIdentityType.SYSTEM, id=str(uuid4())),
+        correlation_id=uuid4(),
+        payload=payload,
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{}, {"slug": "anthropic", "provider_type": "anthropic", "base_url": None, "revived": True}],
+)
+def test_the_llm_provider_created_event_carries_the_connection_but_no_part_of_its_key(overrides):
+    event = _build_llm_provider_created_event(_llm_provider_created_payload(**overrides))
+
+    assert_that(event.event_scope, equal_to(EventScope.PLATFORM))
+    assert_that(
+        set(event.payload),
+        equal_to({"connection_id", "slug", "provider_type", "base_url", "revived", "actor_display", "subject_display"}),
+    )
+
+
+@pytest.mark.parametrize("extra", [{"api_key_last4": "a1b2"}, {"key_hint": "sk-******a1b2"}])
+def test_the_llm_provider_created_event_refuses_any_other_field(extra):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_created_event(_llm_provider_created_payload(**extra))
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))

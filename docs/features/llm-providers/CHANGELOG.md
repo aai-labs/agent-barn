@@ -8,11 +8,17 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section.
-- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection. `LlmProviderKeyChecker` can check their keys, but nothing calls it yet. `GET /api/v1/platform/settings/llm-providers` lists the connections.
-- Next: the slice 1 demo on local k3d; slice 2, PR 4, the `platform.llm_provider.created` event.
+- In progress: slice 2, connections to other providers. The table accepts Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks, Novita, Azure and Custom connections (migration `91ad0093c626`), but nothing creates them yet; OpenRouter is still the only connection. `LlmProviderKeyChecker` can check their keys, but nothing calls it yet. `GET /api/v1/platform/settings/llm-providers` lists the connections. The `platform.llm_provider.created` event is registered, but nothing emits it yet.
+- Next: the slice 1 demo on local k3d; slice 2, PR 5, adding a known provider.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-17 — AF-447 — slice 2, PR 4
+
+- Delivered: the Platform-scoped `platform.llm_provider.created` event, version 1, projected by `security_audit.projection` and by no other handler. Its payload is `connection_id`, `slug`, `provider_type`, `base_url` (null for a known provider), `revived` (whether a deleted connection came back) and the actor and subject display names. Any other field is refused, so no part of the key can be added to it. Nothing emits it yet.
+- Changed: [`domain-events.md`](../domain-events.md) describes the event.
+- Follow-up: PR 5 emits it when a Platform Administrator adds a known provider.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 3
 

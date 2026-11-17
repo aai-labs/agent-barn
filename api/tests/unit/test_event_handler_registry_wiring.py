@@ -166,3 +166,15 @@ def test_file_sync_switch_events_reach_only_the_security_audit(event_name):
 
     assert_that(handler_names.get(event_name), equal_to((SECURITY_AUDIT_HANDLER,)))
     assert_that(_build_production_handler_registry().supports(SECURITY_AUDIT_HANDLER, event_name, 1), is_(True))
+
+
+def test_the_llm_provider_created_event_reaches_only_the_security_audit():
+    event_name = "platform.llm_provider.created"
+    handler_names = {
+        definition.event_name: definition.handler_names
+        for definition in EVENT_REGISTRY.list_definitions()
+        if definition.schema_version == 1
+    }
+
+    assert_that(handler_names.get(event_name), equal_to((SECURITY_AUDIT_HANDLER,)))
+    assert_that(_build_production_handler_registry().supports(SECURITY_AUDIT_HANDLER, event_name, 1), is_(True))
