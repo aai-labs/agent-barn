@@ -181,7 +181,7 @@ run-tier-sweep:
 # One anomaly check of every Agent in Organizations that turned detection on. ./run.sh
 # runs it every 15 minutes as anomaly-checks.
 run-anomaly-checks:
-	cd api && uv run python -c "from api.domains.anomalies.checks import main; main()"
+	api/.venv/bin/python -c "from api.domains.anomalies.checks import main; main()"
 
 # Sets the Stripe account in STRIPE_SECRET_KEY up for Tier subscriptions from the Tier catalog:
 # a monthly Price per paid Tier, and the customer portal. Safe to run again; ARGS=--dry-run
