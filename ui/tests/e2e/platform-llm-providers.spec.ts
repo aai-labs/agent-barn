@@ -40,7 +40,8 @@ test("Platform Admin replaces the OpenRouter key and sees only its last four cha
   await settings.dialog().getByRole("button", { name: "Save key" }).click();
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(page.getByRole("status")).toHaveText("OpenRouter key saved.");
+  await expect(settings.toast("OpenRouter key saved")).toBeVisible();
+  await expect(settings.providerList()).not.toContainText("key saved");
   await expect(settings.card()).toContainText("sk-*******c3d4");
   await expect(page.getByText(NEW_KEY)).toHaveCount(0);
   expect(mock.writes).toEqual([{ slug: "openrouter", body: { api_key: NEW_KEY } }]);
@@ -139,14 +140,14 @@ test("a failed read can be retried", async ({ page }) => {
   await expect(settings.providerCard("Anthropic")).toContainText("*******c3d4");
 });
 
-test("Platform Admin sees every other connection with only its last four characters", async ({ page }) => {
+test("Platform Admin sees every connection in its own card with only its last four characters", async ({ page }) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept({ connections: [ANTHROPIC_CONNECTION, AZURE_CONNECTION] });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
   await expect(settings.card()).toContainText("sk-*******a1b2");
-  await expect(settings.providerCardNames()).toHaveText(["Anthropic", "Azure Europe"]);
+  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", "Anthropic", "Azure Europe"]);
   await expect(settings.providerCard("Anthropic")).toContainText("*******c3d4");
   await expect(settings.providerCard("Anthropic")).not.toContainText("sk-");
   await expect(settings.providerCard("Anthropic")).toContainText("Changed by Platform Person");
@@ -155,14 +156,16 @@ test("Platform Admin sees every other connection with only its last four charact
   await expect(settings.providerCard("Azure Europe")).toContainText("*******e5f6");
 });
 
-test("a platform with only OpenRouter says no other provider is connected", async ({ page }) => {
+test("a platform with only OpenRouter lists OpenRouter, with Add provider outside every card", async ({ page }) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept();
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.otherProviders()).toContainText("No other provider is connected.");
-  await expect(settings.providerCardNames()).toHaveCount(0);
+  await expect(settings.providerCardNames()).toHaveText(["OpenRouter"]);
+  await expect(settings.addProviderButton()).toBeVisible();
+  await expect(settings.providerList().getByRole("button", { name: "Add provider" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Other providers" })).toHaveCount(0);
 });
 
 test("Platform Admin adds a known provider and sees only its last four characters", async ({ page }) => {
@@ -191,7 +194,8 @@ test("Platform Admin adds a known provider and sees only its last four character
   await settings.dialog().getByRole("button", { name: "Add provider" }).click();
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(settings.otherProviders().getByRole("status")).toHaveText("OpenAI added.");
+  await expect(settings.toast("OpenAI added")).toBeVisible();
+  await expect(settings.providerList()).not.toContainText("added");
   await expect(settings.providerCard("OpenAI")).toContainText("*******g7h8");
   await expect(page.getByText(PROVIDER_KEY)).toHaveCount(0);
   expect(mock.adds).toEqual([{ provider_type: "openai", api_key: PROVIDER_KEY }]);
@@ -212,7 +216,7 @@ test("Platform Admin adds an Azure connection with its name, slug and base URL",
   });
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(settings.otherProviders().getByRole("status")).toHaveText("Azure Europe added.");
+  await expect(settings.toast("Azure Europe added")).toBeVisible();
   await expect(settings.providerCard("Azure Europe")).toContainText("https://contoso.openai.azure.com");
   await expect(settings.providerCard("Azure Europe")).toContainText("*******g7h8");
   expect(mock.adds).toEqual([
@@ -296,7 +300,8 @@ test("Platform Admin replaces a known provider's key", async ({ page }) => {
   await settings.dialog().getByRole("button", { name: "Save key" }).click();
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(settings.providerCard("Anthropic").getByRole("status")).toHaveText("Anthropic key saved.");
+  await expect(settings.toast("Anthropic key saved")).toBeVisible();
+  await expect(settings.providerList()).not.toContainText("key saved");
   await expect(settings.providerCard("Anthropic")).toContainText("*******g7h8");
   await expect(page.getByText(PROVIDER_KEY)).toHaveCount(0);
   expect(mock.writes).toEqual([{ slug: "anthropic", body: { api_key: PROVIDER_KEY } }]);
@@ -365,8 +370,8 @@ test("Platform Admin deletes a connection only after confirming", async ({ page 
 
   await expect(settings.dialog()).toHaveCount(0);
   await expect(settings.providerCard("Anthropic")).toHaveCount(0);
-  await expect(settings.otherProviders().getByRole("status")).toHaveText("Anthropic deleted.");
-  await expect(settings.providerCardNames()).toHaveText(["Azure Europe"]);
+  await expect(settings.toast("Anthropic deleted")).toBeVisible();
+  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", "Azure Europe"]);
   expect(mock.deletes).toEqual(["anthropic"]);
   await settings.addProviderButton().click();
   await settings.providerSelect().click();

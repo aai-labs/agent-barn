@@ -7,8 +7,16 @@ export class PlatformLlmProvidersPage {
     await this.page.goto("/dashboard/platform/settings?section=llm-providers");
   }
 
+  providerList() {
+    return this.page.getByRole("list", { name: "LLM providers" });
+  }
+
   card() {
-    return this.page.getByRole("region", { name: "OpenRouter" });
+    return this.providerCard("OpenRouter");
+  }
+
+  toast(text: string) {
+    return this.page.locator("[data-sonner-toast]").filter({ hasText: text });
   }
 
   openDialogButton() {
@@ -33,16 +41,12 @@ export class PlatformLlmProvidersPage {
     await this.dialog().getByRole("button", { name: "Cancel" }).click();
   }
 
-  otherProviders() {
-    return this.page.getByRole("region", { name: "Other providers" });
-  }
-
   providerCard(name: string) {
-    return this.otherProviders().getByRole("region", { name, exact: true });
+    return this.providerList().getByRole("region", { name, exact: true });
   }
 
   providerCardNames() {
-    return this.otherProviders().getByRole("heading", { level: 4 });
+    return this.providerList().getByRole("heading", { level: 3 });
   }
 
   replaceKeyButton(name: string) {
@@ -54,7 +58,7 @@ export class PlatformLlmProvidersPage {
   }
 
   addProviderButton() {
-    return this.otherProviders().getByRole("button", { name: "Add provider" });
+    return this.page.getByRole("button", { name: "Add provider" });
   }
 
   providerSelect() {

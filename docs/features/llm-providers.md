@@ -81,15 +81,16 @@ A saved key records `platform.llm_provider.changed`, Platform scope, projected t
 
 ## UI
 
-Platform Admin settings → **LLM providers** (`/dashboard/platform/settings?section=llm-providers`, `ui/src/features/llm-providers/`) reads every connection from `GET /platform/settings/llm-providers`; a failed read can be retried. It shows an OpenRouter card:
+Platform Admin settings → **LLM providers** (`/dashboard/platform/settings?section=llm-providers`, `ui/src/features/llm-providers/`) reads every connection from `GET /platform/settings/llm-providers`; a failed read can be retried. It lists every live connection in the API's order, OpenRouter first, each in its own card with its name, who changed its key when, and for Azure and Custom the provider and base URL. A saved key is masked as `*******` plus its last four characters, and OpenRouter's as `sk-*******` (other providers' keys don't all start with `sk-`). OpenRouter's card also says:
 
-- a saved key: masked as `sk-*******` plus its last four characters, and who changed it when;
-- no key: whether Agents are using `OPENROUTER_API_KEY` meanwhile, or that they cannot call OpenRouter models until a key is saved;
-- a saved key while `OPENROUTER_API_KEY` is still set: a note that the secret can be deleted once every environment sharing it has a saved key.
+- with no key: whether Agents are using `OPENROUTER_API_KEY` meanwhile, or that they cannot call OpenRouter models until a key is saved;
+- with a saved key while `OPENROUTER_API_KEY` is still set: that the secret can be deleted once every environment sharing it has a saved key.
 
-Below it, **Other providers** lists every other live connection by name, each with its key masked as `*******` plus its last four characters (other providers' keys don't all start with `sk-`), who changed it when, and for Azure and Custom the provider and base URL. "Add provider" opens a dialog that offers the known providers not yet connected, Azure and Custom, never OpenRouter. Azure and Custom also ask for a name, slug and base URL. The key is a password field. A refused add keeps the dialog open with the API's message; a missing provider or empty key is not sent.
+"Add provider", above the cards, opens a dialog that offers the known providers not yet connected, Azure and Custom, never OpenRouter. Azure and Custom also ask for a name, slug and base URL. The key is a password field. A refused add keeps the dialog open with the API's message; a missing provider or empty key is not sent.
 
 Every card has "Replace key" ("Save a key" while it has none), which opens a dialog with a password field and sends `PUT /platform/settings/llm-providers/{slug}/key`. For Azure and Custom the dialog also shows the base URL, filled in with the stored one; it is sent with the key only when it was changed. A refused or failed save keeps the dialog open with the API's message; an empty key is not sent. Every card but OpenRouter's has "Delete", which asks for confirmation before it sends `DELETE /platform/settings/llm-providers/{slug}`; for Azure and Custom the confirmation says the slug can't be used again. A refused delete keeps the confirmation open with the API's message.
+
+An added provider, a saved key and a deleted connection are each confirmed by a toast.
 
 ## Moving off the environment key
 

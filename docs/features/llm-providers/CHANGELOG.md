@@ -14,6 +14,10 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-17 — AF-447 — slice 2, provider list follow-up
+
+- Changed: Platform Admin settings → LLM providers shows every connection, OpenRouter first, in one list with a card each, replacing the OpenRouter card and the **Other providers** card. "Add provider" sits above the cards, as "Add size" does in Agent sizes. An added provider, a saved key and a deleted connection are confirmed by a toast instead of a line inside a card. `provider-card.tsx` replaces `llm-provider-connection-list.tsx`, and `platform-llm-provider-settings.tsx` holds the add, key and delete dialogs. `platform-llm-providers.spec.ts` and its page object find cards in the provider list and check the toasts. [`llm-providers.md`](../llm-providers.md) describes the list.
+
 ### 2026-11-17 — AF-447 — slice 2, PR 13
 
 - Delivered: slice 2 is complete. [`llm-providers.md`](../llm-providers.md) has a section on how each provider's key is checked, and its read-when, role and invariants cover every connection rather than OpenRouter alone.
