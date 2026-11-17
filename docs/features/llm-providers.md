@@ -43,11 +43,11 @@ Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_p
 | xAI | `GET https://api.x.ai/v1/models` | `Authorization: Bearer` |
 | DeepSeek | `GET https://api.deepseek.com/models` | `Authorization: Bearer` |
 | Fireworks | `GET https://api.fireworks.ai/v1/accounts` | `Authorization: Bearer` |
-| Novita | `GET https://api.novita.ai/openai/v1/models` | `Authorization: Bearer` |
+| Novita | `GET https://api.novita.ai/v3/user` | `Authorization: Bearer` |
 | Azure | `GET {base_url}/openai/v1/models`, the base URL being the resource endpoint such as `https://<resource>.openai.azure.com` | `api-key` |
 | Custom | `GET {base_url}/models` | `Authorization: Bearer` |
 
-`200` accepts the key. `401` or `403` refuses it, and for Gemini so does `400`. Any other answer, or none, means the provider could not be reached. For Azure and Custom, a base URL whose host is not a public address is refused before any request, and a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json` means the base URL does not answer like a model API. Why Fireworks, Gemini, Azure and Novita are checked this way is in the [change log](llm-providers/CHANGELOG.md) (slice 2, PR 2).
+`200` accepts the key. `401` or `403` refuses it, and for Gemini and xAI so does `400`. Any other answer, or none, means the provider could not be reached. For Azure and Custom, a base URL whose host is not a public address is refused before any request, and a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json` means the base URL does not answer like a model API. A Custom server whose `/models` does not check the key accepts any key. Why Fireworks, Gemini, Azure, Novita and xAI are checked this way is in the [change log](llm-providers/CHANGELOG.md) (slice 2, PR 2 and the review fixes).
 
 ## LiteLLM routes
 

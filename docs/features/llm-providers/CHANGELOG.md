@@ -14,6 +14,13 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-17 — AF-447 — slice 2, review fixes
+
+- Fixed: a Novita key was accepted without being checked. Novita's `GET /openai/v1/models` answers `200` without authenticating, so any key passed. The checker now asks `GET https://api.novita.ai/v3/user`, which refuses a wrong key with `403` `INVALID_API_KEY`, the bad-key answer PR 2 recorded for Novita.
+- Fixed: a wrong xAI key was reported as "could not be reached" (`503`) instead of "did not accept this key" (`422`). xAI's `GET /v1/models` refuses it with `400` `invalid-argument` ("Incorrect API key provided"), not the `401` in its docs, so xAI's `400` now refuses a key as Gemini's does. Nothing was stored either way.
+- Changed: checked on 2026-11-17 by sending an obviously fake key to every check endpoint, never committed as a test. Novita `/v3/user` answered `403`; Anthropic, OpenAI, DeepSeek and Fireworks `401`; Gemini and xAI `400`; Novita's model list `200`. A real Novita or xAI key answering `200` is not checked yet. `test_llm_provider_key_checker.py` asks Novita at `/v3/user` and refuses xAI's `400`. [`llm-providers.md`](../llm-providers.md) says so, and that a Custom server whose `/models` does not check the key accepts any key.
+- Changed: the PR 12 release-impact line said an API client calling `.../openrouter` gets `405`; it now says those routes never reached a release.
+
 ### 2026-11-17 — AF-447 — slice 2, provider list follow-up
 
 - Changed: Platform Admin settings → LLM providers shows every connection, OpenRouter first, in one list with a card each, replacing the OpenRouter card and the **Other providers** card. "Add provider" sits above the cards, as "Add size" does in Agent sizes. An added provider, a saved key and a deleted connection are confirmed by a toast instead of a line inside a card. `provider-card.tsx` replaces `llm-provider-connection-list.tsx`, and `platform-llm-provider-settings.tsx` holds the add, key and delete dialogs. `platform-llm-providers.spec.ts` and its page object find cards in the provider list and check the toasts. [`llm-providers.md`](../llm-providers.md) describes the list.
@@ -28,7 +35,7 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 - Removed: `GET` and `PUT /api/v1/platform/settings/llm-providers/openrouter`, with `OpenRouterConnectionRead`, `OpenRouterKeyUpdate` and the service's `read_openrouter` and `replace_openrouter_key`. OpenRouter's key status is its entry in `GET /platform/settings/llm-providers`, and its key is replaced through `PUT .../openrouter/key`, which checks it with OpenRouter and writes the LiteLLM route first as before. Both old paths now answer `405`, because `DELETE .../{slug}` matches them, and reach nothing.
 - Changed: `test_platform_llm_providers.py` reads OpenRouter's entry from the list and saves through `PUT .../openrouter/key`, and checks that the old paths change nothing. `test_openrouter_route_litellm_contract.py` saves through `PUT .../openrouter/key` and passes against LiteLLM. `operations-v1.json`, the RBAC brief and [`llm-providers.md`](../llm-providers.md) drop the two routes.
-- Release impact: an API client still calling `GET` or `PUT .../openrouter` gets `405`; the UI stopped calling them in PR 11.
+- Release impact: none for a released client. The two routes were added on 2026-11-16 and reached only `staging`, never `main` or a `vX.Y.Z` tag, and public deploys only from a tag. A call to them now gets `405`; the UI stopped calling them in PR 11. This holds only while this change reaches `staging` before the next release tag is cut from it.
 - Follow-up: PR 13 brings the feature doc, `docs/INDEX.md` and this change log up to slice 2 delivered.
 
 ### 2026-11-17 — AF-447 — slice 2, PR 11

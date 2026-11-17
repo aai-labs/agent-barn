@@ -30,11 +30,14 @@ _ENDPOINTS = {
     ProviderType.XAI: _Endpoint("https://api.x.ai/v1/models", *_BEARER),
     ProviderType.DEEPSEEK: _Endpoint("https://api.deepseek.com/models", *_BEARER),
     ProviderType.FIREWORKS: _Endpoint("https://api.fireworks.ai/v1/accounts", *_BEARER),
-    ProviderType.NOVITA: _Endpoint("https://api.novita.ai/openai/v1/models", *_BEARER),
+    ProviderType.NOVITA: _Endpoint("https://api.novita.ai/v3/user", *_BEARER),
     ProviderType.AZURE: _Endpoint("/openai/v1/models", "api-key"),
     ProviderType.CUSTOM: _Endpoint("/models", *_BEARER),
 }
-_EXTRA_REFUSED_STATUSES = {ProviderType.GEMINI: frozenset({httpx.codes.BAD_REQUEST})}
+_EXTRA_REFUSED_STATUSES = {
+    ProviderType.GEMINI: frozenset({httpx.codes.BAD_REQUEST}),
+    ProviderType.XAI: frozenset({httpx.codes.BAD_REQUEST}),
+}
 
 
 class LlmProviderKeyCheckError(Exception):

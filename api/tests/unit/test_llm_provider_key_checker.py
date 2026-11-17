@@ -38,7 +38,7 @@ PROVIDER_REQUESTS = [
     (ProviderType.XAI, None, "https://api.x.ai/v1/models", BEARER),
     (ProviderType.DEEPSEEK, None, "https://api.deepseek.com/models", BEARER),
     (ProviderType.FIREWORKS, None, "https://api.fireworks.ai/v1/accounts", BEARER),
-    (ProviderType.NOVITA, None, "https://api.novita.ai/openai/v1/models", BEARER),
+    (ProviderType.NOVITA, None, "https://api.novita.ai/v3/user", BEARER),
     (
         ProviderType.AZURE,
         AZURE_BASE_URL,
@@ -135,6 +135,11 @@ def test_a_key_the_provider_refuses_does_not_check_out(provider_type, base_url, 
 def test_gemini_refuses_an_invalid_key_with_400():
     with _answering(_Provider(400)):
         assert_that(_check(ProviderType.GEMINI, None), equal_to(False))
+
+
+def test_xai_refuses_an_invalid_key_with_400():
+    with _answering(_Provider(400)):
+        assert_that(_check(ProviderType.XAI, None), equal_to(False))
 
 
 @pytest.mark.parametrize("status_code", [400, 404, 429, 500, 502, 503])
