@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SettingsErrorText } from "@/components/settings/settings-error-text";
 import { SettingsSection } from "@/components/settings/settings-section";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Fact } from "@/features/spend-limits/components/fact";
 
 import { useAnomalyDetection, useUpdateAnomalyDetection } from "../hooks/use-anomaly-detection";
@@ -16,13 +14,12 @@ const WHAT_IT_DOES = `Each Agent's activity is compared with what is normal for 
 // Said before anyone turns checks on, so judging what was flagged later needs no second
 // consent.
 const BILLING = "Checks may use an AI model provider, and any cost is billed to that Agent's spend.";
+const TOGGLE_LABEL_ID = "unusual-activity-toggle-label";
 
 /** The Organization's opt-in to unusual activity checks. Owners and Admins only. */
 export function UnusualActivityPanel() {
   const { settings, isLoading, error, refetch } = useAnomalyDetection();
   const update = useUpdateAnomalyDetection();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<boolean | null>(null);
 
   if (isLoading) {
     return (
@@ -37,64 +34,45 @@ export function UnusualActivityPanel() {
     );
   }
 
-  const enabled = draft ?? settings.enabled;
-
-  function reset() {
-    setDraft(null);
-    update.reset();
-  }
+  // The change is saved as soon as the toggle is flipped, as for the other on/off
+  // settings; the billing note above it is read before checks are turned on.
+  const enabled = update.isPending && update.variables !== undefined ? update.variables : settings.enabled;
 
   return (
-    <SettingsSection
-      title="Unusual activity checks"
-      description={WHAT_IT_DOES}
-      canEdit={settings.canManage}
-      editing={editing}
-      onEdit={() => setEditing(true)}
-      onCancel={() => {
-        reset();
-        setEditing(false);
-      }}
-      onApply={async () => {
-        await update.mutateAsync(enabled);
-        reset();
-      }}
-      onApplied={() => setEditing(false)}
-      applyDisabled={enabled === settings.enabled || update.isPending}
-      applyLabel="Save"
-      applyPendingLabel="Saving…"
-      errorsShownInline
-      confirm={
-        enabled
-          ? {
-              title: "Turn on unusual activity checks?",
-              description: `${WHAT_IT_DOES} ${BILLING}`,
-              confirmLabel: "Turn on",
-            }
-          : {
-              title: "Turn off unusual activity checks?",
-              description:
-                "Agents stop being checked. What was already flagged stays on each Agent's Anomalies tab.",
-              confirmLabel: "Turn off",
-            }
-      }
-    >
+    <SettingsSection title="Unusual activity checks" description={WHAT_IT_DOES}>
       <div className="flex max-w-2xl flex-col gap-4">
         <p className="m-0 text-[0.86rem]" style={{ color: "var(--ink-2)" }}>
           {WHAT_IT_DOES} {BILLING}
         </p>
-        {editing && settings.canManage ? (
-          <label className="flex items-center gap-2.5 text-[0.9rem]" style={{ color: "var(--ink)" }}>
-            <Checkbox checked={enabled} onCheckedChange={(checked) => setDraft(checked === true)} />
-            Check Agents for unusual activity
-          </label>
+        {settings.canManage ? (
+          <div className="flex items-center justify-between gap-4">
+            <span id={TOGGLE_LABEL_ID} className="text-[0.9rem] font-medium" style={{ color: "var(--ink)" }}>
+              Check Agents for unusual activity
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-labelledby={TOGGLE_LABEL_ID}
+              aria-checked={enabled}
+              disabled={update.isPending}
+              onClick={() => update.mutate(!enabled)}
+              className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ backgroundColor: enabled ? "var(--ink)" : "var(--line)" }}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${enabled ? "translate-x-4" : ""}`}
+              />
+            </button>
+          </div>
         ) : (
           <dl className="m-0">
             <Fact label="Status">{settings.enabled ? "On" : "Off"}</Fact>
           </dl>
         )}
         {update.error && (
-          <SettingsErrorText>{update.error instanceof Error ? update.error.message : "Save failed"}</SettingsErrorText>
+          <SettingsErrorText>
+            {update.error instanceof Error ? update.error.message : "Changing unusual activity checks failed."}
+          </SettingsErrorText>
         )}
       </div>
     </SettingsSection>

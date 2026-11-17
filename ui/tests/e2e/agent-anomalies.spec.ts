@@ -158,16 +158,25 @@ test.describe("Settings · Unusual activity", () => {
   test("checks are off until an Owner turns them on, having been told they may be billed", async ({ page }) => {
     const { mock, anomaliesPage } = await openSettings(page);
     const setting = anomaliesPage.detectionSetting();
-    await expect(setting).toContainText("Off");
     await expect(setting).toContainText("may use an AI model provider");
     await expect(setting).toContainText("billed to that Agent");
 
-    await anomaliesPage.edit(setting);
-    await setting.getByRole("checkbox", { name: "Check Agents for unusual activity" }).check();
-    await anomaliesPage.apply("Save", "Turn on");
+    const toggle = setting.getByRole("switch", { name: "Check Agents for unusual activity" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
 
     expect(mock.requests.find((request) => request.method === "PUT")?.body).toEqual({ enabled: true });
-    await expect(setting).toContainText("On");
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("an Owner turns checks off with the same toggle", async ({ page }) => {
+    const { mock, anomaliesPage } = await openSettings(page, { enabled: true });
+    const toggle = anomaliesPage.detectionSetting().getByRole("switch", { name: "Check Agents for unusual activity" });
+
+    await toggle.click();
+
+    expect(mock.requests.find((request) => request.method === "PUT")?.body).toEqual({ enabled: false });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
   });
 
   test("Members do not see the setting", async ({ page }) => {
