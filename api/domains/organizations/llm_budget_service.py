@@ -423,6 +423,15 @@ class OrganizationLlmBudgetService:
         what counts as a warning."""
         return get_config().llm_budget_alert_thresholds
 
+    def observed_spend(self, organization_id: UUID) -> float | None:
+        """The spend the limit and the Billing balance count, as of the last snapshot: the
+        team's, plus what it doesn't count. None until spend has been observed.
+        System-initiated, so it checks no permission."""
+        organization = self._organization_or_404(organization_id)
+        if organization.llm_spend_usd is None:
+            return None
+        return organization.llm_spend_usd + self.memory_accounting.spend_outside_team(organization)
+
     def get_organization_llm_budget(
         self, organization_id: UUID, context: CurrentUserContext
     ) -> OrganizationLlmBudgetRead:

@@ -26,13 +26,19 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
+from api.domains.llm_providers.lookup import OpenRouterKeyLookup
 from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
+from api.domains.subscriptions.plans import TierPlans
 from api.domains.sync_provider.plugins.providers import shipped_plugins
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.tiers.trial_terms import FreeTierTrialTerms
+from api.domains.tiers.usage_policy import TierUsagePolicy
+from api.domains.usage.guard import UsageGuard
+from api.domains.usage.plans import OrganizationPlans, TrialTermsEditor
 from api.domains.workflows.controller import WorkflowControllerHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
@@ -59,6 +65,24 @@ class AppModule(Module):
     @singleton
     def provide_artifact_storage(self, storage: S3ArtifactStorage) -> ArtifactStorage:
         return storage
+
+    @provider
+    @singleton
+    def provide_usage_guard(self, policy: TierUsagePolicy) -> UsageGuard:
+        # What an Organization may start using is decided by its Tier.
+        return policy
+
+    @provider
+    @singleton
+    def provide_organization_plans(self, plans: TierPlans) -> OrganizationPlans:
+        # A new Organization's plan and the trial's terms come from the Tier catalog.
+        return plans
+
+    @provider
+    @singleton
+    def provide_trial_terms_editor(self, terms: FreeTierTrialTerms) -> TrialTermsEditor:
+        # The trial's terms are the Free Tier's, edited through the catalog.
+        return terms
 
     @provider
     @singleton
@@ -163,6 +187,7 @@ class AppModule(Module):
         openrouter: OpenRouterClient,
         memory_keys: MemoryKeyRepository,
         llm_budgets: OrganizationLlmBudgetService,
+        openrouter_keys: OpenRouterKeyLookup,
     ) -> CostSynchronizer:
         return CostSynchronizer(
             repository=repository,
@@ -173,6 +198,7 @@ class AppModule(Module):
             memory_key_hashes=config.memory_cost_key_hashes,
             memory_key_source=memory_keys.hashes,
             on_healed=llm_budgets.apply_healed_spend,
+            openrouter_api_key=openrouter_keys.api_key,
         )
 
     @provider

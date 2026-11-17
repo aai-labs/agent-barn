@@ -79,6 +79,13 @@ export function AgentCard({ agent, href }: AgentCardProps) {
               <h3 className="m-0 min-w-0 truncate font-semibold text-base tracking-tight" title={agent.name} style={{ color: "var(--ink)" }}>
                 {agent.name}
               </h3>
+              {agent.suspendedAt && (
+                <span className="shrink-0">
+                  <span className="inline-block rounded-full px-2 py-px text-[0.68rem] font-medium" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>
+                    On hold
+                  </span>
+                </span>
+              )}
               {!idle && (
                 <span id={`${agent.id}-status`} className="shrink-0">
                   <span className="inline-block rounded-full px-2 py-px text-[0.68rem] font-medium" style={{ background: presence.badge.bg, color: presence.badge.fg }}>

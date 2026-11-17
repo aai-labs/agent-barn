@@ -388,7 +388,7 @@ prometheus:
                 severity: warning
               annotations:
                 summary: OpenRouter credits cannot be polled.
-                description: The credits probe is failing — OPENROUTER_API_KEY missing/invalid on the API or the OpenRouter API is unreachable.
+                description: The credits probe is failing — no valid OpenRouter key (saved in Platform Admin settings, or OPENROUTER_API_KEY on the API while none is saved) or the OpenRouter API is unreachable.
 
   alertmanager:
     enabled: true

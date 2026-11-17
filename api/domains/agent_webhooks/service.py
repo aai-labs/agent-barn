@@ -30,6 +30,7 @@ from api.domains.communications.models import CommunicationConnection
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.usage.guard import UsageAction, UsageGuard
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -57,6 +58,7 @@ class AgentWebhookService:
     dispatcher: AgentWebhookDispatcher
     connections: CommunicationConnectionRepository
     config: Config
+    usage: UsageGuard
 
     def list_webhooks(self, agent_id: UUID, context: CurrentUserContext) -> list[AgentWebhookRead]:
         self.authorization.require_visible(context, agent_id)
@@ -96,6 +98,7 @@ class AgentWebhookService:
     ) -> AgentWebhookRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
+        self.usage.check(agent.organization_id, UsageAction.ENABLE_WEBHOOK)
         self._require_delivery_platform(agent_id, payload.delivery_platform.value)
         secret = secrets.token_urlsafe(32)
         webhook = AgentWebhook(
@@ -118,10 +121,13 @@ class AgentWebhookService:
         payload: AgentWebhookUpdate,
         context: CurrentUserContext,
     ) -> AgentWebhookRead:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(webhook_id, agent_id, scope) is None:
+        webhook = self.repository.get_active_in_scope(webhook_id, agent_id, scope)
+        if webhook is None:
             self._raise_not_found(webhook_id)
+        if payload.enabled and not webhook.enabled:
+            self.usage.check(agent.organization_id, UsageAction.ENABLE_WEBHOOK)
         if payload.delivery_platform is not None:
             self._require_delivery_platform(agent_id, payload.delivery_platform.value)
         try:
@@ -308,6 +314,8 @@ class AgentWebhookService:
             display_name=webhook.display_name,
             delivery_platform=webhook.delivery_platform,
             enabled=webhook.enabled,
+            suspended_at=webhook.suspended_at,
+            suspension_reason=webhook.suspension_reason,
             revision=webhook.revision,
             webhook_url=webhook_url,
             signing_secret=signing_secret,

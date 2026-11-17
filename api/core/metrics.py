@@ -16,6 +16,7 @@ Registry layout:
   on duplicated timeseries.
 """
 
+import hashlib
 import logging
 import threading
 import time
@@ -79,13 +80,13 @@ OPENROUTER_SCRAPE_OK = Gauge(
 )
 
 _openrouter_lock = threading.Lock()
-_openrouter_polled_at: float | None = None
+_openrouter_polled: tuple[float, str] | None = None
 
 
 def clear_openrouter_credits_cache() -> None:
-    global _openrouter_polled_at
+    global _openrouter_polled
     with _openrouter_lock:
-        _openrouter_polled_at = None
+        _openrouter_polled = None
 
 
 def setup_http_metrics(app: FastAPI) -> CollectorRegistry:
@@ -118,37 +119,45 @@ def refresh_agents_in_error(count_agents_in_error: Callable[[], int]) -> None:
         logger.warning("Failed to refresh agents-in-error gauge", exc_info=True)
 
 
-def refresh_openrouter_credits() -> None:
-    """Poll the key's remaining credit limit, TTL-cached across scrapes.
+def refresh_openrouter_credits(api_key: Callable[[], str]) -> None:
+    """Poll the key's remaining credit limit, TTL-cached across scrapes until the key changes.
 
     Uses GET /key with the ordinary inference key (the account-wide /credits
     endpoint needs a management key, which can also mint/delete keys — too
     much privilege for a metrics probe). limit_remaining is null for a key
     without a credit limit; that maps to +Inf so CreditsLow can never fire
-    until an operator sets a limit on the key. On a missing key or failed
-    poll, scrape_ok drops to 0 and the credits gauge keeps its last value so
-    alerts can distinguish "stale" from "low".
+    until an operator sets a limit on the key. On a missing or unreadable key
+    or a failed poll, scrape_ok drops to 0 and the credits gauge keeps its last
+    value so alerts can distinguish "stale" from "low".
     """
-    global _openrouter_polled_at
+    global _openrouter_polled
     config = get_config()
 
-    if not config.openrouter_api_key:
+    try:
+        key = api_key()
+    except Exception:
+        logger.warning("Failed to read the OpenRouter key for the credits probe", exc_info=True)
         OPENROUTER_SCRAPE_OK.set(0)
         return
+    if not key:
+        OPENROUTER_SCRAPE_OK.set(0)
+        return
+    fingerprint = hashlib.sha256(key.encode()).hexdigest()
 
     with _openrouter_lock:
         now = time.monotonic()
         if (
-            _openrouter_polled_at is not None
-            and now - _openrouter_polled_at < config.openrouter_credits_cache_ttl_seconds
+            _openrouter_polled is not None
+            and _openrouter_polled[1] == fingerprint
+            and now - _openrouter_polled[0] < config.openrouter_credits_cache_ttl_seconds
         ):
             return
-        _openrouter_polled_at = now
+        _openrouter_polled = (now, fingerprint)
 
     try:
         response = httpx.get(
             f"{config.openrouter_base_url.rstrip('/')}/key",
-            headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
+            headers={"Authorization": f"Bearer {key}"},
             timeout=10,
         )
         response.raise_for_status()

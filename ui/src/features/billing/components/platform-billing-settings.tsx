@@ -11,11 +11,12 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { useBillingSettings } from "../hooks/use-billing-settings";
 import { chargeUsd } from "../pricing";
 
-type Draft = { payments: boolean; min: string; max: string; fee: string };
+type Draft = { payments: boolean; min: string; max: string; fee: string; grace: string };
 
 // The API's bounds: Stripe's smallest card payment, and caps that only stop a typo.
 const MIN_PURCHASE_FLOOR_USD = 0.5;
 const MAX_PURCHASE_CAP_USD = 100_000;
+const MAX_PAYMENT_GRACE_DAYS = 60;
 
 function parseWithin(raw: string, { from, to }: { from: number; to: number }): number | null {
   const trimmed = raw.trim();
@@ -77,6 +78,11 @@ function Saved({ label, children }: { label: string; children: string }) {
   );
 }
 
+function graceLabel(days: number): string {
+  if (days === 0) return "None";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
 /** The Billing section of the platform settings page: how organizations buy credit. */
 export function PlatformBillingSettings() {
   const { billingSettings, isLoading, error, reload, saveSettings, isSaving, saveError, resetSave } =
@@ -92,9 +98,12 @@ export function PlatformBillingSettings() {
   const min = draft === null ? null : parseWithin(draft.min, { from: MIN_PURCHASE_FLOOR_USD, to: MAX_PURCHASE_CAP_USD });
   const max = draft === null ? null : parseWithin(draft.max, { from: MIN_PURCHASE_FLOOR_USD, to: MAX_PURCHASE_CAP_USD });
   const fee = draft === null ? null : parseWithin(draft.fee, { from: 0, to: 100 });
+  const grace = draft === null ? null : parseWithin(draft.grace, { from: 0, to: MAX_PAYMENT_GRACE_DAYS });
+  const graceDays = grace !== null && Number.isInteger(grace) ? grace : null;
   const minInvalid = draft !== null && min === null;
   const maxInvalid = draft !== null && (max === null || (min !== null && max < min));
   const feeInvalid = draft !== null && fee === null;
+  const graceInvalid = draft !== null && graceDays === null;
 
   function change(next: Partial<Draft>) {
     setDraft((current) => (current ? { ...current, ...next } : current));
@@ -107,13 +116,14 @@ export function PlatformBillingSettings() {
   const paymentsChange = draft === null || draft.payments === billingSettings.paymentsEnabled ? null : draft.payments;
 
   async function submit() {
-    if (draft === null || min === null || max === null || fee === null || max < min) return;
+    if (draft === null || min === null || max === null || fee === null || graceDays === null || max < min) return;
     try {
       await saveSettings({
         paymentsEnabled: draft.payments,
         minPurchaseUsd: min,
         maxPurchaseUsd: max,
         purchaseFeePercent: fee,
+        paymentGraceDays: graceDays,
       });
       setDraft(null);
       setSaved(true);
@@ -195,6 +205,15 @@ export function PlatformBillingSettings() {
               help="Added on top of every purchase, to cover card fees or keep a margin. $1.00 of credit is always $1.00 of model spend."
               onChange={(value) => change({ fee: value })}
             />
+            <Field
+              id="billing-grace"
+              label="Payment grace period"
+              value={draft.grace}
+              invalid={graceInvalid}
+              error={`Enter a whole number of days from 0 to ${MAX_PAYMENT_GRACE_DAYS}.`}
+              help="How many days a subscription whose payment failed keeps its tier before the organization drops to Free."
+              onChange={(value) => change({ grace: value })}
+            />
           </div>
         ) : (
           <dl className="m-0 grid gap-x-8 gap-y-5 sm:grid-cols-2">
@@ -209,6 +228,7 @@ export function PlatformBillingSettings() {
             <Saved label="Smallest purchase">{formatUsd(billingSettings.minPurchaseUsd, 2)}</Saved>
             <Saved label="Largest purchase">{formatUsd(billingSettings.maxPurchaseUsd, 2)}</Saved>
             <Saved label="Purchase fee">{`${billingSettings.purchaseFeePercent}%`}</Saved>
+            <Saved label="Payment grace period">{graceLabel(billingSettings.paymentGraceDays)}</Saved>
           </dl>
         )}
         {saveError && (
@@ -237,7 +257,7 @@ export function PlatformBillingSettings() {
             </button>
             <button
               className="af-btn af-btn-primary"
-              disabled={minInvalid || maxInvalid || feeInvalid || isSaving}
+              disabled={minInvalid || maxInvalid || feeInvalid || graceInvalid || isSaving}
               onClick={() => setConfirming(true)}
             >
               {isSaving ? "Saving…" : "Save"}
@@ -252,6 +272,7 @@ export function PlatformBillingSettings() {
                 min: String(billingSettings.minPurchaseUsd),
                 max: String(billingSettings.maxPurchaseUsd),
                 fee: String(billingSettings.purchaseFeePercent),
+                grace: String(billingSettings.paymentGraceDays),
               });
               setSaved(false);
             }}

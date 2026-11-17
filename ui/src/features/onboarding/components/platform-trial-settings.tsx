@@ -86,6 +86,10 @@ export function PlatformTrialSettings() {
 
   return (
     <section className="af-card overflow-hidden" aria-label="Signup and trial settings">
+      <p className="m-0 border-b px-5 py-3 text-[0.84rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>
+        A trial is the Free tier: its credit and agent limit are Free&apos;s, also editable under Tiers.
+        {trialSettings.freeTierOffered === false && " Free isn't offered, so sign-up is closed until it is."}
+      </p>
       <div className="p-5">
         {draft !== null ? (
           <div className="flex flex-col gap-5">

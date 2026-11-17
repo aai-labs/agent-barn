@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/select";
 import { formatDate } from "@/shared/date";
 import { toastError } from "@/shared/toast";
+import { TierLockedNote } from "@/features/tiers/components/tier-locked-note";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 
 import { useCreateMemoryGrant, useRevokeMemoryGrant } from "../hooks/use-memory-grant-actions";
 import { useMemoryAgentOptions, useMemoryGrants } from "../hooks/use-memory-grants";
@@ -36,6 +38,9 @@ function sentence(grant: MemoryGrant) {
  */
 export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
   const grantsQuery = useMemoryGrants(canManage);
+  // Without Agent Memory in the tier, existing access can be revoked but none granted.
+  const { tier, hasFeature } = useTierEntitlements();
+  const canGrant = hasFeature("agent_memory");
   const options = useMemoryAgentOptions(canManage);
   const createGrant = useCreateMemoryGrant();
   const revokeGrant = useRevokeMemoryGrant();
@@ -89,6 +94,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
         Access to another Agent&apos;s memory is read-only. Organization Memory can be shared for reading or for reading and writing.
       </p>
 
+      {canGrant ? (
       <section className="mb-6 rounded-2xl p-5" style={{ border: "1px solid var(--line)", background: "var(--bg-card)" }} aria-label="Grant memory access">
         <h3 className="mb-1 mt-0 text-[0.95rem] font-semibold" style={{ color: "var(--ink)" }}>
           Grant access
@@ -217,6 +223,9 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
           </p>
         )}
       </section>
+      ) : (
+        <div className="mb-6"><TierLockedNote tierName={tier?.name} what="new memory access" /></div>
+      )}
 
       <section aria-label="Current memory access">
         <h3 className="mb-1 mt-0 text-[0.95rem] font-semibold" style={{ color: "var(--ink)" }}>
