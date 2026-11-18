@@ -18,6 +18,7 @@ from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.events import event_delivery_tables_are_clean
+from api.tests.steps.onboarding import the_tier_is_offered
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -93,6 +94,7 @@ def test_signup_is_closed_until_an_administrator_configures_it():
                     credit_usd=10.0,
                     agent_limit=1,
                     free_tier_offered=False,
+                    any_tier_offered=False,
                     max_active_trials=none(),
                     updated_at=none(),
                 ),
@@ -247,7 +249,7 @@ def test_an_unauthenticated_caller_cannot_read_trial_settings():
 
 
 def test_signup_can_be_enabled_together_with_positive_credit_and_is_audited():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True, "credit_usd": 20})
         assert_that(response.status_code, equal_to(200), response.text)
         assert_that(
@@ -261,7 +263,7 @@ def test_signup_can_be_enabled_together_with_positive_credit_and_is_audited():
 
 
 def test_signup_cannot_be_enabled_without_positive_credit():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         context.client.put(BASE, headers=auth(context), json={"credit_usd": 0})
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
         assert_that(response.status_code, equal_to(400))
@@ -273,7 +275,7 @@ def test_signup_cannot_be_enabled_without_positive_credit():
 
 
 def test_credit_cannot_be_zeroed_while_signup_is_enabled():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True, "credit_usd": 20})
         response = context.client.put(BASE, headers=auth(context), json={"credit_usd": 0})
         assert_that(response.status_code, equal_to(400))
@@ -285,11 +287,55 @@ def test_credit_cannot_be_zeroed_while_signup_is_enabled():
 
 
 def test_disabling_signup_allows_zero_credit_in_the_same_save():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True, "credit_usd": 20})
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": False, "credit_usd": 0})
         assert_that(response.status_code, equal_to(200), response.text)
         assert_that(response.json(), has_entries(self_signup_enabled=False, credit_usd=0))
+
+
+def test_signup_cannot_be_enabled_while_no_tier_is_offered():
+    with given(_setup(a_platform_admin())) as context:
+        with when("a Platform Administrator enables signup with every Tier withdrawn"):
+            response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+
+        with then("it is refused and nothing changes"):
+            assert_that(response.status_code, equal_to(400))
+            assert_that(
+                response.json()["detail"],
+                equal_to("Offer a tier before enabling self-signup: with none offered, no one can sign up."),
+            )
+            assert_that(
+                context.client.get(BASE, headers=auth(context)).json(),
+                has_entries(self_signup_enabled=False, any_tier_offered=False),
+            )
+            assert_that(_trial_setting_events(context), has_length(0))
+
+
+@pytest.mark.parametrize("key", ["free", "cloud_1"])
+def test_signup_can_be_enabled_while_any_tier_is_offered(key):
+    with given(_setup(a_platform_admin(), the_tier_is_offered(key))) as context:
+        response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), has_entries(self_signup_enabled=True, any_tier_offered=True))
+
+
+def test_signup_already_enabled_stays_editable_after_the_last_tier_is_withdrawn():
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
+        context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+        the_tier_is_offered(offered=False)(context)
+
+        with when("a Platform Administrator saves the settings as the page sends them"):
+            response = context.client.put(
+                BASE, headers=auth(context), json={"self_signup_enabled": True, "max_active_trials": 5}
+            )
+
+        with then("the save goes through, and the read says no Tier is offered"):
+            assert_that(response.status_code, equal_to(200), response.text)
+            assert_that(
+                response.json(), has_entries(self_signup_enabled=True, max_active_trials=5, any_tier_offered=False)
+            )
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT"])

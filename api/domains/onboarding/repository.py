@@ -37,7 +37,8 @@ class TrialSettingsRepository:
 
     def read(self) -> TrialSettingsRead:
         with Session(self.delegate.engine) as session:
-            return self._current(session.get(PlatformTrialSettings, 1), self.plans.trial_terms(session))
+            current = self._current(session.get(PlatformTrialSettings, 1), self.plans.trial_terms(session))
+        return current.model_copy(update={"any_tier_offered": bool(self.plans.offered_keys())})
 
     @staticmethod
     def _current(row: PlatformTrialSettings | None, terms: TrialTerms | None) -> TrialSettingsRead:

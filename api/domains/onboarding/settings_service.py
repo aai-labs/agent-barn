@@ -103,9 +103,9 @@ class TrialSettingsUpdateService:
 
     def update(self, data: TrialSettingsUpdate, context: CurrentUserContext) -> TrialSettingsRead:
         """The trial's credit and Agent limit are its plan's, so they are changed, audited and
-        enforced as a change to that plan; the rest are the trial settings' own. Turning
-        sign-up off is stored before the credit changes, and anything else after, so sign-up
-        is never open on no credit."""
+        enforced as a change to that plan; the rest are the trial settings' own. Sign-up is
+        only turned on while a Tier is offered. Turning sign-up off is stored before the
+        credit changes, and anything else after, so sign-up is never open on no credit."""
         self.authority.require_platform_admin(context.user)
         settings = data.changes()
         # Neither can be cleared (TrialSettingsUpdate), so a term that is sent has a value.
@@ -113,6 +113,15 @@ class TrialSettingsUpdateService:
             setting: value for setting in _PLAN_TERMS if (value := settings.pop(setting, None)) is not None
         }
         current = self.repository.read()
+        if (
+            settings.get("self_signup_enabled") is True
+            and not current.self_signup_enabled
+            and not current.any_tier_offered
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Offer a tier before enabling self-signup: with none offered, no one can sign up.",
+            )
         signup = settings.get("self_signup_enabled", current.self_signup_enabled)
         if signup and terms.get("credit_usd", current.credit_usd) <= 0:
             raise HTTPException(

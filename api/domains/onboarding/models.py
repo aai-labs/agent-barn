@@ -51,6 +51,9 @@ class TrialSettingsRead(BaseModel):
     agent_limit: int = DEFAULT_TRIAL_AGENT_LIMIT
     # Whether the Free Tier is offered; sign-up grants it, so it is closed without.
     free_tier_offered: bool = False
+    # Whether any Tier is offered, Free or paid; with none, sign-up has nothing to put a new
+    # Organization on, so it can't be enabled.
+    any_tier_offered: bool = False
     # None: any number of trials may be active at once.
     max_active_trials: int | None = None
     # Organizations on a trial right now, counted against `max_active_trials`.
