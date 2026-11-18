@@ -8,6 +8,7 @@ export const RateSignalSchema = z.enum([
   "LLM_CALLS_PER_HOUR",
   "TOOL_CALLS_PER_HOUR",
   "TOOL_ERROR_RATE",
+  "LLM_ERROR_RATE",
   "WRITES_PER_HOUR",
 ]);
 export type RateSignal = z.infer<typeof RateSignalSchema>;

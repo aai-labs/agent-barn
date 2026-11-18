@@ -83,6 +83,7 @@ def test_a_seeded_spike_is_flagged_on_every_rate_and_as_first_uses():
                     (AnomalySignal.WRITES_PER_HOUR.value, None),
                     (AnomalySignal.LLM_CALLS_PER_HOUR.value, None),
                     (AnomalySignal.LLM_TOKENS_PER_HOUR.value, None),
+                    (AnomalySignal.LLM_ERROR_RATE.value, None),
                     (AnomalySignal.NEW_DESTINATION.value, "unusual.seed.example"),
                     (AnomalySignal.NEW_INTEGRATION_ACTION.value, "crm delete"),
                 }

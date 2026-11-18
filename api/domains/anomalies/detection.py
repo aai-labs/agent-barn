@@ -42,6 +42,7 @@ class RateSignal(StrEnum):
     LLM_CALLS_PER_HOUR = "LLM_CALLS_PER_HOUR"
     TOOL_CALLS_PER_HOUR = "TOOL_CALLS_PER_HOUR"
     TOOL_ERROR_RATE = "TOOL_ERROR_RATE"
+    LLM_ERROR_RATE = "LLM_ERROR_RATE"
     WRITES_PER_HOUR = "WRITES_PER_HOUR"
 
 
@@ -58,6 +59,7 @@ RATE_FLOORS: dict[RateSignal, RateFloor] = {
     RateSignal.LLM_CALLS_PER_HOUR: RateFloor(min_value=30, min_spread=5),
     RateSignal.TOOL_CALLS_PER_HOUR: RateFloor(min_value=30, min_spread=5),
     RateSignal.TOOL_ERROR_RATE: RateFloor(min_value=0.3, min_spread=0.05),
+    RateSignal.LLM_ERROR_RATE: RateFloor(min_value=0.3, min_spread=0.05),
     RateSignal.WRITES_PER_HOUR: RateFloor(min_value=10, min_spread=2),
 }
 
@@ -102,7 +104,8 @@ def evaluate_cap(observed: float, cap: float) -> Verdict:
 
 
 def error_rate(errors: int, calls: int) -> float | None:
-    """The share of tool calls that failed, or None when there are too few to judge."""
+    """The share of calls (tool or model) that failed, or None when there are too few
+    to judge."""
     if calls < MIN_ERROR_RATE_CALLS:
         return None
     return errors / calls

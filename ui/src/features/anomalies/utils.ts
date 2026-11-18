@@ -19,6 +19,7 @@ export const SIGNAL_LABELS: Record<AnomalySignal, string> = {
   LLM_CALLS_PER_HOUR: "Model calls per hour",
   TOOL_CALLS_PER_HOUR: "Tool calls per hour",
   TOOL_ERROR_RATE: "Failed tool calls",
+  LLM_ERROR_RATE: "Failed model calls",
   WRITES_PER_HOUR: "Changes and deletions per hour",
   LLM_TOKENS_CAP: "Over the hourly token cap",
   LLM_CALLS_CAP: "Over the hourly model call cap",
@@ -52,7 +53,7 @@ export function isFirstUse(signal: AnomalySignal): boolean {
 }
 
 export function formatSignalValue(signal: AnomalySignal | RateSignal, value: number): string {
-  if (signal === "TOOL_ERROR_RATE") return `${Math.round(value * 100)}%`;
+  if (signal === "TOOL_ERROR_RATE" || signal === "LLM_ERROR_RATE") return `${Math.round(value * 100)}%`;
   return Math.round(value).toLocaleString("en-US");
 }
 

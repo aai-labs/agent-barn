@@ -62,6 +62,17 @@ test.describe("Agent · Unusual activity", () => {
     await expect(anomaly).toContainText("Ongoing");
   });
 
+  test("failing model calls read as a share of the Agent's model calls", async ({ page }) => {
+    const { anomaliesPage } = await openTab(page, {
+      anomalies: [mockAnomaly({ signal: "LLM_ERROR_RATE", observed_value: 0.8, usual_value: 0.05, threshold: 0.3 })],
+    });
+
+    const anomaly = anomaliesPage.anomalies().first();
+    await expect(anomaly).toContainText("Failed model calls");
+    await expect(anomaly).toContainText("80%");
+    await expect(anomaly).toContainText("usually 5%");
+  });
+
   test("a first use names the destination and says where it was seen", async ({ page }) => {
     const { anomaliesPage } = await openTab(page, {
       anomalies: [

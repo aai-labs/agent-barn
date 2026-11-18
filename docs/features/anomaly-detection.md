@@ -48,8 +48,9 @@ Rates, per hour, against the Agent's own active hours in the last 14 days:
 
 | Signal | Source |
 | --- | --- |
-| `LLM_TOKENS_PER_HOUR` | `cost_record.total_tokens`, without memory processing |
-| `LLM_CALLS_PER_HOUR` | `cost_record` rows, without memory processing |
+| `LLM_TOKENS_PER_HOUR` | `cost_record.total_tokens` of successful calls, without memory processing |
+| `LLM_CALLS_PER_HOUR` | successful `cost_record` rows, without memory processing |
+| `LLM_ERROR_RATE` | share of `cost_record` rows not in `success`, without memory processing |
 | `TOOL_CALLS_PER_HOUR` | `tool_call` rows |
 | `TOOL_ERROR_RATE` | share of `tool_call` rows in `ERROR` |
 | `WRITES_PER_HOUR` | `business_action` rows with `is_write` |
@@ -95,17 +96,27 @@ image bump stops browser destinations from being seen on Hermes.
 
 Pure functions in `api/domains/anomalies/detection.py`.
 
-- An **active hour** is a UTC hour with at least one LLM call or tool call. Rates are
-  judged over active hours only; an Agent idle most of the day would otherwise have a
-  median and spread of zero and flag on any work. Quiet signals in an active hour count
-  as zero.
+- An **active hour** is a UTC hour with at least one successful LLM call or a tool call.
+  Rates are judged over active hours only; an Agent idle most of the day would otherwise
+  have a median and spread of zero and flag on any work. Quiet signals in an active hour
+  count as zero.
+- **Failed LLM calls** are counted apart. They are not LLM calls for the call rate, the
+  token rate or the call cap, and an hour in which every LLM call failed is not active.
+  Counted together, a scheduled job that keeps failing (seen on staging: a few failed
+  calls every three hours for weeks) made an Agent's usual rates look idle, so every hour
+  of real work was flagged while the failures themselves went unnoticed. They feed
+  `LLM_ERROR_RATE` instead.
 - **Baseline**: the median and the median absolute deviation (scaled by 1.4826) of the
   hourly values. The spread is at least a per-signal minimum and 10% of the median, so a
   perfectly steady Agent tolerates small changes.
 - **Threshold**: median + k × spread, k = 2.5 (high), 3.5 (normal) or 5 (low sensitivity),
   and never below a per-signal floor, so tiny numbers (0 → 3 calls) never flag.
-- **Error rate** counts only hours with at least 10 tool calls, in the baseline and in the
-  hour being checked.
+- **Error rate** counts only hours with at least 10 tool calls (tool error rate) or 10
+  LLM calls, failed ones included (LLM error rate), in the baseline and in the hour being
+  checked. Hours in which every LLM call failed are not active, so the LLM error rate
+  baseline never learns an outage as usual: an Agent whose model calls keep failing keeps
+  being flagged instead of drifting into it. A partial failure rate that lasts days still
+  becomes part of the Agent's normal, as any other deviation does (see below).
 - **Minimum history**: nothing is flagged until the Agent was active on at least 3
   different days in the window, for rates and first use alike. Hard caps apply straight
   away.
