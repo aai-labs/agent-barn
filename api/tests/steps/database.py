@@ -105,6 +105,7 @@ def database_is_clean():
                 [{**seed, "enabled": False, "created_at": now, "updated_at": now} for seed in SEED_TIERS],
             )
             # The LLM Provider Connections back to what the migration seeded: OpenRouter, no key.
+            conn.execute(text("DELETE FROM llm_provider_model"))
             conn.execute(text("DELETE FROM llm_provider_connection"))
             conn.execute(
                 LlmProviderConnection.__table__.insert(),  # ty: ignore[unresolved-attribute]

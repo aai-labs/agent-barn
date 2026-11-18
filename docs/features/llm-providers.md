@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection` table, how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
+Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection` or `llm_provider_model` table, how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
 
 ## Role in the system
 
@@ -19,6 +19,14 @@ Agents never hold a provider key. They call LiteLLM with their own virtual keys,
 - Adding a known provider whose connection was deleted brings that row back, with the same id and the new key. An Azure or Custom connection is never brought back: a slug used before, deleted or not, is refused.
 - An Azure or Custom connection's name is chosen by the Platform Administrator, at most 64 characters. Its base URL is a public HTTPS address, at most 2048 characters, with no credentials, query or fragment, and stored without a trailing `/`.
 - A slug stays unique among deleted connections too, so it is never reused. The database refuses a malformed slug, an unknown provider type, a key without its last four characters or the reverse, and a connection that breaks its provider type's slug or `base_url` rule.
+
+## Models
+
+- Stored in `llm_provider_model`, added by migration `bc817a73bb6d`: the `connection_id`, a `model_id`, four per-token prices (`input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost`, `cache_creation_input_token_cost`, each `NUMERIC(24,18)`), a `price_source` and a `litellm_price_key`. The price columns carry LiteLLM's own route field names.
+- A connection carries a model once; two connections may carry the same `model_id`. A `model_id` is 1 to 200 characters of `[A-Za-z0-9._:/-]`, so it can't hold `*`.
+- `price_source` is `litellm` for a price read from LiteLLM's price list, with the key it was read under in `litellm_price_key`, or `manual` for a typed price, with no key.
+- The database refuses an input or output price of zero or less, a negative cache price, a missing price, an unknown price source, a key that doesn't match the price source, a malformed `model_id` and a model of no connection.
+- Nothing writes the table yet; slice 3's later PRs add the API and LiteLLM routes ([change log](llm-providers/CHANGELOG.md)).
 
 ## Invariants
 

@@ -164,6 +164,10 @@ _Avoid_: configured model, current model
 A model provider account Agent Barn reaches models through, with the key it uses, kept by Platform Administrators for every Organization. Agents never hold its key; they reach it through the model proxy with their own keys.
 _Avoid_: provider key, LLM credential, model provider setting
 
+**LLM Provider Model**:
+A model kept for an LLM Provider Connection, with the per-token prices recorded for it. A connection holds each model once.
+_Avoid_: model route, deployment, model price
+
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend
