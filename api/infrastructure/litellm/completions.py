@@ -66,7 +66,7 @@ class LiteLLMCompletionClient:
         except httpx.HTTPError:
             raise CompletionError(CompletionFailure.UNAVAILABLE) from None
         if response.status_code != 200:
-            raise CompletionError(_failure_for(response))
+            raise CompletionError(failure_for(response))
         try:
             payload = response.json()
             choice = payload["choices"][0]
@@ -78,31 +78,36 @@ class LiteLLMCompletionClient:
                 content=content,
                 prompt_tokens=int(usage.get("prompt_tokens") or 0),
                 completion_tokens=int(usage.get("completion_tokens") or 0),
-                cost_usd=_cost(response.headers.get("x-litellm-response-cost")),
+                cost_usd=response_cost(response.headers.get("x-litellm-response-cost")),
                 truncated=choice.get("finish_reason") == "length",
             )
         except ValueError, KeyError, IndexError, TypeError:
             raise CompletionError(CompletionFailure.BAD_RESPONSE) from None
 
 
-def _failure_for(response: httpx.Response) -> CompletionFailure:
-    # LiteLLM reports an exhausted key or team budget as 400 with a budget error type.
-    if response.status_code in (400, 429) and "budget" in _error_type(response):
+def failure_for(response: httpx.Response) -> CompletionFailure:
+    # An exhausted key or team budget arrives as 400 or 429 on older releases, with "budget"
+    # in the error type or message, and as 422 with the budget_exceeded type on v1.108.6.
+    # A 422 is judged by its type alone, because its message may echo the caller's input.
+    if response.status_code in (400, 429) and "budget" in _error_text(response):
         return CompletionFailure.BUDGET_EXCEEDED
-    if response.status_code in (400, 401, 403, 404):
+    if response.status_code == 422 and "budget" in _error_text(response, message=False):
+        return CompletionFailure.BUDGET_EXCEEDED
+    if response.status_code in (400, 401, 403, 404, 422):
         return CompletionFailure.KEY_OR_MODEL_REJECTED
     return CompletionFailure.UNAVAILABLE
 
 
-def _error_type(response: httpx.Response) -> str:
+def _error_text(response: httpx.Response, *, message: bool = True) -> str:
     try:
         error = response.json().get("error") or {}
-        return f"{error.get('type', '')} {error.get('message', '')}".lower()
+        text = f"{error.get('type', '')} {error.get('message', '') if message else ''}"
+        return text.lower()
     except ValueError, AttributeError, json.JSONDecodeError:
         return ""
 
 
-def _cost(header: str | None) -> Decimal | None:
+def response_cost(header: str | None) -> Decimal | None:
     if not header:
         return None
     try:

@@ -23,6 +23,7 @@ import api.domains.communications.models
 import api.domains.conversations.models
 import api.domains.costs.models
 import api.domains.custom_api.models
+import api.domains.decisions.models
 import api.domains.events.models
 import api.domains.events.security_audit
 import api.domains.file_sync.models

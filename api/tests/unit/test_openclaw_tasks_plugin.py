@@ -262,6 +262,31 @@ def test_heartbeat_runs_are_not_reminded(tmp_path: Path):
 # --- open Tasks each turn ---
 
 
+def test_an_unfinished_tasks_latest_note_is_shown_with_it(tmp_path: Path):
+    driven = _drive(
+        tmp_path,
+        [_prompt()],
+        open_tasks=[
+            {
+                "id": "task-1",
+                "title": "Weekly greetings",
+                "status": "in_progress",
+                "latest_note": "Greeting 5\nof 7 sent",
+            },
+            {"id": "task-2", "title": "Draft summary", "status": "open", "latest_note": None},
+            {"id": "task-3", "title": "Old work", "status": "done", "latest_note": "All sent"},
+            {"id": "task-4", "title": "Long", "status": "open", "latest_note": "x" * 400},
+        ],
+    )
+
+    context = _context(driven["results"][0])
+
+    assert_that(context, contains_string('task-1 [in_progress] Weekly greetings (latest note: "Greeting 5 of 7 sent")'))
+    assert_that(context, contains_string("task-2 [open] Draft summary\n"))
+    assert_that(context, contains_string("task-3 [done] Old work\n"))
+    assert_that(context, contains_string('task-4 [open] Long (latest note: "' + "x" * 200 + '…")'))
+
+
 def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     driven = _drive(
         tmp_path,
@@ -277,6 +302,8 @@ def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     assert_that(context, contains_string("task-1 [in_progress] Reconcile invoices"))
     assert_that(context, contains_string("task-2 [open] Draft summary"))
     assert_that(context, contains_string("task-3 [done] Old work"))
+    assert_that(context, contains_string("only when the request is the same piece of work"))
+    assert_that(context, contains_string("A new request gets its own Task, even while another is in progress"))
 
 
 def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path):
@@ -668,6 +695,75 @@ def test_every_task_left_in_progress_is_closed(tmp_path: Path):
     _drive(tmp_path, [_created("c1", "task-1"), _created("c2", "task-2"), _agent_end()])
 
     assert_that(sorted(_statuses(tmp_path)), equal_to([["status", "task-1", "done"], ["status", "task-2", "done"]]))
+
+
+def _kept(call_id: str = "c2", action: str = "create", keep=True) -> dict:
+    details = {"id": _TASK_ID, "status": "in_progress"}
+    target = {"title": "States"} if action == "create" else {"task_id": _TASK_ID}
+    return _task(
+        call_id,
+        result={"content": [{"type": "text", "text": json.dumps(details)}], "details": details},
+        action=action,
+        status="in_progress",
+        keep=keep,
+        **target,
+    )
+
+
+@pytest.mark.parametrize("action", ["create", "status"])
+def test_a_task_the_agent_keeps_stays_in_progress_when_the_run_ends(tmp_path: Path, action: str):
+    _drive(tmp_path, [_kept(action=action), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_keep_given_as_text_is_honoured(tmp_path: Path):
+    _drive(tmp_path, [_kept(keep="true"), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_task_reopened_without_keep_is_marked_done_when_the_run_ends(tmp_path: Path):
+    _drive(tmp_path, [_task("c1", action="status", task_id=_TASK_ID, status="in_progress"), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_the_last_status_call_in_a_run_wins_over_keep(tmp_path: Path):
+    _drive(
+        tmp_path,
+        [_kept(), _task("c3", action="status", task_id=_TASK_ID, status="in_progress"), _agent_end()],
+    )
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_kept_task_is_reopened_when_the_run_failed(tmp_path: Path):
+    _drive(tmp_path, [_kept(), _agent_end(success=False)])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_keep_is_not_passed_to_the_task_command(tmp_path: Path):
+    _drive(
+        tmp_path,
+        [
+            _tool(action="create", title="Report", keep=True),
+            _tool(action="status", task_id=_TASK_ID, status="in_progress", keep=True),
+        ],
+    )
+
+    assert_that(
+        [call["argv"] for call in _calls(tmp_path)],
+        equal_to([["create", "--title=Report", "--status=in_progress"], ["status", _TASK_ID, "in_progress"]]),
+    )
+
+
+def test_the_tool_offers_keep(tmp_path: Path):
+    [tool] = _drive(tmp_path, [])["tools"]
+
+    assert_that(tool["parameters"]["properties"]["keep"]["type"], equal_to("boolean"))
+    assert_that(tool["description"], contains_string("keep"))
 
 
 def test_files_are_attached_before_the_task_is_closed(tmp_path: Path):

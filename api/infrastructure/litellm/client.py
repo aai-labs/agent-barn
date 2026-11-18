@@ -204,6 +204,10 @@ class LiteLLMClient:
             info = response.json()["info"]
             if not isinstance(info, dict):
                 raise TypeError("Unexpected key info shape")
+            # Newer LiteLLM releases (v1.108.6; v1.96.2 returned 404) answer for a deleted
+            # key from their deleted-key table. The key no longer works, so it is absent.
+            if info.get("deleted_at") or info.get("status") == "deleted":
+                raise LiteLLMKeyNotFound("LiteLLM does not recognise this Agent key")
             return info
         except LiteLLMKeyNotFound:
             raise
@@ -605,7 +609,7 @@ class LiteLLMClient:
         This is LiteLLM's paginated public spend API. `/spend/logs` is deprecated and
         aggregates rather than listing rows; `/spend/logs/ui` is internal and absent
         from the OpenAPI schema, so neither is safe to depend on in client-deployed
-        installs. `/spend/logs/v2` is present in v1.83, v1.96 and v1.101 alike.
+        installs. `/spend/logs/v2` is present in v1.83, v1.96, v1.101 and v1.108 alike.
 
         Dates must be `YYYY-MM-DD HH:MM:SS` — a bare date returns HTTP 400.
 

@@ -8,7 +8,11 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import require_platform_admin
-from api.domains.llm_providers.models import OpenRouterConnectionRead, OpenRouterKeyUpdate
+from api.domains.llm_providers.models import (
+    LlmProviderConnectionCreate,
+    LlmProviderConnectionRead,
+    LlmProviderKeyReplace,
+)
 from api.domains.llm_providers.service import PlatformLlmProviderService
 
 
@@ -30,18 +34,37 @@ platform_llm_providers_router = APIRouter(
 )
 
 
-@platform_llm_providers_router.get("/openrouter", response_model=OpenRouterConnectionRead)
-def read_openrouter_connection(
+@platform_llm_providers_router.get("", response_model=list[LlmProviderConnectionRead])
+def list_connections(
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
-    return service.read_openrouter(context)
+    return service.list_connections(context)
 
 
-@platform_llm_providers_router.put("/openrouter", response_model=OpenRouterConnectionRead)
-def replace_openrouter_key(
-    data: OpenRouterKeyUpdate,
+@platform_llm_providers_router.post("", response_model=LlmProviderConnectionRead, status_code=201)
+def add_connection(
+    data: LlmProviderConnectionCreate,
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
-    return service.replace_openrouter_key(data, context)
+    return service.add_connection(data, context)
+
+
+@platform_llm_providers_router.put("/{slug}/key", response_model=LlmProviderConnectionRead)
+def replace_key(
+    slug: str,
+    data: LlmProviderKeyReplace,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.replace_key(slug, data, context)
+
+
+@platform_llm_providers_router.delete("/{slug}", status_code=204)
+def delete_connection(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    service.delete_connection(slug, context)
