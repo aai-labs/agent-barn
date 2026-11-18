@@ -106,6 +106,17 @@ class AgentTaskTurnEndService:
         holds: dict[str, Literal["in_progress", "open"]] = {}
         for task_id in state_tasks:
             answer = answers.get(task_id)
-            if isinstance(answer, ChoiceAnswer) and answer.confidence >= _MIN_CONFIDENCE and answer.choice in _HOLDS:
+            if not isinstance(answer, ChoiceAnswer):
+                continue
+            if answer.confidence >= _MIN_CONFIDENCE and answer.choice in _HOLDS:
                 holds[task_id] = _HOLDS[answer.choice]
+            # Logged so a Task that was held back, or closed, can be traced to the answer behind it.
+            logger.info(
+                "Task turn-end decision for agent %s: task %s answered %s at %.2f, %s",
+                agent_id,
+                task_id,
+                answer.choice,
+                answer.confidence,
+                f"held {holds[task_id]}" if task_id in holds else "not held",
+            )
         return AgentTaskTurnEndRead(holds=holds)

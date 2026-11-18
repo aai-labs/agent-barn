@@ -1,10 +1,11 @@
 """Before a Task is marked done at the end of a turn, a decision model can say the job is not finished."""
 
+import logging
 from unittest.mock import Mock
 from uuid import uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_entries
+from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_entries
 from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
@@ -196,6 +197,22 @@ def test_the_model_sees_the_turn_and_the_task_and_is_billed_to_the_agent():
         )
         assert_that(isinstance(questions[task_id], ChoiceQuestion), equal_to(True))
         assert_that(set(questions[task_id].options), equal_to({"finished", "ongoing", "waiting"}))
+
+
+def test_each_answer_is_logged_so_a_held_task_can_be_traced(caplog):
+    with given(_given(_the_decision_model_says("ongoing", confidence=0.83))) as context:
+        task_id = _a_task(context)
+
+        with caplog.at_level(logging.INFO, logger="api.domains.agent_tasks.turn_end"):
+            _end_turn(context, [task_id])
+
+        [record] = [record for record in caplog.records if "turn-end" in record.getMessage()]
+        message = record.getMessage()
+        assert_that(message, contains_string(str(context.agent.id)))
+        assert_that(message, contains_string(task_id))
+        assert_that(message, contains_string("ongoing"))
+        assert_that(message, contains_string("0.83"))
+        assert_that(message, contains_string("in_progress"))
 
 
 def test_another_agents_key_is_refused_and_nothing_is_asked():
