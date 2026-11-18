@@ -85,6 +85,10 @@ LiteLLM's model store is on (`store_model_in_db: true`), so model routes the API
 - Never change it. LiteLLM cannot decrypt stored provider keys under a different value. If it was changed, restore the previous value; otherwise every stored provider key must be saved again so LiteLLM re-encrypts it.
 - The config-file OpenRouter route (`OPENROUTER_API_KEY`) stays at `order: 2` and is rendered only while that key is set. LiteLLM sends requests to the lowest-order healthy route, so a healthy database route at `order: 1` is used instead.
 
+### LiteLLM price list
+
+The chart and Compose set `LITELLM_LOCAL_MODEL_COST_MAP=true`, so LiteLLM uses the price list bundled in its image, at startup and on scheduled or admin reloads. Without it, LiteLLM downloads the list from BerriAI's `main` branch at every start. The list therefore changes only when the LiteLLM image tag changes.
+
 ### OpenRouter key
 
 The OpenRouter key is saved by a Platform Administrator in Platform Admin settings. `OPENROUTER_API_KEY` is optional: while it is set, LiteLLM keeps a config-file route with it and the API falls back to it until a key is saved. A new environment leaves it unset and has no OpenRouter key until one is saved.
