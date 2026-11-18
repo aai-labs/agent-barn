@@ -216,7 +216,13 @@ publication triggers. Existing command approval and messaging policy still apply
 failed creation/upload must not be represented as successful delivery. Replies use
 the returned URL unchanged and briefly explain expiry, without dumping internal
 IDs/checksums or tool commands. Those identities remain available for handoffs.
-The section is kept under 1,000 characters: the platform's appended sections count
+When a native Slack, Discord or Telegram Connection carries the Agent's replies, the
+same section puts the attachment first: the file goes in the reply through the
+`MEDIA:` line of the Agents feature's file-delivery block, and a download link is
+published only when someone asks for one, when attaching fails, and in every workflow
+step, whose checkpoints record the published file. Agents without such a Connection
+always deliver a download link, since gateway-owned Connections send text only.
+Each variant of the section is kept under 1,000 characters: the platform's appended sections count
 toward OpenClaw's 20,000-character AGENTS.md budget, and a longer total leaves only a
 digest of the middle of an Agent's own template. Workflow checkpoints record published
 IDs/checksums themselves, so the instructions do not ask the model to carry them.

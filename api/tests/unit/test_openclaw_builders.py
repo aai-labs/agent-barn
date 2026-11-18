@@ -23,7 +23,10 @@ from api.domains.agents.builders import (
     native_telegram_channel,
     runtime_teams_channel,
 )
-from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
+from api.domains.agents.builders.artifacts import (
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_INSTRUCTIONS_WITH_CHAT_ATTACHMENTS,
+)
 from api.domains.agents.builders.openclaw import (
     LEGACY_WORKSPACE_MIGRATION_SH,
     LISTEN_IN_SYSTEM_PROMPT,
@@ -637,6 +640,49 @@ def test_artifact_command_and_instructions_are_available_without_memory() -> Non
     assert "never a workspace path (people\ncan't open it)" in config_map.data["AGENTS.md"]
     assert "Reply with\n`[Download <name>](<url>)`, the returned URL unchanged" in config_map.data["AGENTS.md"]
     assert len(ARTIFACT_INSTRUCTIONS) < 1000
+
+
+def test_with_chat_attachments_files_are_attached_and_links_are_the_fallback() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        artifacts_enabled=True,
+        chat_attachments=True,
+    )
+    agents_md = config_map.data["AGENTS.md"]
+    assert 'attach it to your reply as "Sending Files" says' in agents_md
+    assert "only when someone asks for a download link or\nattaching fails" in agents_md
+    assert "in every workflow step (pass the step's `--attempt-id`)" in agents_md
+    assert "publish it with `/usr/local/bin/agentbarn-artifacts upload <file>`." not in agents_md
+    assert len(ARTIFACT_INSTRUCTIONS_WITH_CHAT_ATTACHMENTS) < 1000
+
+
+def test_without_chat_attachments_files_are_published_as_links() -> None:
+    config_map = build_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        artifacts_enabled=True,
+    )
+    assert ARTIFACT_INSTRUCTIONS in config_map.data["AGENTS.md"]
+    assert '"Sending Files"' not in config_map.data["AGENTS.md"]
 
 
 def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
