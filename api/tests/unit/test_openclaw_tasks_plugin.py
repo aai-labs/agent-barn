@@ -1318,3 +1318,142 @@ def test_a_conversation_turn_that_quotes_a_schedule_prefix_is_not_a_scheduled_ru
     _drive(tmp_path, [_prompt(prompt=f"[cron:{_JOB_ID} greeting-7x] what does this mean?"), _agent_end()])
 
     assert_that(_argvs(tmp_path, "note"), equal_to([]))
+
+
+# --- a Task about to be marked done can be held back ---
+
+
+def _ended(reply: str = "I asked the channel.", run_id: str = "run-1", session: str = "s1", **ctx) -> dict:
+    return {
+        "hook": "agent_end",
+        "event": {"runId": run_id, "success": True, "messages": [{"role": "assistant", "content": reply}]},
+        "ctx": {"sessionKey": session, "runId": run_id, "trigger": "user", **ctx},
+    }
+
+
+def _asked(tmp_path: Path) -> list[dict]:
+    return [json.loads(call["stdin"]) for call in _calls(tmp_path) if call["argv"] == ["turn-end"]]
+
+
+def _left_in_progress(call_id: str = "c2", **kwargs) -> dict:
+    return _after_tool(
+        call_id,
+        tool="agentbarn_task",
+        params={"action": "create", "title": "Ask QA", "status": "in_progress"},
+        result={"details": {"id": _TASK_ID, "status": "in_progress"}},
+        **kwargs,
+    )
+
+
+def test_agent_barn_is_asked_about_a_task_before_it_is_marked_done(tmp_path: Path):
+    steps = [
+        _prompt(prompt="Ask the QA channel for the priority"),
+        _after_tool("c1", command="post question"),
+        _left_in_progress(),
+        _ended(),
+    ]
+
+    _drive(tmp_path, steps)
+
+    [asked] = _asked(tmp_path)
+    assert_that(
+        asked,
+        has_entries(
+            request="Ask the QA channel for the priority",
+            reply="I asked the channel.",
+            closing=[_TASK_ID],
+            trigger="user",
+        ),
+    )
+    assert_that(asked["tools"][0], contains_string("exec"))
+    assert_that(asked["tools"][0], contains_string("post question"))
+    assert_that(len(asked["tools"]), equal_to(2))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_task_whose_job_is_still_going_is_not_marked_done(tmp_path: Path):
+    _drive(tmp_path, [_left_in_progress(), _ended()], FAKE_TURN_END="in_progress")
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_task_waiting_on_the_user_is_left_open(tmp_path: Path):
+    _drive(tmp_path, [_left_in_progress(), _ended()], FAKE_TURN_END="open")
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_a_task_the_agent_kept_is_not_asked_about(tmp_path: Path):
+    _drive(tmp_path, [_kept(), _ended()], FAKE_TURN_END="open")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+@pytest.mark.parametrize("status", ["done", "open", "failed"])
+def test_a_status_the_agent_set_itself_is_not_asked_about(tmp_path: Path, status: str):
+    set_by_agent = _task("c1", result={"details": {"id": _TASK_ID}}, action="status", task_id=_TASK_ID, status=status)
+
+    _drive(tmp_path, [set_by_agent, _ended()], FAKE_TURN_END="in_progress")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_run_that_failed_reopens_its_task_without_asking(tmp_path: Path):
+    _drive(tmp_path, [_left_in_progress(), _agent_end(success=False)], FAKE_TURN_END="in_progress")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_a_run_that_touched_no_task_asks_nothing(tmp_path: Path):
+    _drive(tmp_path, [_after_tool("c1"), _ended()], FAKE_TURN_END="in_progress")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+
+
+def test_secrets_are_not_sent_with_the_question(tmp_path: Path):
+    secret = "sk-" + "a1B2c3D4" * 5
+    steps = [
+        _prompt(prompt=f"Use the key {secret} to call the API"),
+        _after_tool("c1", command=f"curl -H 'Authorization: Bearer {secret}' https://example.com"),
+        _left_in_progress(),
+        _ended(f"I used {secret}."),
+    ]
+
+    _drive(tmp_path, steps)
+
+    assert_that(len(_asked(tmp_path)), equal_to(1))
+    assert_that(secret in json.dumps(_asked(tmp_path)), equal_to(False))
+
+
+def test_a_task_finished_by_setting_up_its_schedule_is_marked_done_without_asking(tmp_path: Path):
+    steps = [
+        _prompt(prompt="Remind me to stretch every morning"),
+        _schedule_added(),
+        _task_recorded("in_progress", keep=True),
+        _ended(),
+    ]
+
+    _drive(tmp_path, steps, FAKE_TURN_END="in_progress", FAKE_SCHEDULE_INTENT="setup")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_task_following_a_schedule_is_not_asked_about(tmp_path: Path):
+    steps = [_prompt(prompt=_GREETING), _schedule_added(), _task_recorded("in_progress"), _ended()]
+
+    _drive(tmp_path, steps, FAKE_TURN_END="open", FAKE_SCHEDULE_INTENT="runs")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_scheduled_run_with_no_linked_task_is_asked_about_as_a_scheduled_run(tmp_path: Path):
+    steps = [_cron_prompt(), _left_in_progress(run_id="cron-1", session=_CRON_SESSION, trigger="cron"), _cron_end()]
+
+    _drive(tmp_path, steps)
+
+    assert_that(_asked(tmp_path)[0]["trigger"], equal_to("cron"))

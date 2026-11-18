@@ -553,3 +553,24 @@ def test_schedule_intent_refuses_input_that_is_not_json_without_a_request():
         result = _run(stub, "schedule-intent", stdin="not json")
 
     assert_that((result.returncode, stub.requests), equal_to((1, [])))
+
+
+def test_turn_end_sends_standard_input_and_prints_the_tasks_held_back():
+    turn = {"request": "Ask QA for the priority", "reply": "Asked.", "tools": [], "closing": [TASK_ID]}
+    with _IngestStub(body={"holds": {TASK_ID: "in_progress"}}) as stub:
+        result = _run(stub, "turn-end", stdin=json.dumps(turn))
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    [request] = stub.requests
+    assert_that(
+        (request["method"], request["path"], json.loads(request["body"])),
+        equal_to(("POST", _tasks_path("/turn-end"), turn)),
+    )
+    assert_that(json.loads(result.stdout), equal_to({"holds": {TASK_ID: "in_progress"}}))
+
+
+def test_turn_end_refuses_input_that_is_not_a_json_object_without_a_request():
+    with _IngestStub() as stub:
+        result = _run(stub, "turn-end", stdin="[]")
+
+    assert_that((result.returncode, stub.requests), equal_to((1, [])))

@@ -10,8 +10,10 @@
 // request, with origin `automatic`. It also does the bookkeeping that would otherwise cost
 // the model a call each: when a run ends, the files it wrote go to the Task it worked on
 // and a Task it left in progress is marked done, or reopened if the run failed; one it kept
-// (`keep`, for work that continues in a later turn) stays in progress. Only a Task
-// call that changed something counts as recording the work: reading the Tasks does not.
+// (`keep`, for work that continues in a later turn) stays in progress. Before a Task is
+// marked done the run is reported to Agent Barn, where a decision model can hold it back:
+// in progress when the job is still going, open when it waits on the user. Only a
+// Task call that changed something counts as recording the work: reading the Tasks does not.
 // The startup checklist (BOOT.md) and subagent runs are left alone: they are not the
 // user's request.
 import { spawn } from "node:child_process";
@@ -42,6 +44,11 @@ const LATEST_NOTE_CHARS = 200;
 const AUTOMATIC_TITLE_CHARS = 120;
 const AUTOMATIC_DESCRIPTION_CHARS = 2000;
 const COMMAND_TIMEOUT_MS = 150_000;
+// Asking whether a Task about to be closed is finished: how long it may take, and how much it is told.
+const TURN_END_TIMEOUT_MS = 45_000;
+const TURN_TOOLS_SENT = 40;
+const TOOL_SUMMARY_CHARS = 300;
+const TURN_TEXT_CHARS = 4000;
 // Sessions remembered at once (requests, reminders, runs); the oldest are forgotten first.
 const SESSIONS_KEPT = 500;
 // Task tool actions and command subcommands that change a Task; reading one is not recording work.
@@ -342,19 +349,54 @@ function track(event, ctx) {
   if (ctx.sessionKey) remember(currentRun, ctx.sessionKey, runId);
   let state = runs.get(runId);
   if (!state) {
-    state = {
-      work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
-      // taskId -> the last status the Agent set this run
-      statuses: new Map(),
-      attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
-      // The Task the Agent touched last, and the titles it gave the Tasks it created.
-      lastTask: null, titles: new Map(),
-      // Schedules the Agent created this run, and the ids of those it removed.
-      schedules: [], removedJobs: new Set(),
-    };
+    state = newState(ctx.sessionKey ?? "");
     remember(runs, runId, state);
   }
   return state;
+}
+
+// What the plugin knows about one run.
+const newState = (sessionKey) => ({
+  work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
+  // taskId -> the last status the Agent set this run
+  statuses: new Map(),
+  attached: new Set(), reminded: false, revised: false, sessionKey,
+  // The Task the Agent touched last, and the titles it gave the Tasks it created.
+  lastTask: null, titles: new Map(),
+  // Schedules the Agent created this run, and the ids of those it removed.
+  schedules: [], removedJobs: new Set(),
+  // The run's tool calls, one short line each, for the question asked before a Task is closed.
+  tools: [], toolIds: new Set(),
+});
+
+// One tool call as a short line, its name and arguments, for the question asked before a Task is closed.
+function toolSummary(name, params) {
+  let text = "";
+  try {
+    text = JSON.stringify(params) ?? "";
+  } catch {
+    text = "";
+  }
+  return redacted(`${name} ${text}`).slice(0, TOOL_SUMMARY_CHARS);
+}
+
+// Ask Agent Barn which of the Tasks about to be marked done are not finished. Returns
+// taskId -> the status to leave it in ("in_progress" or "open"); empty when nothing is held.
+async function held(state, reply, trigger, closing) {
+  const told = {
+    request: redacted(requests.get(state.sessionKey) ?? "").slice(0, TURN_TEXT_CHARS),
+    reply: redacted(reply).slice(0, TURN_TEXT_CHARS),
+    tools: state.tools,
+    closing,
+    trigger: String(trigger ?? "").slice(0, 60),
+  };
+  const answer = await run(["turn-end"], JSON.stringify(told), TURN_END_TIMEOUT_MS);
+  try {
+    const holds = answer.ok ? JSON.parse(answer.output).holds : null;
+    return holds && typeof holds === "object" ? holds : {};
+  } catch {
+    return {};
+  }
 }
 
 const linksPath = () => `${process.env.HOME}/.openclaw/agentbarn-task-schedules.json`;
@@ -444,8 +486,12 @@ async function linkSchedules(sessionKey, state) {
     }
     if (intent === null) intent = agentStatus === KEPT ? "runs" : "setup";
     if (intent !== "runs") {
-      // Setting up the schedule was the whole job: the Task settles like any other.
-      if (agentStatus === KEPT) state.statuses.set(taskId, "in_progress");
+      // Setting up the schedule was the whole job, so the Task for it is finished.
+      if (taskId && (agentStatus === KEPT || agentStatus === "in_progress")) {
+        await run(["status", taskId, "done"]);
+        state.statuses.set(taskId, "done");
+        forgetTaskList();
+      }
       continue;
     }
     if (!taskId) {
@@ -572,11 +618,17 @@ async function attachAutomatically(state) {
 
 // Move each Task the Agent left in_progress this run to `status`; a status it chose itself stays.
 // A Task it kept stays in_progress, unless the run failed: then it is reopened too.
-async function settleInProgress(state, status) {
+async function settleInProgress(state, status, reply = "", trigger = "") {
   const settles = status === "open" ? ["in_progress", KEPT] : ["in_progress"];
   const inProgress = [...state.statuses].filter(([, current]) => settles.includes(current)).map(([id]) => id).sort();
-  for (const taskId of inProgress) await run(["status", taskId, status]);
-  if (inProgress.length) forgetTaskList();
+  if (!inProgress.length) return;
+  // A Task about to be marked done is held back when Agent Barn finds its job is not finished.
+  const holds = status === "done" ? await held(state, reply, trigger, inProgress) : {};
+  for (const taskId of inProgress) {
+    if (holds[taskId] === "in_progress") continue;
+    await run(["status", taskId, holds[taskId] === "open" ? "open" : status]);
+  }
+  forgetTaskList();
 }
 
 // Record a Task for work the Agent left unrecorded. Returns the files it could not attach.
@@ -666,6 +718,10 @@ export default {
     api.on("after_tool_call", (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
       const state = track(event, ctx);
+      if (event.toolCallId && !state.toolIds.has(event.toolCallId) && state.tools.length < TURN_TOOLS_SENT) {
+        state.toolIds.add(event.toolCallId);
+        state.tools.push(toolSummary(event.toolName, event.params));
+      }
       if (SCHEDULER_TOOLS.has(event.toolName)) trackSchedule(state, event);
       if (touchesTasks(event.toolName, event.params)) {
         if (!recordsTask(event.toolName, event.params, event.result, event)) return;
@@ -745,7 +801,8 @@ export default {
       } else if (state.recorded) {
         // A run that failed leaves its Task open to pick up again, not in progress.
         failed = await attachAutomatically(state);
-        await settleInProgress(state, succeeded ? "done" : "open");
+        if (succeeded) await settleInProgress(state, "done", lastReply(event.messages), ctx.trigger);
+        else await settleInProgress(state, "open");
       } else {
         return;
       }

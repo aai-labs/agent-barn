@@ -9,7 +9,9 @@ If it still ends without a Task, the plugin records one itself, named after the 
 with origin `automatic`. It also does the bookkeeping that would otherwise cost the model
 a call each: when a turn ends, the files it wrote go to the Task it worked on and a Task
 it left in progress is marked done, or reopened if the turn did not finish; one it kept
-(`keep`, for work that continues in a later turn) stays in progress. Only a Task
+(`keep`, for work that continues in a later turn) stays in progress. Before a Task is
+marked done the turn is reported to Agent Barn, where a decision model can hold it back:
+in progress when the job is still going, open when it waits on the user. Only a Task
 call that changed something counts as recording the work: reading the Tasks does not.
 Runs with a parent session (Hermes's background review, subagents) are left alone: they
 are not the user's request.
@@ -54,6 +56,11 @@ _COMMAND_TIMEOUT_SECONDS = 150
 _SCHEDULER_TOOL = "cronjob"
 _CRON_SESSION = re.compile(r"^cron_([0-9a-f]{12})_\d{8}_\d{6}")
 _INTENT_TIMEOUT_SECONDS = 45
+# Asking whether a Task about to be closed is finished: how long it may take, and how much it is told.
+_TURN_END_TIMEOUT_SECONDS = 45
+_TURN_TOOLS_SENT = 40
+_TOOL_SUMMARY_CHARS = 300
+_TURN_TEXT_CHARS = 4000
 _RUN_NOTE_CHARS = 300
 # Sessions remembered at once (requests, reminders, turns); the oldest are forgotten first.
 _SESSIONS_KEPT = 500
@@ -469,6 +476,9 @@ def _track(
     if (session_id, turn_id) not in _turns:
         _remember(_turns, (session_id, turn_id), _new_turn())
     turn = _turns[(session_id, turn_id)]
+    if tool_call_id and tool_call_id not in turn["tool_ids"] and len(turn["tools"]) < _TURN_TOOLS_SENT:
+        turn["tool_ids"].add(tool_call_id)
+        turn["tools"].append(_tool_summary(tool_name, args))
     if tool_name == _SCHEDULER_TOOL:
         _track_schedule(turn, args, result)
     if _touches_tasks(tool_name, args):
@@ -498,6 +508,37 @@ def _track(
             for path in published:
                 turn["written"].add(os.path.normpath(os.path.join(_workspace(), path)))
     return turn
+
+
+def _tool_summary(tool_name: str, args) -> str:
+    """One tool call as a short line, its name and arguments, for the question asked before a Task is closed."""
+    try:
+        text = json.dumps(args, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        text = ""
+    return _redacted(f"{tool_name} {text}")[:_TOOL_SUMMARY_CHARS]
+
+
+def _held(session_id: str, turn: dict, reply: str, trigger: str, closing: list[str]) -> dict:
+    """Ask Agent Barn which of the Tasks about to be marked done are not finished.
+
+    Returns task_id -> the status to leave it in ("in_progress" or "open"); empty when nothing is held.
+    """
+    with _lock:
+        request = _redacted(_requests.get(session_id, ""))
+    told = {
+        "request": request[:_TURN_TEXT_CHARS],
+        "reply": _redacted(reply)[:_TURN_TEXT_CHARS],
+        "tools": turn["tools"],
+        "closing": closing,
+        "trigger": trigger,
+    }
+    ok, output = _run(["turn-end"], stdin=json.dumps(told), timeout=_TURN_END_TIMEOUT_SECONDS)
+    try:
+        holds = json.loads(output).get("holds") if ok else None
+    except (ValueError, AttributeError):
+        holds = None
+    return holds if isinstance(holds, dict) else {}
 
 
 def _track_schedule(turn: dict, args, result) -> None:
@@ -607,9 +648,11 @@ def _link_schedules(session_id: str, turn: dict) -> None:
         if intent is None:
             intent = "runs" if agent_status == _KEPT else "setup"
         if intent != "runs":
-            if agent_status == _KEPT:
-                # Setting up the schedule was the whole job: the Task settles like any other.
-                turn["statuses"][task_id] = "in_progress"
+            # Setting up the schedule was the whole job, so the Task for it is finished.
+            if task_id is not None and agent_status in (_KEPT, "in_progress"):
+                _run(["status", task_id, "done"])
+                turn["statuses"][task_id] = "done"
+                _forget_task_list()
             continue
         if task_id is None:
             title = (schedule["name"] or " ".join(request.split()) or "Scheduled work")[:_AUTOMATIC_TITLE_CHARS]
@@ -703,6 +746,9 @@ def _new_turn() -> dict:
         # Schedules the Agent created this turn, and the ids of those it removed.
         "schedules": [],
         "removed_jobs": set(),
+        # The turn's tool calls, one short line each, for the question asked before a Task is closed.
+        "tools": [],
+        "tool_ids": set(),
     }
 
 
@@ -747,19 +793,23 @@ def _attach_automatically(turn: dict) -> list[str]:
     return failed
 
 
-def _settle_in_progress(turn: dict, status: str) -> None:
+def _settle_in_progress(turn: dict, status: str, session_id: str = "", reply: str = "", trigger: str = "") -> None:
     """Move each Task the Agent left in_progress this turn to `status`; a status it chose itself stays.
 
-    A Task it kept stays in_progress, unless the turn did not complete: then it is reopened too.
+    A Task it kept stays in_progress, unless the turn did not complete: then it is reopened too. A Task
+    about to be marked done is held back when Agent Barn finds its job is not finished.
     """
-    settled = False
     settles = {"in_progress", _KEPT} if status == "open" else {"in_progress"}
-    for task_id, current in sorted(turn["statuses"].items()):
-        if current in settles:
-            _run(["status", task_id, status])
-            settled = True
-    if settled:
-        _forget_task_list()
+    settling = sorted(task_id for task_id, current in turn["statuses"].items() if current in settles)
+    if not settling:
+        return
+    holds = _held(session_id, turn, reply, trigger, settling) if status == "done" else {}
+    for task_id in settling:
+        held = holds.get(task_id)
+        if held == "in_progress":
+            continue
+        _run(["status", task_id, "open" if held == "open" else status])
+    _forget_task_list()
 
 
 def _record_automatically(session_id: str, turn: dict) -> list[str]:
@@ -808,9 +858,9 @@ def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="
 
 
 def _on_post_llm_call(session_id="", turn_id="", assistant_response="", **_):
-    if isinstance(assistant_response, str) and _CRON_SESSION.match(session_id or ""):
+    if isinstance(assistant_response, str) and not _side_run(session_id, turn_id):
         with _lock:
-            _remember(_replies, (session_id, turn_id), assistant_response[:_AUTOMATIC_DESCRIPTION_CHARS])
+            _remember(_replies, (session_id, turn_id), assistant_response[:_TURN_TEXT_CHARS])
 
 
 def _on_session_end(session_id="", turn_id="", completed=False, **_):
@@ -839,6 +889,8 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
         if turn is not None and completed and turn["schedules"]:
             _link_schedules(session_id, turn)
         _settle_schedules(turn)
+    with _lock:
+        reply = _replies.pop((session_id, turn_id), "")
     if turn is None:
         return
     if completed and _unrecorded_work(turn):
@@ -846,7 +898,10 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
     elif turn["recorded"]:
         # A turn that failed or was interrupted leaves its Task open to pick up again, not in progress.
         failed = _attach_automatically(turn)
-        _settle_in_progress(turn, "done" if completed else "open")
+        if completed:
+            _settle_in_progress(turn, "done", session_id, reply, "cron" if scheduled else "")
+        else:
+            _settle_in_progress(turn, "open")
     else:
         return
     if failed:
