@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, has_entries, is_, not_none
+from hamcrest import assert_that, contains_string, equal_to, has_entries, has_items, is_, not_, not_none
 
 _PLUGIN = Path(__file__).parents[2] / "domains/agents/scripts/hermes/plugins/agentbarn-tasks/__init__.py"
 _FAKE_COMMAND = Path(__file__).parents[1] / "fixtures/agent_tasks/fake_task_command.py"
@@ -29,6 +29,7 @@ class _Plugin:
         self.log = tmp_path / "calls.jsonl"
         self.workspace = tmp_path / "workspace"
         self.workspace.mkdir()
+        self.home = tmp_path / "home"
         spec = importlib.util.spec_from_file_location("agentbarn_tasks_plugin", _PLUGIN)
         assert spec is not None and spec.loader is not None
         self.module = importlib.util.module_from_spec(spec)
@@ -148,7 +149,16 @@ def test_the_task_tool_and_turn_hooks_are_registered(tmp_path: Path):
 
     assert_that(
         sorted(plugin.hooks),
-        equal_to(["on_session_end", "post_tool_call", "pre_llm_call", "pre_verify", "transform_tool_result"]),
+        equal_to(
+            [
+                "on_session_end",
+                "post_llm_call",
+                "post_tool_call",
+                "pre_llm_call",
+                "pre_verify",
+                "transform_tool_result",
+            ]
+        ),
     )
     tool = plugin.tools["agentbarn_task"]
     assert_that(tool["schema"]["name"], equal_to("agentbarn_task"))
@@ -1128,3 +1138,443 @@ def test_only_the_latest_sessions_requests_are_kept(tmp_path: Path):
     plugin.end_turn(session_id="first", turn_id="turn-1")
 
     assert_that(_option(_creates(plugin)[0], "title"), equal_to("Work recorded automatically"))
+
+
+# --- schedules: a Task follows the schedule it was created for ---
+
+_JOB_ID = "a1b2c3d4e5f6"
+_CRON_SESSION = f"cron_{_JOB_ID}_20261117_101500"
+_GREETING = "Post a greeting every minute, 7 times. It is done after 7 greetings."
+
+
+def _scheduling(tmp_path: Path, intent: str | None = "runs") -> _Plugin:
+    plugin = _Plugin(tmp_path)
+    (plugin.home / "cron").mkdir(parents=True)
+    plugin.env["HERMES_HOME"] = str(plugin.home)
+    if intent:
+        plugin.env["FAKE_SCHEDULE_INTENT"] = intent
+    return plugin
+
+
+def _jobs(plugin: _Plugin, *jobs: dict) -> None:
+    (plugin.home / "cron" / "jobs.json").write_text(json.dumps({"jobs": list(jobs)}))
+
+
+def _job(completed: int = 0, times: int | None = 7, kind: str = "interval", state: str = "scheduled") -> dict:
+    return {
+        "id": _JOB_ID,
+        "name": "greeting",
+        "schedule": {"kind": kind},
+        "repeat": {"times": times, "completed": completed},
+        "state": state,
+        "enabled": state == "scheduled",
+    }
+
+
+def _links(plugin: _Plugin) -> dict:
+    path = plugin.home / "agentbarn-task-schedules.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _linked(plugin: _Plugin, task_id: str = _TASK_ID) -> None:
+    (plugin.home / "agentbarn-task-schedules.json").write_text(json.dumps({_JOB_ID: {"task_id": task_id}}))
+
+
+def _schedule_created(plugin: _Plugin, call_id: str = "call-s", schedule: str = "every 1m", repeat: int | None = 7):
+    args = {"action": "create", "schedule": schedule, "prompt": "Post a greeting", "name": "greeting"}
+    if repeat is not None:
+        args["repeat"] = repeat
+    result = {"success": True, "job_id": _JOB_ID, "name": "greeting", "schedule": schedule}
+    return plugin.tool_call(call_id, tool_name="cronjob", args=args, result=json.dumps(result))
+
+
+def _task_recorded(plugin: _Plugin, status: str = "done", keep: bool = False):
+    args = {"action": "create", "title": "Greetings for a week", "status": status}
+    if keep:
+        args["keep"] = True
+    return plugin.tool_call(
+        "call-t", tool_name="agentbarn_task", args=args, result=json.dumps({"id": _TASK_ID, "status": status})
+    )
+
+
+def _argvs(plugin: _Plugin, command: str) -> list[list[str]]:
+    return [call["argv"] for call in plugin.calls() if call["argv"][0] == command]
+
+
+def test_a_task_whose_job_is_the_runs_stays_in_progress_and_follows_the_schedule(tmp_path: Path):
+    plugin = _scheduling(tmp_path, intent="runs")
+    plugin.start_turn(user_message=_GREETING, turn_id="turn-1")
+    _schedule_created(plugin)
+    _task_recorded(plugin, status="done")
+
+    plugin.end_turn()
+
+    asked = json.loads(next(call["stdin"] for call in plugin.calls() if call["argv"][0] == "schedule-intent"))
+    assert_that(
+        asked,
+        has_entries(
+            request=_GREETING,
+            schedule=has_entries(recurrence="every 1m", run_limit=7),
+            task=has_entries(title="Greetings for a week", status="done"),
+        ),
+    )
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "in_progress"]]))
+    assert_that(_links(plugin), equal_to({_JOB_ID: {"task_id": _TASK_ID}}))
+
+
+def test_a_task_whose_job_was_setting_up_the_schedule_is_done_even_if_the_agent_kept_it(tmp_path: Path):
+    plugin = _scheduling(tmp_path, intent="setup")
+    plugin.start_turn(user_message="Remind me every morning to check the build", turn_id="turn-1")
+    _schedule_created(plugin, schedule="0 9 * * *", repeat=None)
+    _task_recorded(plugin, status="in_progress", keep=True)
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(plugin), equal_to({}))
+
+
+@pytest.mark.parametrize(
+    ("keep", "linked", "statuses"), [(True, True, []), (False, False, [["status", _TASK_ID, "done"]])]
+)
+def test_without_a_decision_the_agents_own_choice_stands(tmp_path: Path, keep: bool, linked: bool, statuses: list):
+    plugin = _scheduling(tmp_path, intent=None)
+    plugin.start_turn(user_message=_GREETING, turn_id="turn-1")
+    _schedule_created(plugin)
+    _task_recorded(plugin, status="in_progress", keep=keep)
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to(statuses))
+    assert_that(bool(_links(plugin)), equal_to(linked))
+
+
+def test_a_schedule_whose_runs_are_the_job_gets_a_task_when_the_agent_recorded_none(tmp_path: Path):
+    plugin = _scheduling(tmp_path, intent="runs")
+    plugin.start_turn(user_message=_GREETING, turn_id="turn-1")
+    _schedule_created(plugin)
+
+    plugin.end_turn()
+
+    created = _argvs(plugin, "create")
+    assert_that(len(created), equal_to(1))
+    assert_that(created[0], has_items("--status=in_progress", "--origin=automatic"))
+    assert_that(_links(plugin), equal_to({_JOB_ID: {"task_id": _TASK_ID}}))
+
+
+def test_a_standing_schedule_with_no_task_recorded_gets_none(tmp_path: Path):
+    plugin = _scheduling(tmp_path, intent="setup")
+    plugin.start_turn(user_message="Remind me every morning to check the build", turn_id="turn-1")
+    _schedule_created(plugin, schedule="0 9 * * *", repeat=None)
+
+    plugin.end_turn()
+
+    assert_that(_argvs(plugin, "create"), equal_to([]))
+
+
+def _scheduled_run(plugin: _Plugin, reply: str = "Good morning, team!", tools: int = 0, completed: bool = True):
+    plugin.start_turn(session_id=_CRON_SESSION, user_message="Post a greeting", turn_id="run-1")
+    for index in range(tools):
+        plugin.tool_call(f"work-{index}", session_id=_CRON_SESSION, turn_id="run-1")
+    with patch.dict(os.environ, plugin.env, clear=True):
+        plugin.hooks["post_llm_call"](
+            session_id=_CRON_SESSION, turn_id="run-1", user_message="Post a greeting", assistant_response=reply
+        )
+    plugin.end_turn(session_id=_CRON_SESSION, turn_id="run-1", completed=completed)
+
+
+def test_a_scheduled_run_is_noted_on_its_task_without_the_agent_doing_anything(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=2))
+
+    _scheduled_run(plugin, tools=4)
+
+    notes = [call for call in plugin.calls() if call["argv"][:2] == ["note", _TASK_ID]]
+    assert_that(len(notes), equal_to(1))
+    assert_that(notes[0]["stdin"], equal_to("Run 3 of 7: Good morning, team!"))
+    assert_that(_statuses(plugin), equal_to([]))
+    assert_that(_argvs(plugin, "create"), equal_to([]))
+
+
+def test_the_last_scheduled_run_marks_the_task_done_and_ends_the_link(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=6))
+
+    _scheduled_run(plugin)
+
+    assert_that(plugin.calls()[-2]["stdin"], equal_to("Run 7 of 7: Good morning, team!"))
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(plugin), equal_to({}))
+
+
+def test_a_one_off_schedule_finishes_its_task_when_it_has_run(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=1, times=1, kind="once"))
+
+    _scheduled_run(plugin)
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_schedule_with_no_end_keeps_its_task_in_progress(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=41, times=None))
+
+    _scheduled_run(plugin)
+
+    assert_that(next(call["stdin"] for call in plugin.calls() if call["argv"][0] == "note"), contains_string("Run 42:"))
+    assert_that(_statuses(plugin), equal_to([]))
+    assert_that(bool(_links(plugin)), equal_to(True))
+
+
+def test_a_task_the_agent_closed_during_an_earlier_run_is_put_back_in_progress(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=2))
+    plugin.start_turn(session_id=_CRON_SESSION, user_message="Post a greeting", turn_id="run-1")
+    plugin.tool_call(
+        "call-1",
+        session_id=_CRON_SESSION,
+        turn_id="run-1",
+        tool_name="agentbarn_task",
+        args={"action": "status", "task_id": _TASK_ID, "status": "done"},
+    )
+
+    plugin.end_turn(session_id=_CRON_SESSION, turn_id="run-1")
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "in_progress"]]))
+
+
+def test_a_run_of_a_schedule_with_no_task_is_handled_as_before(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _jobs(plugin, _job(completed=2))
+
+    _scheduled_run(plugin, tools=3)
+
+    assert_that(_argvs(plugin, "note"), equal_to([]))
+    assert_that(len(_argvs(plugin, "create")), equal_to(1))
+
+
+def test_removing_the_schedule_finishes_its_task(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin)
+    plugin.start_turn(user_message="Stop the greetings", turn_id="turn-1")
+    plugin.tool_call(
+        "call-1", tool_name="cronjob", args={"action": "remove", "job_id": _JOB_ID}, result='{"success": true}'
+    )
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(plugin), equal_to({}))
+
+
+def test_a_schedule_that_ended_while_nobody_was_looking_finishes_its_task_on_the_next_turn(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=7, state="completed"))
+    plugin.start_turn(user_message="hello there, how are things going today?", turn_id="turn-1")
+    plugin.tool_call("call-1")
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(plugin), equal_to({}))
+
+
+def test_links_are_left_alone_when_the_schedules_cannot_be_read(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    (plugin.home / "cron" / "jobs.json").write_text("{not json")
+    plugin.start_turn(user_message="hello there, how are things going today?", turn_id="turn-1")
+    plugin.tool_call("call-1")
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([]))
+    assert_that(bool(_links(plugin)), equal_to(True))
+
+
+def test_a_scheduled_run_reported_twice_is_noted_once(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=2))
+    _scheduled_run(plugin, tools=3)
+
+    plugin.end_turn(session_id=_CRON_SESSION, turn_id="run-1")
+
+    assert_that(len(_argvs(plugin, "note")), equal_to(1))
+    assert_that(_argvs(plugin, "create"), equal_to([]))
+
+
+# --- a Task about to be marked done can be held back ---
+
+
+def _holding(plugin: _Plugin, status: str) -> _Plugin:
+    """Agent Barn finds every Task the plugin is about to close unfinished, and holds it in `status`."""
+    plugin.env["FAKE_TURN_END"] = status
+    return plugin
+
+
+def _replied(plugin: _Plugin, text: str = "I asked the channel.", session_id: str = "s1", turn_id: str = "turn-1"):
+    with patch.dict(os.environ, plugin.env, clear=True):
+        plugin.hooks["post_llm_call"](session_id=session_id, turn_id=turn_id, assistant_response=text)
+
+
+def _asked(plugin: _Plugin) -> list[dict]:
+    return [json.loads(call["stdin"]) for call in plugin.calls() if call["argv"] == ["turn-end"]]
+
+
+def _left_in_progress(plugin: _Plugin, call_id: str = "call-2"):
+    return plugin.tool_call(
+        call_id,
+        tool_name="agentbarn_task",
+        args={"action": "create", "title": "Ask QA", "status": "in_progress"},
+        result=json.dumps({"id": _TASK_ID, "status": "in_progress"}),
+    )
+
+
+def test_agent_barn_is_asked_about_a_task_before_it_is_marked_done(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message="Ask the QA channel for the priority", turn_id="turn-1")
+    plugin.tool_call("call-1", command="post question")
+    _left_in_progress(plugin)
+    _replied(plugin)
+
+    plugin.end_turn()
+
+    [asked] = _asked(plugin)
+    assert_that(
+        asked,
+        has_entries(
+            request="Ask the QA channel for the priority",
+            reply="I asked the channel.",
+            closing=[_TASK_ID],
+            trigger="",
+        ),
+    )
+    assert_that(asked["tools"][0], contains_string("terminal"))
+    assert_that(asked["tools"][0], contains_string("post question"))
+    assert_that(len(asked["tools"]), equal_to(2))
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_task_whose_job_is_still_going_is_not_marked_done(tmp_path: Path):
+    plugin = _holding(_Plugin(tmp_path), "in_progress")
+    _left_in_progress(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_a_task_waiting_on_the_user_is_left_open(tmp_path: Path):
+    plugin = _holding(_Plugin(tmp_path), "open")
+    _left_in_progress(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_a_task_the_agent_kept_is_not_asked_about(tmp_path: Path):
+    plugin = _holding(_Plugin(tmp_path), "open")
+    _kept_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_asked(plugin), equal_to([]))
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+@pytest.mark.parametrize("status", ["done", "open", "failed"])
+def test_a_status_the_agent_set_itself_is_not_asked_about(tmp_path: Path, status: str):
+    plugin = _holding(_Plugin(tmp_path), "in_progress")
+    plugin.tool_call(
+        "call-1", tool_name="agentbarn_task", args={"action": "status", "task_id": _TASK_ID, "status": status}
+    )
+
+    plugin.end_turn()
+
+    assert_that(_asked(plugin), equal_to([]))
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_a_turn_that_did_not_complete_reopens_its_task_without_asking(tmp_path: Path):
+    plugin = _holding(_Plugin(tmp_path), "in_progress")
+    _left_in_progress(plugin)
+
+    plugin.end_turn(completed=False)
+
+    assert_that(_asked(plugin), equal_to([]))
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_a_turn_that_touched_no_task_asks_nothing(tmp_path: Path):
+    plugin = _holding(_Plugin(tmp_path), "in_progress")
+    plugin.tool_call("call-1")
+    _replied(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_asked(plugin), equal_to([]))
+
+
+def test_secrets_are_not_sent_with_the_question(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    secret = "sk-" + "a1B2c3D4" * 5
+    plugin.start_turn(user_message=f"Use the key {secret} to call the API", turn_id="turn-1")
+    plugin.tool_call("call-1", command=f"curl -H 'Authorization: Bearer {secret}' https://example.com")
+    _left_in_progress(plugin)
+    _replied(plugin, f"I used {secret}.")
+
+    plugin.end_turn()
+
+    assert_that(len(_asked(plugin)), equal_to(1))
+    assert_that(json.dumps(_asked(plugin)), is_(not_(contains_string(secret))))
+
+
+def test_a_task_finished_by_setting_up_its_schedule_is_marked_done_without_asking(tmp_path: Path):
+    plugin = _holding(_scheduling(tmp_path, intent="setup"), "in_progress")
+    plugin.start_turn(user_message="Remind me to stretch every morning", turn_id="turn-1")
+    _schedule_created(plugin, repeat=None)
+    _task_recorded(plugin, status="in_progress", keep=True)
+
+    plugin.end_turn()
+
+    assert_that(_asked(plugin), equal_to([]))
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_task_following_a_schedule_is_not_asked_about(tmp_path: Path):
+    plugin = _holding(_scheduling(tmp_path, intent="runs"), "open")
+    plugin.start_turn(user_message=_GREETING, turn_id="turn-1")
+    _schedule_created(plugin)
+    _task_recorded(plugin, status="in_progress")
+
+    plugin.end_turn()
+
+    assert_that(_asked(plugin), equal_to([]))
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_a_scheduled_run_with_no_linked_task_is_asked_about_as_a_scheduled_turn(tmp_path: Path):
+    plugin = _scheduling(tmp_path)
+    _jobs(plugin, _job(completed=2))
+    plugin.start_turn(session_id=_CRON_SESSION, user_message="Post a greeting", turn_id="run-1")
+    plugin.tool_call(
+        "call-1",
+        session_id=_CRON_SESSION,
+        turn_id="run-1",
+        tool_name="agentbarn_task",
+        args={"action": "status", "task_id": _TASK_ID, "status": "in_progress"},
+    )
+
+    plugin.end_turn(session_id=_CRON_SESSION, turn_id="run-1")
+
+    assert_that(_asked(plugin)[0]["trigger"], equal_to("cron"))
