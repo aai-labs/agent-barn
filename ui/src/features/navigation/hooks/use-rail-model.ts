@@ -117,7 +117,7 @@ export function useRailModel(): RailModel {
       icon: ListChecks,
       active: pathname.startsWith(`${orgBase}/tasks`),
     },
-    ...(billing?.available
+    ...(billing?.available || billing?.subscriptionsAvailable || billing?.subscription
       ? [
           {
             key: "billing",

@@ -23,10 +23,12 @@ import api.domains.communications.models
 import api.domains.conversations.models
 import api.domains.costs.models
 import api.domains.custom_api.models
+import api.domains.decisions.models
 import api.domains.events.models
 import api.domains.events.security_audit
 import api.domains.file_sync.models
 import api.domains.integrations.models
+import api.domains.llm_providers.models
 import api.domains.onboarding.models
 import api.domains.organizations.models
 import api.domains.playbooks.models
@@ -34,8 +36,10 @@ import api.domains.playbooks.platform_models
 import api.domains.rbac.models
 import api.domains.shared_credentials.models
 import api.domains.skills.models
+import api.domains.subscriptions.models
 import api.domains.sync_provider.models
 import api.domains.templates.models
+import api.domains.tiers.models
 import api.domains.tool_calls.models
 import api.domains.users.models
 import api.domains.users.organization_users.models

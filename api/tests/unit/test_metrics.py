@@ -312,9 +312,8 @@ def test_refresh_agents_in_error_keeps_last_value_on_failure():
 # --- openrouter credits probe ---
 
 
-def _config(api_key: str = "sk-test", ttl: int = 300) -> MagicMock:
+def _config(ttl: int = 300) -> MagicMock:
     return MagicMock(
-        openrouter_api_key=api_key,
         openrouter_base_url="https://openrouter.test/api/v1",
         openrouter_credits_cache_ttl_seconds=ttl,
     )
@@ -330,7 +329,7 @@ def test_refresh_openrouter_credits_sets_key_limit_remaining(mock_config, mock_g
         mock_get.return_value = response
 
         with when("I refresh the credits gauge"):
-            refresh_openrouter_credits()
+            refresh_openrouter_credits(lambda: "sk-test")
 
         with then("the key's remaining credit limit and scrape_ok are set"):
             assert_that(
@@ -353,7 +352,7 @@ def test_refresh_openrouter_credits_unlimited_key_reads_infinite(mock_config, mo
         mock_get.return_value = response
 
         with when("I refresh against a key with no credit limit"):
-            refresh_openrouter_credits()
+            refresh_openrouter_credits(lambda: "sk-test")
 
         with then("the gauge reads +Inf and the poll counts as healthy"):
             assert_that(
@@ -370,13 +369,13 @@ def test_refresh_openrouter_credits_unlimited_key_reads_infinite(mock_config, mo
 @patch("api.core.metrics.get_config")
 def test_refresh_openrouter_credits_polls_key_endpoint_with_inference_key(mock_config, mock_get):
     with given():
-        mock_config.return_value = _config(api_key="sk-inference")
+        mock_config.return_value = _config()
         response = MagicMock(status_code=200)
         response.json.return_value = {"data": {"limit_remaining": 1.0}}
         mock_get.return_value = response
 
         with when("I refresh the credits gauge"):
-            refresh_openrouter_credits()
+            refresh_openrouter_credits(lambda: "sk-inference")
 
         with then("it calls GET /key with the inference key"):
             assert_that(
@@ -393,10 +392,10 @@ def test_refresh_openrouter_credits_polls_key_endpoint_with_inference_key(mock_c
 @patch("api.core.metrics.get_config")
 def test_refresh_openrouter_credits_scrape_not_ok_without_key(mock_config, mock_get):
     with given():
-        mock_config.return_value = _config(api_key="")
+        mock_config.return_value = _config()
 
         with when("I refresh with no OpenRouter API key configured"):
-            refresh_openrouter_credits()
+            refresh_openrouter_credits(lambda: "")
 
         with then("scrape_ok is 0 and no request is made"):
             assert_that(
@@ -414,7 +413,7 @@ def test_refresh_openrouter_credits_scrape_not_ok_on_http_error(mock_config, moc
         mock_get.side_effect = RuntimeError("connection refused")
 
         with when("I refresh and the request fails"):
-            refresh_openrouter_credits()
+            refresh_openrouter_credits(lambda: "sk-test")
 
         with then("scrape_ok is 0 and nothing raises"):
             assert_that(
@@ -433,11 +432,52 @@ def test_refresh_openrouter_credits_respects_ttl_cache(mock_config, mock_get):
         mock_get.return_value = response
 
         with when("I refresh twice within the TTL"):
-            refresh_openrouter_credits()
-            refresh_openrouter_credits()
+            refresh_openrouter_credits(lambda: "sk-test")
+            refresh_openrouter_credits(lambda: "sk-test")
 
         with then("only one HTTP request is made"):
             assert_that(mock_get.call_count, equal_to(1))
+
+
+@patch("api.core.metrics.httpx.get")
+@patch("api.core.metrics.get_config")
+def test_refresh_openrouter_credits_polls_again_when_the_key_changes(mock_config, mock_get):
+    with given():
+        mock_config.return_value = _config(ttl=300)
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"data": {"limit_remaining": 10}}
+        mock_get.return_value = response
+
+        with when("the key changes within the TTL"):
+            refresh_openrouter_credits(lambda: "sk-old")
+            refresh_openrouter_credits(lambda: "sk-new")
+
+        with then("the new key is polled at once"):
+            assert_that(mock_get.call_count, equal_to(2))
+            assert_that(
+                mock_get.call_args.kwargs["headers"]["Authorization"],
+                equal_to("Bearer sk-new"),
+            )
+
+
+@patch("api.core.metrics.httpx.get")
+@patch("api.core.metrics.get_config")
+def test_refresh_openrouter_credits_scrape_not_ok_when_the_key_cannot_be_read(mock_config, mock_get):
+    with given():
+        mock_config.return_value = _config()
+
+        def unreadable() -> str:
+            raise RuntimeError("database unavailable")
+
+        with when("I refresh and the key lookup fails"):
+            refresh_openrouter_credits(unreadable)
+
+        with then("scrape_ok is 0, no request is made and nothing raises"):
+            assert_that(
+                PROBE_REGISTRY.get_sample_value("agentbarn_openrouter_credits_scrape_ok"),
+                equal_to(0.0),
+            )
+            mock_get.assert_not_called()
 
 
 # --- rendering ---

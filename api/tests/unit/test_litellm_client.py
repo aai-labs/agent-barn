@@ -1,6 +1,15 @@
 from unittest.mock import MagicMock, patch
 
-from api.infrastructure.litellm.client import LiteLLMClient
+import httpx
+import pytest
+
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+
+MODEL_ID = "agentbarn:openrouter"
+PROVIDER_KEY = "sk-or-provider-secret"
+LITELLM_PARAMS = {"model": "openrouter/*", "api_key": PROVIDER_KEY, "order": 1}
+MODEL_INFO = {"id": MODEL_ID, "disable_background_health_check": True}
+HEADERS = {"Authorization": "Bearer master-key", "Content-Type": "application/json"}
 
 
 def _client() -> LiteLLMClient:
@@ -86,3 +95,114 @@ def test_spend_logs_rejects_a_non_object_response():
                 assert "Unexpected" in str(exc)
             else:
                 raise AssertionError("expected a LiteLLMError for a list response")
+
+
+def _response(status_code: int) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status_code
+    if status_code >= 400:
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            f"failed with {PROVIDER_KEY}", request=MagicMock(), response=response
+        )
+    else:
+        response.raise_for_status.return_value = None
+    return response
+
+
+def test_upsert_model_deployment_creates_a_route_litellm_does_not_have():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", return_value=_response(400)) as get:
+            with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(200)) as post:
+                client.upsert_model_deployment("openrouter/*", LITELLM_PARAMS, MODEL_INFO)
+
+    get.assert_called_once_with(
+        "http://litellm:4000/model/info",
+        params={"litellm_model_id": MODEL_ID},
+        headers=HEADERS,
+        timeout=10,
+    )
+    post.assert_called_once_with(
+        "http://litellm:4000/model/new",
+        json={"model_name": "openrouter/*", "litellm_params": LITELLM_PARAMS, "model_info": MODEL_INFO},
+        headers=HEADERS,
+        timeout=10,
+    )
+
+
+def test_upsert_model_deployment_updates_a_route_litellm_already_has():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", return_value=_response(200)):
+            with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(200)) as post:
+                client.upsert_model_deployment("openrouter/*", LITELLM_PARAMS, MODEL_INFO)
+
+    post.assert_called_once_with(
+        "http://litellm:4000/model/update",
+        json={"model_name": "openrouter/*", "litellm_params": LITELLM_PARAMS, "model_info": MODEL_INFO},
+        headers=HEADERS,
+        timeout=10,
+    )
+
+
+def test_upsert_model_deployment_failure_never_carries_the_provider_key():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", return_value=_response(400)):
+            with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(500)):
+                with pytest.raises(LiteLLMError) as raised:
+                    client.upsert_model_deployment("openrouter/*", LITELLM_PARAMS, MODEL_INFO)
+
+    assert PROVIDER_KEY not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True
+
+
+def test_upsert_model_deployment_refuses_when_the_route_lookup_fails():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", return_value=_response(500)):
+            with patch("api.infrastructure.litellm.client.httpx.post") as post:
+                with pytest.raises(LiteLLMError):
+                    client.upsert_model_deployment("openrouter/*", LITELLM_PARAMS, MODEL_INFO)
+
+    post.assert_not_called()
+
+
+def test_delete_model_deployment_removes_the_route():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(200)) as post:
+            removed = client.delete_model_deployment(MODEL_ID)
+
+    assert removed is True
+    post.assert_called_once_with(
+        "http://litellm:4000/model/delete",
+        json={"id": MODEL_ID},
+        headers=HEADERS,
+        timeout=10,
+    )
+
+
+def test_delete_model_deployment_reports_a_route_that_is_already_gone():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(400)):
+            removed = client.delete_model_deployment(MODEL_ID)
+
+    assert removed is False
+
+
+def test_delete_model_deployment_raises_on_other_failures():
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(500)):
+            with pytest.raises(LiteLLMError):
+                client.delete_model_deployment(MODEL_ID)

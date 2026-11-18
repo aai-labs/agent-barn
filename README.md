@@ -112,12 +112,13 @@ anything not listed here has a working local default:
 | `PLATFORM_ADMIN_CREDENTIALS`                        | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
 | `ENVIRONMENT`, `WEB_APP_URL`, `API_PORT`            | leave the `.env.spec` defaults                                                                                          |
 | `AGENT_TOKEN_ENCRYPTION_KEY`                        | a Fernet key — generate it below                                                                                        |
-| `OPENROUTER_API_KEY`                                | your OpenRouter key; passed to LiteLLM and used for the model picker                                                    |
+| `OPENROUTER_API_KEY`                                | optional; your OpenRouter key, used until a key is saved in Platform Admin settings                                     |
 | `LITELLM_MASTER_KEY`                                | a **stable** admin key — generate it below                                                                              |
+| `LITELLM_SALT_KEY`                                  | a **permanent** key that encrypts provider keys stored in LiteLLM — generate it below                                   |
 | `AGENT_LITELLM_BASE_URL`                            | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                     |
 | `OPENCLAW_IMAGE`, `HERMES_IMAGE`                    | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
 
-Generate the two keys:
+Generate the three keys:
 
 ```bash
 # AGENT_TOKEN_ENCRYPTION_KEY — encrypts platform credentials at rest
@@ -125,12 +126,14 @@ openssl rand -base64 32 | tr '+/' '-_'
 
 # LITELLM_MASTER_KEY
 echo "sk-$(openssl rand -hex 16)"
+
+# LITELLM_SALT_KEY
+openssl rand -hex 32
 ```
 
 > [!IMPORTANT]
-> `LITELLM_MASTER_KEY` must stay stable. LiteLLM encrypts the virtual keys it
-> stores with this value, so changing it later breaks every agent created under
-> the old one.
+> `LITELLM_SALT_KEY` must never change: LiteLLM encrypts the provider keys it
+> stores with it and cannot decrypt them under a different value.
 
 You don't need to touch `API_K8S_KUBECONFIG_PATH` — `run.sh` sets it for you once
 the cluster is up.

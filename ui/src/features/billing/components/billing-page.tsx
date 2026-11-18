@@ -8,7 +8,8 @@ import { Loader2 } from "lucide-react";
 import { AppErrorState } from "@/components/app-error-state";
 import { formatUsage, formatUsd, isSpendLimitQuery } from "@/features/organizations/spend-limit";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
-import { organizationLlmBudgetKey } from "@/features/organizations/utils";
+import { currentUserContextKey } from "@/auth/utils";
+import { organizationLlmBudgetKey, organizationsKey } from "@/features/organizations/utils";
 import { Fact } from "@/features/spend-limits/components/fact";
 import { ApiError } from "@/shared/api/error/errors";
 
@@ -16,8 +17,11 @@ import { takeCreditBeforeCheckout } from "../credit-before-checkout";
 import { formatDate, KIND_LABEL, signedUsd } from "../format";
 import { PAYMENT_WAIT_MS, useOrganizationBilling } from "../hooks/use-organization-billing";
 import { BuyCreditDialog } from "./buy-credit-dialog";
+import { SubscriptionPanel } from "./subscription-panel";
 
 type Payment = "none" | "waiting" | "arrived" | "processing" | "cancelled";
+// Coming back from Stripe's subscription checkout: waiting for its confirmation to arrive.
+type Subscribing = "none" | "waiting" | "slow" | "cancelled";
 
 function Notice({ children }: { children: React.ReactNode }) {
   return (
@@ -34,20 +38,42 @@ export function BillingPage() {
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
-  const checkout = useSearchParams()?.get("checkout");
+  const searchParams = useSearchParams();
+  const checkout = searchParams?.get("checkout");
+  const subscriptionReturn = searchParams?.get("subscription");
   // Read once: the address is cleaned straight away, so a reload doesn't repeat it.
   const [payment, setPayment] = useState<Payment>(() =>
     checkout === "success" ? "waiting" : checkout === "cancelled" ? "cancelled" : "none",
   );
+  const [subscribing, setSubscribing] = useState<Subscribing>(() =>
+    subscriptionReturn === "started" ? "waiting" : subscriptionReturn === "cancelled" ? "cancelled" : "none",
+  );
+  const [subscriptionBefore] = useState(() => subscriptionReturn === "started");
   const { billing, isLoading, error, refetch } = useOrganizationBilling(organizationId, {
-    awaitingPayment: payment === "waiting",
+    awaitingPayment: payment === "waiting" || subscribing === "waiting",
   });
+  // Started once Stripe's confirmation has reached Agent Barn.
+  const subscribed = subscriptionBefore && subscribing !== "cancelled" && !!billing?.subscription;
   const [buying, setBuying] = useState(false);
   const creditBefore = useRef<number | null>(null);
 
   useEffect(() => {
-    if (checkout && pathname) router.replace(pathname);
-  }, [checkout, pathname, router]);
+    if ((checkout || subscriptionReturn) && pathname) router.replace(pathname);
+  }, [checkout, subscriptionReturn, pathname, router]);
+
+  useEffect(() => {
+    if (subscribing !== "waiting") return;
+    const timer = setTimeout(() => setSubscribing((current) => (current === "waiting" ? "slow" : current)), PAYMENT_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [subscribing]);
+
+  useEffect(() => {
+    if (!subscribed || !organizationId) return;
+    // The tier, its entitlements and the trial all changed with it.
+    void queryClient.invalidateQueries({ queryKey: organizationsKey.detail(organizationId) });
+    void queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
+    void queryClient.invalidateQueries({ queryKey: organizationLlmBudgetKey.all });
+  }, [subscribed, queryClient, organizationId]);
 
   useEffect(() => {
     if (payment !== "waiting") return;
@@ -80,7 +106,7 @@ export function BillingPage() {
             Billing
           </h1>
           <p className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-3)" }}>
-            Credit your agents spend on model calls.
+            Your tier, and the credit your agents spend on model calls.
           </p>
         </div>
         {billing?.available && (
@@ -99,6 +125,16 @@ export function BillingPage() {
         </Notice>
       )}
       {payment === "cancelled" && <Notice>Payment cancelled. Nothing was charged.</Notice>}
+      {subscribing === "waiting" && !subscribed && (
+        <Notice>Payment received. Your subscription starts in a moment.</Notice>
+      )}
+      {subscribed && billing?.subscription && (
+        <Notice>You&apos;re subscribed to {billing.subscription.tier.name}.</Notice>
+      )}
+      {subscribing === "slow" && !subscribed && (
+        <Notice>Your payment is still being confirmed. Your subscription starts here as soon as it is.</Notice>
+      )}
+      {subscribing === "cancelled" && <Notice>Checkout cancelled. Nothing was charged.</Notice>}
 
       {isLoading ? (
         <div className="flex items-center gap-2 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
@@ -112,13 +148,16 @@ export function BillingPage() {
         <AppErrorState error={error} title="We couldn't load billing" onRetry={() => void refetch()} />
       ) : (
         <>
+          {organizationId && (billing.subscriptionsAvailable || billing.subscription || billing.tier) && (
+            <SubscriptionPanel organizationId={organizationId} billing={billing} />
+          )}
           {!billing.onCredit ? (
             <p className="af-card mb-9 p-4 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
               This organization&apos;s spend is covered by its plan, so it doesn&apos;t buy credit.
             </p>
           ) : (
             <>
-              {!billing.available && (
+              {!billing.available && !billing.upgradeRequired && (
                 <p className="af-card mb-6 p-4 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
                   Buying credit isn&apos;t available right now.
                 </p>

@@ -79,10 +79,11 @@ stripe:
 onedriveSyncClientId: ""
 onedriveSyncClientSecret: ""
 
-# OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
-# via GET /key for the key's remaining credit limit metric. Same key litellm
-# uses; leave blank to skip the poll. The gauge reads +Inf until a credit
-# limit is set on the key at openrouter.ai.
+# Fallback OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY),
+# the same value litellm gets. The API uses the key saved in Platform Admin
+# settings, and this one only while none is saved, for the credit balance, cost
+# repair and the credits metric (GET /key's remaining credit limit). The gauge
+# reads +Inf until a credit limit is set on the key at openrouter.ai.
 openrouterApiKey: ""
 
 litellmBaseUrl: "http://litellm:4000"
@@ -113,6 +114,10 @@ agentModelAllowlist: ""
 # How many Agents an Organization that is not a trial may run, unless a Platform
 # Administrator sets its own. Empty means the default of 10.
 organizationDefaultAgentLimit: ""
+
+# Lets an Owner subscribe to a paid Tier with a pretend payment, for demonstrations.
+# Never turn it on where customers pay.
+tiersMockPayments: false
 
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without
 # the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per
@@ -226,6 +231,13 @@ costs:
     # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "6-59/15 * * * *"
+
+tierSweep:
+  enabled: true
+  # Every five minutes, on minutes ending in 4 and 9 so no minute starts more than three
+  # CronJobs: ends subscription periods that have run out and applies Tier Holds whose
+  # choosing time is up. A run that finds nothing due does nothing.
+  schedule: "4-59/5 * * * *"
 
 businessValue:
   backfill:
