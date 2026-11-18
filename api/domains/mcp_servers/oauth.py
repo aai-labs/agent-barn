@@ -24,8 +24,8 @@ from api.domains.custom_api.request import PinnedHTTPSConnection, RequestRefused
 
 TIMEOUT_SECONDS = 15
 MAX_BYTES = 1024 * 1024
-DEFAULT_TOKEN_LIFETIME = 3600
-MAX_TOKEN_LIFETIME = 24 * 3600
+#: A token that can be refreshed is refreshed at least this often, whatever lifetime it states.
+MAX_REFRESHABLE_LIFETIME = 24 * 3600
 USER_AGENT = "agent-barn-mcp-oauth/1"
 CLIENT_NAME = "Agent Barn"
 PROTOCOL_VERSION = "2025-11-25"
@@ -74,6 +74,23 @@ def _request(method: str, url: str, *, body: bytes | None = None, headers: dict[
     if len(content) > MAX_BYTES:
         raise OAuthError(f"{_host(url)} answered with more than 1 MiB.")
     return _Response(response.status, received, content)
+
+
+def _endpoint(value: object, name: str) -> str:
+    """A metadata endpoint, only as a public HTTPS URL.
+
+    The authorization endpoint is where the person's browser is sent to sign in, so anything
+    else (a `javascript:` URL above all) would run in a window of the app's own origin.
+    """
+    try:
+        if not isinstance(value, str):
+            raise RequestRefused("not a URL")
+        # The shape only: the token and registration endpoints are also held to public
+        # addresses when Agent Barn calls them, and the browser resolves the other itself.
+        parse_url(value)
+    except RequestRefused as exc:
+        raise OAuthError(f"The authorization server's {name} is not a public HTTPS URL: {exc}") from None
+    return value
 
 
 def _host(url: str) -> str:
@@ -182,9 +199,11 @@ def discover(server_url: str) -> OAuthMetadata:
     return OAuthMetadata(
         resource=str((resource_metadata or {}).get("resource") or server_url),
         issuer=issuer,
-        authorization_endpoint=metadata["authorization_endpoint"],
-        token_endpoint=metadata["token_endpoint"],
-        registration_endpoint=registration if isinstance(registration, str) and registration else None,
+        authorization_endpoint=_endpoint(metadata["authorization_endpoint"], "authorization endpoint"),
+        token_endpoint=_endpoint(metadata["token_endpoint"], "token endpoint"),
+        registration_endpoint=(
+            _endpoint(registration, "registration endpoint") if isinstance(registration, str) and registration else None
+        ),
         scope=scopes,
         token_endpoint_auth_methods=[str(m) for m in auth_methods] if isinstance(auth_methods, list) else [],
     )
@@ -255,7 +274,8 @@ def authorize_url(config: dict, *, state: str, code_challenge: str, redirect_uri
     }
     if config.get("scope"):
         query["scope"] = config["scope"]
-    endpoint = config["authorization_endpoint"]
+    # Checked again where the URL leaves for the browser, whatever saved it.
+    endpoint = _endpoint(config.get("authorization_endpoint"), "authorization endpoint")
     separator = "&" if urllib.parse.urlsplit(endpoint).query else "?"
     return endpoint + separator + urllib.parse.urlencode(query)
 
@@ -264,7 +284,9 @@ def authorize_url(config: dict, *, state: str, code_challenge: str, redirect_uri
 class TokenSet:
     access_token: str
     refresh_token: str | None
-    expires_at: float
+    #: None when the server stated no lifetime: such a token (GitHub's OAuth tokens, for one)
+    #: is used until the server refuses it.
+    expires_at: float | None
     scope: str | None
 
     def as_grant(self) -> dict:
@@ -303,15 +325,18 @@ def _token_request(config: dict, values: dict[str, str | None]) -> TokenSet:
         raise OAuthError(f"The token endpoint refused the request: {str(reason)[:200]}")
     if any(ord(c) < 33 or ord(c) > 126 for c in token):
         raise OAuthError("The token endpoint issued an unusable access token.")
-    try:
-        lifetime = int(data.get("expires_in", DEFAULT_TOKEN_LIFETIME))
-    except TypeError, ValueError, OverflowError:
-        lifetime = DEFAULT_TOKEN_LIFETIME
     refresh = data.get("refresh_token")
+    refresh = refresh if isinstance(refresh, str) and refresh else None
+    try:
+        lifetime: int | None = int(data["expires_in"])
+    except KeyError, TypeError, ValueError, OverflowError:
+        lifetime = None
+    if lifetime is not None and refresh is not None:
+        lifetime = min(lifetime, MAX_REFRESHABLE_LIFETIME)
     return TokenSet(
         access_token=token,
-        refresh_token=refresh if isinstance(refresh, str) and refresh else None,
-        expires_at=time.time() + max(0, min(lifetime, MAX_TOKEN_LIFETIME)),
+        refresh_token=refresh,
+        expires_at=None if lifetime is None else time.time() + max(0, lifetime),
         scope=data.get("scope") if isinstance(data.get("scope"), str) else None,
     )
 

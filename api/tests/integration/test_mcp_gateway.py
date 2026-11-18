@@ -17,6 +17,7 @@ The contract under test:
 import hashlib
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from uuid import UUID, uuid7
@@ -70,6 +71,8 @@ class FakeMcpServer:
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        #: When set, `tools/list` sends only heartbeats, each well inside the read timeout.
+        self.tools_list_heartbeats = False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -110,6 +113,16 @@ class FakeMcpServer:
                     return self._send(200, body, **{"Mcp-Session-Id": "upstream-session"})
                 if rid is None:
                     return self._send(202)
+                if method == "tools/list" and fake.tools_list_heartbeats:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    for _ in range(40):
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        time.sleep(0.1)
+                    return
                 if method == "tools/list":
                     tools = [{"name": "search"}, {"name": "delete_all"}]
                     event = json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"tools": tools}})
@@ -155,9 +168,9 @@ def fake_server_is_running():
 
 
 def _server(
-    context, identifier: str = "linear", *, organization_id: UUID | None = None, **fields
+    context, identifier: str = "linear", *, organization_id: UUID | None = None, token: str = SERVER_TOKEN, **fields
 ) -> OrganizationMcpServer:
-    credentials = {"auth": {"type": "bearer", "token": SERVER_TOKEN}, "headers": []}
+    credentials = {"auth": {"type": "bearer", "token": token}, "headers": []}
     server = OrganizationMcpServer(
         organization_id=organization_id or context.organization.id,
         identifier=identifier,
@@ -283,6 +296,33 @@ def test_a_credential_the_server_echoes_is_redacted():
         text = _sse_result(response)["result"]["content"][0]["text"]
         # The whole Authorization value is a secret, so the scheme goes with the token.
         assert_that(text, equal_to("called search with [REDACTED]"))
+
+
+def test_a_credential_the_server_json_escapes_is_redacted_too():
+    """A quote or backslash in the token is escaped in the server's JSON, so its raw bytes
+    never appear; the decoded value would still reach the Agent whole."""
+    with given(_GIVEN) as context:
+        _server(context, token='secret"quoted\\token')
+
+        response = _post(context, _rpc("tools/call", name="search", arguments={}))
+
+        text = _sse_result(response)["result"]["content"][0]["text"]
+        assert_that(text, equal_to("called search with [REDACTED]"))
+        assert_that(response.text, is_not(contains_string("quoted")))
+
+
+def test_a_tool_list_that_never_ends_is_cut_at_the_time_limit_and_frees_its_slot(monkeypatch):
+    with given(_GIVEN) as context:
+        _server(context)
+        context.upstream.tools_list_heartbeats = True
+        monkeypatch.setattr(gateway_module, "MAX_STREAM_SECONDS", 0.5)
+
+        listed = _post(context, _rpc("tools/list"))
+        context.upstream.tools_list_heartbeats = False
+        after = _post(context, _rpc("tools/list"))
+
+        assert_that(listed.status_code, equal_to(status.HTTP_504_GATEWAY_TIMEOUT))
+        assert_that(after.status_code, equal_to(status.HTTP_200_OK))
 
 
 # --- what the gateway refuses ------------------------------------------------------

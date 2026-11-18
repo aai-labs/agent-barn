@@ -247,10 +247,17 @@ class AgentMcpServerService:
         effective_servers = self.repository.effective_for_agent(agent.id)
         effective = {server.id for server in effective_servers}
         pending = False
+        # What the running runtime loaded at its start; None while the Agent is not running.
+        started: set[str] | None = None
         if agent.status == AgentStatus.RUNNING:
             runtime = self.integrations.runtime(agent.id)
             started = mcp_runtime.started_identifiers(runtime.bindings) if runtime else set()
             pending = started != {server.identifier for server in effective_servers}
+
+        def restart_pending(server: OrganizationMcpServer) -> bool:
+            """Available to the Agent now, but not loaded by its running runtime."""
+            return started is not None and server.id in effective and server.identifier not in started
+
         held = self.repository.credentials_for(agent.organization_id, agent.id)
         own = {row.mcp_server_id: row for row in held if row.agent_id == agent.id}
         organization = {row.mcp_server_id: row for row in held if row.agent_id is None}
@@ -276,6 +283,7 @@ class AgentMcpServerService:
                     restricted=server.restricted,
                     attached=server.id in attached,
                     active=server.id in effective,
+                    restart_pending=restart_pending(server),
                     auth_type=auth_type,
                     credential_source=source,
                     needs_sign_in=source == "missing"
@@ -286,7 +294,9 @@ class AgentMcpServerService:
             )
         editor = self._can(context, agent, PermissionKey.AGENT_UPDATE, PermissionKey.AGENT_SECRET_MANAGE)
         own_servers = [
-            self.servers._read(server, None, manager=editor, agent_name=agent.name)
+            self.servers._read(server, None, manager=editor, agent_name=agent.name).model_copy(
+                update={"restart_pending": restart_pending(server)}
+            )
             for server, _ in self.repository.list_agent_servers(agent.organization_id, agent.id)
         ]
         return AgentMcpServersRead(

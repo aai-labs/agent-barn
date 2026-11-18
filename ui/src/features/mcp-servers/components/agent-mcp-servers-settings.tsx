@@ -36,6 +36,8 @@ function credentialLabel(server: AgentMcpServer): string {
 
 function stateLabel(server: AgentMcpServer): string {
   if (!server.enabled) return "Turned off for the organization";
+  // Configured access is not a loaded server: say so until the Agent restarts.
+  if (server.restartPending) return "On — available after the Agent restarts";
   if (server.scope === "all_agents") return "On for every Agent";
   return server.attached ? "On for this Agent" : "Off for this Agent";
 }
@@ -157,6 +159,7 @@ export function AgentMcpServersSettings({
                   <span className="truncate font-medium text-[var(--ink)]">{server.name}</span>
                   <span className="font-mono text-xs text-[var(--ink-4)]">{server.identifier}</span>
                   {server.enabled ? <Badge variant="ok">On</Badge> : <Badge>Off</Badge>}
+                  {server.restartPending && <RestartRequiredBadge />}
                   {server.signIn && <SignInBadge signIn={server.signIn} />}
                 </div>
                 <div className="mt-1 text-xs text-[var(--ink-3)]">{toolFilterLabel(server)}</div>
@@ -254,6 +257,7 @@ export function AgentMcpServersSettings({
                       {server.scope === "all_agents" ? "All Agents" : "Selected Agents"}
                     </Badge>
                     {server.restricted && <RestrictedBadge />}
+                    {server.restartPending && <RestartRequiredBadge />}
                   </div>
                   <div className="mt-1 text-xs text-[var(--ink-3)]">
                     {selectable ? (on ? "On for this Agent" : "Off for this Agent") : stateLabel(server)}
@@ -492,5 +496,14 @@ export function AddAgentMcpServerButton({ agentId, canEdit }: { agentId: string;
       </button>
       {open && <McpServerDialog server={null} agentId={agentId} open onOpenChange={setOpen} />}
     </>
+  );
+}
+
+/** On, but not loaded by the running Agent: its tools appear once the Agent restarts. */
+function RestartRequiredBadge() {
+  return (
+    <Badge variant="warn" title="The running Agent started without this server; restart it to load its tools.">
+      Restart required
+    </Badge>
   );
 }

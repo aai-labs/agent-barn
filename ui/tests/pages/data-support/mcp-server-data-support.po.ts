@@ -28,6 +28,15 @@ export type SignInCallbackMode = "opener" | "channel" | "never";
 
 /** Stands in for the authorization server redirecting the popup back to our callback page. */
 async function interceptSignInCallback(page: Page, mode: SignInCallbackMode = "opener") {
+  await page.context().route(`${AUTHORIZATION_SERVER}/**`, async (route) => {
+    const url = new URL(route.request().url());
+    const callback = `${url.searchParams.get("back")}/api/v1/mcp-servers/oauth/callback?code=${url.searchParams.get("code")}&state=${url.searchParams.get("state")}`;
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<script>window.location.replace(${JSON.stringify(callback)});</script>`,
+    });
+  });
   await page.context().route(CALLBACK, async (route) => {
     const url = new URL(route.request().url());
     const message = JSON.stringify({
@@ -44,8 +53,13 @@ async function interceptSignInCallback(page: Page, mode: SignInCallbackMode = "o
   });
 }
 
+// A stand-in authorization server on HTTPS, the only scheme the app sends a popup to. Its
+// sign-in page redirects straight back to the callback on the app's origin.
+const AUTHORIZATION_SERVER = "https://auth.mcp.test";
+
 function authorizeUrl(requestUrl: string, code: string) {
-  return { authorize_url: `${new URL(requestUrl).origin}/api/v1/mcp-servers/oauth/callback?code=${code}&state=signed-state` };
+  const back = encodeURIComponent(new URL(requestUrl).origin);
+  return { authorize_url: `${AUTHORIZATION_SERVER}/authorize?code=${code}&state=signed-state&back=${back}` };
 }
 
 /** Request interception for Organization MCP Servers and an Agent's attachments. */
@@ -141,6 +155,7 @@ export class McpServerDataSupport {
     agentCredential,
     restricted = false,
     canManageRestricted = false,
+    linearRestartPending = false,
     agentServers = [],
   }: {
     running?: boolean;
@@ -152,6 +167,7 @@ export class McpServerDataSupport {
     // DeepWiki restricted to Owners and Admins, and whether the viewer is one.
     restricted?: boolean;
     canManageRestricted?: boolean;
+    linearRestartPending?: boolean;
     agentServers?: Record<string, unknown>[];
   } = {}) {
     const data = new DataSupport(this.page);
@@ -164,7 +180,7 @@ export class McpServerDataSupport {
     await data.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: running ? "RUNNING" : "STOPPED", allowed_actions: actions },
     });
-    const shape = { restricted, canManageRestricted };
+    const shape = { restricted, canManageRestricted, linearRestartPending };
     let current = agentMcpServers({ attached, pendingRestart, agentServers, ...shape });
     let signingIn: string | null = null;
     const setSource = (serverId: string, own: boolean, credential: Record<string, unknown> | null = null) => {

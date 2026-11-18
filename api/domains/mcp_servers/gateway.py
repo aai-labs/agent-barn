@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -101,10 +102,36 @@ def filter_tools_list(content: bytes, content_type: str, request_id: Any, server
     return json.dumps(_filter_result(message, request_id, server)).encode() if isinstance(message, dict) else content
 
 
+#: A JSON string literal. JSON strings can't hold a raw newline, so one never spans the lines
+#: the stream is relayed in.
+_JSON_STRING = re.compile(rb'"(?:[^"\\]|\\.)*"')
+
+
 def redact(data: bytes, sensitive: list[bytes]) -> bytes:
+    """Removes the credential's values from an answer, however they are escaped.
+
+    Raw bytes first; then every JSON string literal is decoded, so a value the server
+    JSON-escaped (a quote or backslash in the token, or `\\u` escapes) is found too.
+    """
     for value in sensitive:
         data = data.replace(value, b"[REDACTED]")
-    return data
+    secrets = [value.decode("utf-8", errors="replace") for value in sensitive]
+    if not secrets or b"\\" not in data:
+        # Without an escape a literal decodes to its own bytes, which are already redacted.
+        return data
+
+    def literal(match: re.Match[bytes]) -> bytes:
+        try:
+            decoded = json.loads(match.group(0))
+        except ValueError:
+            return match.group(0)
+        if not isinstance(decoded, str) or not any(secret in decoded for secret in secrets):
+            return match.group(0)
+        for secret in secrets:
+            decoded = decoded.replace(secret, "[REDACTED]")
+        return json.dumps(decoded).encode()
+
+    return _JSON_STRING.sub(literal, data)
 
 
 @dataclass(frozen=True)
@@ -270,7 +297,13 @@ class McpGateway:
         forwarded = {name: value for name in _FORWARDED_RESPONSE_HEADERS if (value := response.headers.get(name))}
         if method == "tools/list" and response.status_code == 200:
             try:
-                content = await _read_stream(response, MAX_TOOLS_LIST_BYTES)
+                # The same overall limit as a streamed answer: heartbeats that each beat the
+                # read timeout must not hold one of the server's slots indefinitely.
+                async with asyncio.timeout(MAX_STREAM_SECONDS):
+                    content = await _read_stream(response, MAX_TOOLS_LIST_BYTES)
+            except TimeoutError:
+                logger.warning("MCP gateway cut a tool list at its time limit")
+                return JSONResponse({"error": "MCP server's tool list took too long"}, status_code=504)
             finally:
                 await response.aclose()
                 await client.aclose()

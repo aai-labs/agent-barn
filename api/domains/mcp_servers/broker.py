@@ -88,7 +88,12 @@ class McpCredentialBroker:
             if row.status == McpCredentialStatus.NEEDS_SIGN_IN.value:
                 raise CredentialUnavailable(SIGN_IN_EXPIRED)
             grant = self._decrypt(row.credentials_encrypted)
-            if grant.get("access_token") and float(grant.get("expires_at") or 0) > time.time() + REFRESH_MARGIN_SECONDS:
+            expires_at = grant.get("expires_at")
+            # No lifetime means the server stated none: the token is used until the server
+            # refuses it, which retires it (`retire_access_token`).
+            if grant.get("access_token") and (
+                expires_at is None or float(expires_at) > time.time() + REFRESH_MARGIN_SECONDS
+            ):
                 return grant["access_token"]
             if not grant.get("refresh_token"):
                 row.status = McpCredentialStatus.NEEDS_SIGN_IN.value

@@ -49,6 +49,8 @@ export const McpServerSchema = z.object({
   // An Agent server: its Agent.
   agentId: z.string().uuid().nullable().optional(),
   agentName: z.string().nullable().optional(),
+  // In an Agent's read: on, but the running Agent started without it.
+  restartPending: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -79,6 +81,8 @@ export const AgentMcpServerSchema = z.object({
   restricted: z.boolean().default(false),
   attached: z.boolean(),
   active: z.boolean(),
+  // Active, but the running Agent started without it: its tools appear after a restart.
+  restartPending: z.boolean().default(false),
   authType: McpAuthTypeSchema.default("none"),
   // Which credential the gateway uses for this Agent: its own, the organization's, or none yet.
   credentialSource: z.enum(["agent", "organization", "missing"]).default("organization"),
@@ -138,8 +142,12 @@ export type McpServerWrite = {
   toolExclude?: string[] | null;
 };
 
+// Only ever an HTTPS page: the popup shares this app's origin until it navigates there.
 export const McpSignInStartSchema = z.object({
-  authorizeUrl: z.string().url(),
+  authorizeUrl: z
+    .string()
+    .url()
+    .refine((value) => new URL(value).protocol === "https:", "The sign-in page must be an HTTPS URL."),
 });
 export const McpSignInResultSchema = z.object({
   mcpServerId: z.string().uuid(),

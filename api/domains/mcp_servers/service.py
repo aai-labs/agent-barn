@@ -163,6 +163,7 @@ class McpServerService:
         previous_auth = self._credentials(server)["auth"]
         url_changed = "url" in draft.changed
         clear: frozenset[str] = frozenset()
+        reconfigured = False
         if is_oauth(draft.config):
             submitted = data.auth.model_dump(exclude_none=True) if data.auth is not None else {"type": "oauth"}
             draft.config["auth"], reconfigured = self._oauth_auth(
@@ -183,6 +184,21 @@ class McpServerService:
                     server.identifier,
                     draft.fields["url"],
                     draft.config,
+                    draft.fields["tool_include"],
+                    draft.fields["tool_exclude"],
+                )
+            elif (
+                draft.reaches_server
+                and not reconfigured
+                and self.repository.credential(server.id, server.agent_id) is not None
+            ):
+                # A signed-in OAuth server is checked with its own sign-in, so a tool filter
+                # change can't expose tools whose OpenClaw names collide. Before any sign-in
+                # there is nothing to connect with, and nothing for Agents to use either.
+                self._verify(
+                    server.identifier,
+                    draft.fields["url"],
+                    self._probe_config(server, draft.config),
                     draft.fields["tool_include"],
                     draft.fields["tool_exclude"],
                 )

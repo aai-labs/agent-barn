@@ -7,7 +7,7 @@ import urllib.parse
 from collections.abc import Callable
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, has_entries, is_, none
+from hamcrest import assert_that, contains_string, equal_to, has_entries, is_
 
 from api.domains.mcp_servers import oauth
 from api.domains.mcp_servers.oauth import OAuthError, OAuthRefused, _Response
@@ -132,6 +132,36 @@ def test_an_authorization_server_without_s256_is_refused(web):
 
     with pytest.raises(OAuthError, match="PKCE"):
         oauth.discover(SERVER)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["javascript:alert(document.domain)", "http://auth.example.com/authorize", "data:text/html,<script>1</script>"],
+)
+def test_an_authorization_endpoint_that_is_not_https_is_refused(web, endpoint):
+    """The browser is sent there in a popup that shares the app's origin until it navigates."""
+    web(
+        _standard_web(
+            **{
+                f"GET {ISSUER}/.well-known/oauth-authorization-server": _json(
+                    200, {**AS_METADATA, "authorization_endpoint": endpoint}
+                )
+            }
+        )
+    )
+
+    with pytest.raises(OAuthError, match="authorization endpoint is not a public HTTPS URL"):
+        oauth.discover(SERVER)
+
+
+def test_a_saved_authorization_endpoint_that_is_not_https_never_becomes_a_sign_in_url():
+    with pytest.raises(OAuthError, match="authorization endpoint"):
+        oauth.authorize_url(
+            {**_CONFIG, "authorization_endpoint": "javascript:alert(1)"},
+            state="st",
+            code_challenge="ch",
+            redirect_uri="https://app/cb",
+        )
 
 
 # --- registration --------------------------------------------------------------------
@@ -270,10 +300,31 @@ def test_an_unusable_token_endpoint_is_not_a_refused_grant(web):
     assert_that(isinstance(raised.value, OAuthRefused), is_(False))
 
 
-def test_an_access_token_without_a_lifetime_lasts_an_hour(web):
+def test_an_access_token_without_a_lifetime_is_kept_until_the_server_refuses_it(web):
+    """GitHub's OAuth tokens state no lifetime and come without a refresh token."""
     web(FakeWeb({("POST", f"{ISSUER}/token"): _json(200, {"access_token": "at"})}))
 
     tokens = oauth.exchange_code(_CONFIG, code="c", code_verifier="v", redirect_uri="https://app/cb")
 
-    assert_that(tokens.refresh_token, none())
-    assert_that(3500 < tokens.expires_at - __import__("time").time() <= 3600, is_(True))
+    assert_that((tokens.refresh_token, tokens.expires_at), equal_to((None, None)))
+
+
+def test_a_long_stated_lifetime_is_kept_without_a_refresh_token_and_capped_with_one(web):
+    day = 24 * 3600
+    web(FakeWeb({("POST", f"{ISSUER}/token"): _json(200, {"access_token": "at", "expires_in": 30 * day})}))
+    alone = oauth.exchange_code(_CONFIG, code="c", code_verifier="v", redirect_uri="https://app/cb")
+    web(
+        FakeWeb(
+            {
+                ("POST", f"{ISSUER}/token"): _json(
+                    200, {"access_token": "at", "refresh_token": "rt", "expires_in": 30 * day}
+                )
+            }
+        )
+    )
+    refreshable = oauth.exchange_code(_CONFIG, code="c", code_verifier="v", redirect_uri="https://app/cb")
+
+    now = __import__("time").time()
+    assert alone.expires_at is not None and refreshable.expires_at is not None
+    assert_that(alone.expires_at - now > 29 * day, is_(True))
+    assert_that(refreshable.expires_at - now <= day, is_(True))

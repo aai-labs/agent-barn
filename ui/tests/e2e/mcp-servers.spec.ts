@@ -48,6 +48,32 @@ test.describe("Organization MCP servers", () => {
     await expect(ui.list).toContainText("Deep Wiki");
   });
 
+  test("a failed retest keeps the tools already chosen", async ({ page }) => {
+    const data = new McpServerDataSupport(page);
+    const ui = new McpServersPage(page);
+    await data.openOrganization({ role: "OWNER", servers: [] });
+
+    await ui.addButton.click();
+    await ui.field("Name").fill("Deep Wiki");
+    await ui.field("Server URL").fill("https://mcp.deepwiki.com/mcp");
+    await ui.testConnection();
+    await ui.tool("ask_wiki_question").uncheck();
+    // The server is briefly unreachable when the Owner tests again.
+    const probeUrl = "**/mcp-servers/probe";
+    await page.route(probeUrl, (route) =>
+      route.fulfill({ status: 400, json: { detail: "The MCP server could not be used: it could not be reached." } }),
+    );
+    await ui.testConnection();
+    await expect(ui.tools).toContainText("Connection failed");
+    await expect(ui.tool("ask_wiki_question")).not.toBeChecked();
+    await page.unroute(probeUrl);
+    await ui.submit("Add server");
+
+    await expect(ui.dialog).toHaveCount(0);
+    const create = data.requests.find((request) => request.method === "POST" && request.url.endsWith("/mcp-servers"));
+    expect(create?.body).toMatchObject({ tool_include: null, tool_exclude: ["ask_wiki_question"] });
+  });
+
   test("editing keeps the saved token and secret header unless they are retyped", async ({ page }) => {
     const data = new McpServerDataSupport(page);
     const ui = new McpServersPage(page);
@@ -249,6 +275,16 @@ test.describe("Agent MCP servers", () => {
     const put = data.requests.find((request) => request.method === "PUT");
     expect(put?.body).toEqual({ attached_server_ids: [MCP_SERVER_ID], restart: false });
     await expect(ui.agentSwitch("DeepWiki")).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("a server the running Agent started without reads as needing a restart", async ({ page }) => {
+    const data = new McpServerDataSupport(page);
+    const ui = new McpServersPage(page);
+    await data.openAgent({ running: true, pendingRestart: true, linearRestartPending: true });
+
+    await expect(ui.agentRow("Linear")).toContainText("Restart required");
+    await expect(ui.agentRow("Linear")).toContainText("On — available after the Agent restarts");
+    await expect(ui.agentRow("Notion")).not.toContainText("Restart required");
   });
 
   test("Discard puts the switches back without saving", async ({ page }) => {

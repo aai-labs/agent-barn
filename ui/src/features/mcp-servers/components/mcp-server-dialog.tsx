@@ -158,7 +158,8 @@ export function McpServerDialog({
         Object.fromEntries(result.tools.map((tool) => [tool.name, current[tool.name] ?? tool.visible])),
       );
     } catch {
-      setProbe(null);
+      // Shown from test.error. The last good result stays, so the tools chosen from it are
+      // still what a save sends; clearing it would save the server with every tool visible.
     }
   }
 

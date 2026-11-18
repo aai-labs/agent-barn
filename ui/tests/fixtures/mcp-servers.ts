@@ -84,6 +84,8 @@ export function agentMcpServers({
   pendingRestart = false,
   restricted = false,
   canManageRestricted = false,
+  // Linear, the All Agents server, added after the running Agent started.
+  linearRestartPending = false,
   agentServers = [] as Record<string, unknown>[],
 } = {}) {
   return {
@@ -93,6 +95,7 @@ export function agentMcpServers({
       {
         id: MCP_ALL_AGENTS_ID,
         identifier: "linear",
+        restart_pending: linearRestartPending,
         name: "Linear",
         description: null,
         scope: "all_agents",

@@ -120,9 +120,12 @@ class McpSignInService:
             self.config.secret_signing_key,
             algorithm=JWT_ENCODING_ALGORITHM,
         )
-        url = oauth.authorize_url(
-            config["auth"], state=state, code_challenge=challenge, redirect_uri=redirect_uri(self.config)
-        )
+        try:
+            url = oauth.authorize_url(
+                config["auth"], state=state, code_challenge=challenge, redirect_uri=redirect_uri(self.config)
+            )
+        except oauth.OAuthError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         return McpSignInStart(authorize_url=url)
 
     def _state(self, state: str) -> dict | None:

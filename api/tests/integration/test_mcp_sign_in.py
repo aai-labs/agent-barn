@@ -389,6 +389,48 @@ def test_the_callback_posts_the_code_to_the_opener_only_with_a_valid_state(autho
         assert_that(bad.text, is_not(contains_string('"code"')))
 
 
+def test_a_callback_error_carries_the_state_so_the_channel_delivers_it(authorization_server):
+    with given(_given()) as context:
+        server = _oauth_server(context)
+        state = _state(_start(context, server["id"]).json()["authorize_url"])
+
+        refused = context.client.get(
+            "/api/v1/mcp-servers/oauth/callback", params={"error": "access_denied", "state": state}
+        )
+        forged = context.client.get(
+            "/api/v1/mcp-servers/oauth/callback", params={"error": "access_denied", "state": "forged"}
+        )
+
+        assert_that(refused.text, contains_string(f'"state": "{state}"'))
+        assert_that(forged.text, is_not(contains_string('"state"')))
+
+
+def test_a_signed_in_oauth_servers_tool_filter_is_checked_for_collisions(authorization_server):
+    long = "x" * 60
+    probe = FakeProbe()
+    probe.tools = [f"{long}_one", f"{long}_two", "search"]
+    with given(_given(probe)) as context:
+        server = _oauth_server(context, client_id="entered")
+        _complete(context, _state(_start(context, server["id"]).json()["authorize_url"]))
+        path = f"{_SERVERS}/{server['id']}"
+
+        with when("the filter would show two tools whose OpenClaw names collide"):
+            colliding = context.client.patch(
+                path, json={"tool_exclude": ["search"]}, headers=_auth(context.access_token)
+            )
+
+        with then("the save is refused after checking the server with the Organization's sign-in"):
+            assert_that(colliding.status_code, equal_to(status.HTTP_400_BAD_REQUEST), colliding.text)
+            assert_that(colliding.json()["detail"], contains_string("OpenClaw names"))
+            assert_that(probe.calls[-1][1]["auth"], has_entries(type="bearer", token="access-1"))
+
+        with then("a filter that hides one of them saves"):
+            hidden = context.client.patch(
+                path, json={"tool_exclude": [f"{long}_two"]}, headers=_auth(context.access_token)
+            )
+            assert_that(hidden.status_code, equal_to(status.HTTP_200_OK), hidden.text)
+
+
 # --- what each Agent uses -----------------------------------------------------------------
 
 

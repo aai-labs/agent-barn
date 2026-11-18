@@ -112,7 +112,7 @@ It applies the Custom API destination policy: every DNS answer must be public, t
 - **Each tool**: its OpenClaw name, whether that name is cut at 64 characters, and whether the tool filter lets Agents see it.
 - **Warnings**: no tools offered, no tools visible, names OpenClaw shortens, and filter names the server does not offer.
 
-When two visible tools would share an OpenClaw name after cutting, the probe reports it, and a save is refused (400) until the filter hides all but one of each.
+When two visible tools would share an OpenClaw name after cutting, the probe reports it, and a save is refused (400) until the filter hides all but one of each. A signed-in OAuth server is checked the same way, with its own sign-in, when an update changes its filter or headers; before any sign-in there is nothing to connect with.
 
 ## Audit
 
@@ -128,7 +128,7 @@ A server with authentication `oauth` acts as an account someone signed in with: 
 
 **Saving** an OAuth server sets the sign-in up, and nothing is probed until someone signs in.
 
-1. **Discovery** follows MCP's authorization spec. The server's unauthenticated `initialize` must answer 401. Its challenge's `resource_metadata` (RFC 9728), or the well-known location, names the authorization server. Servers without protected-resource metadata act as their own. That server's metadata (RFC 8414, then OpenID discovery) must name the same issuer, give authorization and token endpoints, and support PKCE with S256 when it lists methods. A server that answers `initialize` without a sign-in is refused.
+1. **Discovery** follows MCP's authorization spec. The server's unauthenticated `initialize` must answer 401. Its challenge's `resource_metadata` (RFC 9728), or the well-known location, names the authorization server. Servers without protected-resource metadata act as their own. That server's metadata (RFC 8414, then OpenID discovery) must name the same issuer, give authorization and token endpoints, and support PKCE with S256 when it lists methods. Every endpoint must be a public HTTPS URL: the authorization endpoint above all, because the sign-in popup shares the app's origin until it navigates there, so a `javascript:` URL would run as the app. `authorize_url` checks it again, and the app opens only an HTTPS sign-in URL. A server that answers `initialize` without a sign-in is refused.
 2. **Registration** uses dynamic client registration (RFC 7591) with the redirect URI `{WEB_APP_URL}/api/v1/mcp-servers/oauth/callback`. It asks for a public client where allowed, else a client with a secret. An Admin may instead enter a client ID and secret for a server without registration, such as GitHub.
 3. **Scope** is the challenge's, else the resource's `scopes_supported`, unless the Admin entered one.
 
@@ -137,7 +137,7 @@ All of these requests follow the server's own policy: public HTTPS, a pinned add
 **Signing in** happens in a popup:
 
 1. **Start**: `POST …/mcp-servers/{id}/sign-in` (Organization, `mcp_server.manage`) or `POST …/agents/{agent_id}/mcp-servers/{id}/sign-in` (Agent, `agent.update` + `agent.secret.manage`) returns an authorize URL. It carries PKCE (S256), the `resource` parameter (RFC 8707) and a signed state that expires in 10 minutes. The state names the Organization, server, Agent, user and client, and carries the verifier encrypted.
-2. **Callback**: the unauthenticated `GET /api/v1/mcp-servers/oauth/callback` checks only the state's signature, then posts `{type: "agentbarn-mcp-sign-in", code, state}`, or an error, twice.
+2. **Callback**: the unauthenticated `GET /api/v1/mcp-servers/oauth/callback` checks only the state's signature, then posts `{type: "agentbarn-mcp-sign-in", code, state}`, or an error (with the state, when it is valid), twice.
    - **On a `BroadcastChannel`** of that name. Some authorization servers (ether.fi) send `Cross-Origin-Opener-Policy: same-origin`, which leaves the popup without an opener. The app accepts a channel message only with the state of the sign-in it started. Because such a popup also reads as closed, it keeps waiting until the state expires (10 minutes) or the person cancels.
    - **To `window.opener`** on the web app's origin, where there still is one.
 3. **Complete**: `POST …/mcp-servers/sign-in/complete` with `{code, state}`.
@@ -214,7 +214,7 @@ Base path: `/api/v1/organizations/{organization_id}/agents/{agent_id}/mcp-server
 - **Conflicts**: a lifecycle or restore operation in progress, or a managed update, is `409`.
 - **Audit**: a change stages `agent.updated`, whose `field_changes.mcp_servers` holds the previous and new identifier lists.
 
-`pending_restart` is true when a running Agent's started servers differ from the ones it would start with now. The started servers are the identifiers its integration runtime snapshot recorded at start. Disabling, deleting or rescoping a server a running Agent started with also sets it.
+`pending_restart` is true when a running Agent's started servers differ from the ones it would start with now. Each server in the read (and each Agent server) also carries `restart_pending`: the Agent may use it now but its running runtime started without it, so the UI shows it as "Restart required" rather than as loaded. The started servers are the identifiers its integration runtime snapshot recorded at start. Disabling, deleting or rescoping a server a running Agent started with also sets it.
 
 ## Runtime configuration
 
@@ -259,15 +259,16 @@ At every start, `AgentService._provision_and_start` reads `effective_for_agent` 
 **Forwarding:**
 
 - **Credential**: the pod's `Authorization` is replaced by the credential headers `McpCredentialBroker` resolves. That is the Agent's own credential, else the Organization's: the server's token and headers, or for an OAuth server the Organization sign-in's access token as `Bearer` plus the server's extra headers.
-  - **Refresh**: an access token within 60 seconds of expiring is refreshed under the credential row's `FOR UPDATE` lock, and a rotated refresh token is saved in the same commit, so replicas share one current token. A server that does not rotate keeps its refresh token.
+  - **Refresh**: an access token within 60 seconds of expiring is refreshed under the credential row's `FOR UPDATE` lock, and a rotated refresh token is saved in the same commit, so replicas share one current token. A server that does not rotate keeps its refresh token. A refreshable token is refreshed at least daily, whatever lifetime it states.
+  - **No stated lifetime**: a token issued without `expires_in` (GitHub's OAuth tokens, which also come without a refresh token) has no expiry and is used until the server refuses it.
   - **Refused refresh**: the row is marked `needs_sign_in`, and Agents get a JSON-RPC error: "This MCP server's sign-in has expired; it needs to be signed in again."
   - **Missing sign-in**: an OAuth server nobody signed in to answers "This MCP server needs a sign-in before this Agent can use it."
   - **Refused access token**: a 401 from the server retires that access token, so the next request refreshes it.
 - **Request headers passed through**: only `Mcp-Session-Id`, `MCP-Protocol-Version`, `Accept`, `Content-Type` and `Last-Event-ID`.
 - **Destination**: the request is sent with the shared public-address pinning (`pin_to_public_address`). TLS is verified against the configured host, and no redirect is followed (`502`).
-- **Answer**: streamed back line by line with only `Content-Type` and `Mcp-Session-Id`. Each line has the credential's values redacted.
+- **Answer**: streamed back line by line with only `Content-Type` and `Mcp-Session-Id`. Each line has the credential's values redacted: their raw bytes, and every JSON string literal that decodes to contain one, so a value the server JSON-escaped (a quote or backslash in the token, or `\u` escapes) is caught too.
 - **Limits**: a stream is cut at 10 MiB or 10 minutes. Upstream connect timeout is 10 seconds and read timeout 300 seconds.
-- **`tools/list`**: the answer is read whole (up to 5 MiB, else `502`) and filtered in either JSON or SSE framing.
+- **`tools/list`**: the answer is read whole (up to 5 MiB, else `502`; within the same 10 minutes, else `504`) and filtered in either JSON or SSE framing.
 
 Refusals are logged with Agent, Organization and server identifier; no audit row is written per request.
 

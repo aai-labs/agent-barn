@@ -119,6 +119,19 @@ Both pinned runtimes, Hermes v2026.8.19 (`hermes-base` 0.2.10) and OpenClaw 2026
 
 ## Changes
 
+### 2026-11-18 — review fixes
+
+- **Security**:
+  - OAuth discovery accepts only public HTTPS endpoints, and the app opens only an HTTPS sign-in URL, so a `javascript:` authorization endpoint can't run in the popup that shares the app's origin.
+  - The gateway also redacts a credential the server echoed back JSON-escaped (a quote or backslash in the token, or `\u` escapes).
+- **Fixed**:
+  - A token issued without a lifetime is kept until the server refuses it, instead of expiring after an hour.
+  - Updating a signed-in OAuth server's tool filter checks it for OpenClaw name collisions with its sign-in.
+  - A `tools/list` answer is cut at the 10-minute stream limit (`504`), so heartbeats can't hold a server's slots.
+  - A failed retest in the server dialog keeps the tools already chosen.
+  - The Agent read marks each server the running Agent started without (`restart_pending`), shown as "Restart required".
+  - A sign-in callback's error carries the state, so the shared popup relay delivers it.
+
 ### 2026-11-12 — Agent servers stay on their Agent
 
 - **Changed**: the Organization's MCP servers page no longer lists every Agent's own servers, and `GET …/mcp-servers/agent-servers` is gone. An Agent's own servers show only on that Agent, as its own integration credentials do.

@@ -298,3 +298,26 @@ def test_disabling_a_server_a_running_agent_started_with_is_pending_too():
         response = context.client.get(_path(context), headers=_auth(context.access_token))
 
         assert_that(response.json()["pending_restart"], is_(True))
+
+
+def test_a_server_added_while_the_agent_runs_reads_as_needing_a_restart_until_it_does():
+    with given(_given()) as context:
+        config_map, _ = _start(context)
+        assert_that(json.loads(config_map["openclaw-config-overlay.json"])["mcp"]["servers"], equal_to({}))
+
+        with when("an Owner adds an All Agents server while the Agent runs"):
+            _server(context, "everyone", McpServerScope.ALL_AGENTS)
+            read = context.client.get(_path(context), headers=_auth(context.access_token)).json()
+
+        with then("it is on for the Agent but not loaded by its runtime yet"):
+            assert_that(read["servers"][0], has_entries(identifier="everyone", active=True, restart_pending=True))
+            assert_that(read["pending_restart"], is_(True))
+
+        with when("the Agent restarts"):
+            restarted = _attach(context, restart=True)
+
+        with then("its runtime lists the server, and nothing is pending"):
+            assert_that(restarted.status_code, equal_to(status.HTTP_200_OK), restarted.text)
+            assert_that(restarted.json()["servers"][0], has_entries(active=True, restart_pending=False))
+            config_map = context.injector.get(KubernetesClient).create_config_map.call_args.args[1].data
+            assert_that(json.loads(config_map["openclaw-config-overlay.json"])["mcp"]["servers"], has_key("everyone"))

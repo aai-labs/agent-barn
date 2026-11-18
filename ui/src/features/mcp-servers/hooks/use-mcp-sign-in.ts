@@ -45,8 +45,12 @@ export function useMcpServerSignIn() {
             ? `${base}/agents/${agentId}/mcp-servers/${serverId}/sign-in`
             : `${base}/mcp-servers/${serverId}/sign-in`;
           const { data } = await api.post<{ authorizeUrl: string }>(startUrl, {}, { schema: McpSignInStartSchema });
-          expectedState = new URL(data.authorizeUrl).searchParams.get("state") ?? undefined;
-          popup.location.href = data.authorizeUrl;
+          const authorizeUrl = new URL(data.authorizeUrl);
+          // Checked here as well as in the schema: anything but an HTTPS page would run in
+          // this popup, which still shares the app's origin.
+          if (authorizeUrl.protocol !== "https:") throw new Error("The sign-in page must be an HTTPS URL.");
+          expectedState = authorizeUrl.searchParams.get("state") ?? undefined;
+          popup.location.href = authorizeUrl.toString();
         } catch (err) {
           popup.close();
           throw err;

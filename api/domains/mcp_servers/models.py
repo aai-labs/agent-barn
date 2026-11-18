@@ -412,6 +412,9 @@ class McpServerRead(DTO):
     #: Set for an Agent MCP Server: the Agent it belongs to.
     agent_id: UUID | None = None
     agent_name: str | None = None
+    #: In an Agent's read: the server is on, but the running Agent started without it, so it
+    #: is not usable until the Agent restarts.
+    restart_pending: bool = False
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
@@ -459,6 +462,8 @@ class AgentMcpServerRead(DTO):
     attached: bool
     #: Whether the Agent may use the server now: enabled, and All Agents or attached.
     active: bool
+    #: Active, but the running Agent started without it: its tools appear after a restart.
+    restart_pending: bool = False
     #: `none`, `bearer`, `api_key` or `oauth`: what an Agent credential for it must be.
     auth_type: str
     #: Which credential the gateway uses for this Agent: its own, the Organization's, or
