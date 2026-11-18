@@ -37,11 +37,16 @@ COST_RECORD_STATUS_SUCCESS = "success"
 
 @dataclass(frozen=True)
 class HourlyLlmUsage:
-    """One UTC hour of an Agent's own LLM calls and tokens, by when they ran."""
+    """One UTC hour of an Agent's own LLM calls and tokens, by when they ran.
+
+    `calls` and `tokens` are the calls that succeeded; `failures` are the ones that did
+    not, which carry no tokens.
+    """
 
     hour: datetime
     calls: int
     tokens: int
+    failures: int
 
 
 class CostSyncState(SQLModel, table=True):

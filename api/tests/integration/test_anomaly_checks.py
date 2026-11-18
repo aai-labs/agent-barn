@@ -111,15 +111,15 @@ def _tool_call(
     return row
 
 
-def _cost(agent, at: datetime, *, tokens: int = 1_000) -> CostRecord:
+def _cost(agent, at: datetime, *, tokens: int = 1_000, failed: bool = False) -> CostRecord:
     row = CostRecord(
         request_id=f"req-{uuid4().hex}",
         litellm_key_hash="hash",
         occurred_at=at,
-        spend=Decimal("0.01"),
-        total_tokens=tokens,
+        spend=Decimal(0) if failed else Decimal("0.01"),
+        total_tokens=0 if failed else tokens,
         model="m",
-        status="success",
+        status="failure" if failed else "success",
         agent_id=agent.id,
         organization_id=agent.organization_id,
     )
@@ -319,6 +319,82 @@ def test_a_jump_in_the_tool_error_rate_is_recorded():
         assert_that(
             _anomalies(context, AnomalySignal.TOOL_ERROR_RATE),
             contains_exactly(has_properties(observed_value=0.8, usual_value=0.0)),
+        )
+
+
+def _model_calls(agent, start: datetime, *, succeeded: int, failed: int, minutes: int = 30) -> list:
+    times = _spread(start, succeeded + failed, minutes)
+    return [_cost(agent, at, failed=index >= succeeded) for index, at in enumerate(times)]
+
+
+def test_failed_model_calls_are_not_counted_as_model_calls():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _save(context, *_model_calls(context.agent, _in_last_hour(), succeeded=10, failed=40))
+
+        _check(context)
+
+        assert_that(_anomalies(context, AnomalySignal.LLM_CALLS_PER_HOUR), empty())
+
+
+def test_hours_with_only_failed_model_calls_do_not_count_as_active():
+    with given([*_ENABLED, usual_activity()]) as context:
+        # A scheduled job whose model calls all fail, every few hours of every day.
+        rows = []
+        for day in range(1, 14):
+            for hour in (0, 3, 6, 15, 18, 21):
+                start = (NOW - timedelta(days=day)).replace(hour=hour, minute=0)
+                rows += _model_calls(context.agent, start, succeeded=0, failed=4)
+        _save(context, *rows)
+        service = context.injector.get(AnomalyCheckService)
+
+        history = service.history(context.agent.id, *service.windows(NOW))
+
+        assert_that(history.llm_calls, equal_to([10.0] * 12))
+        assert_that(history.tool_calls, equal_to([10.0] * 12))
+        assert_that(history.active_days, equal_to(4))
+
+
+def test_a_jump_in_the_model_error_rate_is_recorded():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _save(context, *_model_calls(context.agent, _in_last_hour(), succeeded=4, failed=16))
+
+        _check(context)
+
+        assert_that(
+            _anomalies(context, AnomalySignal.LLM_ERROR_RATE),
+            contains_exactly(has_properties(observed_value=0.8, usual_value=0.0)),
+        )
+
+
+def test_hours_where_every_model_call_failed_are_not_learned_as_the_usual_error_rate():
+    with given([*_ENABLED, usual_activity()]) as context:
+        # An outage most days: if those hours were learned, failing would look normal.
+        rows = []
+        for day in HISTORY_DAYS:
+            for hour in (13, 14, 15, 16, 17):
+                start = (NOW - timedelta(days=day)).replace(hour=hour, minute=0)
+                rows += _model_calls(context.agent, start, succeeded=0, failed=20)
+        rows += _model_calls(context.agent, _in_last_hour(), succeeded=0, failed=20)
+        _save(context, *rows)
+
+        _check(context)
+
+        assert_that(
+            _anomalies(context, AnomalySignal.LLM_ERROR_RATE),
+            contains_exactly(has_properties(observed_value=1.0, usual_value=0.0)),
+        )
+
+
+def test_a_model_error_rate_anomaly_ends_when_the_cost_sync_has_stopped():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _save(context, *_model_calls(context.agent, _in_last_hour(), succeeded=4, failed=16))
+        _check(context)
+
+        _check(context, NOW + timedelta(hours=3))
+
+        assert_that(
+            _anomalies(context, AnomalySignal.LLM_ERROR_RATE),
+            contains_exactly(has_properties(ended_at=NOW)),
         )
 
 

@@ -83,7 +83,7 @@ def _tool_call(
     return row
 
 
-def _cost(agent, *, at: datetime, tokens: int = 100, is_memory: bool = False) -> CostRecord:
+def _cost(agent, *, at: datetime, tokens: int = 100, is_memory: bool = False, status: str = "success") -> CostRecord:
     return CostRecord(
         request_id=f"req-{uuid4().hex}",
         litellm_key_hash="hash",
@@ -91,7 +91,7 @@ def _cost(agent, *, at: datetime, tokens: int = 100, is_memory: bool = False) ->
         spend=Decimal("0.01"),
         total_tokens=tokens,
         model="m",
-        status="success",
+        status=status,
         agent_id=agent.id,
         organization_id=agent.organization_id,
         is_memory=is_memory,
@@ -197,6 +197,28 @@ def test_llm_calls_and_tokens_are_counted_per_hour_without_memory_processing():
         hours = context.injector.get(CostService).hourly_llm_usage(agent.id, HOUR, HOUR + timedelta(hours=1))
 
         assert_that(hours, contains_exactly(has_properties(hour=HOUR, calls=2, tokens=350)))
+
+
+def test_failed_llm_calls_are_counted_apart_from_the_ones_that_succeeded():
+    with given(_GIVEN) as context:
+        agent = context.agent
+        later = HOUR + timedelta(hours=1)
+        _save(
+            context,
+            _cost(agent, at=HOUR + timedelta(minutes=1), tokens=100),
+            _cost(agent, at=HOUR + timedelta(minutes=2), tokens=0, status="failure"),
+            _cost(agent, at=later + timedelta(minutes=1), tokens=0, status="failure"),
+        )
+
+        hours = context.injector.get(CostService).hourly_llm_usage(agent.id, HOUR, HOUR + timedelta(hours=2))
+
+        assert_that(
+            hours,
+            contains_exactly(
+                has_properties(hour=HOUR, calls=1, tokens=100, failures=1),
+                has_properties(hour=later, calls=0, tokens=0, failures=1),
+            ),
+        )
 
 
 def test_the_last_completed_cost_sync_is_reported():

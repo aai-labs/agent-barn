@@ -85,6 +85,7 @@ COST_SYNC_STALE = timedelta(hours=1)
 LLM_SIGNALS = (
     AnomalySignal.LLM_CALLS_PER_HOUR,
     AnomalySignal.LLM_TOKENS_PER_HOUR,
+    AnomalySignal.LLM_ERROR_RATE,
     AnomalySignal.LLM_CALLS_CAP,
     AnomalySignal.LLM_TOKENS_CAP,
 )
@@ -109,11 +110,13 @@ class AgentHistory:
     writes: list[float]
     llm_calls: list[float]
     llm_tokens: list[float]
+    llm_error_rates: list[float]
     observed_tool_calls: int
     observed_errors: int
     observed_writes: int
     observed_llm_calls: int | None
     observed_llm_tokens: int | None
+    observed_llm_failures: int | None
 
 
 def _floor_hour(at: datetime) -> datetime:
@@ -190,6 +193,12 @@ class AnomalyCheckService:
         if cost_until is not None and until - cost_until <= COST_SYNC_STALE:
             rate(RateSignal.LLM_CALLS_PER_HOUR, history.observed_llm_calls, history.llm_calls, cost_until)
             rate(RateSignal.LLM_TOKENS_PER_HOUR, history.observed_llm_tokens, history.llm_tokens, cost_until)
+            observed_llm_error_rate = (
+                error_rate(history.observed_llm_failures, history.observed_llm_calls + history.observed_llm_failures)
+                if history.observed_llm_calls is not None and history.observed_llm_failures is not None
+                else None
+            )
+            rate(RateSignal.LLM_ERROR_RATE, observed_llm_error_rate, history.llm_error_rates, cost_until)
             self._check_caps(organization_id, agent_id, override, history, cost_until)
         elif cost_until is not None:
             # The cost sync has stopped: nothing shows an LLM deviation still going, so
@@ -235,6 +244,10 @@ class AnomalyCheckService:
         LLM figures have their own window, ending where the cost sync has got to, so an
         hour with tool calls whose LLM calls are not synced yet does not count as an
         hour without LLM calls.
+
+        Failed LLM calls are kept apart: an hour in which every LLM call failed is not
+        an active hour, so a job that keeps failing neither makes the Agent's usual
+        rates look idle nor teaches the check that failing is usual.
         """
         tool_since, tool_until = _baseline_window(until)
         llm_window = _baseline_window(cost_until) if cost_until is not None else None
@@ -247,7 +260,7 @@ class AnomalyCheckService:
             row.hour: row.writes for row in self.business_value_service.hourly_writes(agent_id, tool_since, tool_until)
         }
         llm_by_hour = (
-            {row.hour: row for row in self.cost_service.hourly_llm_usage(agent_id, *llm_window)}
+            {row.hour: row for row in self.cost_service.hourly_llm_usage(agent_id, *llm_window) if row.calls > 0}
             if llm_window is not None
             else {}
         )
@@ -274,6 +287,15 @@ class AnomalyCheckService:
             active_days=len({hour.date() for hour in [*tool_active, *llm_active]}),
             tool_calls=[float(tools_by_hour[hour].calls) if hour in tools_by_hour else 0.0 for hour in tool_active],
             error_rates=error_rates,
+            llm_error_rates=[
+                rate
+                for hour in llm_active
+                if hour in llm_by_hour
+                and (
+                    rate := error_rate(llm_by_hour[hour].failures, llm_by_hour[hour].calls + llm_by_hour[hour].failures)
+                )
+                is not None
+            ],
             writes=[float(write_hours.get(hour, 0)) for hour in tool_active],
             llm_calls=[float(llm_by_hour[hour].calls) if hour in llm_by_hour else 0.0 for hour in llm_active],
             llm_tokens=[float(llm_by_hour[hour].tokens) if hour in llm_by_hour else 0.0 for hour in llm_active],
@@ -282,6 +304,7 @@ class AnomalyCheckService:
             observed_writes=sum(row.writes for row in observed_writes),
             observed_llm_calls=sum(row.calls for row in observed_llm) if observed_llm is not None else None,
             observed_llm_tokens=sum(row.tokens for row in observed_llm) if observed_llm is not None else None,
+            observed_llm_failures=sum(row.failures for row in observed_llm) if observed_llm is not None else None,
         )
 
     def _check_first_use(self, organization_id: UUID, agent_id: UUID, until: datetime, enough: bool) -> None:
@@ -482,6 +505,7 @@ class AnomalyService:
             rated += [
                 (RateSignal.LLM_CALLS_PER_HOUR, history.llm_calls),
                 (RateSignal.LLM_TOKENS_PER_HOUR, history.llm_tokens),
+                (RateSignal.LLM_ERROR_RATE, history.llm_error_rates),
             ]
         rates = [
             RateBaselineRead(

@@ -5,6 +5,7 @@ see the Agent but not this; a Member without access cannot see the Agent at all.
 """
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import status
@@ -25,7 +26,7 @@ from api.domains.anomalies.models import (
     OrganizationAnomalySettings,
     SeenKind,
 )
-from api.domains.costs.models import CostSyncState
+from api.domains.costs.models import CostRecord, CostSyncState
 from api.domains.rbac.catalog import AGENT_OWNER_ROLE_ID, OrganizationRole
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -232,6 +233,36 @@ def test_the_learned_rates_show_the_usual_value_and_what_would_be_flagged():
                 body["rates"],
                 has_item(has_entries(signal="TOOL_CALLS_PER_HOUR", usual=10.0, threshold=30.0, active_hours=4)),
             )
+
+
+def test_the_learned_rates_include_the_share_of_model_calls_that_fail():
+    with given([*signed_in(), there_is_an_agent(), usual_tool_activity()]) as context:
+        now = datetime.now(UTC)
+        rows = []
+        for day in (2, 3, 4, 5):
+            hour = (now - timedelta(days=day)).replace(minute=0, second=0, microsecond=0)
+            for minute in range(20):
+                failed = minute % 4 == 0
+                row = CostRecord(
+                    request_id=f"req-{uuid4().hex}",
+                    litellm_key_hash="hash",
+                    occurred_at=hour + timedelta(minutes=minute),
+                    spend=Decimal(0),
+                    total_tokens=0 if failed else 1_000,
+                    model="m",
+                    status="failure" if failed else "success",
+                    agent_id=context.agent.id,
+                    organization_id=context.organization.id,
+                )
+                row.created_at = row.occurred_at
+                rows.append(row)
+        _save(context, *rows)
+
+        body = get(context, NORMAL).json()
+
+        with then("a quarter of its model calls usually fail, and only successful ones count as calls"):
+            assert_that(body["rates"], has_item(has_entries(signal="LLM_ERROR_RATE", usual=0.25, active_hours=4)))
+            assert_that(body["rates"], has_item(has_entries(signal="LLM_CALLS_PER_HOUR", usual=15.0)))
 
 
 def test_what_the_agent_used_in_its_baseline_window_is_listed():

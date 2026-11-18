@@ -18,6 +18,7 @@ class AnomalySignal(StrEnum):
     LLM_CALLS_PER_HOUR = RateSignal.LLM_CALLS_PER_HOUR.value
     TOOL_CALLS_PER_HOUR = RateSignal.TOOL_CALLS_PER_HOUR.value
     TOOL_ERROR_RATE = RateSignal.TOOL_ERROR_RATE.value
+    LLM_ERROR_RATE = RateSignal.LLM_ERROR_RATE.value
     WRITES_PER_HOUR = RateSignal.WRITES_PER_HOUR.value
     # Over an Owner- or Admin-set hard cap, whatever the baseline says.
     LLM_TOKENS_CAP = "LLM_TOKENS_CAP"

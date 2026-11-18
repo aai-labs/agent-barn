@@ -7,8 +7,8 @@ runs a check that learns it. From then on, what the Agent does is judged against
 history: ask it to fetch a host it never used and the next check flags it.
 
 `--spike` also adds an unusual few minutes just now (a burst of tool calls, half of
-them failing, `crm` deletes, model calls and a new host), and runs a check that flags
-it. Model-usage anomalies need the cost sync to have run recently, as they would live.
+them failing, `crm` deletes, model calls, many of them failing, and a new host), and
+runs a check that flags it. Model-usage anomalies need the cost sync to have run recently, as they would live.
 
 Seeded rows are marked (tool call session `anomaly-seed`, cost request ids
 `anomaly-seed-…`), and `--clear` removes them together with the Agent's Anomalies,
@@ -112,15 +112,15 @@ def _crm(agent: Agent, at: datetime, verb: str) -> list:
     return [call, action]
 
 
-def _model_call(agent: Agent, at: datetime, tokens: int) -> CostRecord:
+def _model_call(agent: Agent, at: datetime, tokens: int, *, failed: bool = False) -> CostRecord:
     row = CostRecord(
         request_id=f"{SEED_REQUEST_PREFIX}{uuid4().hex}",
         litellm_key_hash=SEED_SESSION,
         occurred_at=at,
-        spend=Decimal("0.001"),
-        total_tokens=tokens,
+        spend=Decimal(0) if failed else Decimal("0.001"),
+        total_tokens=0 if failed else tokens,
         model="seed",
-        status="success",
+        status="failure" if failed else "success",
         agent_id=agent.id,
         organization_id=agent.organization_id,
     )
@@ -161,8 +161,8 @@ def seed_history(delegate: PostgresRepositoryDelegate, agent_id: UUID, now: date
 
 def seed_spike(delegate: PostgresRepositoryDelegate, agent_id: UUID, now: datetime) -> None:
     """Six minutes, ending three minutes ago, unlike anything in the history: 150
-    fetches, 90 of them failing and 5 from a new host, 25 `crm` deletes, and 80 model
-    calls of 20,000 tokens."""
+    fetches, 90 of them failing and 5 from a new host, 25 `crm` deletes, 80 model
+    calls of 20,000 tokens, and 70 model calls that failed."""
     with Session(delegate.engine) as session:
         agent = _agent(session, agent_id)
     times = _spread(now - timedelta(minutes=9), 150, timedelta(minutes=6))
@@ -173,6 +173,7 @@ def seed_spike(delegate: PostgresRepositoryDelegate, agent_id: UUID, now: dateti
     for at in times[:25]:
         rows += _crm(agent, at, "delete")
     rows += [_model_call(agent, at, 20_000) for at in times[:80]]
+    rows += [_model_call(agent, at, 0, failed=True) for at in times[80:]]
     _save(delegate, rows)
 
 

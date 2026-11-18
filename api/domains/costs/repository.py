@@ -113,18 +113,21 @@ class CostRepository:
             session.commit()
 
     def hourly_llm_usage(self, agent_id: UUID, since: datetime, until: datetime) -> list[HourlyLlmUsage]:
-        """An Agent's LLM calls and tokens per UTC hour of `occurred_at`, for hours with any.
+        """An Agent's LLM calls and tokens per UTC hour of `occurred_at`, for hours with any,
+        with failed calls counted apart from the ones that succeeded.
 
         Memory processing is left out: the platform runs it on the Agent's behalf, so it
         says nothing about what the Agent itself is doing. Unscoped: only the scheduled
         anomaly check calls this, and no router reaches it.
         """
         hour = sa.func.date_trunc("hour", sa.func.timezone("UTC", col(CostRecord.occurred_at)))
+        succeeded = col(CostRecord.status) == COST_RECORD_STATUS_SUCCESS
         query = (
             select(
                 sa.func.timezone("UTC", hour),
-                sa.func.count(),
-                sa.func.coalesce(sa.func.sum(CostRecord.total_tokens), 0),
+                sa.func.count().filter(succeeded),
+                sa.func.coalesce(sa.func.sum(CostRecord.total_tokens).filter(succeeded), 0),
+                sa.func.count().filter(sa.not_(succeeded)),
             )
             .where(
                 col(CostRecord.agent_id) == agent_id,
@@ -137,7 +140,10 @@ class CostRepository:
         )
         with Session(self.delegate.engine) as session:
             rows = session.exec(query).all()  # type: ignore[call-overload]
-        return [HourlyLlmUsage(hour=bucket, calls=calls, tokens=int(tokens)) for bucket, calls, tokens in rows]
+        return [
+            HourlyLlmUsage(hour=bucket, calls=calls, tokens=int(tokens), failures=failures)
+            for bucket, calls, tokens, failures in rows
+        ]
 
     def last_sync_completed_at(self) -> datetime | None:
         with Session(self.delegate.engine) as session:
