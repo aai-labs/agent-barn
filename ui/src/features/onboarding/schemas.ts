@@ -21,6 +21,8 @@ export const TrialSettingsSchema = z.object({
   activeTrials: z.number().int().optional(),
   // Sign-up grants the Free tier, so it stays closed while Free isn't offered.
   freeTierOffered: z.boolean().optional(),
+  // Whether any tier, Free or paid, is offered; self-signup can't be turned on without one.
+  anyTierOffered: z.boolean().optional(),
   updatedAt: z.string().nullable().optional(),
 });
 

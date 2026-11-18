@@ -141,7 +141,11 @@ moves is audited as `platform.trial_settings.changed`, a removed cap as `null`. 
 Credit and agent limit are the Free Tier's, so this page changes them through the Tier
 catalog, as **Tiers** does: audited as `platform.tier.changed`, and a lower agent limit
 holds what Free no longer covers ([Tier Holds](tiers.md#tier-holds)). The read also says
-whether Free is offered (`free_tier_offered`). The page shows how many trials are active.
+whether Free is offered (`free_tier_offered`) and whether any Tier is (`any_tier_offered`).
+Self-signup can't be turned on while no Tier is offered (400), since sign-up would have
+nothing to put a new Organization on; the page warns and locks the switch. Withdrawing the
+last Tier leaves self-signup as it was, turning everyone away, and the page warns until a
+Tier is offered or self-signup is turned off. The page shows how many trials are active.
 Until the first save, self-signup is disabled and there is no cap; the credit and limit are
 Free's seeded $10 and one Agent. Self-signup requires positive Trial Credit.
 Updates validate the combined settings first: administrators may enable signup and set
