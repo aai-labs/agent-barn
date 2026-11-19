@@ -1,4 +1,6 @@
-import type { AnomalySignal, RateSignal, Sensitivity } from "./schemas";
+import type { BadgeVariant } from "@/components/badge";
+
+import type { AnomalyCategory, AnomalySeverity, AnomalySignal, RateSignal, Sensitivity } from "./schemas";
 
 export const anomaliesKey = {
   all: ["anomalies"] as const,
@@ -28,6 +30,36 @@ export const SIGNAL_LABELS: Record<AnomalySignal, string> = {
   NEW_INTEGRATION_ACTION: "New action on an integration",
   NEW_DESTINATION: "New destination",
 };
+
+export const CATEGORY_LABELS: Record<AnomalyCategory, string> = {
+  RUNAWAY_LOOP: "Runaway loop",
+  FAILING_DEPENDENCY: "Something it relies on is failing",
+  MORE_WORK: "More work than usual",
+  NEW_CAPABILITY: "Expected new use",
+  RISKY_ACTION: "Risky action",
+  OTHER: "Other",
+};
+
+export const SEVERITY_LABELS: Record<AnomalySeverity, string> = {
+  LOW: "Low severity",
+  MEDIUM: "Medium severity",
+  HIGH: "High severity",
+  CRITICAL: "Critical severity",
+};
+
+export const SEVERITY_BADGES: Record<AnomalySeverity, BadgeVariant> = {
+  LOW: "neutral",
+  MEDIUM: "warn",
+  HIGH: "danger",
+  CRITICAL: "danger",
+};
+
+/** Below this, a flagged item is more likely noise than something to look at. */
+const LIKELY_UNUSUAL = 0.5;
+
+export function isProbablyFine(unusualProbability: number | null): boolean {
+  return unusualProbability !== null && unusualProbability < LIKELY_UNUSUAL;
+}
 
 export const SENSITIVITY_LABELS: Record<Sensitivity, string> = {
   LOW: "Low",

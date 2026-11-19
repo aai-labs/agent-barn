@@ -31,6 +31,27 @@ export const AnomalyDetectionSettingsSchema = z.object({
 });
 export type AnomalyDetectionSettings = z.infer<typeof AnomalyDetectionSettingsSchema>;
 
+export const AnomalyCategorySchema = z.enum([
+  "RUNAWAY_LOOP",
+  "FAILING_DEPENDENCY",
+  "MORE_WORK",
+  "NEW_CAPABILITY",
+  "RISKY_ACTION",
+  "OTHER",
+]);
+export type AnomalyCategory = z.infer<typeof AnomalyCategorySchema>;
+
+export const AnomalySeveritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+export type AnomalySeverity = z.infer<typeof AnomalySeveritySchema>;
+
+export const AnomalyClassificationSchema = z.object({
+  category: AnomalyCategorySchema,
+  severity: AnomalySeveritySchema,
+  // How likely the activity is really unusual for the Agent, rather than noise.
+  unusualProbability: z.number().nullable(),
+});
+export type AnomalyClassification = z.infer<typeof AnomalyClassificationSchema>;
+
 export const AnomalySchema = z.object({
   id: z.string(),
   signal: AnomalySignalSchema,
@@ -44,6 +65,7 @@ export const AnomalySchema = z.object({
   // Null while the deviation is still going on.
   endedAt: z.string().nullable(),
   classificationState: z.enum(["STATISTICS_ONLY", "CLASSIFIED"]),
+  classification: AnomalyClassificationSchema.nullable(),
 });
 export type Anomaly = z.infer<typeof AnomalySchema>;
 

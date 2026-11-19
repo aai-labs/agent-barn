@@ -18,6 +18,7 @@ export function mockAnomaly(overrides: Json = {}): Json {
     last_observed_at: "2026-11-16T10:28:00Z",
     ended_at: null,
     classification_state: "STATISTICS_ONLY",
+    classification: null,
     ...overrides,
   };
 }
