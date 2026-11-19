@@ -216,6 +216,16 @@ class AnomalyDetectionSettingsUpdate(PydanticBaseModel):
     enabled: bool
 
 
+class AnomalyClassificationRead(PydanticBaseModel):
+    """What the decision model made of an Anomaly."""
+
+    category: str
+    # LOW, MEDIUM, HIGH or CRITICAL.
+    severity: str
+    # How likely the activity is really unusual for the Agent, rather than noise.
+    unusual_probability: float | None
+
+
 class AgentAnomalyRead(PydanticBaseModel):
     id: UUID
     signal: AnomalySignal
@@ -227,6 +237,8 @@ class AgentAnomalyRead(PydanticBaseModel):
     last_observed_at: datetime
     ended_at: datetime | None
     classification_state: ClassificationState
+    # None until the Anomaly is classified.
+    classification: AnomalyClassificationRead | None
 
 
 class AgentAnomalyOverrideRead(PydanticBaseModel):

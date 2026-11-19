@@ -10,6 +10,7 @@ first use names the tool or integration, which are the platform's own vocabulary
 never a destination's host: a host can identify a customer.
 """
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -111,6 +112,11 @@ def read_classifications(anomalies: Sequence[AgentAnomaly], answers: Mapping[str
     """Each Anomaly's classification from the answers to `classification_request`'s
     questions. Raises ValueError for answers of the wrong type."""
     return {anomaly.id: _classification(_ref(index), answers) for index, anomaly in enumerate(anomalies)}
+
+
+def severity_level(score: float) -> str:
+    """The severity level nearest a score, as the decision model reads it."""
+    return SEVERITY_LEVELS[min(max(math.floor(score + 0.5), 0), len(SEVERITY_LEVELS) - 1)]
 
 
 def _ref(index: int) -> str:

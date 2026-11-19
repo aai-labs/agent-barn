@@ -32,6 +32,7 @@ from api.domains.anomalies.classification import (
     AgentContext,
     classification_request,
     read_classifications,
+    severity_level,
 )
 from api.domains.anomalies.detection import Sensitivity
 from api.domains.anomalies.models import AgentAnomaly, AnomalySignal
@@ -261,3 +262,10 @@ def test_answers_of_the_wrong_type_are_refused():
 
     with pytest.raises(ValueError):
         read_classifications([anomaly], answers)
+
+
+@pytest.mark.parametrize(
+    "score, level", [(0.0, "LOW"), (0.49, "LOW"), (0.5, "MEDIUM"), (2.4, "HIGH"), (2.5, "CRITICAL"), (3.0, "CRITICAL")]
+)
+def test_the_severity_level_is_the_one_nearest_the_score(score, level):
+    assert_that(severity_level(score), equal_to(level))

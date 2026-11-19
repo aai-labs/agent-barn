@@ -16,6 +16,7 @@ from api.domains.anomalies.classification import (
     AgentContext,
     classification_request,
     read_classifications,
+    severity_level,
 )
 from api.domains.anomalies.destinations import destination_hosts
 from api.domains.anomalies.detection import (
@@ -32,14 +33,17 @@ from api.domains.anomalies.detection import (
 )
 from api.domains.anomalies.models import (
     NEW_SIGNAL_BY_KIND,
+    AgentAnomaly,
     AgentAnomalyOverride,
     AgentAnomalyOverrideRead,
     AgentAnomalyOverrideUpdate,
     AgentAnomalyRead,
     AgentNormalBehaviourRead,
     AnomalyDetectionSettingsRead,
+    AnomalyClassificationRead,
     AnomalyDetectionSettingsUpdate,
     AnomalySignal,
+    ClassificationState,
     RateBaselineRead,
     SeenKind,
 )
@@ -77,6 +81,34 @@ def override_read(override: AgentAnomalyOverride | None) -> AgentAnomalyOverride
         sensitivity=Sensitivity(override.sensitivity),
         max_llm_tokens_per_hour=override.max_llm_tokens_per_hour,
         max_llm_calls_per_hour=override.max_llm_calls_per_hour,
+    )
+
+
+def anomaly_read(anomaly: AgentAnomaly) -> AgentAnomalyRead:
+    classification = None
+    if (
+        anomaly.classification_state == ClassificationState.CLASSIFIED.value
+        and anomaly.classification_category is not None
+        and anomaly.classification_severity is not None
+    ):
+        probability = (anomaly.classification or {}).get("unusual_probability")
+        classification = AnomalyClassificationRead(
+            category=anomaly.classification_category,
+            severity=severity_level(anomaly.classification_severity),
+            unusual_probability=float(probability) if isinstance(probability, int | float) else None,
+        )
+    return AgentAnomalyRead(
+        id=anomaly.id,
+        signal=AnomalySignal(anomaly.signal),
+        subject=anomaly.subject,
+        observed_value=anomaly.observed_value,
+        usual_value=anomaly.usual_value,
+        threshold=anomaly.threshold,
+        started_at=anomaly.started_at,
+        last_observed_at=anomaly.last_observed_at,
+        ended_at=anomaly.ended_at,
+        classification_state=ClassificationState(anomaly.classification_state),
+        classification=classification,
     )
 
 
@@ -567,7 +599,7 @@ class AnomalyService:
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=[AgentAnomalyRead.model_validate(item, from_attributes=True) for item in items],
+            items=[anomaly_read(item) for item in items],
         )
 
     def normal_behaviour(self, agent_id: UUID, context: CurrentUserContext) -> AgentNormalBehaviourRead:
