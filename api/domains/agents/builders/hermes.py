@@ -15,10 +15,10 @@ from api.domains.file_sync.rules import rules_manifest
 
 from .artifacts import (
     ARTIFACT_COMMAND,
-    ARTIFACT_INSTRUCTIONS,
     ARTIFACT_TOOL,
     artifact_command_mount,
     artifact_command_volume,
+    artifact_instructions,
 )
 from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
@@ -467,6 +467,7 @@ def build_hermes_config_map(
     skills_json: str | None = None,
     memory_enabled: bool = False,
     artifacts_enabled: bool = False,
+    chat_attachments: bool = False,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -481,7 +482,7 @@ def build_hermes_config_map(
         "TOOLS.md": tools_md,
         "AGENTS.md": agents_md
         + TASK_TOOL_INSTRUCTIONS
-        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (artifact_instructions(chat_attachments) if artifacts_enabled else "")
         + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
