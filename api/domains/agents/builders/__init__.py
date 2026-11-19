@@ -8,6 +8,8 @@ from .hermes import (
     TELEMETRY_PUSH_PLUGIN_INIT,
     TELEMETRY_PUSH_PLUGIN_YAML,
     agentbarn_telegram_env,
+    bot_gateway_config,
+    bot_passthrough_names,
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
@@ -16,6 +18,7 @@ from .hermes import (
     native_slack_env,
     native_telegram_env,
     runtime_teams_env,
+    with_passthrough_placeholders,
 )
 from .openclaw import (
     HEALTHZ_SERVER_JS,
@@ -77,6 +80,9 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "agentbarn_telegram_env",
     "runtime_teams_env",
     "build_hermes_config_map",
+    "bot_gateway_config",
+    "bot_passthrough_names",
     "build_secret_hermes_runtime",
+    "with_passthrough_placeholders",
     "build_hermes_deployment",
 ]

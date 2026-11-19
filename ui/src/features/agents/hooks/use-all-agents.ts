@@ -14,14 +14,15 @@ const PAGE_SIZE = 100;
  * Every Agent the viewer can see, read page by page, for views that name or filter by Agents
  * across the whole team rather than show its first page.
  */
-export function useAllAgents() {
+export function useAllAgents({ includeBots = false }: { includeBots?: boolean } = {}) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
-    queryKey: [...agentsKey.all, "every-page", orgApiBase],
+    queryKey: [...agentsKey.all, "every-page", orgApiBase, includeBots],
     queryFn: async () => {
       const agents: Agent[] = [];
       for (let page = 1; ; page++) {
         const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+        if (includeBots) params.set("include_bots", "true");
         const { data } = await api.get<PaginatedAgents>(`${orgApiBase}/agents?${params.toString()}`, {
           schema: PaginatedAgentsSchema,
         });

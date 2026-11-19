@@ -8,6 +8,7 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.models import trigger_target
 from api.domains.agents.repository import AgentRepository
 from api.domains.events.catalog import WORKFLOW_CONTROLLER_HANDLER, WORKFLOW_RUN_CHANGED
 from api.domains.events.dispatch import EventDeliveryDispatcher
@@ -21,7 +22,6 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
-TRIGGER_PORT = 8082
 STEPS_PATH = "/agent-triggers/v1/workflow-steps"
 TRANSIENT_REJECTIONS = {408, 409, 425, 429}
 
@@ -96,11 +96,12 @@ class WorkflowController:
         if agent is None or not agent.communication_key_encrypted:
             return None
         key = decrypt_token(agent.communication_key_encrypted, self.config.agent_token_encryption_key)
+        pod_id, port = trigger_target(agent)
         try:
             status, _, _ = self.k8s.proxy_to_agent(
-                f"agent-{agent_id}",
+                f"agent-{pod_id}",
                 self.config.k8s_namespace,
-                TRIGGER_PORT,
+                port,
                 path,
                 "POST",
                 json.dumps(payload).encode(),

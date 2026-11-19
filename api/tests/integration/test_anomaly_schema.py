@@ -34,7 +34,7 @@ from api.tests.steps.agent import (
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization
 
-PRE_AF453_REVISION = "e4b439a1c7d2"
+PRE_AF453_REVISION = "0a07b0b57b62"
 AF453_REVISION = "92996d692c89"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 AF453_TABLES = {

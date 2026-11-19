@@ -11,7 +11,8 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAgents } from "@/features/agents/hooks/use-agents";
+import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
+import { agentLabels, withBotsAfterTheirParents } from "@/features/agents/utils";
 import { ApiError } from "@/shared/api/error/errors";
 
 import { useWorkflow, useWorkflowActions } from "../hooks/use-workflows";
@@ -72,7 +73,8 @@ function EditorForm({
   const editing = target.mode === "edit" && source !== null;
   const actions = useWorkflowActions();
   // Any Agent the author can see may be the default; it only preselects "Run as".
-  const { agents } = useAgents();
+  const { agents } = useAllAgents({ includeBots: true });
+  const labels = agentLabels(agents);
   const detail = useWorkflow(editing ? source.id : "");
   const [initial, setInitial] = useState<WorkflowDraft>(() => {
     if (!source) return emptyDraft("");
@@ -230,7 +232,7 @@ function EditorForm({
               disabled={!maySave || pending}
               problems={problems}
               revealed={attempted}
-              agents={agents.map(({ id, name }) => ({ id, name }))}
+              agents={withBotsAfterTheirParents(agents).map(({ id, name }) => ({ id, name: labels.get(id) ?? name }))}
               defaultAgentId={defaultAgentId}
               onDefaultAgentChange={setDefaultAgentId}
             />

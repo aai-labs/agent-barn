@@ -3,6 +3,7 @@ import json
 import ntpath
 import os
 import posixpath
+import re
 import shutil
 import stat
 import sys
@@ -49,6 +50,22 @@ HERMES_EXCLUDED = (
     "workspace/HEARTBEAT.md",
 )
 
+HERMES_BOT_PROFILE = re.compile(r"^profiles/[^/]+/(.+)$")
+HERMES_BOT_EXCLUDED = (
+    ".cache",
+    ".config/aai-cli",
+    ".env",
+    "SOUL.md",
+    "AGENTS.md",
+    "IDENTITY.md",
+    "TOOLS.md",
+    "BOOT.md",
+    "HEARTBEAT.md",
+    "config.yaml",
+    "plugins",
+    "skills",
+)
+
 OPENCLAW_EXCLUDED = (
     # aai-cli's encrypted secret store and its key live here (Hermes keeps them under
     # .config/aai-cli); the boot script rewrites both from the agent's credentials.
@@ -80,8 +97,11 @@ def _matches_prefix(rel_path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def is_excluded(rel_path: str, runtime: str) -> bool:
-    excluded = HERMES_EXCLUDED if runtime == RUNTIME_HERMES else OPENCLAW_EXCLUDED
-    return _matches_prefix(rel_path, excluded)
+    if runtime != RUNTIME_HERMES:
+        return _matches_prefix(rel_path, OPENCLAW_EXCLUDED)
+    bot_file = HERMES_BOT_PROFILE.match(rel_path)
+    path, excluded = (bot_file.group(1), HERMES_BOT_EXCLUDED) if bot_file else (rel_path, HERMES_EXCLUDED)
+    return path.startswith(".env_") or _matches_prefix(path, excluded)
 
 
 def _walk_included_files(root: Path, runtime: str):

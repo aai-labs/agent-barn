@@ -118,6 +118,31 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(support.saveRequests[0]).toMatchObject({ default_agent_id: team[7].id });
   });
 
+  test("a Bot can be the default Agent, named and placed after its Parent Agent", async ({ page }) => {
+    const botId = "0000000b-0000-4000-8000-00000000000b";
+    await new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: {
+        page: 1,
+        page_size: 100,
+        total: 3,
+        items: [
+          mockAgent,
+          { ...mockAgent, id: "77777777-7777-4777-8777-777777777777", name: "Rex" },
+          { ...mockAgent, id: botId, name: "Scout", parent_agent_id: MOCK_AGENT_ID },
+        ],
+      },
+    });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.create("Summarize weekly pipeline changes");
+    const pills = workflows.editor().getByRole("radiogroup", { name: /Default agent/ });
+    await expect(pills.getByRole("radio").nth(2)).toHaveAccessibleName("Scout · Maya");
+    await workflows.defaultAgent("Scout · Maya").click();
+    await workflows.buildExample();
+    await workflows.save();
+    expect(support.saveRequests[0]).toMatchObject({ default_agent_id: botId });
+  });
+
   test("create a workflow from the Organization page with a default Agent", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();

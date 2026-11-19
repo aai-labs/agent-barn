@@ -14,7 +14,13 @@ function timestamp(value: string | null) {
     : "Not recorded";
 }
 
-export function RuntimeDiagnostics({ agent, lastCallAt, orgId, usageAvailable }: {
+type RuntimeDiagnosticsProps = Parameters<typeof PodDiagnostics>[0];
+
+export function RuntimeDiagnostics(props: RuntimeDiagnosticsProps) {
+  return props.agent.parentAgentId ? null : <PodDiagnostics {...props} />;
+}
+
+function PodDiagnostics({ agent, lastCallAt, orgId, usageAvailable }: {
   agent: Agent;
   usageAvailable: boolean;
   lastCallAt: string | null;

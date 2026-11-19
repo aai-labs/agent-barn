@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -196,6 +197,8 @@ def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict 
 # runtime will not report faithfully (see healthz-server). Read when a turn fails, so
 # the person chatting is told the actual reason rather than the runtime's version.
 _LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
+if os.environ.get("GATEWAY_MULTIPLEX_PROFILES") == "1":
+    _LLM_ERROR_MARKER += "." + hashlib.sha256(os.environ.get("OPENAI_API_KEY", "").encode()).hexdigest()[:16]
 _TURN_STARTED: dict[str, float] = {}
 
 

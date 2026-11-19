@@ -192,6 +192,11 @@ export function PanelGroups({
               {group.label}
             </div>
           )}
+          {group.hint && (
+            <div className="px-2.5 text-[11.5px]" style={{ color: "var(--ink-4)" }}>
+              {group.hint}
+            </div>
+          )}
           <div className="flex flex-col gap-px pt-1">
             {group.items.map((item) => (
               <PanelLink key={item.key} item={item} onNavigate={onNavigate} />
