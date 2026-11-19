@@ -104,13 +104,14 @@ test.describe("Organization KPIs — navigation and access", () => {
   test.describe("on a mobile viewport", () => {
     test.use({ viewport: { width: 375, height: 812 } });
 
-    test("an owner finds KPIs first under More, after the bottom bar's Costs", async ({ page }) => {
+    test("an owner finds KPIs under More, right after Costs", async ({ page }) => {
       await kpis.gotoHome();
-      await expect(kpis.navLink("Costs")).toBeVisible();
+      // Team, Usage and Workflows fill the bottom bar; the rest of the rail is under More.
+      await expect(kpis.navLink("Workflows")).toBeVisible();
 
       await kpis.openMore();
       const labels = await kpis.moreLinks().allInnerTexts();
-      expect(labels[0]).toBe("KPIs");
+      expect(labels.slice(0, 2)).toEqual(["Costs", "KPIs"]);
 
       await kpis.moreLink("KPIs").click();
 
