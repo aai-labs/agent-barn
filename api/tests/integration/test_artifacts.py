@@ -30,7 +30,7 @@ from api.tests.core.modules import set_env_variable
 from api.tests.helpers.artifacts import garage_storage, provision_agents, running_product_api
 from api.tests.helpers.workflows import draft
 from api.tests.integration.test_workflow_runs import attempt, start
-from api.tests.integration.test_workflows import _GIVEN, auth, base, switch_member
+from api.tests.integration.test_workflows import _GIVEN, agent_base, auth, base, switch_member
 
 CONTENT = b"actual private file bytes\x00\xff\n"
 
@@ -53,7 +53,9 @@ def metadata(content=CONTENT, **changes):
 
 def staged(context, payload=None):
     provision_agents(context)
-    response = context.client.post(base(context) + "/artifacts", headers=auth(context), json=payload or metadata())
+    response = context.client.post(
+        agent_base(context) + "/artifacts", headers=auth(context), json=payload or metadata()
+    )
     assert_that(response.status_code, equal_to(201), response.text)
     return response.json()
 
@@ -61,7 +63,7 @@ def staged(context, payload=None):
 def publish(context, row=None, content=CONTENT):
     row = row or staged(context)
     response = context.client.put(
-        base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=content
+        agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=content
     )
     assert_that(response.status_code, equal_to(200), response.text)
     return response.json()
@@ -72,7 +74,7 @@ def test_real_private_bytes_signed_download_and_fresh_link(storage):
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = publish(context)
         assert_that(row["state"], equal_to("READY"))
-        path = base(context) + f"/artifacts/{row['id']}"
+        path = agent_base(context) + f"/artifacts/{row['id']}"
         link = context.client.get(path + "/download-link", headers=auth(context)).json()
         response = context.client.get(link["url"])
         assert_that(response.content, equal_to(CONTENT))
@@ -83,7 +85,7 @@ def test_real_private_bytes_signed_download_and_fresh_link(storage):
         assert_that(
             context.client.get(path + "/download-link?seconds=3601", headers=auth(context)).status_code, equal_to(422)
         )
-        listing = context.client.get(base(context) + "/artifacts", headers=auth(context)).json()
+        listing = context.client.get(agent_base(context) + "/artifacts", headers=auth(context)).json()
         assert_that(listing["items"], has_length(1))
         assert_that(set(row).intersection({"bucket", "object_key", "organization_id"}), equal_to(set()))
 
@@ -92,7 +94,7 @@ def test_download_uses_app_origin_and_provider_authority_without_a_public_store(
     env, _ = storage
     with given([set_env_variable({**env, "WEB_APP_URL": "https://files.example.test"}), *_GIVEN]) as context:
         row = publish(context)
-        path = base(context) + f"/artifacts/{row['id']}/download-link"
+        path = agent_base(context) + f"/artifacts/{row['id']}/download-link"
         response = context.client.get(path, headers=auth(context))
         assert_that(response.status_code, equal_to(200))
         url = response.json()["url"]
@@ -122,7 +124,7 @@ def test_provider_rejects_changed_authority_and_capability_for_a_different_file(
         row = publish(context)
         other = publish(context)
         link = context.client.get(
-            base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+            agent_base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
         ).json()["url"]
         assert_that(context.client.get(link).content, equal_to(CONTENT))
         wrong_target = link.replace(row["id"], other["id"])
@@ -145,7 +147,7 @@ def test_app_streams_exact_empty_and_multichunk_bytes_with_safe_unicode_filename
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = publish(context, staged(context, metadata(content, filename="résumé.csv")), content)
         link = context.client.get(
-            base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+            agent_base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
         ).json()["url"]
         response = context.client.get(link)
         assert_that(response.status_code, equal_to(200))
@@ -160,7 +162,7 @@ def test_private_store_failure_returns_retryable_error_without_its_address(stora
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = publish(context)
         link = context.client.get(
-            base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+            agent_base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
         ).json()["url"]
 
         def unavailable(*args):
@@ -177,12 +179,12 @@ def test_checksum_failure_unavailable_and_retry_gets_new_identity(storage):
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = staged(context)
         response = context.client.put(
-            base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=b"wrong"
+            agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=b"wrong"
         )
         assert_that(response.status_code, equal_to(422))
         assert_that(
             context.client.get(
-                base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+                agent_base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
             ).status_code,
             equal_to(404),
         )
@@ -197,11 +199,11 @@ def test_duplicate_publish_immutable_and_changed_bytes_rejected(storage):
         row = publish(context)
         assert_that(publish(context, row)["id"], equal_to(row["id"]))
         response = context.client.put(
-            base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=b"changed"
+            agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=b"changed"
         )
         assert_that(response.status_code, equal_to(422))
         assert_that(
-            context.client.get(base(context) + f"/artifacts/{row['id']}", headers=auth(context)).json()["state"],
+            context.client.get(agent_base(context) + f"/artifacts/{row['id']}", headers=auth(context)).json()["state"],
             equal_to("READY"),
         )
 
@@ -408,7 +410,7 @@ def test_runtime_reuse_respects_name_content_and_deleted_state(storage):
         changed = context.client.post(path, headers=headers, json=metadata(b"different")).json()
         assert_that(len({first["id"], renamed["id"], changed["id"]}), equal_to(3))
         assert_that(
-            context.client.delete(base(context) + f"/artifacts/{first['id']}", headers=auth(context)).status_code,
+            context.client.delete(agent_base(context) + f"/artifacts/{first['id']}", headers=auth(context)).status_code,
             equal_to(204),
         )
         replacement = context.client.post(path, headers=headers, json=metadata()).json()
@@ -421,7 +423,9 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
         headers = runtime_auth(context)
         definition = draft()
         definition["steps"].append({**definition["steps"][0], "id": str(uuid4()), "name": "Consume file"})
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=definition).json()
+        saved = context.client.post(
+            base(context) + "/workflows", headers=auth(context), json={"draft": definition}
+        ).json()
         response, _, _ = start(context, saved)
         run_id = response.json()["id"]
         repo, current, token = attempt(context, run_id)
@@ -449,7 +453,7 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
             session.commit()
         assert_that(context.injector.get(ArtifactService).purge(), equal_to(0))
         assert_that(
-            context.client.delete(base(context) + f"/artifacts/{row['id']}", headers=auth(context)).status_code,
+            context.client.delete(agent_base(context) + f"/artifacts/{row['id']}", headers=auth(context)).status_code,
             equal_to(409),
         )
         state = context.client.get(base(context) + f"/workflow-runs/{run_id}", headers=auth(context)).json()
@@ -467,7 +471,7 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
             )
         assert_that(
             context.client.get(
-                base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+                agent_base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
             ).status_code,
             equal_to(200),
         )
@@ -501,11 +505,11 @@ def test_viewer_read_current_access_and_update_gate(storage):
         from api.tests.steps.agent import there_is_agent_access
 
         there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID)(context)
-        path = base(context) + f"/artifacts/{row['id']}"
+        path = agent_base(context) + f"/artifacts/{row['id']}"
         assert_that(context.client.get(path + "/download-link", headers=auth(context)).status_code, equal_to(200))
         assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(403))
         assert_that(
-            context.client.post(base(context) + "/artifacts", headers=auth(context), json=metadata()).status_code,
+            context.client.post(agent_base(context) + "/artifacts", headers=auth(context), json=metadata()).status_code,
             equal_to(403),
         )
         switch_member(context)
@@ -521,7 +525,9 @@ def test_soft_and_hard_delete_preserve_cleanup_journal(storage):
             agent.deleted_at = datetime.now(UTC)
             session.add(agent)
             session.commit()
-        assert_that(context.client.get(base(context) + "/artifacts", headers=auth(context)).status_code, equal_to(404))
+        assert_that(
+            context.client.get(agent_base(context) + "/artifacts", headers=auth(context)).status_code, equal_to(404)
+        )
         with Session(context.postgres_delegate.engine) as session:
             session.delete(session.get_one(type(context.agent), context.agent.id))
             session.commit()
@@ -536,7 +542,7 @@ def test_signed_link_expires_without_deleting_file(storage):
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = publish(context)
-        path = base(context) + f"/artifacts/{row['id']}/download-link"
+        path = agent_base(context) + f"/artifacts/{row['id']}/download-link"
         old = context.client.get(path + "?seconds=3", headers=auth(context)).json()
         assert_that(context.client.get(old["url"]).content, equal_to(CONTENT))
         time.sleep(4)
@@ -562,11 +568,11 @@ def test_failed_storage_after_put_never_ready_and_purge_retries(storage, monkeyp
 
         monkeypatch.setattr(adapter, "put", fail_after_put)
         response = context.client.put(
-            base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=CONTENT
+            agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=CONTENT
         )
         assert_that(response.status_code, equal_to(503))
         assert_that(
-            context.client.get(base(context) + "/artifacts", headers=auth(context)).json()["total"], equal_to(0)
+            context.client.get(agent_base(context) + "/artifacts", headers=auth(context)).json()["total"], equal_to(0)
         )
         original_delete = adapter.delete
 
@@ -606,7 +612,7 @@ def test_incomplete_upload_cleanup_and_unsafe_key_refusal(storage):
             session.add(row)
             session.commit()
         assert_that(context.injector.get(ArtifactService).purge(), equal_to(0))
-        path = base(context) + f"/artifacts/{protected['id']}/download-link"
+        path = agent_base(context) + f"/artifacts/{protected['id']}/download-link"
         assert_that(
             context.client.get(context.client.get(path, headers=auth(context)).json()["url"]).content, equal_to(CONTENT)
         )
@@ -627,10 +633,10 @@ def test_read_only_key_cannot_publish_or_delete(storage):
             "/api/v1/auth/me/api-keys", headers=auth(context), json={"name": "Files", "access_mode": "READ_ONLY"}
         ).json()["token"]
         key_auth = {"Authorization": "Bearer " + key}
-        path = base(context) + f"/artifacts/{row['id']}"
+        path = agent_base(context) + f"/artifacts/{row['id']}"
         assert_that(context.client.get(path + "/download-link", headers=key_auth).status_code, equal_to(200))
         assert_that(
-            context.client.post(base(context) + "/artifacts", headers=key_auth, json=metadata()).status_code,
+            context.client.post(agent_base(context) + "/artifacts", headers=key_auth, json=metadata()).status_code,
             equal_to(403),
         )
         assert_that(context.client.delete(path, headers=key_auth).status_code, equal_to(403))
@@ -638,7 +644,7 @@ def test_read_only_key_cannot_publish_or_delete(storage):
 
 def test_disabled_storage_keeps_text_workflows_usable():
     with given([set_env_variable({"ARTIFACT_S3_ENDPOINT_URL": ""}), *_GIVEN]) as context:
-        response = context.client.post(base(context) + "/artifacts", headers=auth(context), json=metadata())
+        response = context.client.post(agent_base(context) + "/artifacts", headers=auth(context), json=metadata())
         assert_that(response.status_code, equal_to(503))
         response, _, _ = start(context)
         repo, current, token = attempt(context, response.json()["id"])
@@ -675,10 +681,10 @@ def test_custom_read_role_and_general_access_need_no_activity_permission(storage
             context.injector.get(AgentRepository).save(context.agent)
         else:
             there_is_agent_access(access_role_id=role_id)(context)
-        path = base(context) + f"/artifacts/{row['id']}"
+        path = agent_base(context) + f"/artifacts/{row['id']}"
         assert_that(context.client.get(path + "/download-link", headers=auth(context)).status_code, equal_to(200))
         assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(403))
-        storage_path = base(context) + "/artifacts/storage"
+        storage_path = agent_base(context) + "/artifacts/storage"
         assert_that(context.client.get(storage_path, headers=auth(context)).json()["state"], equal_to("READY"))
         assert_that(context.client.post(storage_path, headers=auth(context)).status_code, equal_to(403))
 
@@ -690,10 +696,12 @@ def test_cross_tenant_and_runtime_identity_cannot_select_another_agents_bytes(st
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = publish(context)
-        link = context.client.get(base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)).json()
+        link = context.client.get(
+            agent_base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+        ).json()
         there_is_an_organization_with_user_and_access_token()(context)
         there_is_an_agent(status=AgentStatus.STOPPED)(context)
-        path = base(context) + f"/artifacts/{row['id']}"
+        path = agent_base(context) + f"/artifacts/{row['id']}"
         assert_that(context.client.get(path, headers=auth(context)).status_code, equal_to(404))
         assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(404))
         machine = runtime_auth(context)
@@ -765,7 +773,7 @@ def test_attempt_expiring_during_real_storage_cannot_become_ready(storage, monke
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
         assert_that(response.status_code, equal_to(409), response.text)
         assert_that(
-            context.client.get(base(context) + "/artifacts", headers=auth(context)).json()["total"], equal_to(0)
+            context.client.get(agent_base(context) + "/artifacts", headers=auth(context)).json()["total"], equal_to(0)
         )
         assert_that(context.injector.get(ArtifactService).purge(), equal_to(1))
 
@@ -788,7 +796,7 @@ def test_human_authority_revoked_during_storage_cannot_publish(storage, monkeypa
 
         monkeypatch.setattr(adapter, "put", revoked_during_put)
         response = context.client.put(
-            base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=CONTENT
+            agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=CONTENT
         )
         assert_that(response.status_code, equal_to(403), response.text)
         with Session(context.postgres_delegate.engine) as session:
@@ -801,7 +809,7 @@ def test_concurrent_finalization_preserves_immutable_garage_bytes(storage):
     env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = staged(context)
-        path = base(context) + f"/artifacts/{row['id']}"
+        path = agent_base(context) + f"/artifacts/{row['id']}"
         with ThreadPoolExecutor(max_workers=2) as pool:
             responses = list(
                 pool.map(
@@ -826,12 +834,14 @@ def test_previous_storage_layout_has_specific_download_error_without_affecting_c
             session.add(row)
             session.commit()
         response = context.client.get(
-            base(context) + f"/artifacts/{previous['id']}/download-link", headers=auth(context)
+            agent_base(context) + f"/artifacts/{previous['id']}/download-link", headers=auth(context)
         )
         assert_that(response.status_code, equal_to(409))
         assert_that("previous storage layout" in response.json()["detail"], equal_to(True))
         assert_that("uploaded again" in response.json()["detail"], equal_to(True))
-        link = context.client.get(base(context) + f"/artifacts/{current['id']}/download-link", headers=auth(context))
+        link = context.client.get(
+            agent_base(context) + f"/artifacts/{current['id']}/download-link", headers=auth(context)
+        )
         assert_that(link.status_code, equal_to(200))
         assert_that(context.client.get(link.json()["url"]).content, equal_to(CONTENT))
 
@@ -848,7 +858,7 @@ def test_current_file_missing_usable_credentials_reports_specific_cause(storage)
             session.add(row)
             session.commit()
         response = context.client.get(
-            base(context) + f"/artifacts/{artifact['id']}/download-link", headers=auth(context)
+            agent_base(context) + f"/artifacts/{artifact['id']}/download-link", headers=auth(context)
         )
         assert_that(response.status_code, equal_to(503))
         assert_that("Storage credentials for this file are unavailable" in response.json()["detail"], equal_to(True))
@@ -866,7 +876,9 @@ def test_files_have_stable_pagination_when_publication_timestamps_match(storage)
             session.commit()
         ids = []
         for page in (1, 2):
-            response = context.client.get(base(context) + f"/artifacts?page={page}&page_size=2", headers=auth(context))
+            response = context.client.get(
+                agent_base(context) + f"/artifacts?page={page}&page_size=2", headers=auth(context)
+            )
             assert_that(response.status_code, equal_to(200))
             assert_that(response.json()["total"], equal_to(3))
             ids.extend(item["id"] for item in response.json()["items"])

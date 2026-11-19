@@ -91,7 +91,7 @@ class WorkflowController:
             self.dispatcher.enqueue_immediate(delivery_ids)
 
     def _send(self, run: WorkflowRun, path: str, payload: dict) -> int | None:
-        agent_id = self.repository.owning_agent_id(run.workflow_id)
+        agent_id = run.agent_id
         agent = self.agents.get_by_id(agent_id)
         if agent is None or not agent.communication_key_encrypted:
             return None
