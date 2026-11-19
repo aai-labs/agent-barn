@@ -79,6 +79,12 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-19 — AF-445 — A Bot's workflow files go to its own workspace
+
+- Fixed: an OpenClaw Bot's Secret carries the runtime's upload root, the Parent Agent's workspace. `agentbarn-bot-env` and the Tasks plugin replace it for the Bot's commands, but `bot-run.py` passed it unchanged to the Bot's helpers, so the Bot's trigger server wrote a workflow step's input files into the Parent Agent's workspace. The Bot could still read them, because OpenClaw's file tools are not limited to the workspace (`tools.fs.workspaceOnly` defaults off and is not set), but they were outside the Bot's own workspace.
+- Now `bot-run.py` sets `ARTIFACT_UPLOAD_ROOTS` to the Bot's workspace (`workspace-<bot-id>`), the folder `bot-setup.py` creates and `agentbarn-bot-env` uses.
+- Follow-up: the end-to-end runs.
+
 ### 2026-11-19 — AF-445 — Staging merge (schedule-linked Tasks per agent)
 
 - Merged: staging, bringing the AF-425 merge, AF-412's schedule-linked Tasks and turn-end holds, and AF-439's Organization workflows.

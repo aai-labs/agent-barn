@@ -41,6 +41,7 @@ def main():
     env["RUNTIME_SESSION_PREFIX"] = f"agent:{bot_id}:"
     env["AGENT_TRIGGER_PORT"] = str(TRIGGER_BASE_PORT + slot)
     env["AGENT_TRIGGER_RECEIPT_PATH"] = str(STATE / "bots" / bot_id / "agent-trigger-receipts.sqlite3")
+    env["ARTIFACT_UPLOAD_ROOTS"] = str(STATE / f"workspace-{bot_id}")
     os.execve(sys.executable, [sys.executable, script], env)
 
 

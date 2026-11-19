@@ -144,6 +144,7 @@ class Pod:
             "OPENCLAW_GATEWAY_TOKEN": f"own-{bot_id}",
             "RUNTIME_API_KEY": f"own-{bot_id}",
             "RUNTIME_MODEL": "openclaw/default",
+            "ARTIFACT_UPLOAD_ROOTS": "/home/node/.openclaw/workspace",
             **(secret or {}),
         }
         for name, value in values.items():
@@ -364,6 +365,7 @@ def test_a_helper_runs_as_its_bot_through_the_parents_gateway(pod):
     assert env["RUNTIME_SESSION_PREFIX"] == f"agent:{BOT_B}:"
     assert env["AGENT_TRIGGER_PORT"] == "8102"
     assert env["AGENT_TRIGGER_RECEIPT_PATH"] == str(pod.state / "bots" / BOT_B / "agent-trigger-receipts.sqlite3")
+    assert env["ARTIFACT_UPLOAD_ROOTS"] == str(pod.state / f"workspace-{BOT_B}")
     assert env["LITELLM_API_KEY"] == f"sk-{BOT_B}"
     assert "sk-parent" not in env.values()
     assert "ingest-parent" not in env.values()
