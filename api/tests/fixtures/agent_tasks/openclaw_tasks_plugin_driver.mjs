@@ -38,6 +38,6 @@ for (const step of JSON.parse(readFileSync(stepsPath, "utf8"))) {
 }
 console.log(JSON.stringify({
   hooks: [...hooks.keys()].sort(),
-  tools: [...tools.values()].map((build) => build({})).map(({ name, parameters }) => ({ name, parameters })),
+  tools: [...tools.values()].map((build) => build({})).map(({ name, description, parameters }) => ({ name, description, parameters })),
   results,
 }));

@@ -9,8 +9,11 @@
 // the run still ends without a Task, the plugin records one itself, named after the
 // request, with origin `automatic`. It also does the bookkeeping that would otherwise cost
 // the model a call each: when a run ends, the files it wrote go to the Task it worked on
-// and a Task it left in progress is marked done, or reopened if the run failed. Only a Task
-// call that changed something counts as recording the work: reading the Tasks does not.
+// and a Task it left in progress is marked done, or reopened if the run failed; one it kept
+// (`keep`, for work that continues in a later turn) stays in progress. Before a Task is
+// marked done the run is reported to Agent Barn, where a decision model can hold it back:
+// in progress when the job is still going, open when it waits on the user. Only a
+// Task call that changed something counts as recording the work: reading the Tasks does not.
 // The startup checklist (BOOT.md) and subagent runs are left alone: they are not the
 // user's request.
 import { spawn } from "node:child_process";
@@ -23,7 +26,14 @@ const SECRET_ROOT = process.env.BOT_SECRET_ROOT || "/run/agentbarn/bots";
 const AGENT_NAME = /^[A-Za-z0-9-]+$/;
 const IDENTITY_NAMES = ["AGENT_ID", "INGEST_URL", "INGEST_API_KEY", "ARTIFACT_URL", "ARTIFACT_API_KEY", "ARTIFACT_MAX_BYTES"];
 const STATUSES = ["open", "in_progress", "done", "failed"];
+// A Task the Agent left in_progress with keep: work that continues in a later turn. Only a run
+// that failed moves it (to open); otherwise it stays in_progress.
+const KEPT = "kept";
 const WORK_THRESHOLD = 3;
+// OpenClaw's scheduler tool, under its current and its earlier name.
+const SCHEDULER_TOOLS = new Set(["automations", "cron"]);
+const INTENT_TIMEOUT_MS = 45_000;
+const RUN_NOTE_CHARS = 300;
 // OpenClaw's file-writing tools. A run that produces a file is worth a Task however short it is.
 const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const OPEN_TASKS_TTL_MS = 60_000;
@@ -34,9 +44,15 @@ const LIST_PAGE_SIZE = 100;
 const OPEN_TASKS_SHOWN = 10;
 // Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 const DONE_TASKS_SHOWN = 3;
+const LATEST_NOTE_CHARS = 200;
 const AUTOMATIC_TITLE_CHARS = 120;
 const AUTOMATIC_DESCRIPTION_CHARS = 2000;
 const COMMAND_TIMEOUT_MS = 150_000;
+// Asking whether a Task about to be closed is finished: how long it may take, and how much it is told.
+const TURN_END_TIMEOUT_MS = 45_000;
+const TURN_TOOLS_SENT = 40;
+const TOOL_SUMMARY_CHARS = 300;
+const TURN_TEXT_CHARS = 4000;
 // Sessions remembered at once (requests, reminders, runs); the oldest are forgotten first.
 const SESSIONS_KEPT = 500;
 // Task tool actions and command subcommands that change a Task; reading one is not recording work.
@@ -104,6 +120,13 @@ const PARAMETERS = {
       description: "The new status, a list filter, or the starting status for create (in_progress).",
     },
     body: { type: "string", description: "The note, for note; or one to add with create or status." },
+    keep: {
+      type: "boolean",
+      description:
+        "With create, or status in_progress: keep the Task in progress after this turn, because the job " +
+        "continues in a later turn (more parts or messages to come). Without it the Task is marked done when " +
+        "the turn ends.",
+    },
     path: { type: "string", description: "The file to attach, absolute or relative to your workspace." },
     name: { type: "string", description: "The file's name as shown on the Task, for attach." },
     content_type: { type: "string", description: "A bare type/subtype, for attach." },
@@ -122,6 +145,10 @@ const currentRun = new Map();
 const nextTurnReminders = new Map();
 // sessionKey -> the user's latest request, the title of a Task recorded automatically
 const requests = new Map();
+// runId -> the id of the scheduled job the run belongs to
+const runJobs = new Map();
+// Jobs removed while one of their runs was still going; that run finishes their Task when it ends.
+const removedMidRun = new Set();
 
 // Store a value as the newest entry, forgetting the oldest past SESSIONS_KEPT.
 function remember(map, key, value) {
@@ -347,9 +374,11 @@ function taskIdOf(toolName, params, result) {
 // The status a call of the Task tool left its Task in, if it set one.
 function statusSet(toolName, params) {
   if (toolName !== TOOL) return null;
-  if (params?.action === "create") return STATUSES.includes(params.status) ? params.status : "in_progress";
-  if (params?.action === "status" && STATUSES.includes(params.status)) return params.status;
-  return null;
+  let status;
+  if (params?.action === "create") status = STATUSES.includes(params.status) ? params.status : "in_progress";
+  else if (params?.action === "status" && STATUSES.includes(params.status)) status = params.status;
+  else return null;
+  return status === "in_progress" && (params.keep === true || params.keep === "true") ? KEPT : status;
 }
 
 function track(event, ctx) {
@@ -357,15 +386,231 @@ function track(event, ctx) {
   if (ctx.sessionKey) remember(currentRun, ctx.sessionKey, runId);
   let state = runs.get(runId);
   if (!state) {
-    state = {
-      work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
-      // taskId -> the last status the Agent set this run
-      statuses: new Map(),
-      attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "", agent: agentOf(ctx),
-    };
+    state = newState(ctx);
     remember(runs, runId, state);
   }
   return state;
+}
+
+// What the plugin knows about one run.
+const newState = (ctx) => ({
+  work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
+  // taskId -> the last status the Agent set this run
+  statuses: new Map(),
+  attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "", agent: agentOf(ctx),
+  // The Task the Agent touched last, and the titles it gave the Tasks it created.
+  lastTask: null, titles: new Map(),
+  // Schedules the Agent created this run, and the ids of those it removed.
+  schedules: [], removedJobs: new Set(),
+  // The run's tool calls, one short line each, for the question asked before a Task is closed.
+  tools: [], toolIds: new Set(),
+});
+
+// One tool call as a short line, its name and arguments, for the question asked before a Task is closed.
+function toolSummary(name, params) {
+  let text = "";
+  try {
+    text = JSON.stringify(params) ?? "";
+  } catch {
+    text = "";
+  }
+  return redacted(`${name} ${text}`).slice(0, TOOL_SUMMARY_CHARS);
+}
+
+// Ask Agent Barn which of the Tasks about to be marked done are not finished. Returns
+// taskId -> the status to leave it in ("in_progress" or "open"); empty when nothing is held.
+async function held(state, reply, trigger, closing) {
+  const told = {
+    request: redacted(requests.get(state.sessionKey) ?? "").slice(0, TURN_TEXT_CHARS),
+    reply: redacted(reply).slice(0, TURN_TEXT_CHARS),
+    tools: state.tools,
+    closing,
+    trigger: String(trigger ?? "").slice(0, 60),
+  };
+  const answer = await run(state.agent, ["turn-end"], JSON.stringify(told), TURN_END_TIMEOUT_MS);
+  try {
+    const holds = answer.ok ? JSON.parse(answer.output).holds : null;
+    return holds && typeof holds === "object" ? holds : {};
+  } catch {
+    return {};
+  }
+}
+
+const linksPath = () => `${process.env.HOME}/.openclaw/agentbarn-task-schedules.json`;
+
+// Job id -> {task_id, agent, runs}: the Tasks that follow a schedule, and whose they are. Kept beside OpenClaw's own state.
+function readLinks() {
+  try {
+    const links = JSON.parse(fs.readFileSync(linksPath(), "utf8"));
+    return links && typeof links === "object" && !Array.isArray(links) ? links : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLinks(links) {
+  try {
+    fs.writeFileSync(`${linksPath()}.tmp`, JSON.stringify(links));
+    fs.renameSync(`${linksPath()}.tmp`, linksPath());
+  } catch {
+    // The link is a convenience; the Agent can still update the Task itself.
+  }
+}
+
+// Stop following a schedule; its Task is done unless another schedule still feeds it.
+async function endLink(jobId, setDone = true) {
+  const links = readLinks();
+  const link = links[jobId];
+  if (!link) return;
+  delete links[jobId];
+  saveLinks(links);
+  if (!setDone || Object.values(links).some((other) => other?.task_id === link.task_id)) return;
+  const agent = link.agent ?? MAIN_AGENT;
+  await run(agent, ["status", link.task_id, "done"]);
+  forgetTaskList(agent);
+}
+
+function recurrenceOf(schedule) {
+  if (schedule?.kind === "every" && typeof schedule.everyMs === "number") return `every ${Math.round(schedule.everyMs / 1000)}s`;
+  if (schedule?.kind === "cron" && typeof schedule.expr === "string") return schedule.expr;
+  if (schedule?.kind === "at") return `once at ${schedule.at ?? ""}`.trim();
+  return String(schedule?.kind ?? "");
+}
+
+// Remember a schedule the Agent created or removed with OpenClaw's scheduler tool.
+function trackSchedule(state, event) {
+  const params = event.params ?? {};
+  if (failed(event)) return;
+  if (params.action === "remove") {
+    const jobId = params.jobId ?? params.id;
+    if (typeof jobId === "string") state.removedJobs.add(jobId);
+    return;
+  }
+  if (params.action !== "add") return;
+  const details = event.result?.details ?? {};
+  const job = details.job ?? details;
+  if (typeof job?.id !== "string") return;
+  const schedule = job.schedule ?? params.job?.schedule ?? params.schedule;
+  state.schedules.push({
+    jobId: job.id,
+    name: String(job.name ?? params.job?.name ?? ""),
+    recurrence: recurrenceOf(schedule).slice(0, 200),
+    // OpenClaw has no run limit: only a one-off is known to end.
+    runLimit: schedule?.kind === "at" ? 1 : null,
+  });
+}
+
+// Decide, for each schedule created this run, whether its runs are part of the Task for the request.
+// A decision model reads the request once. Without its answer, a Task the Agent kept follows the schedule.
+async function linkSchedules(sessionKey, state) {
+  const request = redacted(requests.get(sessionKey) ?? "");
+  for (const schedule of state.schedules) {
+    let taskId = state.lastTask;
+    const agentStatus = taskId ? state.statuses.get(taskId) : undefined;
+    const asked = {
+      request: request.slice(0, AUTOMATIC_DESCRIPTION_CHARS),
+      schedule: { recurrence: schedule.recurrence, run_limit: schedule.runLimit },
+      task: {
+        title: taskId ? (state.titles.get(taskId) ?? "").slice(0, 500) : "",
+        status: agentStatus === KEPT ? "in_progress" : (agentStatus ?? ""),
+      },
+    };
+    const answer = await run(state.agent, ["schedule-intent"], JSON.stringify(asked), INTENT_TIMEOUT_MS);
+    let intent = null;
+    try {
+      intent = answer.ok ? (JSON.parse(answer.output).intent ?? null) : null;
+    } catch {
+      intent = null;
+    }
+    if (intent === null) intent = agentStatus === KEPT ? "runs" : "setup";
+    if (intent !== "runs") {
+      // Setting up the schedule was the whole job, so the Task for it is finished.
+      if (taskId && (agentStatus === KEPT || agentStatus === "in_progress")) {
+        await run(state.agent, ["status", taskId, "done"]);
+        state.statuses.set(taskId, "done");
+        forgetTaskList(state.agent);
+      }
+      continue;
+    }
+    if (!taskId) {
+      const words = request.split(/\s+/).filter(Boolean).join(" ");
+      const title = (schedule.name || words || "Scheduled work").slice(0, AUTOMATIC_TITLE_CHARS);
+      const created = await run(state.agent, ["create", `--title=${title}`, "--status=in_progress", "--origin=automatic"]);
+      try {
+        taskId = created.ok ? JSON.parse(created.output).id : null;
+      } catch {
+        taskId = null;
+      }
+      if (typeof taskId !== "string") continue;
+      state.recorded = true;
+      state.taskIds.add(taskId);
+      state.lastTask = taskId;
+    } else if (agentStatus !== KEPT && agentStatus !== "in_progress") {
+      await run(state.agent, ["status", taskId, "in_progress"]);
+    }
+    state.statuses.set(taskId, KEPT);
+    const links = readLinks();
+    links[schedule.jobId] = { task_id: taskId, agent: state.agent };
+    saveLinks(links);
+    forgetTaskList(state.agent);
+  }
+}
+
+// The Agent's final reply in a run's messages, as plain text.
+function lastReply(messages) {
+  if (!Array.isArray(messages)) return "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const content = message.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(" ")
+          : "";
+    if (text.trim()) return text;
+  }
+  return "";
+}
+
+// Note a scheduled run on the Task that follows its schedule. False when no Task does.
+async function recordScheduledRun(jobId, state, event) {
+  const links = readLinks();
+  const link = links[jobId];
+  if (typeof link?.task_id !== "string") return false;
+  const taskId = link.task_id;
+  const agent = link.agent ?? MAIN_AGENT;
+  const number = (Number.isInteger(link.runs) ? link.runs : 0) + 1;
+  const reply = redacted(lastReply(event.messages)).split(/\s+/).filter(Boolean).join(" ");
+  await run(agent, ["note", taskId], reply ? `Run ${number}: ${reply.slice(0, RUN_NOTE_CHARS)}` : `Run ${number}.`);
+  if (state) {
+    state.taskIds = new Set([taskId]);
+    await attachAutomatically(state);
+  }
+  if (state?.removedJobs.has(jobId) || removedMidRun.delete(jobId)) {
+    // The run ended its own schedule, so the job is finished.
+    await endLink(jobId);
+  } else {
+    links[jobId] = { ...link, runs: number };
+    saveLinks(links);
+    const set = state?.statuses.get(taskId);
+    // The schedule is still live, so the Task is not finished whatever this run set.
+    if (set && ![KEPT, "in_progress", "failed"].includes(set)) await run(agent, ["status", taskId, "in_progress"]);
+  }
+  forgetTaskList(agent);
+  return true;
+}
+
+// The scheduled job a run belongs to. OpenClaw names it on the run, in an isolated run's session key
+// (agent:<id>:cron:<jobId>:run:<n>), and at the start of every scheduled prompt ([cron:<jobId> <name>]).
+function jobOf(ctx, prompt) {
+  if (ctx.trigger !== "cron") return undefined;
+  if (typeof ctx.jobId === "string" && ctx.jobId) return ctx.jobId;
+  const inKey = /(?:^|:)cron:([^:]+)(?::|$)/.exec(ctx.sessionKey ?? "");
+  if (inKey) return inKey[1];
+  const inPrompt = /^\[cron:(\S+)[ \]]/.exec(typeof prompt === "string" ? prompt : "");
+  return inPrompt ? inPrompt[1] : undefined;
 }
 
 const unrecordedWork = (state) =>
@@ -411,10 +656,18 @@ async function attachAutomatically(state) {
 }
 
 // Move each Task the Agent left in_progress this run to `status`; a status it chose itself stays.
-async function settleInProgress(state, status) {
-  const inProgress = [...state.statuses].filter(([, current]) => current === "in_progress").map(([id]) => id).sort();
-  for (const taskId of inProgress) await run(state.agent, ["status", taskId, status]);
-  if (inProgress.length) forgetTaskList(state.agent);
+// A Task it kept stays in_progress, unless the run failed: then it is reopened too.
+async function settleInProgress(state, status, reply = "", trigger = "") {
+  const settles = status === "open" ? ["in_progress", KEPT] : ["in_progress"];
+  const inProgress = [...state.statuses].filter(([, current]) => settles.includes(current)).map(([id]) => id).sort();
+  if (!inProgress.length) return;
+  // A Task about to be marked done is held back when Agent Barn finds its job is not finished.
+  const holds = status === "done" ? await held(state, reply, trigger, inProgress) : {};
+  for (const taskId of inProgress) {
+    if (holds[taskId] === "in_progress") continue;
+    await run(state.agent, ["status", taskId, holds[taskId] === "open" ? "open" : status]);
+  }
+  forgetTaskList(state.agent);
 }
 
 // Record a Task for work the Agent left unrecorded. Returns the files it could not attach.
@@ -445,6 +698,14 @@ function smallTalk(message) {
 }
 
 // The open Tasks, then the latest finished ones, from one listing (most recently changed first).
+// An unfinished Task is listed with the start of its latest note, so a later turn or scheduled run,
+// which has no memory of earlier ones, sees where the work got to.
+function notePreview(note) {
+  const text = typeof note === "string" ? note.split(/\s+/).filter(Boolean).join(" ") : "";
+  if (!text) return "";
+  return ` (latest note: "${text.slice(0, LATEST_NOTE_CHARS)}${text.length > LATEST_NOTE_CHARS ? "…" : ""}")`;
+}
+
 function taskLines(output) {
   let items;
   try {
@@ -457,7 +718,8 @@ function taskLines(output) {
   for (const status of ["in_progress", "open", "done"]) {
     const shown = items.filter((task) => task?.status === status);
     for (const task of shown.slice(0, status === "done" ? DONE_TASKS_SHOWN : OPEN_TASKS_SHOWN)) {
-      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}`);
+      const note = status === "done" ? "" : notePreview(task.latest_note);
+      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}${note}`);
     }
   }
   return lines;
@@ -486,9 +748,10 @@ export default {
       description:
         "Record work that uses tools or produces files as a Task the people you work for can follow. `create` " +
         "one before you start (it starts in_progress); when your run ends, files you wrote with your " +
-        "file-writing tool or published are attached and a Task still in_progress is marked done. Attach any " +
-        "other file that is part of the result yourself. Set `failed` (with a body saying why) or `open` (waiting on " +
-        "the user) yourself.",
+        "file-writing tool or published are attached and a Task still in_progress is marked done. If the work " +
+        "continues in a later turn and is not waiting on the user, set it in_progress with keep: true so it stays " +
+        "in progress. Attach any other file that is part of the result yourself. Set `failed` (with a body saying " +
+        "why), `open` (waiting on the user) or `done` yourself.",
       parameters: PARAMETERS,
       execute: (toolCallId, params) => executeTool(agentOf(ctx), toolCallId, params),
     }), { name: TOOL });
@@ -496,6 +759,11 @@ export default {
     api.on("after_tool_call", (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
       const state = track(event, ctx);
+      if (event.toolCallId && !state.toolIds.has(event.toolCallId) && state.tools.length < TURN_TOOLS_SENT) {
+        state.toolIds.add(event.toolCallId);
+        state.tools.push(toolSummary(event.toolName, event.params));
+      }
+      if (SCHEDULER_TOOLS.has(event.toolName)) trackSchedule(state, event);
       if (touchesTasks(event.toolName, event.params)) {
         if (!recordsTask(event.toolName, event.params, event.result, event)) return;
         state.recorded = true;
@@ -503,6 +771,8 @@ export default {
         const taskId = taskIdOf(event.toolName, event.params, event.result);
         if (taskId) {
           state.taskIds.add(taskId);
+          state.lastTask = taskId;
+          if (typeof event.params?.title === "string") state.titles.set(taskId, event.params.title);
           const status = statusSet(event.toolName, event.params);
           if (status) state.statuses.set(taskId, status);
         }
@@ -555,23 +825,46 @@ export default {
       runs.delete(runId);
       const sessionKey = ctx.sessionKey ?? state?.sessionKey ?? "";
       if (currentRun.get(sessionKey) === runId) currentRun.delete(sessionKey);
-      if (!state || ctx.trigger === "heartbeat" || sideRun(sessionKey)) return;
+      const jobId = runJobs.get(runId) ?? jobOf(ctx, requests.get(sessionKey));
+      runJobs.delete(runId);
+      if (ctx.trigger === "heartbeat" || sideRun(sessionKey)) return;
+      if (typeof jobId === "string" && (await recordScheduledRun(jobId, state, event))) return;
+      if (!state) return;
       const succeeded = event.success !== false;
+      if (succeeded && state.schedules.length) await linkSchedules(sessionKey, state);
+      // A status the Agent set itself while removing a schedule stands.
+      for (const removed of state.removedJobs) {
+        await endLink(removed, !state.statuses.has(readLinks()[removed]?.task_id));
+      }
       let failed;
       if (succeeded && unrecordedWork(state)) {
         failed = await recordAutomatically(sessionKey, state);
       } else if (state.recorded) {
         // A run that failed leaves its Task open to pick up again, not in progress.
         failed = await attachAutomatically(state);
-        await settleInProgress(state, succeeded ? "done" : "open");
+        if (succeeded) await settleInProgress(state, "done", lastReply(event.messages), ctx.trigger);
+        else await settleInProgress(state, "open");
       } else {
         return;
       }
       if (failed.length) remember(nextTurnReminders, sessionKey, attachReminder(failed) + QUIET);
     });
 
+    // A schedule that is removed, or a one-off that has run, finishes the Task that follows it.
+    api.on("cron_changed", async (event) => {
+      const jobId = event?.jobId;
+      if (typeof jobId !== "string" || !readLinks()[jobId]) return;
+      const ended = event.action === "removed" || (event.action === "finished" && event.job?.schedule?.kind === "at");
+      if (!ended) return;
+      if ([...runJobs.values()].includes(jobId)) removedMidRun.add(jobId);
+      else await endLink(jobId);
+    });
+
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
+      const jobId = jobOf(ctx, event.prompt);
+      const runId = event.runId ?? ctx.runId;
+      if (jobId && runId) remember(runJobs, runId, jobId);
       const parts = [];
       if (ctx.trigger === "user" || ctx.trigger === "cron") {
         if (typeof event.prompt === "string") {
@@ -582,8 +875,10 @@ export default {
       const lines = await openTaskLines(agentOf(ctx));
       if (lines.length) {
         parts.push(
-          `Your open and latest finished Tasks:\n${lines.join("\n")}\nIf the request continues one of these, ` +
-            "keep using it with the agentbarn_task tool (set a done one back to in_progress) rather than creating another.",
+          `Your open and latest finished Tasks:\n${lines.join("\n")}\nKeep using one of these only when the ` +
+            "request is the same piece of work: set it to in_progress with the agentbarn_task tool, with keep: true " +
+            "if the work still continues after this turn. A new request gets its own Task, even while another is " +
+            "in progress.",
         );
       }
       const reminder = nextTurnReminders.get(ctx.sessionKey ?? "");

@@ -75,6 +75,22 @@ const AGENT_COLORS = [
 
 export const podIdOf = (agent: Pick<Agent, "id" | "parentAgentId">) => agent.parentAgentId ?? agent.id;
 
+export function withBotsAfterTheirParents<T extends Pick<Agent, "id" | "parentAgentId">>(agents: T[]): T[] {
+  const parents = agents.filter((agent) => !agent.parentAgentId);
+  const placed = parents.flatMap((parent) => [parent, ...agents.filter((agent) => agent.parentAgentId === parent.id)]);
+  return [...placed, ...agents.filter((agent) => !placed.includes(agent))];
+}
+
+export function agentLabels(agents: Pick<Agent, "id" | "name" | "parentAgentId">[]): Map<string, string> {
+  const names = new Map(agents.map((agent) => [agent.id, agent.name]));
+  return new Map(
+    agents.map((agent) => {
+      const parent = agent.parentAgentId ? names.get(agent.parentAgentId) : undefined;
+      return [agent.id, parent ? `${agent.name} · ${parent}` : agent.name];
+    }),
+  );
+}
+
 export function canAgent(
   agent: Pick<Agent, "allowedActions"> | null | undefined,
   permission: AgentPermissionKey,

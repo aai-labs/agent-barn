@@ -51,6 +51,40 @@ import sys
 from pathlib import Path
 Path(sys.argv[0]).parents[1].joinpath("out").joinpath(f"{Path(sys.argv[0]).stem}-{os.environ.get('AGENT_ID')}.json").write_text(json.dumps(dict(os.environ)))
 """
+BOT_D = "dddddddd-0000-4000-8000-00000000000d"
+PRUNING_CONFIG = {**BOT_CONFIG, "sessions": {"auto_prune": True, "retention_days": 30}}
+HERMES_STUBS = {
+    "hermes_constants.py": """
+import os
+from pathlib import Path
+
+def get_hermes_home():
+    return Path(os.environ["HERMES_HOME"])
+""",
+    "hermes_cli/__init__.py": "",
+    "hermes_cli/config.py": """
+import os
+from pathlib import Path
+import yaml
+
+def load_config():
+    return yaml.safe_load((Path(os.environ["HERMES_HOME"]) / "config.yaml").read_text()) or {}
+""",
+    "hermes_state.py": """
+import json
+import os
+
+class SessionDB:
+    def maybe_auto_prune_and_vacuum(self, **settings):
+        if os.environ.get("PRUNE_FAILS"):
+            raise RuntimeError("prune failed")
+        with open(os.environ["PRUNE_LOG"], "a") as log:
+            log.write(json.dumps({"home": os.environ["HERMES_HOME"], **settings}, default=str) + "\\n")
+
+    def close(self):
+        pass
+""",
+}
 
 
 def _symlinks_work() -> bool:
@@ -164,6 +198,17 @@ class Pod:
     def dotenv(self, path: Path) -> dict[str, str]:
         lines = [line.split("=", 1) for line in path.read_text().splitlines()]
         return {name: value.strip('"') for name, value in lines}
+
+    def hermes(self, **extra) -> dict[str, str]:
+        stubs = self.root.parent / "hermes-stubs"
+        for name, source in HERMES_STUBS.items():
+            (stubs / name).parent.mkdir(parents=True, exist_ok=True)
+            (stubs / name).write_text(source)
+        return {"PYTHONPATH": str(stubs), "PRUNE_LOG": str(self.out / "pruned.jsonl"), **extra}
+
+    def pruned(self) -> list[dict]:
+        log = self.out / "pruned.jsonl"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
 @pytest.fixture
@@ -535,3 +580,53 @@ def test_a_bot_gets_the_listen_in_guard_and_its_startup_check(pod):
     home = pod.home()
     assert (home / "plugins/agentbarn-listen-in/__init__.py").read_text() == "listen = 1"
     assert (home / "listen-in-checked").read_text() == str(home / "config.yaml")
+
+
+def test_each_served_bot_prunes_its_own_sessions_under_its_own_settings(pod):
+    pod.manifest(bots=(BOT_A, BOT_B), deleted=(BOT_D,))
+    pod.bot(BOT_A, config=PRUNING_CONFIG)
+    pod.bot(BOT_B, config=PRUNING_CONFIG)
+
+    _ok(pod.setup(**pod.hermes()))
+
+    assert pod.pruned() == [
+        {
+            "home": str(pod.home(bot)),
+            "retention_days": 30,
+            "min_interval_hours": 24,
+            "min_vacuum_interval_days": 30,
+            "vacuum": True,
+            "sessions_dir": str(pod.home(bot) / "sessions"),
+        }
+        for bot in (BOT_A, BOT_B)
+    ]
+
+
+def test_a_bot_that_is_not_served_is_not_pruned(pod):
+    pod.manifest(bots=(BOT_A, BOT_B))
+    pod.bot(BOT_A, secret={"AGENT_ID": "parent-id"}, config=PRUNING_CONFIG)
+    pod.bot(BOT_B, config=PRUNING_CONFIG)
+
+    _ok(pod.setup(**pod.hermes()))
+
+    assert [entry["home"] for entry in pod.pruned()] == [str(pod.home(BOT_B))]
+
+
+def test_a_bot_without_auto_prune_is_not_pruned(pod):
+    pod.manifest()
+    pod.bot()
+
+    _ok(pod.setup(**pod.hermes()))
+
+    assert pod.pruned() == []
+
+
+def test_a_failed_prune_leaves_the_bot_served(pod):
+    pod.manifest()
+    pod.bot(config=PRUNING_CONFIG)
+
+    result = pod.setup(**pod.hermes(PRUNE_FAILS="1"))
+
+    _ok(result)
+    assert pod.served() == [BOT_A]
+    assert f"could not prune sessions of {BOT_A}: CalledProcessError" in result.stdout

@@ -5,8 +5,7 @@ import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
-import type { Agent } from "@/features/agents/schemas";
-import { canAgent } from "@/features/agents/utils";
+import { agentLabels, canAgent, withBotsAfterTheirParents } from "@/features/agents/utils";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import { useTasks } from "../hooks/use-agent-tasks";
@@ -29,22 +28,6 @@ import { TaskList } from "./task-list";
 import { TaskViewToggle } from "./task-view-toggle";
 
 const EMPTY = "Your Agents haven't recorded any tasks yet.";
-
-function withBotsAfterTheirParents(agents: Agent[]): Agent[] {
-  const parents = agents.filter((agent) => !agent.parentAgentId);
-  const placed = parents.flatMap((parent) => [parent, ...agents.filter((agent) => agent.parentAgentId === parent.id)]);
-  return [...placed, ...agents.filter((agent) => !placed.includes(agent))];
-}
-
-function agentLabels(agents: Agent[]): Map<string, string> {
-  const names = new Map(agents.map((agent) => [agent.id, agent.name]));
-  return new Map(
-    agents.map((agent) => {
-      const parent = agent.parentAgentId ? names.get(agent.parentAgentId) : undefined;
-      return [agent.id, parent ? `${agent.name} · ${parent}` : agent.name];
-    }),
-  );
-}
 
 /** Tasks across every Agent whose Tasks the viewer can see. */
 export function OrganizationTasksPage() {

@@ -66,9 +66,9 @@ export function useContextPanel(): ContextPanelModel | null {
   const agentRoute = parseAgentRoute(pathname);
   const agent = useCachedAgent(agentRoute?.agentId);
   const pod = useCachedAgent(agent?.parentAgentId ?? agentRoute?.agentId);
-  const workflowAuthoring = useCachedWorkflowAuthoring(agentRoute?.agentId);
+  const workflowAuthoring = useCachedWorkflowAuthoring();
   const queryClient = useQueryClient();
-  const awaiting = useAwaitingApprovals(agentRoute?.agentId ?? "", Boolean(agent));
+  const awaiting = useAwaitingApprovals(agentRoute?.agentId, Boolean(agent));
 
   if (pathname.startsWith(PLATFORM_BASE)) {
     return platformPanel(pathname, searchParams.get("section"));

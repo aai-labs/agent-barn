@@ -16,6 +16,13 @@ from api.domains.auth.repository import (
     PasswordResetTokenRepository,
     RefreshTokenRepository,
 )
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    OPENROUTER_NAME,
+    OPENROUTER_SLUG,
+    LlmProviderConnection,
+    ProviderType,
+)
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.tiers.models import SEED_TIERS, Tier
@@ -67,7 +74,7 @@ def database_is_clean():
         with delegate.engine.connect() as conn:
             conn.execute(
                 text(
-                    "TRUNCATE artifact_reference, artifact, artifact_bucket, platform_workflow_settings, memory_key_revocation, platform_memory_settings, platform_playbook_settings, platform_trial_settings, platform_billing_settings, platform_organization_settings, billing_checkout, billing_unapplied_payment, trial_grant, security_audit_record, gateway_audit_event, event_delivery, event_outbox_message, communication_operation_journal, skill, communication_delivery, agent_chat_message, communication_connection, tool_call, agent_template, platform_template_draft_skill, platform_template_draft, platform_template_skill, platform_template, platform_resource_limits, agent CASCADE"
+                    "TRUNCATE artifact_reference, artifact, artifact_bucket, platform_workflow_settings, memory_key_revocation, platform_memory_settings, platform_playbook_settings, platform_decision_settings, platform_trial_settings, platform_billing_settings, platform_organization_settings, billing_checkout, billing_unapplied_payment, trial_grant, security_audit_record, gateway_audit_event, event_delivery, event_outbox_message, communication_operation_journal, skill, communication_delivery, agent_chat_message, communication_connection, tool_call, agent_template, platform_template_draft_skill, platform_template_draft, platform_template_skill, platform_template, platform_resource_limits, agent CASCADE"
                 )
             )
             # The Agent Size catalog back to what the migration seeded: Standard, the default.
@@ -96,6 +103,19 @@ def database_is_clean():
             conn.execute(
                 Tier.__table__.insert(),  # ty: ignore[unresolved-attribute]
                 [{**seed, "enabled": False, "created_at": now, "updated_at": now} for seed in SEED_TIERS],
+            )
+            # The LLM Provider Connections back to what the migration seeded: OpenRouter, no key.
+            conn.execute(text("DELETE FROM llm_provider_connection"))
+            conn.execute(
+                LlmProviderConnection.__table__.insert(),  # ty: ignore[unresolved-attribute]
+                {
+                    "id": OPENROUTER_CONNECTION_ID,
+                    "slug": OPENROUTER_SLUG,
+                    "name": OPENROUTER_NAME,
+                    "provider_type": ProviderType.OPENROUTER,
+                    "created_at": now,
+                    "updated_at": now,
+                },
             )
             conn.commit()
         delegate.delete_all(RefreshToken)

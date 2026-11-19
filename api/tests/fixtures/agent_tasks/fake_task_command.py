@@ -3,6 +3,8 @@
 Calls are appended to $FAKE_TASK_LOG as JSON lines. `list` answers with $FAKE_TASK_LIST
 (a JSON list of Tasks, filtered by --status), fails when $FAKE_TASK_LIST_FAIL is set, and
 waits $FAKE_TASK_LIST_SLEEP seconds first; a value of "fail" makes any call fail.
+`schedule-intent` answers with $FAKE_SCHEDULE_INTENT ("setup" or "runs"), or no intent when unset.
+`turn-end` holds every closing Task in $FAKE_TURN_END ("in_progress" or "open"), or none when unset.
 """
 
 import json
@@ -32,5 +34,10 @@ if argv[0] == "list":
     status = options.get("status")
     items = [task for task in tasks if status is None or task["status"] == status]
     print(json.dumps({"items": items, "total": len(items), "page": 1, "page_size": 25}))
+elif argv[0] == "schedule-intent":
+    print(json.dumps({"intent": os.environ.get("FAKE_SCHEDULE_INTENT") or None}))
+elif argv[0] == "turn-end":
+    held = os.environ.get("FAKE_TURN_END")
+    print(json.dumps({"holds": {task_id: held for task_id in json.loads(stdin)["closing"]} if held else {}}))
 else:
     print(json.dumps({"id": "0199f1d2-0000-7000-8000-0000000000aa", "status": "open"}))

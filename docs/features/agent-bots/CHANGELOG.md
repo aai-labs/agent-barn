@@ -17,7 +17,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in and the organization Tasks page); OpenClaw with real Slack, Telegram and Discord apps.
+- Next: the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in, the organization Tasks page and running workflows on a Bot); OpenClaw with real Slack, Telegram and Discord apps.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -78,6 +78,31 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 **Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
 
 ## Changes
+
+### 2026-11-19 — AF-445 — Staging merge (schedule-linked Tasks per agent)
+
+- Merged: staging, bringing the AF-425 merge, AF-412's schedule-linked Tasks and turn-end holds, and AF-439's Organization workflows.
+- Fixed: AF-412's OpenClaw Tasks plugin code ran its commands in the one-agent form, which the per-agent plugin answers with "Tasks are unavailable". After the merge every schedule question, run Note, turn-end question and finished status for a linked Task failed, for the Parent Agent too. Staging's new turn state now also carries the turn's agent. Each is now sent as its agent: the turn's, or for a scheduled run or a removed job the one its schedule link records. A link saved without an agent belongs to the Parent Agent.
+- Changed: the conflicted files keep both sides. Migration `c87b17ccfe1a` joins this branch's `3e9d8fca9996` with staging's `0a07b0b57b62`. `ui.md` now says the Bot switcher shows on every Agent, as `path-bar.tsx` already does on this branch.
+- Follow-up: the end-to-end runs.
+
+### 2026-11-19 — AF-425 — Workflows run on Bots again
+
+- Fixed: AF-439 moved workflows to the Organization, and its "Run as" and default-Agent pickers read the first page of Agents without Bots. A Bot's Workflows tab linked to the run dialog with the Bot named, but the dialog dropped it, and a workflow that had belonged to a Bot (migrated with the Bot as its default Agent) could not run on it. The API already accepted a Bot.
+- Now both pickers read every Agent the viewer can see with `include_bots=true`, and name and place each Bot after its Parent Agent ("Bot · Parent Agent"), as the Organization Tasks page does. The ordering and naming helpers moved from the Tasks page to `features/agents/utils.ts`.
+- Follow-up: the end-to-end run.
+
+### 2026-11-19 — AF-425 — Prune each Bot's sessions at start
+
+- Fixed: staging turned on Hermes's session auto-prune, which runs once, when the gateway starts, outside any Bot profile, so it pruned only the Parent Agent's `state.db`. A Bot's chat sessions, kept in its own profile, were never pruned.
+- Now `bot-setup.py` runs Hermes's `SessionDB.maybe_auto_prune_and_vacuum` for each served Bot, in a subprocess with `HERMES_HOME` set to the Bot's profile, with the settings the gateway passes from that profile's `sessions` block. It is limited to 60 seconds per Bot, and a failure is logged without stopping the start. Checked once in the pinned Hermes image: a 40-day-old ended session was removed, a new one kept, and the Parent Agent's `state.db` was not touched.
+- Follow-up: the end-to-end run.
+
+### 2026-11-19 — AF-425 — A Bot's Tasks follow its own schedules
+
+- Fixed: staging's schedule-linked Tasks (AF-412) kept every profile's schedule links in the pod's `HERMES_HOME`, the Parent Agent's folder, and read that folder's `cron/jobs.json`, while Hermes keeps a Bot's jobs in its own profile. When the Parent Agent had a job file, the next turn of any profile in the pod marked a Bot's linked Task `done` while its schedule still ran. When it had none, the Bot's runs were noted without the run limit, so the link never ended and the Task stayed `in_progress` after the last run.
+- Now the Tasks plugin's `_home()` returns the Bot's profile folder when its copy is installed under `profiles/`, the same rule the observer uses. The Parent Agent's copy still uses `HERMES_HOME`.
+- Follow-up: the end-to-end run.
 
 ### 2026-11-16 — AF-445 — Home reads every Bot in one list
 

@@ -1,10 +1,13 @@
 "use client";
 
-import { WorkflowFiles } from "./workflow-files";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
+import { FILES_GONE, WorkflowFiles } from "./workflow-files";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, Clock3, FileCheck2, Files, LayoutDashboard } from "lucide-react";
 import { AppErrorState } from "@/components/app-error-state";
+import { useAgent } from "@/features/agents/hooks/use-agent";
+import { canAgent } from "@/features/agents/utils";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import {
   useWorkflowRun,
@@ -21,28 +24,27 @@ import {
   RunViewConnector,
   StepRail,
 } from "./workflow-run-parts";
-import { pendingApproval } from "../run-schemas";
+import { pendingApproval, runTitle } from "../run-schemas";
 import { StepApprovals, WorkflowApproval } from "./workflow-approval";
 
+/**
+ * One run, wherever it is opened. The Agent that ran it comes from the run itself; a
+ * deleted Agent is named without a link and its run is read-only.
+ */
 export function WorkflowRunDetail({
-  agentId,
-  agent,
-  agentHref,
-  canManageFiles,
+  organizationId,
   runId,
-  canRunAgain,
   onOpenRun,
 }: {
-  agentId: string;
-  agent: { id: string; name: string };
-  agentHref: string;
-  canManageFiles: boolean;
+  organizationId: string;
   runId: string;
-  /** Whether this actor may start runs of the workflow; the server decides per run. */
-  canRunAgain: boolean;
   onOpenRun: (id: string) => void;
 }) {
-  const run = useWorkflowRun(agentId, runId);
+  const run = useWorkflowRun(runId);
+  // The viewer's own authority on the run's Agent decides whether they manage its files.
+  const { agent: runner } = useAgent(
+    run.data && !run.data.agentArchived ? run.data.agentId : "",
+  );
   if (run.error)
     return (
       <AppErrorState
@@ -55,12 +57,15 @@ export function WorkflowRunDetail({
   return (
     <RunContents
       key={runId}
-      agentId={agentId}
-      agent={agent}
-      agentHref={agentHref}
-      canManageFiles={canManageFiles}
+      agentId={run.data.agentId}
+      agent={{ id: run.data.agentId, name: run.data.agentName }}
+      agentHref={
+        run.data.agentArchived
+          ? undefined
+          : `/dashboard/${organizationId}/agents/${run.data.agentId}`
+      }
+      canManageFiles={canAgent(runner, "agent.update")}
       run={run.data}
-      canRunAgain={canRunAgain}
       onOpenRun={onOpenRun}
     />
   );
@@ -73,7 +78,7 @@ function RunSummary({
 }: {
   run: WorkflowRun;
   agentName: string;
-  agentHref: string;
+  agentHref?: string;
 }) {
   const current = run.steps.find((step) => step.state === "RUNNING");
   const note = (text: string) => (
@@ -240,20 +245,21 @@ function RunContents({
   agentHref,
   canManageFiles,
   run,
-  canRunAgain,
   onOpenRun,
 }: {
   agentId: string;
   agent: { id: string; name: string };
-  agentHref: string;
+  /** Absent once the Agent was deleted. */
+  agentHref?: string;
   canManageFiles: boolean;
   run: WorkflowRun;
-  canRunAgain: boolean;
   onOpenRun: (id: string) => void;
 }) {
   const [selectedView, setSelectedView] = useState("summary");
   const showArtifacts = selectedView === "artifacts";
-  const actions = useWorkflowRunActions(agentId);
+  const actions = useWorkflowRunActions();
+  // The API refuses a re-run the Tier leaves out, so the button is not offered.
+  const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
   const [confirm, setConfirm] = useState(false);
   const [confirmRerun, setConfirmRerun] = useState(false);
   const [rerunRequestId] = useState(() => crypto.randomUUID());
@@ -263,10 +269,11 @@ function RunContents({
     <section aria-label="Run detail">
       <RunPageHeader
         eyebrow={`${run.name} · v${run.versionNumber} · run ${run.id.slice(0, 8)}`}
-        title={run.name}
+        title={runTitle(run)}
         badge={<RunStatusBadge state={run.state} approval={pendingApproval(run)} />}
         agent={agent}
         agentHref={agentHref}
+        agentArchived={run.agentArchived}
         detail={`Started ${started}`}
         actions={
           <>
@@ -275,7 +282,7 @@ function RunContents({
                 Cancel run
               </button>
             )}
-            {canRunAgain && run.allowedActions.includes("rerun") && (
+            {run.allowedActions.includes("rerun") && tierAllowsWorkflows && (
               <button
                 className="af-btn af-btn-primary"
                 onClick={() => setConfirmRerun(true)}
@@ -313,7 +320,7 @@ function RunContents({
       )}
       {pendingApproval(run) && (
         <div className="mb-6">
-          <WorkflowApproval agentId={agentId} agentName={agent.name} run={run} />
+          <WorkflowApproval agentName={agent.name} run={run} />
         </div>
       )}
       <div className="grid gap-x-8 gap-y-4 md:grid-cols-[minmax(200px,260px)_minmax(0,1fr)]">
@@ -404,6 +411,9 @@ function RunContents({
                 Files published during this run, including work from unfinished
                 steps. Step and final outputs are labeled below.
               </p>
+              {run.agentArchived ? (
+                <p className="mt-3 text-sm text-[var(--ink-3)]">{FILES_GONE}</p>
+              ) : (
               <AgentFiles
                 canManageFiles={canManageFiles}
                 key={run.id}
@@ -426,6 +436,7 @@ function RunContents({
                   run.state,
                 )}
               />
+              )}
             </div>
           ) : (
             <>
@@ -439,6 +450,7 @@ function RunContents({
               {!(selectedStep?.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state)) && <>
               <WorkflowFiles
                 agentId={agentId}
+                unavailable={run.agentArchived}
                 title={selectedStep ? "Step input files" : "Run input files"}
                 files={Array.from(
                   new Map(
@@ -459,6 +471,7 @@ function RunContents({
               {selectedStep ? (
                 <WorkflowFiles
                   agentId={agentId}
+                  unavailable={run.agentArchived}
                   title="Step outputs"
                   description={selectedStep.outputDescription}
                   files={selectedStep.artifacts ?? []}
@@ -467,6 +480,7 @@ function RunContents({
                 run.state === "SUCCEEDED" && (
                   <WorkflowFiles
                     agentId={agentId}
+                    unavailable={run.agentArchived}
                     title="Final outputs"
                     description={run.finalOutputDescription}
                     files={run.finalArtifacts ?? []}
@@ -474,7 +488,7 @@ function RunContents({
                 )
               )}
               <WorkflowRunTiming run={run} />
-              <WorkflowRunActivity agentId={agentId} run={run} />
+              <WorkflowRunActivity run={run} />
               </>}
             </>
           )}

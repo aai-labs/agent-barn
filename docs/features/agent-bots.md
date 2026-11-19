@@ -11,7 +11,7 @@ A **Bot** is a full Agent created from its **Parent Agent**'s page. It has its o
 - A Bot belongs to its Parent Agent's Organization, and its parent link never changes.
 - At most 5 Bots per Parent Agent. Each Bot counts toward the Organization's Agent limit, so an Organization limited to one Agent cannot add Bots.
 - The Parent Agent is the first bot: it keeps its own profile or agent, Template and Connections.
-- Bots appear only inside their Parent Agent. Home and Agent lists show Parent Agents; a Bot keeps its own Agent id and URL. `GET /organizations/{organization_id}/agents?include_bots=true` also returns the Bots the caller can read, each with its `parent_agent_id`. Home uses it once for every card's Bot count, and the Organization Tasks page to name and filter by Bots.
+- Bots appear only inside their Parent Agent. Home and Agent lists show Parent Agents; a Bot keeps its own Agent id and URL. `GET /organizations/{organization_id}/agents?include_bots=true` also returns the Bots the caller can read, each with its `parent_agent_id`. Home uses it once for every card's Bot count, the Organization Tasks page to name and filter by Bots, and the workflow Run dialog and editor to offer a Bot to run as or as the default Agent.
 
 ## Lifecycle
 
@@ -23,6 +23,7 @@ The pod belongs to the Parent Agent.
 - Deleting a Bot takes effect at the Parent Agent's next restart. Deleting the Parent Agent deletes its Bots.
 - A Bot on a tier hold is not served. Holding a running Bot, or switching off one of its Slack, Telegram or Discord Connections, restarts its Parent Agent without it. A held Bot keeps its data and is served again once released and the Parent Agent restarts.
 - Every start issues each Bot fresh runtime keys. The LiteLLM key is created once per Agent and kept across starts.
+- On Hermes, every start prunes each served Bot's ended sessions as Hermes's gateway prunes the Parent Agent's: those inactive for 30 days, at most once a day, under the Bot's own `sessions` settings. The gateway prunes only the Parent Agent's `state.db`, so `bot-setup.py` runs the same Hermes call in each Bot profile. A prune that fails is logged and the Bot is still served.
 - A Bot whose runtime material is missing at start is not served, and none of its helpers run. Nothing falls back to the Parent Agent's identity or keys.
 - On OpenClaw, a Parent Agent's sessions, scheduled jobs and memory carry over when its first Bot is added and when its last Bot is removed.
 - On Hermes, each profile's values are written to an environment file that Hermes expands `${…}` in, so a value with a line break or `${` can't be held. On the Parent Agent it refuses the start, naming only the key; on a Bot it puts that Bot in error.

@@ -42,6 +42,26 @@ PLUGINS = (
 )
 LISTEN_IN_PLUGIN = "agentbarn-listen-in"
 HELPERS = ("communications-runtime-adapter.py", "agent-trigger-server.py", "boot-run.py")
+PRUNE_TIMEOUT_SECONDS = 60
+PRUNE_SESSIONS = """
+from hermes_cli.config import load_config
+from hermes_constants import get_hermes_home
+from hermes_state import SessionDB
+
+sessions = load_config().get("sessions") or {}
+if sessions.get("auto_prune", False):
+    db = SessionDB()
+    try:
+        db.maybe_auto_prune_and_vacuum(
+            retention_days=int(sessions.get("retention_days", 90)),
+            min_interval_hours=int(sessions.get("min_interval_hours", 24)),
+            min_vacuum_interval_days=int(sessions.get("min_vacuum_interval_days", 30)),
+            vacuum=bool(sessions.get("vacuum_after_prune", True)),
+            sessions_dir=get_hermes_home() / "sessions",
+        )
+    finally:
+        db.close()
+"""
 
 
 def log(message):
@@ -206,6 +226,18 @@ def setup_bot(bot_id, passthrough):
     link(target, home / ".env")
 
 
+def prune_sessions(bot_id):
+    try:
+        subprocess.run(
+            [sys.executable, "-c", PRUNE_SESSIONS],
+            check=True,
+            timeout=PRUNE_TIMEOUT_SECONDS,
+            env={**os.environ, "HERMES_HOME": str(ROOT / "profiles" / bot_id)},
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        log(f"could not prune sessions of {bot_id}: {type(error).__name__}")
+
+
 def setup_parent(passthrough):
     target = ENV_DIR / "default.env"
     values = env_values(dict(os.environ), ROOT, passthrough)
@@ -317,9 +349,11 @@ def main():
     for entry in entries:
         try:
             setup_bot(entry["id"], passthrough)
-            served.append(entry)
         except Exception as error:
             log(f"could not set up {entry['id']}: {type(error).__name__}")
+            continue
+        served.append(entry)
+        prune_sessions(entry["id"])
     (ENV_DIR / ACTIVE_FILE).write_text(json.dumps(served), encoding="utf-8")
     log(f"serving {len(served)} of {len(entries)} bots")
     return 0

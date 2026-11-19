@@ -214,3 +214,20 @@ def test_the_instructions_leave_closing_and_attaching_to_the_plugin():
     assert "is marked `done` when your turn ends" in instructions
     assert "Files you write with your file-writing tool, and files you publish with" in instructions
     assert "attach it yourself if it is part of the result" in instructions
+
+
+def test_the_instructions_say_how_to_keep_a_task_in_progress_across_turns():
+    instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
+    assert "set it `in_progress` with `keep: true`" in instructions
+    assert "A note alone does not keep it in progress" in instructions
+    assert "A new request gets its own Task, even while another is in progress" in instructions
+    assert "set `done` without `keep`" in instructions
+    assert "Finishing one part of it is not finishing the job" in instructions
+    assert "including on the turn you create it" in instructions
+
+
+def test_the_instructions_ask_for_a_progress_note_on_a_job_that_spans_runs():
+    instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
+    assert "has no memory of the earlier ones" in instructions
+    assert "add a `body` saying how far the job is" in instructions
+    assert "The latest note is shown with the Task at the start of each turn" in instructions

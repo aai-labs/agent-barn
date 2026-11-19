@@ -168,6 +168,10 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**LLM Provider Connection**:
+A model provider account Agent Barn reaches models through, with the key it uses, kept by Platform Administrators for every Organization. Agents never hold its key; they reach it through the model proxy with their own keys.
+_Avoid_: provider key, LLM credential, model provider setting
+
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend
@@ -376,6 +380,10 @@ _Avoid_: training job, sync, import
 Rules every Agent in an Organization should follow whatever its role, such as time zones, approval before changes, and message format. A Playbook Extraction proposes them; people review them and add them to a marked section of Organization Templates' AGENTS.md. They are not a Skill.
 _Avoid_: playbook, org prompt, global instructions
 
+**Decision**:
+One call in which a platform feature asks a decision model typed questions (yes/no, choice, score) about state derived from an Agent's data and gets calibrated answers back. It is billed to that Agent's model key. Which model answers is a Platform setting.
+_Avoid_: classification job, LLM judgement, noul, predicate
+
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
@@ -530,10 +538,21 @@ _Avoid_: webhook
 - “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.
 
 **Workflow**:
-An Agent-owned repeatable plan, explicitly saved before execution. Its ordered
-steps describe goals, required inputs and preserved outputs.
+An Organization-owned repeatable plan, explicitly saved before execution. Its
+ordered steps describe goals and required inputs. A Workflow is not tied to an
+Agent; Agents run it.
 See [Agent workflows](docs/features/agent-workflows.md).
-_Avoid_: Agent Skill, native scheduled job
+_Avoid_: Agent Skill, native scheduled job, Playbook, Agent-owned workflow
+
+**Workflow Run**:
+One Workflow Version executed by one Agent, chosen when the run starts. The Agent
+runs every step of that run and governs who may see and act on it.
+_Avoid_: owning Agent, workflow instance
+
+**Default Agent**:
+The Agent a Workflow preselects when a run is started. It grants no access and
+the person starting the run may choose another.
+_Avoid_: owner, assigned Agent
 
 **Workflow Version**:
 An immutable saved snapshot of a Workflow. Editing and saving appends a new

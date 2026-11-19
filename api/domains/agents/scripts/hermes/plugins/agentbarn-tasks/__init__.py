@@ -8,7 +8,10 @@ next; a turn that wrote files is also held back once before it finishes (`pre_ve
 If it still ends without a Task, the plugin records one itself, named after the request,
 with origin `automatic`. It also does the bookkeeping that would otherwise cost the model
 a call each: when a turn ends, the files it wrote go to the Task it worked on and a Task
-it left in progress is marked done, or reopened if the turn did not finish. Only a Task
+it left in progress is marked done, or reopened if the turn did not finish; one it kept
+(`keep`, for work that continues in a later turn) stays in progress. Before a Task is
+marked done the turn is reported to Agent Barn, where a decision model can hold it back:
+in progress when the job is still going, open when it waits on the user. Only a Task
 call that changed something counts as recording the work: reading the Tasks does not.
 Runs with a parent session (Hermes's background review, subagents) are left alone: they
 are not the user's request.
@@ -28,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 _TOOL = "agentbarn_task"
 _STATUSES = ["open", "in_progress", "done", "failed"]
+# A Task the Agent left in_progress with keep: work that continues in a later turn. Only a turn
+# that did not complete moves it (to open); otherwise it stays in_progress.
+_KEPT = "kept"
 _WORK_THRESHOLD = 3
 # The startup checklist (boot-run.py) runs in this session; it is not a request to keep a Task for.
 _BOOT_SESSION_ID = "agentbarn-boot"
@@ -41,9 +47,22 @@ _LIST_PAGE_SIZE = 100
 _OPEN_TASKS_SHOWN = 10
 # Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 _DONE_TASKS_SHOWN = 3
+# An unfinished Task is listed with the start of its latest note, so a later turn or scheduled run,
+# which has no memory of earlier ones, sees where the work got to.
+_LATEST_NOTE_CHARS = 200
 _AUTOMATIC_TITLE_CHARS = 120
 _AUTOMATIC_DESCRIPTION_CHARS = 2000
 _COMMAND_TIMEOUT_SECONDS = 150
+# Hermes's scheduler tool, and the session id of a scheduled run: cron_<job id>_<date>_<time>.
+_SCHEDULER_TOOL = "cronjob"
+_CRON_SESSION = re.compile(r"^cron_([0-9a-f]{12})_\d{8}_\d{6}")
+_INTENT_TIMEOUT_SECONDS = 45
+# Asking whether a Task about to be closed is finished: how long it may take, and how much it is told.
+_TURN_END_TIMEOUT_SECONDS = 45
+_TURN_TOOLS_SENT = 40
+_TOOL_SUMMARY_CHARS = 300
+_TURN_TEXT_CHARS = 4000
+_RUN_NOTE_CHARS = 300
 # Sessions remembered at once (requests, reminders, turns); the oldest are forgotten first.
 _SESSIONS_KEPT = 500
 # Task tool actions and command subcommands that change a Task; reading one is not recording work.
@@ -168,9 +187,10 @@ _SCHEMA = {
     "description": (
         "Record work that uses tools or produces files as a Task the people you work for can follow. "
         "`create` one before you start (it starts in_progress); when your turn ends, files you wrote with your "
-        "file-writing tool or published are attached and a Task still in_progress is marked done. Attach any "
-        "other file that is part of the result yourself. Set `failed` (with a body saying why) or "
-        "`open` (waiting on the user) yourself."
+        "file-writing tool or published are attached and a Task still in_progress is marked done. If the work "
+        "continues in a later turn and is not waiting on the user, set it in_progress with keep: true so it stays "
+        "in progress. Attach any other file that is part of the result yourself. Set `failed` (with a body saying "
+        "why), `open` (waiting on the user) or `done` yourself."
     ),
     "parameters": {
         "type": "object",
@@ -188,6 +208,14 @@ _SCHEMA = {
                 "description": "The new status, a list filter, or the starting status for create (in_progress).",
             },
             "body": {"type": "string", "description": "The note, for note; or one to add with create or status."},
+            "keep": {
+                "type": "boolean",
+                "description": (
+                    "With create, or status in_progress: keep the Task in progress after this turn, because the "
+                    "job continues in a later turn (more parts or messages to come). Without it the Task is "
+                    "marked done when the turn ends."
+                ),
+            },
             "path": {"type": "string", "description": "The file to attach, absolute or relative to your workspace."},
             "name": {"type": "string", "description": "The file's name as shown on the Task, for attach."},
             "content_type": {"type": "string", "description": "A bare type/subtype, for attach."},
@@ -210,6 +238,10 @@ _task_list_cache: dict = {"at": None, "lines": []}
 _requests: dict[str, str] = {}
 # (session_id, turn_id) of runs with a parent session: the background review and subagents
 _side_runs: dict[tuple[str, str], bool] = {}
+# (session_id, turn_id) -> the Agent's final reply, noted on a scheduled run's Task
+_replies: dict[tuple[str, str], str] = {}
+# Scheduled runs already noted on their Task; Hermes can report the end of one run more than once.
+_noted_runs: dict[str, bool] = {}
 
 
 def _remember(mapping: dict, key, value) -> None:
@@ -460,10 +492,12 @@ def _status_set(tool_name: str, args) -> str | None:
     if tool_name != _TOOL or not isinstance(args, dict):
         return None
     if args.get("action") == "create":
-        return args["status"] if args.get("status") in _STATUSES else "in_progress"
-    if args.get("action") == "status" and args.get("status") in _STATUSES:
-        return args["status"]
-    return None
+        status = args["status"] if args.get("status") in _STATUSES else "in_progress"
+    elif args.get("action") == "status" and args.get("status") in _STATUSES:
+        status = args["status"]
+    else:
+        return None
+    return _KEPT if status == "in_progress" and args.get("keep") in (True, "true") else status
 
 
 def _track(
@@ -474,6 +508,11 @@ def _track(
     if (session_id, turn_id) not in _turns:
         _remember(_turns, (session_id, turn_id), _new_turn())
     turn = _turns[(session_id, turn_id)]
+    if tool_call_id and tool_call_id not in turn["tool_ids"] and len(turn["tools"]) < _TURN_TOOLS_SENT:
+        turn["tool_ids"].add(tool_call_id)
+        turn["tools"].append(_tool_summary(tool_name, args))
+    if tool_name == _SCHEDULER_TOOL:
+        _track_schedule(turn, args, result)
     if _touches_tasks(tool_name, args):
         if _records_task(tool_name, args, result):
             turn["recorded"] = True
@@ -481,6 +520,10 @@ def _track(
             task_id = _task_id(tool_name, args, result)
             if task_id:
                 turn["task_ids"].add(task_id)
+                turn["last_task"] = task_id
+                title = args.get("title") if isinstance(args, dict) else None
+                if isinstance(title, str):
+                    turn["titles"][task_id] = title
                 status = _status_set(tool_name, args)
                 if status:
                     turn["statuses"][task_id] = status
@@ -499,6 +542,227 @@ def _track(
     return turn
 
 
+def _tool_summary(tool_name: str, args) -> str:
+    """One tool call as a short line, its name and arguments, for the question asked before a Task is closed."""
+    try:
+        text = json.dumps(args, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        text = ""
+    return _redacted(f"{tool_name} {text}")[:_TOOL_SUMMARY_CHARS]
+
+
+def _held(session_id: str, turn: dict, reply: str, trigger: str, closing: list[str]) -> dict:
+    """Ask Agent Barn which of the Tasks about to be marked done are not finished.
+
+    Returns task_id -> the status to leave it in ("in_progress" or "open"); empty when nothing is held.
+    """
+    with _lock:
+        request = _redacted(_requests.get(session_id, ""))
+    told = {
+        "request": request[:_TURN_TEXT_CHARS],
+        "reply": _redacted(reply)[:_TURN_TEXT_CHARS],
+        "tools": turn["tools"],
+        "closing": closing,
+        "trigger": trigger,
+    }
+    ok, output = _run(["turn-end"], stdin=json.dumps(told), timeout=_TURN_END_TIMEOUT_SECONDS)
+    try:
+        holds = json.loads(output).get("holds") if ok else None
+    except (ValueError, AttributeError):
+        holds = None
+    return holds if isinstance(holds, dict) else {}
+
+
+def _track_schedule(turn: dict, args, result) -> None:
+    """Remember a schedule the Agent created or removed with Hermes's scheduler tool."""
+    if not isinstance(args, dict) or _failed(result):
+        return
+    if args.get("action") == "remove" and isinstance(args.get("job_id"), str):
+        turn["removed_jobs"].add(args["job_id"])
+        return
+    if args.get("action") != "create":
+        return
+    try:
+        created = json.loads(result) if isinstance(result, str) else result
+    except ValueError:
+        return
+    if not isinstance(created, dict) or not isinstance(created.get("job_id"), str):
+        return
+    recurrence = str(created.get("schedule") or args.get("schedule") or "")
+    repeat = args.get("repeat")
+    limit = repeat if isinstance(repeat, int) and not isinstance(repeat, bool) and repeat > 0 else None
+    turn["schedules"].append(
+        {
+            "job_id": created["job_id"],
+            "name": str(created.get("name") or args.get("name") or ""),
+            "recurrence": recurrence[:200],
+            "run_limit": 1 if limit is None and recurrence.startswith("once") else limit,
+        }
+    )
+
+
+def _home() -> str:
+    installed = Path(__file__).resolve().parents[2]
+    if installed.parent.name == "profiles":
+        return str(installed)
+    return os.environ.get("HERMES_HOME") or "/opt/data"
+
+
+def _links_path() -> str:
+    return os.path.join(_home(), "agentbarn-task-schedules.json")
+
+
+def _links() -> dict:
+    """Job id -> {"task_id": ...}: the Tasks that follow a schedule. Kept beside the scheduler's own state."""
+    try:
+        with open(_links_path(), encoding="utf-8") as stored:
+            links = json.load(stored)
+    except (OSError, ValueError):
+        return {}
+    return links if isinstance(links, dict) else {}
+
+
+def _save_links(links: dict) -> None:
+    path = _links_path()
+    try:
+        with open(path + ".tmp", "w", encoding="utf-8") as stored:
+            json.dump(links, stored)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
+def _jobs() -> dict | None:
+    """Hermes's scheduled jobs by id, or None when they cannot be read."""
+    path = os.path.join(_home(), "cron", "jobs.json")
+    try:
+        with open(path, encoding="utf-8") as stored:
+            data = json.load(stored)
+    except (OSError, ValueError):
+        return None
+    jobs = data.get("jobs") if isinstance(data, dict) else data
+    if not isinstance(jobs, list):
+        return None
+    return {job["id"]: job for job in jobs if isinstance(job, dict) and isinstance(job.get("id"), str)}
+
+
+def _end_link(links: dict, job_id: str, set_done: bool = True) -> None:
+    """Stop following a schedule; its Task is done unless another schedule still feeds it."""
+    link = links.pop(job_id, None)
+    _save_links(links)
+    if not link or not set_done:
+        return
+    if all(other.get("task_id") != link.get("task_id") for other in links.values()):
+        _run(["status", link["task_id"], "done"])
+        _forget_task_list()
+
+
+def _link_schedules(session_id: str, turn: dict) -> None:
+    """Decide, for each schedule created this turn, whether its runs are part of the Task for the request.
+
+    A decision model reads the request once. Without its answer, a Task the Agent kept follows the schedule.
+    """
+    with _lock:
+        request = _redacted(_requests.get(session_id, ""))
+    for schedule in turn["schedules"]:
+        task_id = turn["last_task"]
+        agent_status = turn["statuses"].get(task_id) if task_id else None
+        asked = {
+            "request": request[:_AUTOMATIC_DESCRIPTION_CHARS],
+            "schedule": {"recurrence": schedule["recurrence"], "run_limit": schedule["run_limit"]},
+            "task": {
+                "title": turn["titles"].get(task_id, "")[:500] if task_id else "",
+                "status": "in_progress" if agent_status == _KEPT else (agent_status or ""),
+            },
+        }
+        ok, output = _run(["schedule-intent"], stdin=json.dumps(asked), timeout=_INTENT_TIMEOUT_SECONDS)
+        try:
+            intent = json.loads(output).get("intent") if ok else None
+        except (ValueError, AttributeError):
+            intent = None
+        if intent is None:
+            intent = "runs" if agent_status == _KEPT else "setup"
+        if intent != "runs":
+            # Setting up the schedule was the whole job, so the Task for it is finished.
+            if task_id is not None and agent_status in (_KEPT, "in_progress"):
+                _run(["status", task_id, "done"])
+                turn["statuses"][task_id] = "done"
+                _forget_task_list()
+            continue
+        if task_id is None:
+            title = (schedule["name"] or " ".join(request.split()) or "Scheduled work")[:_AUTOMATIC_TITLE_CHARS]
+            ok, output = _run(["create", f"--title={title}", "--status=in_progress", "--origin=automatic"])
+            try:
+                task_id = json.loads(output).get("id") if ok else None
+            except (ValueError, AttributeError):
+                task_id = None
+            if not isinstance(task_id, str):
+                continue
+            turn["recorded"] = True
+            turn["task_ids"].add(task_id)
+            turn["last_task"] = task_id
+        elif agent_status not in (_KEPT, "in_progress"):
+            _run(["status", task_id, "in_progress"])
+        turn["statuses"][task_id] = _KEPT
+        links = _links()
+        links[schedule["job_id"]] = {"task_id": task_id}
+        _save_links(links)
+        _forget_task_list()
+
+
+def _settle_schedules(turn: dict | None) -> None:
+    """Finish the Tasks of schedules the Agent removed this turn, or that ended since the plugin last looked."""
+    links = _links()
+    if not links:
+        return
+    jobs = _jobs()
+    created = {schedule["job_id"] for schedule in turn["schedules"]} if turn is not None else set()
+    for job_id in list(links):
+        task_id = links[job_id].get("task_id")
+        if job_id in created:
+            continue
+        if turn is not None and job_id in turn["removed_jobs"]:
+            # A status the Agent set itself while removing the schedule stands.
+            _end_link(links, job_id, set_done=task_id not in turn["statuses"])
+        elif jobs is not None and (job_id not in jobs or jobs[job_id].get("state") == "completed"):
+            _end_link(links, job_id)
+
+
+def _record_scheduled_run(session_id: str, turn_id: str, job_id: str, turn: dict | None) -> bool:
+    """Note a scheduled run on the Task that follows its schedule. False when no Task does."""
+    links = _links()
+    link = links.get(job_id)
+    if not link or not isinstance(link.get("task_id"), str):
+        return False
+    task_id = link["task_id"]
+    job: dict = (_jobs() or {}).get(job_id) or {}
+    repeat = job.get("repeat")
+    repeat = repeat if isinstance(repeat, dict) else {}
+    completed, times, schedule = repeat.get("completed"), repeat.get("times"), job.get("schedule")
+    done: int = completed if isinstance(completed, int) else int(link.get("runs") or 0)
+    limit = times if isinstance(times, int) else None
+    once = isinstance(schedule, dict) and schedule.get("kind") == "once"
+    # Hermes counts a recurring run after it ends, and a one-off before it starts.
+    number = done if once else done + 1
+    with _lock:
+        reply = " ".join(_redacted(_replies.pop((session_id, turn_id), "")).split())
+    label = f"Run {number} of {limit}" if limit else f"Run {number}"
+    _run(["note", task_id], stdin=f"{label}: {reply[:_RUN_NOTE_CHARS]}" if reply else f"{label}.")
+    if turn is not None:
+        turn["task_ids"] = {task_id}
+        _attach_automatically(turn)
+    if once or (limit is not None and number >= limit):
+        _end_link(links, job_id)
+    else:
+        links[job_id] = {**link, "runs": number}
+        _save_links(links)
+        if turn is not None and turn["statuses"].get(task_id) not in (None, _KEPT, "in_progress", "failed"):
+            # The schedule has runs left, so the Task is not finished whatever this run set.
+            _run(["status", task_id, "in_progress"])
+    _forget_task_list()
+    return True
+
+
 def _new_turn() -> dict:
     return {
         "work": set(),
@@ -511,6 +775,15 @@ def _new_turn() -> dict:
         "attached": set(),
         "reminded": False,
         "held": False,
+        # The Task the Agent touched last, and the titles it gave the Tasks it created.
+        "last_task": None,
+        "titles": {},
+        # Schedules the Agent created this turn, and the ids of those it removed.
+        "schedules": [],
+        "removed_jobs": set(),
+        # The turn's tool calls, one short line each, for the question asked before a Task is closed.
+        "tools": [],
+        "tool_ids": set(),
     }
 
 
@@ -555,15 +828,23 @@ def _attach_automatically(turn: dict) -> list[str]:
     return failed
 
 
-def _settle_in_progress(turn: dict, status: str) -> None:
-    """Move each Task the Agent left in_progress this turn to `status`; a status it chose itself stays."""
-    settled = False
-    for task_id, current in sorted(turn["statuses"].items()):
-        if current == "in_progress":
-            _run(["status", task_id, status])
-            settled = True
-    if settled:
-        _forget_task_list()
+def _settle_in_progress(turn: dict, status: str, session_id: str = "", reply: str = "", trigger: str = "") -> None:
+    """Move each Task the Agent left in_progress this turn to `status`; a status it chose itself stays.
+
+    A Task it kept stays in_progress, unless the turn did not complete: then it is reopened too. A Task
+    about to be marked done is held back when Agent Barn finds its job is not finished.
+    """
+    settles = {"in_progress", _KEPT} if status == "open" else {"in_progress"}
+    settling = sorted(task_id for task_id, current in turn["statuses"].items() if current in settles)
+    if not settling:
+        return
+    holds = _held(session_id, turn, reply, trigger, settling) if status == "done" else {}
+    for task_id in settling:
+        held = holds.get(task_id)
+        if held == "in_progress":
+            continue
+        _run(["status", task_id, "open" if held == "open" else status])
+    _forget_task_list()
 
 
 def _record_automatically(session_id: str, turn: dict) -> list[str]:
@@ -611,6 +892,12 @@ def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="
     return f"{result if isinstance(result, str) else json.dumps(result)}\n\n{_IN_TURN_REMINDER}"
 
 
+def _on_post_llm_call(session_id="", turn_id="", assistant_response="", **_):
+    if isinstance(assistant_response, str) and not _side_run(session_id, turn_id):
+        with _lock:
+            _remember(_replies, (session_id, turn_id), assistant_response[:_TURN_TEXT_CHARS])
+
+
 def _on_session_end(session_id="", turn_id="", completed=False, **_):
     """Hermes fires this at the end of every turn, despite its name.
 
@@ -619,10 +906,26 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
     recorded automatically. Only what could not be attached is named on the next turn.
     """
     with _lock:
-        _side_runs.pop((session_id, turn_id), None)
+        side = _side_runs.pop((session_id, turn_id), None) or session_id == _BOOT_SESSION_ID
         turn = _turns.pop((session_id, turn_id), None)
         if _current_turn.get(session_id) == turn_id:
             del _current_turn[session_id]
+    if side:
+        return
+    scheduled = _CRON_SESSION.match(session_id or "")
+    if scheduled:
+        with _lock:
+            noted = session_id in _noted_runs
+            if not noted and scheduled.group(1) in _links():
+                _remember(_noted_runs, session_id, True)
+        if noted or _record_scheduled_run(session_id, turn_id, scheduled.group(1), turn):
+            return
+    if not scheduled:
+        if turn is not None and completed and turn["schedules"]:
+            _link_schedules(session_id, turn)
+        _settle_schedules(turn)
+    with _lock:
+        reply = _replies.pop((session_id, turn_id), "")
     if turn is None:
         return
     if completed and _unrecorded_work(turn):
@@ -630,7 +933,10 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
     elif turn["recorded"]:
         # A turn that failed or was interrupted leaves its Task open to pick up again, not in progress.
         failed = _attach_automatically(turn)
-        _settle_in_progress(turn, "done" if completed else "open")
+        if completed:
+            _settle_in_progress(turn, "done", session_id, reply, "cron" if scheduled else "")
+        else:
+            _settle_in_progress(turn, "open")
     else:
         return
     if failed:
@@ -663,8 +969,17 @@ def _task_lines(output: str) -> list[str]:
         shown = [task for task in items if isinstance(task, dict) and task.get("status") == task_status]
         for task in shown[: _DONE_TASKS_SHOWN if task_status == "done" else _OPEN_TASKS_SHOWN]:
             title = str(task.get("title", ""))[:120]
-            lines.append(f"- {task.get('id')} [{task_status}] {title}")
+            note = "" if task_status == "done" else _note_preview(task.get("latest_note"))
+            lines.append(f"- {task.get('id')} [{task_status}] {title}{note}")
     return lines
+
+
+def _note_preview(note) -> str:
+    text = " ".join(note.split()) if isinstance(note, str) else ""
+    if not text:
+        return ""
+    shown = text[:_LATEST_NOTE_CHARS] + ("…" if len(text) > _LATEST_NOTE_CHARS else "")
+    return f' (latest note: "{shown}")'
 
 
 def _open_task_lines() -> list[str]:
@@ -700,8 +1015,9 @@ def _on_pre_llm_call(session_id="", turn_id="", user_message="", parent_session_
         parts.append(
             "[Agent Barn] Your open and latest finished Tasks:\n"
             + "\n".join(lines)
-            + "\nIf the request continues one of these, keep using it with the agentbarn_task tool (set a done "
-            "one back to in_progress) rather than creating another."
+            + "\nKeep using one of these only when the request is the same piece of work: set it to in_progress "
+            "with the agentbarn_task tool, with keep: true if the work still continues after this turn. A new "
+            "request gets its own Task, even while another is in progress."
         )
     with _lock:
         reminder = _next_turn_reminders.pop(session_id, None)
@@ -725,5 +1041,6 @@ def register(ctx):
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("transform_tool_result", _on_transform_tool_result)
+    ctx.register_hook("post_llm_call", _on_post_llm_call)
     ctx.register_hook("on_session_end", _on_session_end)
     ctx.register_hook("pre_verify", _on_pre_verify)
