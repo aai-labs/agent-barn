@@ -42,7 +42,7 @@ class MemorySpendLogs:
 
 
 class MemoryGeneration:
-    def get_generation(self, generation_id):
+    def get_generation(self, generation_id, api_key):
         return {"total_cost": "0.012345678901"}
 
 
@@ -56,6 +56,7 @@ def test_memory_sync_replay_and_healing_produce_one_exact_organization_cost():
             MemoryGeneration(),
             "",
             frozenset({"memory-hash"}),
+            openrouter_api_key=lambda: "",
         )
         with when("the same model charge is synced, healed, and replayed"):
             synchronizer.run_once()
@@ -124,6 +125,7 @@ def test_registered_team_memory_key_is_attributed_only_to_its_own_bank():
             logs,
             MemoryGeneration(),
             "",
+            openrouter_api_key=lambda: "",
             memory_key_source=lambda: {"memory-hash": context.organization.id},
         )
         synchronizer.run_once()

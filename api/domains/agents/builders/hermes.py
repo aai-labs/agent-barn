@@ -70,6 +70,7 @@ _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 # Turns one Hermes run may take before the runtime stops it. An Agent's own
 # `max_turns` replaces it; a review of a large pull request needs more than this.
 HERMES_DEFAULT_MAX_TURNS = 50
+HERMES_SESSION_RETENTION_DAYS = 30
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # Hermes shows a first-message onboarding notice whenever this variable is
@@ -176,6 +177,10 @@ def _hermes_config_core(
         # Deliver scheduled results as the agent wrote them, without Hermes'
         # "Cronjob Response" header and "stop reminder" footer.
         "cron": {"wrap_response": False},
+        # Hermes keeps every session in state.db unless pruned; frequent crons grew one
+        # Agent's past 1 GB, where checkpoints lag and corruption costs the most. Pruning
+        # runs at gateway start, at most daily, and only touches ended sessions.
+        "sessions": {"auto_prune": True, "retention_days": HERMES_SESSION_RETENTION_DAYS},
         "group_sessions_per_user": False,
         "plugins": {
             "enabled": enabled_plugins,

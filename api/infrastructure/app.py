@@ -26,6 +26,7 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
+from api.domains.llm_providers.lookup import OpenRouterKeyLookup
 from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.restore_points.reconciliation import RestorePointReconciler
@@ -186,6 +187,7 @@ class AppModule(Module):
         openrouter: OpenRouterClient,
         memory_keys: MemoryKeyRepository,
         llm_budgets: OrganizationLlmBudgetService,
+        openrouter_keys: OpenRouterKeyLookup,
     ) -> CostSynchronizer:
         return CostSynchronizer(
             repository=repository,
@@ -196,6 +198,7 @@ class AppModule(Module):
             memory_key_hashes=config.memory_cost_key_hashes,
             memory_key_source=memory_keys.hashes,
             on_healed=llm_budgets.apply_healed_spend,
+            openrouter_api_key=openrouter_keys.api_key,
         )
 
     @provider

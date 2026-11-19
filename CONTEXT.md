@@ -168,6 +168,10 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**LLM Provider Connection**:
+A model provider account Agent Barn reaches models through, with the key it uses, kept by Platform Administrators for every Organization. Agents never hold its key; they reach it through the model proxy with their own keys.
+_Avoid_: provider key, LLM credential, model provider setting
+
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend
@@ -375,6 +379,10 @@ _Avoid_: training job, sync, import
 **Organization Conventions**:
 Rules every Agent in an Organization should follow whatever its role, such as time zones, approval before changes, and message format. A Playbook Extraction proposes them; people review them and add them to a marked section of Organization Templates' AGENTS.md. They are not a Skill.
 _Avoid_: playbook, org prompt, global instructions
+
+**Decision**:
+One call in which a platform feature asks a decision model typed questions (yes/no, choice, score) about state derived from an Agent's data and gets calibrated answers back. It is billed to that Agent's model key. Which model answers is a Platform setting.
+_Avoid_: classification job, LLM judgement, noul, predicate
 
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.

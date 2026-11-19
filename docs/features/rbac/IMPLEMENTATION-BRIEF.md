@@ -35,6 +35,19 @@ Organization roles confer no authority on these Platform routes.
 The Platform Playbook Extraction model (`/platform/settings/playbooks`) follows the
 same rule; see [Playbooks](../playbooks.md#model-and-billing).
 
+### Platform LLM Provider settings
+
+`/platform/settings/llm-providers` routes require a current Platform Administrator
+(`require_platform_admin` and `PlatformAdminService.require_platform_admin`);
+Organization roles confer no authority on them. `GET /platform/settings/llm-providers`
+lists the connections that are not deleted, each with its provider, base URL and key
+status, never the key or its ciphertext. `POST /platform/settings/llm-providers` adds a
+known provider's, Azure or Custom connection after the provider accepts its key, and
+`PUT .../{slug}/key` replaces any live connection's key the same way. `DELETE .../{slug}`
+deletes a connection other than OpenRouter and purges its key. Every write refuses a
+read-only Personal API Key, and a malformed request gets a fixed `422` that does not echo
+the body.
+
 ### Organization Roles
 
 | Role                | Authority                                                                                                                          |

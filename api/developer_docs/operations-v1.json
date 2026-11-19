@@ -116,6 +116,11 @@
   ],
   [
     "DELETE",
+    "/platform/settings/llm-providers/{slug}",
+    "delete_connection_platform_settings_llm_providers__slug__delete"
+  ],
+  [
+    "DELETE",
     "/platform/skills/{skill_id}",
     "delete_platform_skill_platform_skills__skill_id__delete"
   ],
@@ -916,6 +921,21 @@
   ],
   [
     "GET",
+    "/platform/settings/decisions",
+    "read_settings_platform_settings_decisions_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/decisions/models",
+    "list_models_platform_settings_decisions_models_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/llm-providers",
+    "list_connections_platform_settings_llm_providers_get"
+  ],
+  [
+    "GET",
     "/platform/settings/organizations",
     "read_organization_settings_platform_settings_organizations_get"
   ],
@@ -1561,6 +1581,11 @@
   ],
   [
     "POST",
+    "/platform/settings/llm-providers",
+    "add_connection_platform_settings_llm_providers_post"
+  ],
+  [
+    "POST",
     "/platform/skills",
     "create_platform_skill_platform_skills_post"
   ],
@@ -1693,6 +1718,16 @@
     "PUT",
     "/platform/settings/billing",
     "update_billing_settings_platform_settings_billing_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/decisions",
+    "update_settings_platform_settings_decisions_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/llm-providers/{slug}/key",
+    "replace_key_platform_settings_llm_providers__slug__key_put"
   ],
   [
     "PUT",

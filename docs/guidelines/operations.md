@@ -76,6 +76,28 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+### LiteLLM salt key
+
+LiteLLM's model store is on (`store_model_in_db: true`), so model routes the API registers persist in LiteLLM's database with their provider keys encrypted under `LITELLM_SALT_KEY`. The chart keeps the salt in its own `litellm-salt` Secret because the API reads the `litellm` Secret.
+
+- Generate one value per environment with `openssl rand -hex 32` and add it before the deploy that introduces it: GitHub secrets `LITELLM_SALT_KEY` (k3s), `STAGING_LITELLM_SALT_KEY` (staging) and `PUBLIC_LITELLM_SALT_KEY` (public), and `.env` locally. Helmfile fails with `LITELLM_SALT_KEY is required` without it.
+- Adding it does not affect running Agents: LiteLLM stores virtual keys as hashes, not encrypted.
+- Never change it. LiteLLM cannot decrypt stored provider keys under a different value. If it was changed, restore the previous value; otherwise every stored provider key must be saved again so LiteLLM re-encrypts it.
+- The config-file OpenRouter route (`OPENROUTER_API_KEY`) stays at `order: 2` and is rendered only while that key is set. LiteLLM sends requests to the lowest-order healthy route, so a healthy database route at `order: 1` is used instead.
+
+### OpenRouter key
+
+The OpenRouter key is saved by a Platform Administrator in Platform Admin settings. `OPENROUTER_API_KEY` is optional: while it is set, LiteLLM keeps a config-file route with it and the API falls back to it until a key is saved. A new environment leaves it unset and has no OpenRouter key until one is saved.
+
+Moving an environment off the GitHub secret needs a Platform Administrator of that environment and someone who can edit the repository's Actions secrets:
+
+1. Deploy as usual with the secret still set. Agents keep using it through LiteLLM's config-file route.
+2. The Platform Administrator opens Platform Admin settings at `/dashboard/platform/settings` on the environment's web app (`STAGING_WEB_APP_URL` for staging, `WEB_APP_URL` for k3s, https://cloud.agentbarn.dev/dashboard/platform/settings for public), pastes the key under OpenRouter and saves. OpenRouter checks the key and LiteLLM switches to it at once; the page then shows its last four characters.
+3. Once staging and k3s both show a saved key, delete `OPENROUTER_API_KEY` at https://github.com/aai-labs/agent-barn/settings/secrets/actions. Both environments read that one secret. Once public shows a saved key, delete `PUBLIC_OPENROUTER_API_KEY` there too.
+4. The next deploy of each environment renders LiteLLM without the config-file route, and the page no longer reports the environment key as configured.
+
+Deleting a secret before step 2 leaves LiteLLM with no OpenRouter route, so every Agent call fails until a Platform Administrator saves a key. Locally, `OPENROUTER_API_KEY` in `.env` is optional and works the same way.
+
 ## Public signup configuration
 
 Configure public self-signup in **Platform settings → Signup & trials**. Sign-up grants the
@@ -333,6 +355,13 @@ The Playbook Extraction model is chosen at Platform Settings. Until then the API
 and Helm deployments use the default. The worker calls LiteLLM directly for these runs, so its
 Deployment and Compose service receive `LITELLM_BASE_URL` like the API, and the Compose worker also
 receives `MEMORY_VIEW_BASE_URL` to read long-term memories (Helm supplies it through the API Secret).
+
+The decision model is chosen at Platform Settings by name. `DECISION_MODELS` (JSON, name to LiteLLM
+slug) lists the choices and `DECISION_DEFAULT_MODEL` (`jev` when unset) applies until then; the API
+refuses to start if the default names no entry. Compose reads both from `.env`, and Helm deployments
+use the defaults. Decision calls use LiteLLM's System One route, which needs LiteLLM v1.104.3 or later.
+Data-collection and zero-data-retention preferences for these calls are set on the OpenRouter account;
+see [`../features/decisions.md`](../features/decisions.md#data-retention).
 
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
@@ -705,13 +734,14 @@ kubeconfig portably with
 | `PUBLIC_POSTGRES_LITELLM_PASSWORD` | New |
 | `PUBLIC_POSTGRES_FIRECRAWL_PASSWORD` | New |
 | `PUBLIC_LITELLM_MASTER_KEY` | New (`sk-` + random) |
+| `PUBLIC_LITELLM_SALT_KEY` | New (`openssl rand -hex 32`). Never change it once set |
 | `PUBLIC_SECRET_SIGNING_KEY` | New |
 | `PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY` | New Fernet key |
 | `PUBLIC_PLATFORM_ADMIN_CREDENTIALS` | `email:password` (API policy: 8+, upper, lower, digit; `openssl rand -hex` is not enough) |
 | `PUBLIC_GRAFANA_ADMIN_PASSWORD` | Product Grafana (not cluster Grafana) |
 | `PUBLIC_MONITORING_WEB_PASSWORD` | Basic auth on Prometheus/Alertmanager; 12+ alphanumeric (`openssl rand -hex 16`) |
 | `PUBLIC_FIRECRAWL_API_KEY` | New (this cluster's Firecrawl) |
-| `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
+| `PUBLIC_OPENROUTER_API_KEY` | Optional. Only until a Platform Administrator saves the key; see [OpenRouter key](#openrouter-key). Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
@@ -771,7 +801,7 @@ Documentation-only changes do not change a service image and do not require a se
   deployable on the shared cluster by the namespace-scoped deployer. Note the
   dashboards ConfigMap is deliberately not labeled `grafana_dashboard` — the
   cluster's central Grafana imports that label from every namespace.
-- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, and `MONITORING_WEB_PASSWORD` / `STAGING_MONITORING_WEB_PASSWORD` (basic auth on Prometheus and Alertmanager, which agent pods can otherwise reach in-namespace; 12+ alphanumeric, e.g. `openssl rand -hex 16`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric reuses the existing `OPENROUTER_API_KEY` secret (the API polls `GET /key` for the key's `limit_remaining`); for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
+- Required GitHub Actions config: secrets `SLACK_ALERTS_WEBHOOK_URL` (incoming webhook for `#alerts`), `GRAFANA_ADMIN_PASSWORD`, and `MONITORING_WEB_PASSWORD` / `STAGING_MONITORING_WEB_PASSWORD` (basic auth on Prometheus and Alertmanager, which agent pods can otherwise reach in-namespace; 12+ alphanumeric, e.g. `openssl rand -hex 16`); variable `GRAFANA_HOST` (DNS must resolve for the http01 challenge). The credits metric polls `GET /key` for the key's `limit_remaining`, using the OpenRouter key saved in Platform Admin settings, or the `OPENROUTER_API_KEY` secret while none is saved; for `OpenRouterCreditsLow` to be meaningful, set a credit limit on that key at openrouter.ai — an unlimited key reports `+Inf`.
 - Monitoring verification and its prerequisites live in
   [`testing.md`](testing.md#verification-commands). CI selects
   `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.
