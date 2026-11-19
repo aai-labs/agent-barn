@@ -27,6 +27,7 @@ from api.domains.agents.builders.restore_point import (
     restore_point_resource_name,
 )
 from api.domains.agents.error_messages import friendly_k8s_error
+from api.domains.agents.exceptions import refuse_on_bot
 from api.domains.agents.models import (
     Agent,
     AgentRestorePoint,
@@ -512,6 +513,7 @@ class RestorePointService:
         while that update runs.
         """
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        refuse_on_bot(agent)
         origin = RestorePointOrigin.PRE_UPGRADE if managed_update else RestorePointOrigin.MANUAL
 
         self._await_agent_volume_release(agent.id)
@@ -799,6 +801,7 @@ class RestorePointService:
         allowed while that update runs, and it skips the safety copy (see below).
         """
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        refuse_on_bot(agent)
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
 
         self._await_agent_volume_release(agent.id)
@@ -952,6 +955,7 @@ class RestorePointService:
             scalar_updates=resolved.scalar_updates,
             restored_configuration_id=target.id,
         )
+        self.selection.apply_parent_settings_to_bots(agent.id, selection.model_dump(exclude_unset=True))
 
     def apply_recorded_configuration(
         self,
@@ -1078,7 +1082,7 @@ class RestorePointService:
         restore_point_id: UUID,
         context: CurrentUserContext,
     ) -> None:
-        self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        refuse_on_bot(self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE))
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
 
         self.reconcile_agent(agent_id)

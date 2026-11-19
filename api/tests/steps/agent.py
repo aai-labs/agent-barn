@@ -92,6 +92,8 @@ def there_is_an_agent(
     created_by_user_id: UUID | None = None,
     creator_membership_id: UUID | None = None,
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO,
+    parent_agent_id: UUID | None = None,
+    bot_slot: int | None = None,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -125,6 +127,8 @@ def there_is_an_agent(
             agent_type=agent_type,
             agent_template_id=template.id,
             approval_mode=approval_mode,
+            parent_agent_id=parent_agent_id,
+            bot_slot=bot_slot,
         )
 
         if deleted:

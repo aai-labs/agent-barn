@@ -26,6 +26,7 @@ export const agentsKey = {
     [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
   diagnostics: (org: string, id: string) => [..._agentsKeyBase.detail(id), "diagnostics", org] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
+  bots: (id: string) => [..._agentsKeyBase.detail(id), "bots"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
   llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
   llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
@@ -71,6 +72,24 @@ const AGENT_COLORS = [
   ["#4338ca", "#5b21b6"],
   ["#0f766e", "#0e7490"],
 ];
+
+export const podIdOf = (agent: Pick<Agent, "id" | "parentAgentId">) => agent.parentAgentId ?? agent.id;
+
+export function withBotsAfterTheirParents<T extends Pick<Agent, "id" | "parentAgentId">>(agents: T[]): T[] {
+  const parents = agents.filter((agent) => !agent.parentAgentId);
+  const placed = parents.flatMap((parent) => [parent, ...agents.filter((agent) => agent.parentAgentId === parent.id)]);
+  return [...placed, ...agents.filter((agent) => !placed.includes(agent))];
+}
+
+export function agentLabels(agents: Pick<Agent, "id" | "name" | "parentAgentId">[]): Map<string, string> {
+  const names = new Map(agents.map((agent) => [agent.id, agent.name]));
+  return new Map(
+    agents.map((agent) => {
+      const parent = agent.parentAgentId ? names.get(agent.parentAgentId) : undefined;
+      return [agent.id, parent ? `${agent.name} · ${parent}` : agent.name];
+    }),
+  );
+}
 
 export function canAgent(
   agent: Pick<Agent, "allowedActions"> | null | undefined,

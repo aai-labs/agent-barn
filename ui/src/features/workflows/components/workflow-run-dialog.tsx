@@ -15,8 +15,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents } from "@/features/agents/hooks/use-agents";
-import { canAgent } from "@/features/agents/utils";
+import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
+import { agentLabels, canAgent, withBotsAfterTheirParents } from "@/features/agents/utils";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useWorkflowRunActions } from "../hooks/use-workflow-runs";
@@ -41,9 +41,10 @@ function RunForm({
   onStarted: (run: WorkflowRun) => void;
 }) {
   const actions = useWorkflowRunActions();
-  const { agents, isLoading, error: agentsError, refetch } = useAgents();
+  const { agents, isLoading, error: agentsError, refetch } = useAllAgents({ includeBots: true });
+  const labels = agentLabels(agents);
   // A run needs agent.update on a running Agent; the server checks again on start.
-  const updatable = agents.filter((agent) => canAgent(agent, "agent.update"));
+  const updatable = withBotsAfterTheirParents(agents).filter((agent) => canAgent(agent, "agent.update"));
   const runnable = updatable.filter((agent) => agent.status === "RUNNING");
   const offered = (id?: string | null) =>
     id && runnable.some((agent) => agent.id === id) ? id : null;
@@ -170,7 +171,7 @@ function RunForm({
           ) : (
             <AgentPillPicker
               labelledBy="workflow-run-as"
-              agents={runnable}
+              agents={runnable.map((agent) => ({ id: agent.id, name: labels.get(agent.id) ?? agent.name }))}
               value={agentId}
               onChange={(id) => id && chooseAgent(id)}
               // An upload belongs to the Agent it started on, so the choice waits for it.

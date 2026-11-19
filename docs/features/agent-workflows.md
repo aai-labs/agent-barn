@@ -225,7 +225,8 @@ Agent is preselected when it is among them; `?agent={id}` preselects another and
 takes precedence. File inputs are chosen from the selected Agent's files, so they
 unlock once an Agent is chosen and clear when it changes. A started run opens on
 the Organization page. The dialog and the editor's default-Agent choices both
-read the first 50 Agents of the Organization.
+read every Agent the viewer can see, Bots included (`include_bots=true`): each
+Bot follows its Parent Agent and is named "Bot · Parent Agent".
 
 An Agent's Workflows tab, listed under Work in the Agent's navigation panel,
 shows only that Agent's runs and the approvals waiting on them, and links to the
@@ -252,8 +253,7 @@ default Agent (any Agent the author can see, or none), the steps and the inputs.
 Default Agent choices are pills: No default, the first four Agents and the current
 default when it is past them. The rest sit behind a "+N more" pill that opens a
 searchable list. The Run dialog's "Run as" uses the same picker over the running
-Agents the viewer can update, without a No default pill. Both cover the first 50
-Agents the page loads.
+Agents the viewer can update, without a No default pill.
 Each step is a card with its number, move up/down controls, a remove control and
 one text box, its prompt: what the Agent should do and produce. Every step is
 open at once. A step has no name field; editing the prompt sets the stored step

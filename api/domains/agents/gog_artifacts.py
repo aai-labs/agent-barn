@@ -103,6 +103,9 @@ set -eu
 umask 077
 
 if [ -z "${{{token_env}:-}}" ] || [ -z "${{AF_GATEWAY_TOKEN_URL:-}}" ]; then
+  if [ -f /app/config/bots.json ]; then
+    exec {_REAL_GOG} "$@"
+  fi
   echo "gog: no Google Workspace credential is configured for this agent" >&2
   exit 78
 fi

@@ -12,6 +12,7 @@ restore-point service, because it already depends on it.
 import fnmatch
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -108,6 +109,19 @@ class SelectionValidator:
     skill_repository: SkillRepository
     organization_lookup: OrganizationLookupService
     agent_settings_lookup: AgentSettingsLookupService
+
+    def apply_parent_settings_to_bots(self, parent_id: UUID, updated: Mapping[str, Any]) -> None:
+        if not {"approval_mode", "max_turns"} & updated.keys():
+            return
+        approval_mode = updated.get("approval_mode")
+        for bot in self.repository.find_live_bots(parent_id):
+            if "max_turns" in updated:
+                bot.max_turns = updated["max_turns"]
+            if approval_mode is not None and (bot.approval_mode == CommandApprovalMode.MANUAL) != (
+                approval_mode == CommandApprovalMode.MANUAL
+            ):
+                bot.approval_mode = approval_mode
+            self.repository.save(bot)
 
     def resolve_skill_pins(
         self,
