@@ -5,7 +5,12 @@ import { Hourglass } from "lucide-react";
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 
 import { useAwaitingApprovals } from "../hooks/use-workflow-runs";
-import { pendingApproval, runTitle } from "../run-schemas";
+import {
+  pendingApproval,
+  runTitle,
+  waitingStepApproval,
+  waitsOnViewer,
+} from "../run-schemas";
 
 function waited(since: string): string {
   const minutes = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 60_000));
@@ -26,11 +31,12 @@ export function WorkflowApprovalInbox({
   const runs = useAwaitingApprovals(agentId);
   const items = (runs.data?.items ?? []).flatMap((run) => {
     const approval = pendingApproval(run);
-    return approval ? [{ run, approval }] : [];
+    const stepApproval = waitingStepApproval(run);
+    return approval || stepApproval ? [{ run, approval, stepApproval }] : [];
   });
   if (items.length === 0) return null;
   // Viewers see what is waiting, but only those who may decide are told it waits on them.
-  const title = items.some(({ run }) => run.allowedActions.includes("decide"))
+  const title = items.some(({ run }) => waitsOnViewer(run))
     ? "Waiting on your approval"
     : "Waiting on approval";
   return (
@@ -54,7 +60,7 @@ export function WorkflowApprovalInbox({
         </span>
       </div>
       <ul>
-        {items.map(({ run, approval }) => (
+        {items.map(({ run, approval, stepApproval }) => (
           <li
             key={run.id}
             className="flex items-center gap-4 border-b border-[var(--line)] px-6 py-4 last:border-0"
@@ -63,11 +69,22 @@ export function WorkflowApprovalInbox({
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">{runTitle(run)}</p>
               <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--ink-3)]">
-                <span className="max-w-full truncate font-mono text-[var(--ink-2)]">
-                  {approval.command}
-                </span>
+                {approval ? (
+                  <span className="max-w-full truncate font-mono text-[var(--ink-2)]">
+                    {approval.command}
+                  </span>
+                ) : (
+                  <span className="max-w-full truncate text-[var(--ink-2)]">
+                    Approval step {stepApproval!.stepIndex + 1} ·{" "}
+                    {run.steps[stepApproval!.stepIndex]?.name}
+                  </span>
+                )}
                 <span aria-hidden="true">·</span>
-                {approval.state === "LIVE" ? (
+                {!approval ? (
+                  <span className="font-semibold">
+                    Waiting · {waited(stepApproval!.createdAt)}
+                  </span>
+                ) : approval.state === "LIVE" ? (
                   <span className="font-semibold" style={{ color: "var(--warn)" }}>
                     Live · answer by{" "}
                     {new Date(approval.liveUntil).toLocaleTimeString([], {

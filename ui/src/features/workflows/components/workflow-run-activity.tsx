@@ -86,10 +86,19 @@ type Tone = "ok" | "warn" | "err" | "muted";
 /** How an event reads at a glance: green progress, amber waiting on a person, red trouble. */
 function eventTone(kind: string, detail: string): Tone {
   if (kind === "APPROVAL_DECIDED") return detail.startsWith("Command declined") ? "err" : "ok";
-  if (["STEP_COMPLETED", "APPROVAL_RELEASED"].includes(kind)) return "ok";
-  if (["APPROVAL_REQUESTED", "APPROVAL_PARKED", "NEEDS_ATTENTION", "CANCEL_REQUESTED"].includes(kind))
+  if (["STEP_COMPLETED", "APPROVAL_RELEASED", "APPROVAL_STEP_APPROVED"].includes(kind)) return "ok";
+  if (
+    [
+      "APPROVAL_REQUESTED",
+      "APPROVAL_PARKED",
+      "NEEDS_ATTENTION",
+      "CANCEL_REQUESTED",
+      "APPROVAL_STEP_WAITING",
+      "CHANGES_REQUESTED",
+    ].includes(kind)
+  )
     return "warn";
-  if (["ATTEMPT_FAILED", "FENCED"].includes(kind)) return "err";
+  if (["ATTEMPT_FAILED", "FENCED", "APPROVAL_STEP_REJECTED"].includes(kind)) return "err";
   return "muted";
 }
 

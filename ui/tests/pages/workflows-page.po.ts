@@ -39,7 +39,7 @@ export class WorkflowsPage {
     return this.editor().getByLabel(`Step ${index} instructions`, { exact: true });
   }
   async addStep() {
-    await this.editor().getByRole("button", { name: "Add step" }).click();
+    await this.editor().getByRole("button", { name: "Add agent step" }).click();
   }
   async addInput() {
     await this.editor().getByRole("button", { name: "Add input" }).click();

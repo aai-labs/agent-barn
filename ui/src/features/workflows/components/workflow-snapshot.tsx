@@ -45,11 +45,23 @@ export function WorkflowSnapshot({ version }: { version: WorkflowVersion }) {
             <>
               <div>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ink-3)]">
-                  What the Agent should do
+                  {step.type === "approval"
+                    ? "Approval step · what the person deciding should check"
+                    : "What the Agent should do"}
                 </h3>
                 <p className="whitespace-pre-wrap text-sm leading-6">
                   {step.goal}
                 </p>
+                {step.type === "approval" && (
+                  <p className="mt-3 text-sm text-[var(--ink-3)]">
+                    Allowed decisions:{" "}
+                    {(step.allowedDecisions ?? ["approve", "request_changes", "reject"])
+                      .map((decision) =>
+                        ({ approve: "Approve", request_changes: "Request changes", reject: "Reject" })[decision],
+                      )
+                      .join(", ")}
+                  </p>
+                )}
               </div>
               {step.completionCriteria && (
                 <div className="rounded-xl bg-[var(--bg-soft)] p-4">
