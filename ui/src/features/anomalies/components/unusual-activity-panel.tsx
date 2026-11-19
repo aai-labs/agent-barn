@@ -10,7 +10,7 @@ import { Fact } from "@/features/spend-limits/components/fact";
 import { useAnomalyDetection, useUpdateAnomalyDetection } from "../hooks/use-anomaly-detection";
 import { BASELINE_DAYS } from "../utils";
 
-const WHAT_IT_DOES = `Each Agent's activity is compared with what is normal for that Agent over the last ${BASELINE_DAYS} days, and anything unusual is listed on the Agent's Anomalies tab.`;
+const WHAT_IT_DOES = `Each Agent's activity is compared with what is normal for that Agent over the last ${BASELINE_DAYS} days, and anything unusual is listed on the Agent's Unusual activity tab.`;
 // Said before anyone turns checks on, so judging what was flagged later needs no second
 // consent.
 const BILLING = "Checks may use an AI model provider, and any cost is billed to that Agent's spend.";

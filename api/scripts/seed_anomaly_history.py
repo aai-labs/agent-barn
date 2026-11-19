@@ -238,7 +238,7 @@ def main() -> None:
     if args.spike:
         seed_spike(delegate, agent.id, now)
         summary = checks.run_checks(now)
-        print(f"Seeded a spike and checked {summary.agents} agents. See the Agent's Anomalies tab.")
+        print(f"Seeded a spike and checked {summary.agents} agents. See the Agent's Unusual activity tab.")
 
 
 if __name__ == "__main__":
