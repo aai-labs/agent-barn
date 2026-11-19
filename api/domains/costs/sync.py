@@ -103,7 +103,7 @@ class CostSyncSpendLogSource(Protocol):
 
 
 class CostSyncGenerationSource(Protocol):
-    def get_generation(self, generation_id: str) -> dict | None: ...
+    def get_generation(self, generation_id: str, api_key: str) -> dict | None: ...
 
 
 @dataclass
@@ -132,6 +132,7 @@ class CostSynchronizer:
     # a limit that depends on it (credit, less what the proxy never counted) is pushed
     # now rather than at the next reconciliation.
     on_healed: Callable[[set[UUID]], None] | None = None
+    openrouter_api_key: Callable[[], str] = field(kw_only=True)
 
     def run_once(self) -> CostSyncResult:
         started = time.monotonic()
@@ -363,6 +364,7 @@ class CostSynchronizer:
         truncated = False
         seen: set[str] = set()
         organizations_healed: set[UUID] = set()
+        api_key = self.openrouter_api_key()
 
         while True:
             if self._out_of_time(started):
@@ -377,7 +379,7 @@ class CostSynchronizer:
 
             with ThreadPoolExecutor(max_workers=COST_HEAL_CONCURRENCY) as executor:
                 futures = {
-                    executor.submit(self._heal_one, candidate.request_id, started): candidate
+                    executor.submit(self._heal_one, candidate.request_id, started, api_key): candidate
                     for candidate in batch
                     if not self._out_of_time(started)
                 }
@@ -411,12 +413,12 @@ class CostSynchronizer:
             truncated=result.truncated or truncated,
         )
 
-    def _heal_one(self, request_id: str, started: float) -> tuple[str, Decimal]:
+    def _heal_one(self, request_id: str, started: float, api_key: str) -> tuple[str, Decimal]:
         """The outcome, and the cost written back when healed."""
         if self._out_of_time(started):
             return "failed", Decimal(0)
         try:
-            generation = self.generations.get_generation(request_id)
+            generation = self.generations.get_generation(request_id, api_key)
         except Exception as exc:
             logger.warning("Cost healing lookup failed for %s: %s", request_id, exc)
             return "failed", Decimal(0)

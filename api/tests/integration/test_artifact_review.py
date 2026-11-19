@@ -31,7 +31,7 @@ from api.tests.integration.test_artifacts import (
     storage,  # noqa: F401
 )
 from api.tests.integration.test_workflow_runs import attempt, start
-from api.tests.integration.test_workflows import _GIVEN, auth, base
+from api.tests.integration.test_workflows import _GIVEN, agent_base, auth, base
 
 RUNTIME_PATH = "/api/v1/agent-artifacts/runtime/artifacts"
 
@@ -63,7 +63,7 @@ def test_workflow_file_tool_never_receives_completion_authority(storage):  # noq
         assert_that(response.status_code, equal_to(200), response.text)
         # Human write authority cannot masquerade as a runtime workflow publication.
         human = context.client.put(
-            base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=CONTENT
+            agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=CONTENT
         )
         assert_that(human.status_code, equal_to(403))
 
@@ -271,7 +271,7 @@ def test_overlapping_publication_is_retryable_without_waiting_or_poisoning(stora
             assert_that(first.result(timeout=10).status_code, equal_to(200))
         assert_that(len(writes), equal_to(1))
         assert_that(
-            context.client.get(base(context) + f"/artifacts/{row['id']}", headers=auth(context)).json()["state"],
+            context.client.get(agent_base(context) + f"/artifacts/{row['id']}", headers=auth(context)).json()["state"],
             equal_to("READY"),
         )
 
@@ -331,7 +331,7 @@ def test_human_workflow_publication_is_rejected_before_request_body(storage):  #
             yield b"unreachable"
 
         response = context.client.put(
-            base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=unread_body()
+            agent_base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=unread_body()
         )
         assert_that(response.status_code, equal_to(403), response.text)
 

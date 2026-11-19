@@ -2,7 +2,7 @@
 ledger, the check's read cursors and the Anomaly records
 
 Revision ID: 92996d692c89
-Revises: 38de1199ae19
+Revises: e4b439a1c7d2
 Create Date: 2026-11-16
 
 Organizations opt in (`organization_anomaly_settings.enabled`, no row means off). A
@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.schema import SchemaItem
 
 revision: str = "92996d692c89"
-down_revision: str | Sequence[str] | None = "38de1199ae19"
+down_revision: str | Sequence[str] | None = "e4b439a1c7d2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

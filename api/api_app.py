@@ -54,12 +54,15 @@ from api.domains.conversations.routes import conversations_router
 from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.custom_api.routes import custom_api_router
+from api.domains.decisions.routes import platform_decisions_router
 from api.domains.discovery.routes import router as discovery_router
 from api.domains.environment_health.routes import platform_environment_health_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.file_sync.routes import agent_file_sync_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
+from api.domains.llm_providers.lookup import OpenRouterKeyLookup
+from api.domains.llm_providers.routes import platform_llm_providers_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
 from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
@@ -167,6 +170,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agent_settings_router)
     subapi.include_router(anomalies_router)
     subapi.include_router(platform_memory_router)
+    subapi.include_router(platform_llm_providers_router)
     subapi.include_router(platform_agent_sizes_router)
     subapi.include_router(platform_tiers_router)
     subapi.include_router(platform_organization_tier_router)
@@ -213,6 +217,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(tasks_router)
     subapi.include_router(playbook_extractions_router)
     subapi.include_router(platform_playbooks_router)
+    subapi.include_router(platform_decisions_router)
     subapi.include_router(integrations_router)
     subapi.include_router(sharepoint_sign_in_router)
     subapi.include_router(microsoft_callback_router)
@@ -244,10 +249,11 @@ def create_app(injector: Injector | None = None):
             CommunicationOperationalRepository,
             Injected(CommunicationOperationalRepository),
         ],
+        openrouter_keys: Annotated[OpenRouterKeyLookup, Injected(OpenRouterKeyLookup)],
     ):
         refresh_database_gauge(db.engine)
         refresh_agents_in_error(agent_service.count_agents_in_error)
-        refresh_openrouter_credits()
+        refresh_openrouter_credits(openrouter_keys.api_key)
         refresh_communication_metrics(communication_operations)
         return Response(
             content=render_metrics(REGISTRY, PROBE_REGISTRY, http_registry),

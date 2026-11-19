@@ -1,4 +1,4 @@
-"""Durable WF02 execution records. Each attempt runs as a new session in the owning Agent,
+"""Durable WF02 execution records. Each attempt runs as a new session in the Agent chosen for the run,
 except one continuing a late approval decision, which resumes its step's session."""
 
 from datetime import datetime
@@ -11,7 +11,7 @@ from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field as SqlField
 
-from api.domains.workflows.models import StrictDTO, Text
+from api.domains.workflows.models import Name, StrictDTO, Text
 from api.infrastructure.postgres.models import BaseModel
 
 TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
@@ -32,7 +32,11 @@ InputValue = StrictStr | StrictInt | StrictFloat | StrictBool | WorkflowFileInpu
 
 
 class WorkflowRunCreate(StrictDTO):
+    workflow_id: UUID
+    # The Agent that runs every step of this run.
+    agent_id: UUID
     version_id: UUID
+    title: Name | None = None
     client_request_id: UUID
     inputs: dict[str, InputValue] = Field(default_factory=dict, max_length=30)
 
@@ -59,7 +63,9 @@ class WorkflowRun(BaseModel, table=True):
         ),
     )
     workflow_id: UUID = SqlField(foreign_key="workflow.id", ondelete="CASCADE", index=True)
+    agent_id: UUID = SqlField(foreign_key="agent.id", ondelete="CASCADE", index=True)
     version_id: UUID = SqlField(foreign_key="workflow_version.id", ondelete="CASCADE")
+    title: str | None = None
     initiating_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
     initiating_membership_id: UUID | None = SqlField(
         default=None, foreign_key="user_organization.id", ondelete="SET NULL"
@@ -216,6 +222,12 @@ class WorkflowRunRead(DTO):
     version_id: UUID
     version_number: int
     name: str
+    # The run's own title, when the person starting it gave one.
+    title: str | None = None
+    agent_id: UUID
+    agent_name: str
+    # The Agent was deleted; the run stays readable but nothing more can be done with it.
+    agent_archived: bool
     initiating_user_id: UUID | None
     inputs: dict[str, Any]
     state: RunState

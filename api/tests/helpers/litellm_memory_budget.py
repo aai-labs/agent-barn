@@ -11,7 +11,7 @@ from testcontainers.postgres import PostgresContainer
 
 from api.tests.core.givenpy import LambdaWith
 
-IMAGE = "ghcr.io/berriai/litellm:v1.96.2"
+IMAGE = "ghcr.io/berriai/litellm:v1.108.6"
 MASTER_KEY = "sk-memory-budget-contract-master"
 
 

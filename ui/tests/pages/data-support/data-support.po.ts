@@ -7,6 +7,7 @@ import { AnomalyDataSupport } from "./anomaly-data-support.po";
 import { AuthSupport } from "./auth-support.po";
 import { CommunicationConnectionDataSupport } from "./communication-connection-data-support.po";
 import { CostDataSupport } from "./cost-data-support.po";
+import { DecisionDataSupport } from "./decision-data-support.po";
 import { EnvironmentHealthDataSupport } from "./environment-health-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { FileSyncDataSupport } from "./file-sync-data-support.po";
@@ -35,6 +36,7 @@ export class DataSupport {
   public onboarding: OnboardingDataSupport;
   public organizations: OrganizationDataSupport;
   public costs: CostDataSupport;
+  public decisions: DecisionDataSupport;
   public environmentHealth: EnvironmentHealthDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
   public fileSync: FileSyncDataSupport;
@@ -60,6 +62,7 @@ export class DataSupport {
     this.onboarding = new OnboardingDataSupport(page);
     this.organizations = new OrganizationDataSupport(page);
     this.costs = new CostDataSupport(page);
+    this.decisions = new DecisionDataSupport(page);
     this.environmentHealth = new EnvironmentHealthDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
     this.fileSync = new FileSyncDataSupport(page);

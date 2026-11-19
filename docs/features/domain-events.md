@@ -113,11 +113,19 @@ behavior are owned by [Agent workflows](agent-workflows.md#platform-authoring-se
 
 Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
 
+LLM providers add the Platform-scoped `platform.llm_provider.changed` event, emitted atomically when a Platform Administrator replaces a connection's key and projected by `security_audit.projection`. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id and slug, whether a key was replaced, the provider type, the base URL before and after (`previous_base_url` and `base_url`, null for a provider without one), and actor/subject display snapshots, never the key or its last four characters. The provider type and base URLs are optional fields added in version 1, so events recorded before them stay valid.
+
+They also add the Platform-scoped `platform.llm_provider.created` event, projected by `security_audit.projection` and emitted atomically when a Platform Administrator adds a connection. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug, provider type, base URL (null for a known provider), whether a deleted connection was revived, and actor/subject display snapshots, never the key or any part of it.
+
+The Platform-scoped `platform.llm_provider.deleted` event is projected by `security_audit.projection` and emitted atomically when a Platform Administrator deletes a connection. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug, provider type, base URL (null for a known provider), whether a stored key was purged (`key_purged`), and actor/subject display snapshots, never the key or any part of it.
+
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 
 File Sync adds `agent.file_sync.enabled` and `agent.file_sync.disabled`, handled by `security_audit.projection`. The Subject is the Agent whose per-Agent File Sync switch changed. The payload carries the Organization and Agent ids and display snapshots of the actor and the Agent, and nothing about the folder or its files. See [Sync providers](sync-provider/README.md#agent-file-sync).
 
 Playbooks add the Platform-scoped `platform.playbook_model.changed` event, carrying previous/current model IDs and display snapshots, and the Organization-scoped `playbook.extraction.requested` event, both projected by `security_audit.projection`. It commits with the queued run; its Subject is the source Agent whose transcripts the run reads, and its payload carries IDs, the target Skill name, the window length, the session bound, and display snapshots, never transcript or playbook content. See [`Playbooks`](playbooks.md).
+
+Decisions add the Platform-scoped `platform.decision_model.changed` event, carrying the previous/current decision model names and display snapshots, projected by `security_audit.projection`. See [`Decisions`](decisions.md).
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 
@@ -359,7 +367,7 @@ Changes to the Platform Event Delivery Monitor's summary/explorer response contr
 Workflow run transitions stage `workflow.run.changed` v1 with the run identity,
 revision and state only, alongside their ledger/history transaction. The
 `workflow.controller` handler advances durable intent and dispatches steps to the
-owning Agent through the Kubernetes client. It tolerates duplicate events and
+Agent running the run through the Kubernetes client. It tolerates duplicate events and
 uses the same cluster access as the API. Services and the controller enqueue
 staged delivery IDs immediately after each successful ledger commit, including
 starts, cancellation, step results, failures and recovery transitions. Broker
