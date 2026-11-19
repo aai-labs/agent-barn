@@ -169,6 +169,18 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
     assert deployment.spec.template.spec.containers[0].name == "agent"
 
 
+def test_deployment_runs_start_sh_under_tini() -> None:
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
+
+    assert deployment.spec.template.spec.containers[0].command == ["/usr/bin/tini", "--", "sh", "/app/config/start.sh"]
+
+
+def test_deployment_pods_keep_the_deployment_name_as_hostname() -> None:
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test", resources=STANDARD)
+
+    assert deployment.spec.template.spec.hostname == deployment.metadata.name
+
+
 def test_adapter_targets_the_port_the_gateway_actually_binds() -> None:
     secret = build_secret_runtime(
         _AGENT_ID,

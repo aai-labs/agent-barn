@@ -508,6 +508,12 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
     assert deployment.spec.template.spec.containers[0].name == "agent"
 
 
+def test_deployment_runs_start_sh_under_tini() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
+
+    assert deployment.spec.template.spec.containers[0].command == ["/usr/bin/tini", "--", "sh", "/app/config/start.sh"]
+
+
 def test_init_container_costs_no_more_quota_than_the_agent() -> None:
     """Same rule as OpenClaw: the pod is charged for its biggest container, so the init
     container must not default to the LimitRange's larger values."""
