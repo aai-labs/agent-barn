@@ -118,6 +118,19 @@ class AgentHistory:
     observed_llm_tokens: int | None
     observed_llm_failures: int | None
 
+    @property
+    def observed_llm_attempts(self) -> int | None:
+        """Every LLM call in the checked hour, failed or not (None before any cost sync)."""
+        if self.observed_llm_calls is None or self.observed_llm_failures is None:
+            return None
+        return self.observed_llm_calls + self.observed_llm_failures
+
+
+def _error_rates(hours: list[datetime], counts: dict[datetime, tuple[int, int]]) -> list[float]:
+    """The error rate of each of `hours` with enough calls to judge, from its (failed,
+    all) call counts."""
+    return [rate for hour in hours if hour in counts and (rate := error_rate(*counts[hour])) is not None]
+
 
 def _floor_hour(at: datetime) -> datetime:
     return at.replace(minute=0, second=0, microsecond=0)
@@ -197,12 +210,13 @@ class AnomalyCheckService:
         if cost_until is not None and until - cost_until <= COST_SYNC_STALE:
             rate(RateSignal.LLM_CALLS_PER_HOUR, history.observed_llm_calls, history.llm_calls, cost_until)
             rate(RateSignal.LLM_TOKENS_PER_HOUR, history.observed_llm_tokens, history.llm_tokens, cost_until)
-            observed_llm_error_rate = (
-                error_rate(history.observed_llm_failures, history.observed_llm_calls + history.observed_llm_failures)
-                if history.observed_llm_calls is not None and history.observed_llm_failures is not None
-                else None
+            attempts = history.observed_llm_attempts
+            rate(
+                RateSignal.LLM_ERROR_RATE,
+                error_rate(history.observed_llm_failures or 0, attempts) if attempts is not None else None,
+                history.llm_error_rates,
+                cost_until,
             )
-            rate(RateSignal.LLM_ERROR_RATE, observed_llm_error_rate, history.llm_error_rates, cost_until)
             self._check_caps(organization_id, agent_id, override, history, cost_until)
         elif cost_until is not None:
             # The cost sync has stopped: nothing shows an LLM deviation still going, so
@@ -235,9 +249,7 @@ class AnomalyCheckService:
                 AnomalySignal.LLM_CALLS_CAP,
                 override.max_llm_calls_per_hour if override else None,
                 # Failed calls still reach the provider, so the cap counts them.
-                history.observed_llm_calls + history.observed_llm_failures
-                if history.observed_llm_calls is not None and history.observed_llm_failures is not None
-                else None,
+                history.observed_llm_attempts,
             ),
         )
         for signal, cap, observed in caps:
@@ -284,25 +296,15 @@ class AnomalyCheckService:
             if cost_until is not None
             else None
         )
-        error_rates = [
-            rate
-            for hour in tool_active
-            if hour in tools_by_hour
-            and (rate := error_rate(tools_by_hour[hour].errors, tools_by_hour[hour].calls)) is not None
-        ]
         return AgentHistory(
             active_days=len({hour.date() for hour in [*tool_active, *llm_active]}),
             tool_calls=[float(tools_by_hour[hour].calls) if hour in tools_by_hour else 0.0 for hour in tool_active],
-            error_rates=error_rates,
-            llm_error_rates=[
-                rate
-                for hour in llm_active
-                if hour in llm_by_hour
-                and (
-                    rate := error_rate(llm_by_hour[hour].failures, llm_by_hour[hour].calls + llm_by_hour[hour].failures)
-                )
-                is not None
-            ],
+            error_rates=_error_rates(
+                tool_active, {hour: (row.errors, row.calls) for hour, row in tools_by_hour.items()}
+            ),
+            llm_error_rates=_error_rates(
+                llm_active, {hour: (row.failures, row.calls + row.failures) for hour, row in llm_by_hour.items()}
+            ),
             writes=[float(write_hours.get(hour, 0)) for hour in tool_active],
             llm_calls=[float(llm_by_hour[hour].calls) if hour in llm_by_hour else 0.0 for hour in llm_active],
             llm_tokens=[float(llm_by_hour[hour].tokens) if hour in llm_by_hour else 0.0 for hour in llm_active],
