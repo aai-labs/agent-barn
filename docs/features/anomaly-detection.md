@@ -100,8 +100,10 @@ Pure functions in `api/domains/anomalies/detection.py`.
   Rates are judged over active hours only; an Agent idle most of the day would otherwise
   have a median and spread of zero and flag on any work. Quiet signals in an active hour
   count as zero.
-- **Failed LLM calls** are counted apart. They are not LLM calls for the call rate, the
-  token rate or the call cap, and an hour in which every LLM call failed is not active.
+- **Failed LLM calls** are counted apart. They are not LLM calls for the call rate or the
+  token rate, and an hour in which every LLM call failed is not active. The call cap does
+  count them: a failed call still reaches the provider, and a retry loop is what a cap
+  is for.
   Counted together, a scheduled job that keeps failing (seen on staging: a few failed
   calls every three hours for weeks) made an Agent's usual rates look idle, so every hour
   of real work was flagged while the failures themselves went unnoticed. They feed

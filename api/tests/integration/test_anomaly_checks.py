@@ -282,6 +282,25 @@ def test_a_hard_cap_fires_even_without_history():
         )
 
 
+def test_the_model_call_cap_counts_calls_that_failed():
+    with given(_ENABLED) as context:
+        # A retry loop: failed calls still reach the provider, so they count toward the cap.
+        _save(
+            context,
+            AgentAnomalyOverride(
+                organization_id=context.organization.id, agent_id=context.agent.id, max_llm_calls_per_hour=50
+            ),
+            *_model_calls(context.agent, _in_last_hour(), succeeded=5, failed=55),
+        )
+
+        _check(context)
+
+        assert_that(
+            _anomalies(context, AnomalySignal.LLM_CALLS_CAP),
+            contains_exactly(has_properties(observed_value=60, threshold=50)),
+        )
+
+
 def test_a_token_spike_is_recorded():
     with given([*_ENABLED, usual_activity()]) as context:
         _save(context, *[_cost(context.agent, at, tokens=50_000) for at in _spread(_in_last_hour(), 10, minutes=30)])
