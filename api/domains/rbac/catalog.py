@@ -41,6 +41,7 @@ class PermissionKey(str, Enum):
     BILLING_MANAGE = "billing.manage"
     WORKFLOW_MANAGE = "workflow.manage"
     TIER_HOLD_MANAGE = "tier_hold.manage"
+    MCP_SERVER_MANAGE = "mcp_server.manage"
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(UUID("9a3e6c1f-2b74-5d08-8e5a-4c7f1b2d6e33"), PermissionKey.BILLING_MANAGE),
     PermissionSeed(UUID("c3f7a1d2-6b48-5e90-8a2c-7d4e1f9b0a56"), PermissionKey.WORKFLOW_MANAGE),
     PermissionSeed(UUID("f236e2c1-a221-559e-946b-9c25232caa30"), PermissionKey.TIER_HOLD_MANAGE),
+    PermissionSeed(UUID("9649cb6a-fc1a-51b1-9160-8b13c09de27a"), PermissionKey.MCP_SERVER_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
@@ -138,6 +140,9 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         # Which Agents stay on hold when the Tier no longer covers them all is the
         # Organization's decision, like dividing its spend.
         PermissionKey.TIER_HOLD_MANAGE,
+        # Organization-scoped only: an Organization MCP Server lends one Organization
+        # credential to many Agents, so choosing it is not an Agent Owner's call.
+        PermissionKey.MCP_SERVER_MANAGE,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {

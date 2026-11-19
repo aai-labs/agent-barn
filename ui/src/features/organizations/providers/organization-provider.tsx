@@ -31,6 +31,7 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "cost",
   "skills",
   "shared-credentials",
+  "mcp-servers",
   "memory-grants",
   "organization-memory-items",
   "playbook-extractions",

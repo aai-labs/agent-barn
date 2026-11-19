@@ -36,6 +36,16 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/{server_id}",
+    "delete_agent_own_mcp_server_organizations__organization_id__agents__agent_id__mcp_servers__server_id__delete"
+  ],
+  [
+    "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/{server_id}/credential",
+    "remove_agent_mcp_server_credential_organizations__organization_id__agents__agent_id__mcp_servers__server_id__credential_delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points/{restore_point_id}",
     "delete_restore_point_organizations__organization_id__agents__agent_id__restore_points__restore_point_id__delete"
   ],
@@ -63,6 +73,16 @@
     "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/webhooks/{webhook_id}",
     "retire_agent_webhook_organizations__organization_id__agents__agent_id__webhooks__webhook_id__delete"
+  ],
+  [
+    "DELETE",
+    "/organizations/{organization_id}/mcp-servers/{server_id}",
+    "delete_mcp_server_organizations__organization_id__mcp_servers__server_id__delete"
+  ],
+  [
+    "DELETE",
+    "/organizations/{organization_id}/mcp-servers/{server_id}/sign-in",
+    "remove_mcp_server_sign_in_organizations__organization_id__mcp_servers__server_id__sign_in_delete"
   ],
   [
     "DELETE",
@@ -228,6 +248,11 @@
     "GET",
     "/llms.txt",
     "llms_txt_llms_txt_get"
+  ],
+  [
+    "GET",
+    "/mcp-servers/oauth/callback",
+    "mcp_server_sign_in_callback_mcp_servers_oauth_callback_get"
   ],
   [
     "GET",
@@ -436,6 +461,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers",
+    "list_agent_mcp_servers_organizations__organization_id__agents__agent_id__mcp_servers_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/memory/items",
     "list_agent_memories_organizations__organization_id__agents__agent_id__memory_items_get"
   ],
@@ -623,6 +653,16 @@
     "GET",
     "/organizations/{organization_id}/llm-budget",
     "get_organization_llm_budget_organizations__organization_id__llm_budget_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/mcp-servers",
+    "list_mcp_servers_organizations__organization_id__mcp_servers_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/mcp-servers/{server_id}",
+    "get_mcp_server_organizations__organization_id__mcp_servers__server_id__get"
   ],
   [
     "GET",
@@ -1056,6 +1096,11 @@
   ],
   [
     "PATCH",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/{server_id}",
+    "update_agent_own_mcp_server_organizations__organization_id__agents__agent_id__mcp_servers__server_id__patch"
+  ],
+  [
+    "PATCH",
     "/organizations/{organization_id}/agents/{agent_id}/skills/{skill_id}",
     "update_agent_skill_organizations__organization_id__agents__agent_id__skills__skill_id__patch"
   ],
@@ -1073,6 +1118,11 @@
     "PATCH",
     "/organizations/{organization_id}/agents/{agent_id}/webhooks/{webhook_id}",
     "update_agent_webhook_organizations__organization_id__agents__agent_id__webhooks__webhook_id__patch"
+  ],
+  [
+    "PATCH",
+    "/organizations/{organization_id}/mcp-servers/{server_id}",
+    "update_mcp_server_organizations__organization_id__mcp_servers__server_id__patch"
   ],
   [
     "PATCH",
@@ -1301,6 +1351,26 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers",
+    "create_agent_own_mcp_server_organizations__organization_id__agents__agent_id__mcp_servers_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/probe",
+    "probe_new_agent_own_mcp_server_organizations__organization_id__agents__agent_id__mcp_servers_probe_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/{server_id}/probe",
+    "probe_agent_own_mcp_server_organizations__organization_id__agents__agent_id__mcp_servers__server_id__probe_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/{server_id}/sign-in",
+    "start_agent_mcp_server_sign_in_organizations__organization_id__agents__agent_id__mcp_servers__server_id__sign_in_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
     "create_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions_post"
   ],
@@ -1388,6 +1458,31 @@
     "POST",
     "/organizations/{organization_id}/billing/checkout",
     "create_checkout_organizations__organization_id__billing_checkout_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/mcp-servers",
+    "create_mcp_server_organizations__organization_id__mcp_servers_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/mcp-servers/probe",
+    "probe_new_mcp_server_organizations__organization_id__mcp_servers_probe_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/mcp-servers/sign-in/complete",
+    "complete_mcp_server_sign_in_organizations__organization_id__mcp_servers_sign_in_complete_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/mcp-servers/{server_id}/probe",
+    "probe_mcp_server_organizations__organization_id__mcp_servers__server_id__probe_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/mcp-servers/{server_id}/sign-in",
+    "start_mcp_server_sign_in_organizations__organization_id__mcp_servers__server_id__sign_in_post"
   ],
   [
     "POST",
@@ -1653,6 +1748,16 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/llm-budget",
     "set_agent_llm_budget_organizations__organization_id__agents__agent_id__llm_budget_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers",
+    "update_agent_mcp_servers_organizations__organization_id__agents__agent_id__mcp_servers_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/mcp-servers/{server_id}/credential",
+    "set_agent_mcp_server_credential_organizations__organization_id__agents__agent_id__mcp_servers__server_id__credential_put"
   ],
   [
     "PUT",

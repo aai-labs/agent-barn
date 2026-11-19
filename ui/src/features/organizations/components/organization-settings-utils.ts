@@ -1,4 +1,4 @@
-import { Brain, FileCode2, FolderSync, KeyRound, Layers, Sparkles, UserRound, Wallet } from "lucide-react";
+import { Brain, FileCode2, FolderSync, KeyRound, Layers, PlugZap, Sparkles, UserRound, Wallet } from "lucide-react";
 
 export type OrganizationSettingsSectionKey =
   | "agents"
@@ -8,6 +8,7 @@ export type OrganizationSettingsSectionKey =
   | "organization-memory"
   | "memory-access"
   | "shared-credentials"
+  | "mcp-servers"
   | "sync"
   | "tier";
 
@@ -73,6 +74,12 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     adminOnly: true,
   },
   {
+    key: "mcp-servers",
+    label: "MCP servers",
+    description: "Remote MCP servers your Agents can call tools on, each with one organization credential.",
+    adminOnly: false,
+  },
+  {
     key: "sync",
     label: "Sync",
     description: "Connect storage providers to keep your organization's files in sync.",
@@ -99,6 +106,7 @@ export const ORGANIZATION_SETTINGS_ICONS = {
   "memory-access": Brain,
   "organization-memory": Brain,
   "shared-credentials": KeyRound,
+  "mcp-servers": PlugZap,
   sync: FolderSync,
   tier: Layers,
 } as const;

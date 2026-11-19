@@ -180,6 +180,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         credential_gateway=MagicMock(),
         integrations=MagicMock(),
         custom_api=MagicMock(),
+        mcp_servers=MagicMock(),
         agent_budgets=MagicMock(),
         restore_points=MagicMock(),
         selection=MagicMock(),
