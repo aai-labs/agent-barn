@@ -45,12 +45,12 @@ function ownAccount(agentId) {
   return agentId === MAIN ? DEFAULT_ACCOUNT : agentId;
 }
 
-function pinRoute(route, agentId, platforms) {
+function pinRoute(route, agentId, platforms, pinUnrouted = true) {
   if (!route || typeof route !== "object") return { route };
   const own = ownAccount(agentId);
   if (route.accountId && route.accountId !== own) return { refused: "another agent's account" };
   const channel = String(route.channel || "").trim().toLowerCase();
-  if (UNROUTED_CHANNELS.has(channel) && agentId === MAIN) return { route };
+  if (UNROUTED_CHANNELS.has(channel) && (agentId === MAIN || !pinUnrouted)) return { route };
   if (!UNROUTED_CHANNELS.has(channel) && !platforms.includes(channel)) {
     return { refused: `no account of its own on ${channel}` };
   }
@@ -67,12 +67,13 @@ function guardMessage(params, agentId, platforms) {
   return pinned.changed ? { params: pinned.route } : undefined;
 }
 
-function guardScheduler(params, agentId, platforms) {
+function guardScheduler(params, agentId, platforms, turnAccount) {
   if (!SCHEDULER_WRITES.has(params.action) || !params.job || typeof params.job !== "object") return undefined;
   const job = { ...params.job };
+  const pinUnrouted = turnAccount === ownAccount(agentId);
   let changed = false;
   for (const field of ["delivery", "failureAlert"]) {
-    const pinned = pinRoute(job[field], agentId, platforms);
+    const pinned = pinRoute(job[field], agentId, platforms, pinUnrouted);
     if (pinned.refused) return refusal(pinned.refused);
     if (pinned.changed) {
       job[field] = pinned.route;
@@ -80,7 +81,7 @@ function guardScheduler(params, agentId, platforms) {
     }
   }
   if (job.delivery && typeof job.delivery === "object" && job.delivery.failureDestination) {
-    const pinned = pinRoute(job.delivery.failureDestination, agentId, platforms);
+    const pinned = pinRoute(job.delivery.failureDestination, agentId, platforms, pinUnrouted);
     if (pinned.refused) return refusal(pinned.refused);
     if (pinned.changed) {
       job.delivery = { ...job.delivery, failureDestination: pinned.route };
@@ -90,6 +91,15 @@ function guardScheduler(params, agentId, platforms) {
   return changed ? { params: { ...params, job } } : undefined;
 }
 
+function guardSending(ctx, platformNames) {
+  const agentId = SESSION_AGENT.exec(ctx?.sessionKey ?? "")?.[1];
+  if (!agentId || agentId === MAIN) return undefined;
+  if (!platformNames.has(String(ctx.channelId || "").trim().toLowerCase())) return undefined;
+  const own = ownAccount(agentId);
+  if ((ctx.accountId || DEFAULT_ACCOUNT) === own) return undefined;
+  return { cancel: true, cancelReason: refusal("sent from another agent's account").blockReason };
+}
+
 export default {
   id: "agentbarn-bot-env",
   name: "Agent Barn Bot env",
@@ -97,6 +107,11 @@ export default {
   register(api) {
     const parentNames = Array.isArray(api.pluginConfig?.parentNames) ? api.pluginConfig.parentNames : [];
     const platformsByAgent = api.pluginConfig?.platforms || {};
+    const platformNames = new Set(
+      Object.values(platformsByAgent)
+        .flat()
+        .map((name) => String(name).toLowerCase()),
+    );
     api.on(
       "before_tool_call",
       (event, ctx) => {
@@ -122,9 +137,10 @@ export default {
         const params = event.params || {};
         return event.toolName === "message"
           ? guardMessage(params, agentId, platforms)
-          : guardScheduler(params, agentId, platforms);
+          : guardScheduler(params, agentId, platforms, ctx?.requester?.accountId);
       },
       { priority: -1000, matcher: ["message", "automations", "cron"] },
     );
+    api.on("message_sending", (event, ctx) => guardSending(ctx, platformNames), { priority: -1000 });
   },
 };

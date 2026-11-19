@@ -13,9 +13,11 @@ plugin.register({
 });
 const results = [];
 for (const call of steps.calls) {
-  const registration = registrations.find(
-    (entry) => entry.name === "before_tool_call" && entry.options.matcher.includes(call.event.toolName),
-  );
+  const registration = call.hook
+    ? registrations.find((entry) => entry.name === call.hook)
+    : registrations.find(
+        (entry) => entry.name === "before_tool_call" && entry.options.matcher.includes(call.event.toolName),
+      );
   if (!registration) {
     results.push({ result: null });
     continue;

@@ -70,6 +70,7 @@ def test_the_plugin_rewrites_exec_last_and_only_exec(tmp_path):
     assert registrations == [
         {"name": "before_tool_call", "options": {"priority": -1000, "matcher": ["exec"]}},
         {"name": "before_tool_call", "options": {"priority": -1000, "matcher": ["message", "automations", "cron"]}},
+        {"name": "message_sending", "options": {"priority": -1000}},
     ]
 
 
@@ -160,8 +161,9 @@ def test_other_tools_are_left_alone(tmp_path):
     assert _run(tmp_path, [call])["results"] == [{"result": None}]
 
 
-def _tool(agent_id, tool, params):
-    return {"event": {"toolName": tool, "params": params}, "ctx": {"agentId": agent_id}}
+def _tool(agent_id, tool, params, account=None):
+    requester = {"requester": {"channel": "telegram", "accountId": account}} if account else {}
+    return {"event": {"toolName": tool, "params": params}, "ctx": {"agentId": agent_id, **requester}}
 
 
 def _params(outcome):
@@ -265,11 +267,61 @@ def test_scheduler_reads_are_left_alone(tmp_path):
     assert outcome == {"result": None}
 
 
-def test_a_bots_job_without_a_channel_still_delivers_from_its_own_account(tmp_path):
+def test_a_bots_job_without_a_channel_delivers_from_its_own_account_when_asked_on_it(tmp_path):
     job = {"delivery": {"mode": "announce", "channel": "last"}}
-    outcome = _run(tmp_path, [_tool(BOT_A, "automations", {"action": "add", "job": job})])["results"][0]
+    outcome = _run(tmp_path, [_tool(BOT_A, "automations", {"action": "add", "job": job}, account=BOT_A)])["results"][0]
 
     assert _params(outcome)["job"]["delivery"] == {"mode": "announce", "channel": "last", "accountId": BOT_A}
+
+
+@pytest.mark.parametrize("account", [None, "default"])
+@pytest.mark.parametrize("delivery", [{"mode": "announce"}, {"mode": "announce", "channel": "last"}])
+def test_a_bots_job_without_a_channel_asked_without_its_own_account_is_left_to_its_owner(tmp_path, account, delivery):
+    job = {"delivery": delivery}
+    outcome = _run(tmp_path, [_tool(BOT_A, "automations", {"action": "add", "job": job}, account=account)])["results"][
+        0
+    ]
+
+    assert outcome == {"result": None}
+
+
+def test_the_parents_job_without_a_channel_is_left_alone(tmp_path):
+    job = {"delivery": {"mode": "announce"}}
+    outcome = _run(tmp_path, [_tool("main", "automations", {"action": "add", "job": job})])["results"][0]
+
+    assert outcome == {"result": None}
+
+
+def _sending(session, channel="telegram", account=None):
+    ctx = {
+        "channelId": channel,
+        "conversationId": "1",
+        "sessionKey": session,
+        **({"accountId": account} if account else {}),
+    }
+    return {"hook": "message_sending", "event": {"to": "1", "content": "hi"}, "ctx": ctx}
+
+
+@pytest.mark.parametrize("account", [None, "default", BOT_B])
+def test_a_bots_post_from_another_account_is_cancelled_when_sent(tmp_path, account):
+    outcome = _run(tmp_path, [_sending(f"agent:{BOT_A}:cron:j:run:1", account=account)])["results"][0]
+
+    assert outcome["result"]["cancel"] is True
+    assert "own account" in outcome["result"]["cancelReason"]
+
+
+@pytest.mark.parametrize(
+    "sending",
+    [
+        _sending(f"agent:{BOT_A}:cron:j:run:1", account=BOT_A),
+        _sending("agent:main:cron:j:run:1", account="default"),
+        _sending("agent:main:cron:j:run:1"),
+        _sending(f"agent:{BOT_A}:connection:c:l:root", channel="webchat"),
+    ],
+    ids=["bots_own_account", "parent", "parent_no_account", "not_a_platform"],
+)
+def test_other_posts_are_sent_unchanged(tmp_path, sending):
+    assert _run(tmp_path, [sending])["results"] == [{"result": None}]
 
 
 def test_a_message_from_no_known_agent_is_refused(tmp_path):

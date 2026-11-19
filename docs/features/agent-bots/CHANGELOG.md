@@ -79,6 +79,13 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-19 — AF-445 — A Bot's scheduled run can end its own schedule
+
+- Fixed: in local k3d, a Bot asked in Web Chat for "every minute, 3 quotes, then delete the schedule" could not delete it. Each run's `automations list` returned no jobs, so the run said the schedule was removed and set its Task done; the Tasks plugin put it back in progress, and the job kept running. `agentbarn-bot-env` pinned the job's unrouted delivery to the Bot's account, while OpenClaw recorded the job's owner account from the Web Chat turn, which has none (`default`). OpenClaw runs a job under its delivery account and lets a run list, read or remove its own job only when that matches the owner account. The Parent Agent was unaffected: both are `default`, and its run removed its job and finished its Task.
+- Now a Bot's job that names no platform is pinned only when the Bot was asked for it on its own account (the tool call's `requester.accountId`). A new `message_sending` hook cancels any post from a Bot's session on a platform from an account other than its own, so an unpinned job still never posts from the Parent Agent's account.
+- Known limit: a job a Bot is asked for in Web Chat that names a platform is still pinned, so its runs can't remove it themselves; it can be removed in a conversation.
+- Follow-up: the end-to-end runs.
+
 ### 2026-11-19 — AF-445 — A Bot's workflow files go to its own workspace
 
 - Fixed: an OpenClaw Bot's Secret carries the runtime's upload root, the Parent Agent's workspace. `agentbarn-bot-env` and the Tasks plugin replace it for the Bot's commands, but `bot-run.py` passed it unchanged to the Bot's helpers, so the Bot's trigger server wrote a workflow step's input files into the Parent Agent's workspace. The Bot could still read them, because OpenClaw's file tools are not limited to the workspace (`tools.fs.workspaceOnly` defaults off and is not set), but they were outside the Bot's own workspace.
