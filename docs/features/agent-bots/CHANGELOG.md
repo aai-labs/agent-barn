@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-19 — AF-425 — A Bot's Tasks follow its own schedules
+
+- Fixed: staging's schedule-linked Tasks (AF-412) kept every profile's schedule links in the pod's `HERMES_HOME`, the Parent Agent's folder, and read that folder's `cron/jobs.json`, while Hermes keeps a Bot's jobs in its own profile. When the Parent Agent had a job file, the next turn of any profile in the pod marked a Bot's linked Task `done` while its schedule still ran. When it had none, the Bot's runs were noted without the run limit, so the link never ended and the Task stayed `in_progress` after the last run.
+- Now the Tasks plugin's `_home()` returns the Bot's profile folder when its copy is installed under `profiles/`, the same rule the observer uses. The Parent Agent's copy still uses `HERMES_HOME`.
+- Follow-up: the end-to-end run.
+
 ### 2026-11-16 — AF-425 — Tier holds on Bots
 
 - Fixed: staging's tier holds acted on a Bot as if it had its own pod. Holding a running Bot marked it STOPPED and revoked its keys while its profile kept answering in the Parent Agent's pod. Holding one of a Bot's native Connections created a Deployment, Service and PVC for the Bot. The Parent Agent's next start served held Bots again.

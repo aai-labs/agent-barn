@@ -1628,3 +1628,57 @@ def test_a_scheduled_run_with_no_linked_task_is_asked_about_as_a_scheduled_turn(
     plugin.end_turn(session_id=_CRON_SESSION, turn_id="run-1")
 
     assert_that(_asked(plugin)[0]["trigger"], equal_to("cron"))
+
+
+# --- Bot schedules: a Bot's Tasks follow the Bot's own schedules ---
+
+
+def _bot_scheduling(tmp_path: Path) -> _Plugin:
+    plugin = _bot_plugin(tmp_path, f"AGENT_ID={_BOT_ID}\nINGEST_URL=http://ingest/bot\nINGEST_API_KEY=bot-key\n")
+    (plugin.home / "cron").mkdir(parents=True)
+    plugin.env["HERMES_HOME"] = str(plugin.home)
+    plugin.env["FAKE_SCHEDULE_INTENT"] = "runs"
+    _jobs(plugin)
+    plugin.home = tmp_path / "profiles" / _BOT_ID
+    (plugin.home / "cron").mkdir()
+    return plugin
+
+
+def test_a_bots_schedule_link_is_kept_in_its_own_profile(tmp_path: Path):
+    plugin = _bot_scheduling(tmp_path)
+    plugin.start_turn(user_message=_GREETING, turn_id="turn-1")
+    _schedule_created(plugin)
+    _task_recorded(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_links(plugin), equal_to({_JOB_ID: {"task_id": _TASK_ID}}))
+    assert_that((tmp_path / "home" / "agentbarn-task-schedules.json").exists(), equal_to(False))
+
+
+def test_a_bots_running_schedule_keeps_its_task_in_progress_at_its_next_turn(tmp_path: Path):
+    plugin = _bot_scheduling(tmp_path)
+    plugin.start_turn(user_message=_GREETING, turn_id="turn-1")
+    _schedule_created(plugin)
+    _task_recorded(plugin)
+    plugin.end_turn()
+    _jobs(plugin, _job(completed=2))
+
+    plugin.start_turn(session_id="later", user_message="How are the greetings going?", turn_id="turn-2")
+    plugin.end_turn(session_id="later", turn_id="turn-2")
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "in_progress"]]))
+    assert_that(_links(plugin), equal_to({_JOB_ID: {"task_id": _TASK_ID}}))
+
+
+def test_a_bots_scheduled_run_is_counted_from_its_own_job(tmp_path: Path):
+    plugin = _bot_scheduling(tmp_path)
+    _linked(plugin)
+    _jobs(plugin, _job(completed=6))
+
+    _scheduled_run(plugin)
+
+    assert_that(_argvs(plugin, "note"), equal_to([["note", _TASK_ID]]))
+    assert_that(plugin.calls()[-2]["stdin"], equal_to("Run 7 of 7: Good morning, team!"))
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(plugin), equal_to({}))

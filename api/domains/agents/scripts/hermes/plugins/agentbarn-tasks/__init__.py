@@ -602,6 +602,9 @@ def _track_schedule(turn: dict, args, result) -> None:
 
 
 def _home() -> str:
+    installed = Path(__file__).resolve().parents[2]
+    if installed.parent.name == "profiles":
+        return str(installed)
     return os.environ.get("HERMES_HOME") or "/opt/data"
 
 
