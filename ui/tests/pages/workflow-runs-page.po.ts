@@ -5,38 +5,63 @@ import { RUN_ID } from "./data-support/workflow-run-data-support.po";
 
 export class WorkflowRunsPage {
   constructor(private page: Page) {}
+  /** A run on its Agent's page, or the saved workflow on the Organization's Workflows page. */
   async goto(agentId: string, run = false, organizationId = TEST_ORG_ID) {
     await this.page.goto(
-      `/dashboard/${organizationId}/agents/${agentId}?tab=workflows&workflow=${WORKFLOW_ID}${run ? `&workflowRun=${RUN_ID}` : ""}`,
+      run
+        ? `/dashboard/${organizationId}/agents/${agentId}?tab=workflows&workflowRun=${RUN_ID}`
+        : `/dashboard/${organizationId}/workflows?workflow=${WORKFLOW_ID}`,
     );
   }
-  /** The Agent's Workflows page, which opens on its Runs tab. */
-  async gotoLanding(agentId: string) {
+  /** The Organization's Workflows page, which opens on its Runs tab. */
+  async gotoLanding(query = "") {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/workflows${query}`);
+  }
+  /** A run opened from the Organization's Workflows page. */
+  async gotoOrganizationRun() {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/workflows?workflowRun=${RUN_ID}`);
+  }
+  /** An Agent's Workflows tab: its own runs. */
+  async gotoAgentRuns(agentId: string) {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=workflows`);
   }
-  async selectView(name: "Overview" | "Version history") {
+  async selectView(name: "Overview" | "Version history" | "Runs") {
     await this.page.getByRole("tab", { name, exact: true }).click();
   }
-  async openFirstRun() {
-    await this.page
-      .getByLabel("Recent runs", { exact: true })
-      .getByRole("button")
-      .first()
-      .click();
+  /** A section of runs: "Active", "Recent", or an Agent's "Recent runs". */
+  runs(section: string) {
+    return this.page.getByRole("region", { name: section, exact: true });
   }
-  async gotoView(agentId: string, view: string) {
+  async openFirstRun(section = "Recent") {
+    await this.runs(section).getByRole("button").first().click();
+  }
+  async gotoView(view: string) {
     await this.page.goto(
-      `/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=workflows&workflow=${WORKFLOW_ID}&workflowView=${view}`,
+      `/dashboard/${TEST_ORG_ID}/workflows?workflow=${WORKFLOW_ID}&workflowView=${view}`,
     );
   }
-  async reviewInputs(period: string) {
-    await this.page
-      .getByRole("button", { name: "Run workflow", exact: true })
-      .click();
+  /** The Run dialog, opened from the saved workflow. */
+  dialog() {
+    return this.page.getByRole("dialog");
+  }
+  async openRunDialog() {
+    await this.page.getByRole("button", { name: "Run workflow", exact: true }).click();
+  }
+  /** The Agent chips under "Run as". */
+  runAs(name: string) {
+    return this.dialog().getByRole("radio", { name, exact: true });
+  }
+  async chooseAgent(name: string) {
+    await this.runAs(name).click();
+  }
+  /** Opens the Run dialog, chooses the Agent and fills the text input. */
+  async reviewInputs(period: string, agent = "Maya") {
+    await this.openInputReview(agent);
     await this.page.getByLabel("Reporting period (required)").fill(period);
   }
-  async openInputReview() {
-    await this.page.getByRole("button", { name: "Run workflow", exact: true }).click();
+  async openInputReview(agent = "Maya") {
+    await this.openRunDialog();
+    await this.chooseAgent(agent);
   }
   async selectFile(label: string, filename: string) {
     await this.page.getByRole("combobox", { name: `Select file for ${label}` }).click();
@@ -59,7 +84,7 @@ export class WorkflowRunsPage {
       .click();
   }
   async start() {
-    await this.page.getByRole("button", { name: /^Start run/ }).click();
+    await this.page.getByRole("button", { name: "Start run", exact: true }).click();
   }
   async selectedViewGeometry() {
     return {
