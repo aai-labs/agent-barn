@@ -988,3 +988,17 @@ def test_hermes_delivery_explicitly_resumes_its_durable_session(monkeypatch: pyt
         "session_id": "connection:conn-1:chan-1:root",
         "resume_session": True,
     }
+
+
+def test_a_pod_with_bots_names_the_agent_in_every_session_key(monkeypatch):
+    monkeypatch.setenv("RUNTIME_SESSION_PREFIX", "agent:main:")
+    adapter = _load_adapter(monkeypatch, runtime_kind="openclaw")
+
+    assert adapter.session_key_for(_delivery()) == "agent:main:connection:connection-1:user-1:thread-1"
+
+
+def test_a_pod_without_bots_keeps_its_session_keys(monkeypatch):
+    monkeypatch.delenv("RUNTIME_SESSION_PREFIX", raising=False)
+    adapter = _load_adapter(monkeypatch, runtime_kind="openclaw")
+
+    assert adapter.session_key_for(_delivery()) == "connection:connection-1:user-1:thread-1"

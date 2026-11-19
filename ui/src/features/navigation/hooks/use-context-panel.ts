@@ -120,8 +120,7 @@ export function useContextPanel(): ContextPanelModel | null {
       : requested && tabs.includes(requested)
         ? requested
         : DEFAULT_AGENT_TAB;
-    const isHermes = agent?.agentType === "hermes";
-    const podGroups = isHermes && pod ? [podNavGroup(pod, orgBase, role, activeTab)] : [];
+    const podGroups = pod ? [podNavGroup(pod, orgBase, role, activeTab)] : [];
     return {
       title: agent?.name ?? "Agent",
       crumb: { label: "Your team", href: orgBase },
@@ -130,7 +129,7 @@ export function useContextPanel(): ContextPanelModel | null {
         key: group.key,
         label: group.label,
         items: group.tabs
-          .filter((tab) => tabs.includes(tab) && !(isHermes && AGENT_POD_TABS.includes(tab)))
+          .filter((tab) => tabs.includes(tab) && !(pod && AGENT_POD_TABS.includes(tab)))
           .map((tab) => ({
             key: tab,
             label: AGENT_PAGE_TAB_LABELS[tab],
