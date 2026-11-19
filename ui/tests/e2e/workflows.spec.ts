@@ -53,26 +53,6 @@ test.describe("WF01 Organization workflow authoring", () => {
     await expect(workflows.card(NAME)).toBeVisible();
   });
 
-  test("disabled workflows hide the destination, the Agent section and creation", async ({
-    page,
-  }) => {
-    await support.intercept(MOCK_AGENT_ID, { saved: true, authoring: false });
-    const workflows = new WorkflowsPage(page);
-    const capability = page.waitForResponse((response) =>
-      response.url().endsWith("/workflow-capabilities"),
-    );
-    await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=workflows`);
-    await expect(workflows.sectionLink("Overview")).toHaveAttribute("aria-current", "page");
-    expect((await (await capability).json()).authoring).toBe(false);
-    await expect(workflows.sectionLink("Workflows")).toHaveCount(0);
-    await expect(workflows.railLink()).toHaveCount(0);
-    await workflows.goto();
-    await expect(
-      page.getByText("Workflow authoring is disabled for this installation."),
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: "New workflow" })).toHaveCount(0);
-  });
-
   test("an old link to an Agent's saved workflow opens it for the Organization", async ({
     page,
   }) => {

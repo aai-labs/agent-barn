@@ -27,7 +27,6 @@ from api.domains.workflows.models import (
     WorkflowVersionRead,
     WorkflowVersionSummaryRead,
 )
-from api.domains.workflows.platform_repository import PlatformWorkflowRepository
 from api.domains.workflows.repository import (
     UNCHANGED,
     Unchanged,
@@ -65,11 +64,7 @@ class WorkflowService:
     repository: WorkflowRepository
     policy: PermissionPolicy
     agents: AgentAuthorization
-    settings: PlatformWorkflowRepository
     usage: UsageGuard
-
-    def _authoring_enabled(self) -> bool:
-        return self.settings.read().authoring_enabled
 
     def _member(self, organization_id: UUID, context: CurrentUserContext) -> None:
         self.policy.require_organization(context, organization_id, PermissionKey.ORGANIZATION_READ)
@@ -84,16 +79,11 @@ class WorkflowService:
             return True
         return self.policy.resolve(context, organization_id, PermissionKey.WORKFLOW_MANAGE) is not None
 
-    def _require_authoring(self) -> None:
-        if not self._authoring_enabled():
-            raise HTTPException(409, "Workflow authoring is disabled for this installation")
-
     def _require_manage(self, organization_id: UUID, workflow_id: UUID, context: CurrentUserContext) -> Workflow:
         self._member(organization_id, context)
         workflow = self._found(organization_id, workflow_id)
         if not self._can_manage(organization_id, workflow.created_by_membership_id, context):
             raise HTTPException(403, "Only the workflow's creator or an Organization Owner or Admin can change it")
-        self._require_authoring()
         return workflow
 
     def _found(self, organization_id: UUID, workflow_id: UUID) -> Workflow:
@@ -114,7 +104,7 @@ class WorkflowService:
 
     def capabilities(self, organization_id: UUID, context: CurrentUserContext) -> WorkflowCapabilitiesRead:
         self._member(organization_id, context)
-        return WorkflowCapabilitiesRead(authoring=self._authoring_enabled(), execution=True)
+        return WorkflowCapabilitiesRead(authoring=True, execution=True)
 
     def _actions(self, archived_at: datetime | None, can_author: bool) -> list[Literal["save_version", "archive"]]:
         if can_author and archived_at is None:
@@ -136,10 +126,7 @@ class WorkflowService:
             raise HTTPException(404, "Workflow is unavailable")
         creators = self.repository.creators([workflow.created_by_membership_id])
         readable = self._readable_agents({workflow.default_agent_id}, context)
-        can_author = (
-            self._can_manage(workflow.organization_id, workflow.created_by_membership_id, context)
-            and self._authoring_enabled()
-        )
+        can_author = self._can_manage(workflow.organization_id, workflow.created_by_membership_id, context)
         return WorkflowRead(
             id=workflow.id,
             created_by=self._creator(creators, workflow.created_by_membership_id),
@@ -185,15 +172,12 @@ class WorkflowService:
         run_counts = self.repository.run_counts(
             (row.id for row in rows), self.agents.authorization_scope(context, PermissionKey.AGENT_READ)
         )
-        authoring = self._authoring_enabled()
         return PaginatedItems(
             page,
             size,
             total,
             [
-                self._summary_read(
-                    organization_id, row, creators, readable, run_counts.get(row.id, 0), authoring, context
-                )
+                self._summary_read(organization_id, row, creators, readable, run_counts.get(row.id, 0), context)
                 for row in rows
             ],
         )
@@ -205,10 +189,9 @@ class WorkflowService:
         creators: dict[UUID, WorkflowCreator],
         readable: dict[UUID, str],
         run_count: int,
-        authoring: bool,
         context: CurrentUserContext,
     ) -> WorkflowSummaryRead:
-        can_author = authoring and self._can_manage(organization_id, row.created_by_membership_id, context)
+        can_author = self._can_manage(organization_id, row.created_by_membership_id, context)
         return WorkflowSummaryRead(
             id=row.id,
             created_by=self._creator(creators, row.created_by_membership_id),
@@ -245,7 +228,6 @@ class WorkflowService:
 
     def create(self, organization_id: UUID, payload: WorkflowCreate, context: CurrentUserContext) -> WorkflowRead:
         self._member(organization_id, context)
-        self._require_authoring()
         self.usage.check(organization_id, UsageAction.CREATE_WORKFLOW)
         workflow = self.repository.create(
             organization_id,

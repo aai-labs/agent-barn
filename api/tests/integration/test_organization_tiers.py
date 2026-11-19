@@ -22,7 +22,7 @@ from api.domains.tiers.models import SEED_TIERS, TierFeature
 from api.domains.tiers.repository import TierRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
-from api.tests.helpers.workflows import authoring_is_enabled, draft
+from api.tests.helpers.workflows import draft
 from api.tests.integration.test_agent_webhooks import _create_webhook
 from api.tests.integration.test_spend_limits import events_named
 from api.tests.integration.test_trial_organizations import the_organization_is_a_trial
@@ -449,7 +449,7 @@ _FEATURE_OF = {
 
 @pytest.mark.parametrize("action", list(_FEATURE_OF))
 def test_free_refuses_what_it_leaves_out(action):
-    with given(_setup(on_tier("free"), there_is_an_agent(), authoring_is_enabled)) as context:
+    with given(_setup(on_tier("free"), there_is_an_agent())) as context:
         response = _gated_requests()[action](context)
 
         refused_by_tier(response, feature=_FEATURE_OF[action])
@@ -469,7 +469,7 @@ def test_free_refuses_starting_or_rerunning_a_workflow_saved_before_the_tier_cha
             headers=auth(context.access_token),
         )
 
-    with given(_setup(there_is_an_agent(status=AgentStatus.RUNNING), authoring_is_enabled)) as context:
+    with given(_setup(there_is_an_agent(status=AgentStatus.RUNNING))) as context:
         created = context.client.post(
             org_url(context, "/workflows"), json={"draft": draft()}, headers=auth(context.access_token)
         )

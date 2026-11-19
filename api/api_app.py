@@ -90,7 +90,6 @@ from api.domains.users.organization_users.routes import member_router, platform_
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.web_chat.routes import web_chat_router
-from api.domains.workflows.platform_routes import platform_workflow_router
 from api.domains.workflows.routes import router as workflows_router
 from api.domains.workflows.run_routes import router as workflow_runs_router
 from api.domains.workflows.runtime_routes import router as workflow_runtime_router
@@ -186,7 +185,6 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_organization_settings_router)
     subapi.include_router(platform_billing_router)
     subapi.include_router(stripe_webhook_router)
-    subapi.include_router(platform_workflow_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)
     subapi.include_router(organization_memory_router)

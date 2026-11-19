@@ -956,11 +956,6 @@
   ],
   [
     "GET",
-    "/platform/settings/workflows",
-    "read_settings_platform_settings_workflows_get"
-  ],
-  [
-    "GET",
     "/platform/skills",
     "list_global_skills_for_platform_admin_platform_skills_get"
   ],
@@ -1748,10 +1743,5 @@
     "PUT",
     "/platform/settings/trial",
     "update_trial_settings_platform_settings_trial_put"
-  ],
-  [
-    "PUT",
-    "/platform/settings/workflows",
-    "update_settings_platform_settings_workflows_put"
   ]
 ]

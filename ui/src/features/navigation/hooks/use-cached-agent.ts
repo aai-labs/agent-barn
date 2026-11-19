@@ -5,9 +5,6 @@ import { hashKey, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
 import type { Agent, AgentHealth } from "@/features/agents/schemas";
 import { agentsKey } from "@/features/agents/utils";
-import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
-import { workflowKeys } from "@/features/workflows/hooks/use-workflows";
-import type { WorkflowCapabilities } from "@/features/workflows/schemas";
 
 /**
  * What the query cache holds for a key, kept current, without fetching and without
@@ -46,16 +43,4 @@ export function useCachedAgent(agentId: string | undefined): Agent | undefined {
 /** The health the Agent page polls, when it polls it. */
 export function useCachedAgentHealth(agentId: string): AgentHealth | undefined {
   return useCachedData<AgentHealth>(agentsKey.health(agentId));
-}
-
-/**
- * Whether this installation offers workflows, as a page has read it for the Organization.
- * Unknown (false) until one has asked, so Workflows joins the panel when the page shows it.
- */
-export function useCachedWorkflowAuthoring(): boolean {
-  const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
-  const data = useCachedData<WorkflowCapabilities>(
-    workflowKeys.capabilities({ organizationId }),
-  );
-  return data?.authoring === true;
 }

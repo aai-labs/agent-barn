@@ -86,7 +86,7 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
   const [historic, setHistoric] = useState<WorkflowVersion | null>(null);
   // Without workflows in the tier, existing ones stay editable but none can be added or run.
   const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
-  const canCreate = capabilities.data?.authoring === true && tierAllowsWorkflows;
+  const canCreate = tierAllowsWorkflows;
   const canRun = capabilities.data?.execution === true && tierAllowsWorkflows;
 
   const openRun = (id: string) => {
@@ -435,11 +435,6 @@ export function WorkflowsPage({ organizationId }: { organizationId: string }) {
           </button>
         )}
       </div>
-      {capabilities.data?.authoring === false && (
-        <p className="mb-6 text-sm">
-          Workflow authoring is disabled for this installation.
-        </p>
-      )}
       <Tabs
         value={landingTab}
         onValueChange={(value) => {

@@ -44,7 +44,6 @@ import api.domains.tool_calls.models
 import api.domains.users.models
 import api.domains.users.organization_users.models
 import api.domains.workflows.models
-import api.domains.workflows.platform_models
 import api.domains.workflows.run_models  # noqa: F401
 from api.core.config import get_config
 from api.migrations.autogenerate import include_object
