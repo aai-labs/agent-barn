@@ -52,8 +52,9 @@ NEW_SIGNAL_BY_KIND: dict[SeenKind, AnomalySignal] = {
 class ClassificationState(StrEnum):
     """Whether a decision model has judged the Anomaly yet.
 
-    Only STATISTICS_ONLY is written today. Classification (a later ticket) fills in
-    the classification columns and moves the state on, without reshaping the table.
+    A new Anomaly starts STATISTICS_ONLY. The check then asks the decision model about it
+    once; an answer fills in the classification columns and moves it to CLASSIFIED, a
+    failure leaves it as it is.
     """
 
     STATISTICS_ONLY = "STATISTICS_ONLY"

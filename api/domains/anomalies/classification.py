@@ -108,9 +108,11 @@ def classification_request(
     return state, questions
 
 
-def read_classifications(anomalies: Sequence[AgentAnomaly], answers: Mapping[str, Answer]) -> dict[UUID, Classification]:
+def read_classifications(
+    anomalies: Sequence[AgentAnomaly], answers: Mapping[str, Answer]
+) -> dict[UUID, Classification]:
     """Each Anomaly's classification from the answers to `classification_request`'s
-    questions. Raises ValueError for answers of the wrong type."""
+    questions. Raises TypeError for answers of the wrong type."""
     return {anomaly.id: _classification(_ref(index), answers) for index, anomaly in enumerate(anomalies)}
 
 
@@ -160,7 +162,7 @@ def _classification(ref: str, answers: Mapping[str, Answer]) -> Classification:
         or not isinstance(category, ChoiceAnswer)
         or not isinstance(severity, ScoreAnswer)
     ):
-        raise ValueError(f"Unexpected answer types for {ref}")
+        raise TypeError(f"Unexpected answer types for {ref}")
     return Classification(
         unusual_probability=unusual.probability,
         category=category.choice,

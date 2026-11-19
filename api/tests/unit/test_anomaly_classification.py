@@ -149,15 +149,16 @@ def test_a_cap_is_described_against_the_cap_with_no_usual_value():
 def test_a_first_use_of_a_tool_or_integration_names_it(signal, subject):
     state, _ = classification_request([_first_use(signal, subject, uses=3)], CONTEXT, other_ongoing=[])
 
-    assert_that(state["flagged"][0], equal_to({"ref": "a1", "signal": signal.value, "kind": "first_use", "subject": subject, "uses": 3}))
+    assert_that(
+        state["flagged"][0],
+        equal_to({"ref": "a1", "signal": signal.value, "kind": "first_use", "subject": subject, "uses": 3}),
+    )
 
 
 def test_a_new_destination_never_sends_its_host():
     host = "customer-portal.example.com"
 
-    state, _ = classification_request(
-        [_first_use(AnomalySignal.NEW_DESTINATION, host)], CONTEXT, other_ongoing=[]
-    )
+    state, _ = classification_request([_first_use(AnomalySignal.NEW_DESTINATION, host)], CONTEXT, other_ongoing=[])
 
     assert_that(state["flagged"][0], is_not(has_key("subject")))
     assert host not in json.dumps(state)
@@ -188,12 +189,17 @@ def test_other_ongoing_activity_is_given_as_context():
 def test_each_flagged_item_gets_an_unusual_a_category_and_a_severity_question():
     _, questions = classification_request([_rate(), _cap()], CONTEXT, other_ongoing=[])
 
-    assert_that(list(questions), equal_to(["a1_unusual", "a1_category", "a1_severity", "a2_unusual", "a2_category", "a2_severity"]))
+    assert_that(
+        list(questions),
+        equal_to(["a1_unusual", "a1_category", "a1_severity", "a2_unusual", "a2_category", "a2_severity"]),
+    )
     assert_that(questions["a1_unusual"], instance_of(YesNoQuestion))
     assert_that(questions["a1_category"], has_properties(options=CATEGORIES))
     assert_that(questions["a1_category"], instance_of(ChoiceQuestion))
     assert_that(questions["a1_severity"], instance_of(ScoreQuestion))
-    assert_that(list(questions["a1_severity"].levels), equal_to(list(SEVERITY_LEVELS)))
+    severity = questions["a1_severity"]
+    assert isinstance(severity, ScoreQuestion)
+    assert_that(list(severity.levels), equal_to(list(SEVERITY_LEVELS)))
     assert "a1" in questions["a1_unusual"].question
 
 
@@ -260,7 +266,7 @@ def test_answers_of_the_wrong_type_are_refused():
     anomaly = _rate()
     answers = {**_answers("a1"), "a1_unusual": ChoiceAnswer(choice="OTHER", confidence=1.0, probabilities={})}
 
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         read_classifications([anomaly], answers)
 
 

@@ -161,7 +161,9 @@ def test_an_ongoing_anomaly_is_not_classified_again():
         _check(context)
         _check(context, LATER)
 
-        assert_that(_anomalies(context, AnomalySignal.TOOL_CALLS_PER_HOUR), contains_exactly(has_properties(ended_at=None)))
+        assert_that(
+            _anomalies(context, AnomalySignal.TOOL_CALLS_PER_HOUR), contains_exactly(has_properties(ended_at=None))
+        )
         assert_that(context.decide.call_count, equal_to(1))
 
 
@@ -184,7 +186,12 @@ def test_what_is_still_ongoing_is_given_as_context_for_what_is_new():
 
 @pytest.mark.parametrize(
     "failure",
-    [DecisionFailure.BUDGET_EXCEEDED, DecisionFailure.UNAVAILABLE, DecisionFailure.KEY_OR_MODEL_REJECTED, DecisionFailure.BAD_RESPONSE],
+    [
+        DecisionFailure.BUDGET_EXCEEDED,
+        DecisionFailure.UNAVAILABLE,
+        DecisionFailure.KEY_OR_MODEL_REJECTED,
+        DecisionFailure.BAD_RESPONSE,
+    ],
 )
 def test_a_failed_classification_leaves_the_anomaly_as_flagged_by_statistics(failure):
     with given(_given(the_decision_model_fails(failure))) as context:
@@ -233,7 +240,9 @@ def test_a_failed_classification_is_not_retried():
 )
 def test_a_new_destination_is_classified_on_both_runtimes_without_its_host(agent_type, tool_name, arguments):
     with given(_given(the_decision_model_classifies(category="RISKY_ACTION"), agent_type=agent_type)) as context:
-        _learned_then(context, [_tool_call(context.agent, NOW + timedelta(minutes=1), tool_name=tool_name, arguments=arguments)])
+        _learned_then(
+            context, [_tool_call(context.agent, NOW + timedelta(minutes=1), tool_name=tool_name, arguments=arguments)]
+        )
 
         assert_that(
             _anomalies(context, AnomalySignal.NEW_DESTINATION),
