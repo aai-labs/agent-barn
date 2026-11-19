@@ -9,13 +9,22 @@ import time
 from pathlib import Path
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, has_entries, is_
+from hamcrest import assert_that, contains_string, equal_to, has_entries, is_, is_not
 
 _PLUGIN_DIR = Path(__file__).parents[2] / "domains/agents/scripts/openclaw/plugins/agentbarn-tasks"
 _DRIVER = Path(__file__).parents[1] / "fixtures/agent_tasks/openclaw_tasks_plugin_driver.mjs"
 _FAKE_COMMAND = Path(__file__).parents[1] / "fixtures/agent_tasks/fake_task_command.py"
 _TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
 _SESSIONS_KEPT = 500
+_PARENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+_BOT_ID = "0000000b-0000-4000-8000-00000000000b"
+_BOT_IDENTITY = {
+    "AGENT_ID": _BOT_ID,
+    "INGEST_URL": "http://ingest/bot",
+    "INGEST_API_KEY": "bot-ingest-key",
+    "ARTIFACT_URL": "http://artifacts/bot",
+    "ARTIFACT_API_KEY": "bot-artifact-key",
+}
 
 
 def _drive(tmp_path: Path, steps: list[dict], open_tasks: list[dict] | None = None, **env: str) -> dict:
@@ -38,7 +47,7 @@ def _drive(tmp_path: Path, steps: list[dict], open_tasks: list[dict] | None = No
         env={
             "PATH": os.environ["PATH"],
             "HOME": str(tmp_path),
-            "AGENT_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "AGENT_ID": _PARENT_ID,
             "INGEST_URL": "http://localhost:8001/ingest/v1",
             "INGEST_API_KEY": "test-key-123",
             "AGENTBARN_TASK_COMMAND": str(wrapper),
@@ -1086,6 +1095,113 @@ def test_only_the_latest_sessions_requests_are_kept(tmp_path: Path):
     assert_that(_option(_creates(tmp_path)[0], "title"), equal_to("Work recorded automatically"))
 
 
+# --- each agent in a pod with Bots ---
+
+
+def _bot_pod(tmp_path: Path, **secret: str) -> str:
+    directory = tmp_path / "bots" / _BOT_ID
+    directory.mkdir(parents=True)
+    for name, value in {**_BOT_IDENTITY, **secret}.items():
+        (directory / name).write_text(value)
+    (tmp_path / ".openclaw" / f"workspace-{_BOT_ID}").mkdir(parents=True)
+    return str(tmp_path / "bots")
+
+
+def _as(step: dict, agent: str | None = _BOT_ID) -> dict:
+    ctx = step.get("ctx", {})
+    session = f"agent:{agent or _BOT_ID}:{ctx.get('sessionKey', 's1')}"
+    return {**step, "ctx": {**ctx, "sessionKey": session, **({"agentId": agent} if agent else {})}}
+
+
+def _env_of(tmp_path: Path, command: str) -> list[dict]:
+    return [call["env"] for call in _calls(tmp_path) if call["argv"][0] == command]
+
+
+def test_a_bots_task_tool_runs_the_command_as_that_bot_in_its_own_workspace(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(tmp_path, [_as(_tool(action="create", title="Report"))], BOT_SECRET_ROOT=pod)
+
+    call = _calls(tmp_path)[-1]
+    assert_that(call["env"], equal_to(_BOT_IDENTITY))
+    workspace = tmp_path / ".openclaw" / f"workspace-{_BOT_ID}"
+    assert_that(os.path.realpath(call["cwd"]), equal_to(os.path.realpath(workspace)))
+
+
+@pytest.mark.parametrize("agent", [_BOT_ID, None])
+def test_a_bots_unrecorded_work_is_recorded_as_that_bot(tmp_path: Path, agent: str | None):
+    pod = _bot_pod(tmp_path)
+    work = [_as(_after_tool(f"c{n}"), agent) for n in range(3)]
+
+    _drive(tmp_path, [*work, _as(_agent_end(), agent)], BOT_SECRET_ROOT=pod)
+
+    assert_that(_env_of(tmp_path, "create"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_files_are_found_in_its_own_workspace(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    states = tmp_path / ".openclaw" / f"workspace-{_BOT_ID}" / "states.csv"
+    states.write_text("a,b\n")
+    wrote = _after_tool("c1", tool="write", params={"path": "states.csv"})
+
+    _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end())], BOT_SECRET_ROOT=pod)
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, str(states), "--replace"]]))
+    assert_that(_env_of(tmp_path, "attach"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_file_over_its_own_limit_is_named_on_the_next_turn(tmp_path: Path):
+    pod = _bot_pod(tmp_path, ARTIFACT_MAX_BYTES="1")
+    (tmp_path / ".openclaw" / f"workspace-{_BOT_ID}" / "states.csv").write_text("a,b\n")
+    wrote = _after_tool("c1", tool="write", params={"path": "states.csv"})
+
+    driven = _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end()), _as(_prompt())], BOT_SECRET_ROOT=pod)
+
+    assert_that((_attaches(tmp_path), "states.csv" in _context(driven["results"][-1])), equal_to(([], True)))
+
+
+@pytest.mark.parametrize(
+    "secret", [None, {"AGENT_ID": _PARENT_ID}, {"INGEST_API_KEY": ""}], ids=["missing", "another_agent", "no_key"]
+)
+def test_a_bot_without_its_own_secret_records_nothing_and_never_as_the_parent(tmp_path: Path, secret: dict | None):
+    pod = _bot_pod(tmp_path, **secret) if secret is not None else str(tmp_path / "bots")
+    work = [_as(_after_tool(f"c{n}")) for n in range(3)]
+
+    driven = _drive(
+        tmp_path,
+        [_as(_tool(action="create", title="Report")), *work, _as(_agent_end()), _as(_prompt())],
+        BOT_SECRET_ROOT=pod,
+    )
+
+    assert_that(_calls(tmp_path), equal_to([]))
+    assert_that(_tool_output(driven["results"][0])["error"], contains_string("unavailable"))
+    assert_that(_context(driven["results"][-1]), is_not(contains_string("Your open and latest finished Tasks")))
+
+
+def test_each_agent_is_shown_its_own_open_tasks(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(
+        tmp_path,
+        [_prompt(), _as(_prompt()), _prompt(), _as(_prompt())],
+        open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}],
+        BOT_SECRET_ROOT=pod,
+    )
+
+    assert_that([env["AGENT_ID"] for env in _env_of(tmp_path, "list")], equal_to([_PARENT_ID, _BOT_ID]))
+
+
+def test_the_parent_in_a_pod_with_bots_keeps_its_own_identity_and_workspace(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(tmp_path, [_as(_tool(action="create", title="Report"), "main")], BOT_SECRET_ROOT=pod)
+
+    call = _calls(tmp_path)[-1]
+    assert_that(call["env"], has_entries(AGENT_ID=_PARENT_ID, INGEST_API_KEY="test-key-123"))
+    workspace = tmp_path / ".openclaw" / "workspace"
+    assert_that(os.path.realpath(call["cwd"]), equal_to(os.path.realpath(workspace)))
+
+
 # --- schedules: a Task follows the schedule it was created for ---
 
 _JOB_ID = "a829ba55-d319-4b26-962a-7eee853a53f0"
@@ -1163,7 +1279,7 @@ def test_a_task_whose_job_is_the_runs_stays_in_progress_and_follows_the_schedule
         ),
     )
     assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "in_progress"]]))
-    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID}}))
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "agent": "main"}}))
 
 
 def test_a_task_whose_job_was_setting_up_the_schedule_is_done_even_if_the_agent_kept_it(tmp_path: Path):
@@ -1189,7 +1305,7 @@ def test_a_schedule_whose_runs_are_the_job_gets_a_task_when_the_agent_recorded_n
 
     [created] = _argvs(tmp_path, "create")
     assert_that("--status=in_progress" in created and "--origin=automatic" in created, equal_to(True))
-    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID}}))
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "agent": "main"}}))
 
 
 def test_a_one_off_schedule_is_asked_about_with_a_limit_of_one_run(tmp_path: Path):
@@ -1457,3 +1573,71 @@ def test_a_scheduled_run_with_no_linked_task_is_asked_about_as_a_scheduled_run(t
     _drive(tmp_path, steps)
 
     assert_that(_asked(tmp_path)[0]["trigger"], equal_to("cron"))
+
+
+# --- a Bot's schedules and turn-end questions ---
+
+_BOT_CRON_SESSION = f"agent:{_BOT_ID}:cron:{_JOB_ID}:run:r1"
+
+
+def _bot_cron(step: dict) -> dict:
+    return {**step, "ctx": {**step["ctx"], "sessionKey": _BOT_CRON_SESSION, "agentId": _BOT_ID}}
+
+
+def _bot_linked(tmp_path: Path) -> None:
+    (tmp_path / ".openclaw").mkdir(parents=True, exist_ok=True)
+    link = {"task_id": _TASK_ID, "agent": _BOT_ID}
+    (tmp_path / ".openclaw" / "agentbarn-task-schedules.json").write_text(json.dumps({_JOB_ID: link}))
+
+
+def _removed() -> dict:
+    return {"hook": "cron_changed", "event": {"action": "removed", "jobId": _JOB_ID, "agentId": _BOT_ID}, "ctx": {}}
+
+
+def test_a_bots_schedule_is_linked_to_its_task_as_that_bot(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    steps = [_prompt(prompt=_GREETING), _schedule_added(), _task_recorded("done"), _agent_end()]
+
+    _drive(tmp_path, [_as(step) for step in steps], FAKE_SCHEDULE_INTENT="runs", BOT_SECRET_ROOT=pod)
+
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "agent": _BOT_ID}}))
+    assert_that(_env_of(tmp_path, "schedule-intent"), equal_to([_BOT_IDENTITY]))
+    assert_that(_env_of(tmp_path, "status"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_scheduled_run_is_noted_on_its_task_as_that_bot(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    _bot_linked(tmp_path)
+
+    _drive(tmp_path, [_bot_cron(_cron_prompt()), _bot_cron(_cron_end())], BOT_SECRET_ROOT=pod)
+
+    assert_that(_env_of(tmp_path, "note"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_schedule_removed_outside_a_run_finishes_its_task_as_that_bot(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    _bot_linked(tmp_path)
+
+    _drive(tmp_path, [_removed()], BOT_SECRET_ROOT=pod)
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_env_of(tmp_path, "status"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_task_is_asked_about_as_that_bot_before_it_is_marked_done(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(tmp_path, [_as(_left_in_progress()), _as(_ended())], BOT_SECRET_ROOT=pod)
+
+    assert_that(_env_of(tmp_path, "turn-end"), equal_to([_BOT_IDENTITY]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_env_of(tmp_path, "status"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_schedule_linked_without_an_agent_finishes_its_task_as_the_parent(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    _linked(tmp_path)
+
+    _drive(tmp_path, [_removed()], BOT_SECRET_ROOT=pod)
+
+    assert_that([env["AGENT_ID"] for env in _env_of(tmp_path, "status")], equal_to([_PARENT_ID]))

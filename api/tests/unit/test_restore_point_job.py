@@ -1,3 +1,4 @@
+import ast
 import gzip
 import io
 import os
@@ -24,6 +25,8 @@ from api.domains.agents.restore_point_job import (
     HERMES_EXCLUDED,
     MANIFEST_NAME,
     MODE_RESTORE,
+    OPENCLAW_BOT_HOME_EXCLUDED,
+    OPENCLAW_BOT_WORKSPACE_EXCLUDED,
     OPENCLAW_EXCLUDED,
     ArchiveValidationError,
     capture,
@@ -43,6 +46,13 @@ _RETIRE_MESSAGING = _AGENTS_DIR / "scripts" / "retire-messaging.py"
 _OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
 _AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
 _AGENT_SERVICE = _AGENTS_DIR / "service.py"
+_OPENCLAW_BOT_SETUP = _AGENTS_DIR / "scripts" / "openclaw" / "bot-setup.py"
+_GOG_ARTIFACTS = _AGENTS_DIR / "gog_artifacts.py"
+_OPENCLAW_BOT_HOME_EVIDENCE = {
+    "aai-cli": (_AGENT_SERVICE, 'aai_store_dir = f"{aai_home}/aai-cli"'),
+    ".config": (_AAI_CLI_ARTIFACTS, "/.config/aai-cli"),
+    ".local": (_GOG_ARTIFACTS, 'SHIM_BIN_SUBDIR = ".local/bin"'),
+}
 
 _HERMES_WORKSPACE_COPY_LOOP = re.compile(r"^for f in (?P<files>[^;]+); do$", re.MULTILINE)
 
@@ -789,3 +799,91 @@ def test_a_file_that_shrinks_during_a_live_capture_is_padded_and_the_archive_sta
 
     assert_that(manifest["changed"], equal_to(1))
     validate_archive(dest / ARCHIVE_NAME, tmp_path / "target")
+
+
+OPENCLAW_BOT = "0000000a-0000-4000-8000-00000000000a"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"workspace-{OPENCLAW_BOT}/{name}"
+        for name in ("AGENTS.md", "BOOT.md", "BOOTSTRAP.md", "HEARTBEAT.md", "IDENTITY.md", "SOUL.md", "TOOLS.md")
+    ]
+    + [
+        f"workspace-{OPENCLAW_BOT}/skills/jira/SKILL.md",
+        f"bots/{OPENCLAW_BOT}/aai-cli/aai-secrets.enc.json",
+        f"bots/{OPENCLAW_BOT}/aai-cli/key",
+        f"bots/{OPENCLAW_BOT}/.config/aai-cli/config.toml",
+        f"bots/{OPENCLAW_BOT}/.config/gogcli/keyring/token",
+        f"bots/{OPENCLAW_BOT}/.local/bin/gog",
+    ],
+)
+def test_an_openclaw_bots_credentials_and_generated_files_are_left_out(path):
+    assert_that(is_excluded(path, _OPENCLAW), equal_to(True))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"workspace-{OPENCLAW_BOT}/USER.md",
+        f"workspace-{OPENCLAW_BOT}/notes.md",
+        f"workspace-{OPENCLAW_BOT}/memory/2026-11-12.md",
+        f"agents/{OPENCLAW_BOT}/agent/sessions/session.jsonl",
+        f"bots/{OPENCLAW_BOT}/agent-trigger-receipts.sqlite3",
+        "state/openclaw.sqlite",
+    ],
+)
+def test_an_openclaw_bots_own_state_is_kept(path):
+    assert_that(is_excluded(path, _OPENCLAW), equal_to(False))
+
+
+@pytest.mark.parametrize(
+    "path", [f"workspace/workspace-{OPENCLAW_BOT}/AGENTS.md", f"workspace/bots/{OPENCLAW_BOT}/aai-cli/key"]
+)
+def test_only_top_level_openclaw_bot_folders_count(path):
+    assert_that(is_excluded(path, _OPENCLAW), equal_to(False))
+
+
+def test_the_openclaw_bot_rules_do_not_reach_hermes():
+    assert_that(is_excluded(f"workspace-{OPENCLAW_BOT}/AGENTS.md", _HERMES), equal_to(False))
+
+
+def test_an_openclaw_bots_markdown_exclusions_match_what_bot_setup_rewrites():
+    module = ast.parse(_OPENCLAW_BOT_SETUP.read_text(encoding="utf-8"))
+    values = {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in module.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id in {"WORKSPACE_FILES", "AGENT_OWNED_FILES"}
+    }
+    rewritten = set(values["WORKSPACE_FILES"]) - set(values["AGENT_OWNED_FILES"])
+
+    assert_that({name for name in OPENCLAW_BOT_WORKSPACE_EXCLUDED if name.endswith(".md")}, equal_to(rewritten))
+    assert_that('workspace / "skills"' in _OPENCLAW_BOT_SETUP.read_text(encoding="utf-8"), equal_to(True))
+
+
+def test_every_openclaw_bot_home_exclusion_is_still_written_by_the_runtime():
+    assert_that(set(OPENCLAW_BOT_HOME_EXCLUDED), equal_to(set(_OPENCLAW_BOT_HOME_EVIDENCE)))
+    for source, evidence in _OPENCLAW_BOT_HOME_EVIDENCE.values():
+        assert_that(evidence in source.read_text(encoding="utf-8"), equal_to(True))
+
+
+def test_an_openclaw_capture_with_bots_keeps_their_sessions_and_drops_their_credentials(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _openclaw_volume(source)
+    _write(source, f"workspace-{OPENCLAW_BOT}/AGENTS.md")
+    _write(source, f"workspace-{OPENCLAW_BOT}/USER.md", "learned profile")
+    _write(source, f"agents/{OPENCLAW_BOT}/agent/sessions/session.jsonl", "conversation")
+    _write(source, f"bots/{OPENCLAW_BOT}/aai-cli/key", "KEY")
+
+    capture(source, dest, _OPENCLAW)
+
+    names = _members(dest)
+    assert_that(names, has_item(f"workspace-{OPENCLAW_BOT}/USER.md"))
+    assert_that(names, has_item(f"agents/{OPENCLAW_BOT}/agent/sessions/session.jsonl"))
+    assert_that(names, is_not(has_item(f"workspace-{OPENCLAW_BOT}/AGENTS.md")))
+    assert_that(names, is_not(has_item(f"bots/{OPENCLAW_BOT}/aai-cli/key")))

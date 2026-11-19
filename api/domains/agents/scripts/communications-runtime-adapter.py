@@ -18,6 +18,7 @@ AGENT_ID = os.environ["AGENT_ID"]
 RUNTIME_API_URL = os.environ["RUNTIME_API_URL"].rstrip("/")
 RUNTIME_API_KEY = os.environ["RUNTIME_API_KEY"]
 RUNTIME_MODEL = os.environ["RUNTIME_MODEL"]
+RUNTIME_SESSION_PREFIX = os.environ.get("RUNTIME_SESSION_PREFIX", "")
 # "hermes" drives the async /v1/runs API below; anything else (including unset,
 # for OpenClaw pods which don't set this) keeps the original blocking
 # /v1/chat/completions call, since only Hermes exposes the run/event/approval API.
@@ -167,7 +168,7 @@ def runtime_headers(session_key: str, idempotency_key: str) -> dict[str, str]:
 def session_key_for(delivery: dict) -> str:
     envelope = delivery["envelope"]
     return (
-        f"connection:{delivery['connection_id']}:"
+        f"{RUNTIME_SESSION_PREFIX}connection:{delivery['connection_id']}:"
         f"{envelope['location']['id']}:{envelope['location'].get('thread_id') or 'root'}"
     )
 
@@ -199,6 +200,8 @@ def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict 
 _LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
 if os.environ.get("GATEWAY_MULTIPLEX_PROFILES") == "1":
     _LLM_ERROR_MARKER += "." + hashlib.sha256(os.environ.get("OPENAI_API_KEY", "").encode()).hexdigest()[:16]
+elif os.environ.get("RUNTIME_SESSION_PREFIX"):
+    _LLM_ERROR_MARKER += "." + hashlib.sha256(os.environ.get("LITELLM_API_KEY", "").encode()).hexdigest()[:16]
 _TURN_STARTED: dict[str, float] = {}
 
 
