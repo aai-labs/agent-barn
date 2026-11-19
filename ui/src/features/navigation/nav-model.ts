@@ -219,7 +219,7 @@ export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
   { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "tasks", "file-sync"] },
-  { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage", "unusual-activity"] },
+  { key: "health", label: "Health", tabs: ["activity", "costs", "unusual-activity", "resource-usage"] },
 ];
 
 export const AGENT_CONFIGURATION_GROUPS: {

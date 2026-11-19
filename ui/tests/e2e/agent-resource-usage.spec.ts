@@ -44,7 +44,7 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
     await agentDetailPage.gotoResourceUsage();
 
     await expect(agentDetailPage.resourceUsageTab()).toBeVisible();
-    expect((await agentDetailPage.tabLabels()).slice(-3)).toEqual(["Activity", "Costs", "Resource usage"]);
+    expect((await agentDetailPage.tabLabels()).slice(-4)).toEqual(["Activity", "Costs", "Unusual activity", "Resource usage"]);
   });
 
   test("shows current usage against the container's limits", async ({ page }) => {
