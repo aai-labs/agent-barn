@@ -52,6 +52,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 ## Changes
 
+### 2026-11-19 — AF-425 — Prune each Bot's sessions at start
+
+- Fixed: staging turned on Hermes's session auto-prune, which runs once, when the gateway starts, outside any Bot profile, so it pruned only the Parent Agent's `state.db`. A Bot's chat sessions, kept in its own profile, were never pruned.
+- Now `bot-setup.py` runs Hermes's `SessionDB.maybe_auto_prune_and_vacuum` for each served Bot, in a subprocess with `HERMES_HOME` set to the Bot's profile, with the settings the gateway passes from that profile's `sessions` block. It is limited to 60 seconds per Bot, and a failure is logged without stopping the start. Checked once in the pinned Hermes image: a 40-day-old ended session was removed, a new one kept, and the Parent Agent's `state.db` was not touched.
+- Follow-up: the end-to-end run.
+
 ### 2026-11-19 — AF-425 — A Bot's Tasks follow its own schedules
 
 - Fixed: staging's schedule-linked Tasks (AF-412) kept every profile's schedule links in the pod's `HERMES_HOME`, the Parent Agent's folder, and read that folder's `cron/jobs.json`, while Hermes keeps a Bot's jobs in its own profile. When the Parent Agent had a job file, the next turn of any profile in the pod marked a Bot's linked Task `done` while its schedule still ran. When it had none, the Bot's runs were noted without the run limit, so the link never ended and the Task stayed `in_progress` after the last run.
