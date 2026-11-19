@@ -58,6 +58,11 @@ from api.domains.agents.builders import (
     runtime_teams_env,
     with_passthrough_placeholders,
 )
+from api.domains.agents.builders.openclaw import (
+    OpenClawBot,
+    multi_agent_gateway_config,
+    multi_agent_runtime_env,
+)
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import (
     AgentLimitReached,
@@ -75,6 +80,7 @@ from api.domains.agents.models import (
     AgentConfigurationVersionRead,
     AgentCreate,
     AgentCreatorRead,
+    AgentDefinition,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
@@ -294,6 +300,14 @@ def _manual_mixing_refused() -> HTTPException:
     )
 
 
+def _refuse_openclaw_bot_firecrawl(agent_type: AgentType, providers: Collection[str]) -> None:
+    if agent_type == AgentType.OPENCLAW and SecretProvider.FIRECRAWL in providers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A Bot on OpenClaw uses its Parent Agent's Firecrawl setup and cannot have its own Firecrawl credential",
+        )
+
+
 def _refuse_during_managed_update(agent: Agent) -> None:
     if managed_update_in_flight(agent):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
@@ -339,6 +353,7 @@ class _AssembledAgent:
     memory_key: str | None
     env_names: frozenset[str]
     tool_env_names: frozenset[str]
+    overlay: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -1008,17 +1023,16 @@ class AgentService:
             parent = self.authorization.require_action(context, parent_id, PermissionKey.AGENT_UPDATE)
             if parent.parent_agent_id is not None:
                 raise HTTPException(status.HTTP_409_CONFLICT, "A Bot cannot hold Bots")
-            if parent.agent_type != AgentType.HERMES:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only Hermes Agents can hold Bots")
             _refuse_during_managed_update(parent)
             if self.restore_points.has_blocking_operation(parent.id):
                 raise HTTPException(status.HTTP_409_CONFLICT, "An Agent restore operation is in progress")
             if parent.status == AgentStatus.RUNNING:
                 raise HTTPException(status.HTTP_409_CONFLICT, f"Agent {parent.id} must be stopped before adding a Bot")
-            if (data.approval_mode == CommandApprovalMode.MANUAL) != (
+            if parent.agent_type == AgentType.HERMES and (data.approval_mode == CommandApprovalMode.MANUAL) != (
                 parent.approval_mode == CommandApprovalMode.MANUAL
             ):
                 raise _manual_mixing_refused()
+            _refuse_openclaw_bot_firecrawl(parent.agent_type, self._requested_providers(data, parent.organization_id))
             taken = {bot.bot_slot for bot in self.repository.find_live_bots(parent.id)}
             slot = next((slot for slot in range(1, MAX_BOTS_PER_PARENT + 1) if slot not in taken), None)
             if slot is None:
@@ -1027,11 +1041,21 @@ class AgentService:
                 )
             definition = AgentCreate(
                 **dict(data),
-                agent_type=AgentType.HERMES,
+                agent_type=parent.agent_type,
                 max_turns=parent.max_turns,
                 file_sync_enabled=False,
             )
             return self._create_agent(definition, context, parent_agent_id=parent.id, bot_slot=slot)
+
+    def _requested_providers(self, data: AgentDefinition, organization_id: UUID) -> set[str]:
+        providers = {item.provider.value for item in data.secrets}
+        for attach in data.shared_credentials:
+            credential = self.shared_credential_repository.get_by_id_and_org(
+                attach.shared_credential_id, organization_id
+            )
+            if credential is not None:
+                providers.add(credential.provider)
+        return providers
 
     def _create_agent(
         self,
@@ -2030,6 +2054,8 @@ class AgentService:
                 raise HTTPException(
                     status_code=400, detail=f"Duplicate shared credential provider: {credential.provider}"
                 )
+            if agent.parent_agent_id is not None:
+                _refuse_openclaw_bot_firecrawl(agent.agent_type, {credential.provider})
             providers.add(credential.provider)
             credentials.append(credential)
         return credentials
@@ -2054,7 +2080,7 @@ class AgentService:
             return read
 
     def _refuse_bot_setting_changes(self, agent: Agent, updated: Mapping[str, Any]) -> None:
-        if agent.parent_agent_id is None:
+        if agent.parent_agent_id is None or agent.agent_type != AgentType.HERMES:
             return
         if "max_turns" in updated and updated["max_turns"] != agent.max_turns:
             raise HTTPException(status.HTTP_409_CONFLICT, "A Bot's turn limit is set on its Parent Agent")
@@ -2087,6 +2113,8 @@ class AgentService:
             )
 
         self._refuse_bot_setting_changes(agent, updated)
+        if agent.parent_agent_id is not None:
+            _refuse_openclaw_bot_firecrawl(agent.agent_type, {item.provider.value for item in data.secrets or []})
 
         if data.restart or data.policies or data.custom_api is not None:
             _refuse_during_managed_update(agent)
@@ -2561,7 +2589,7 @@ class AgentService:
             # A database fault is one of the things that lands here, and it would
             # raise again on this write. The caller still gets the classified cause.
             logger.exception("Could not record the provisioning failure for agent %s", agent.id)
-        if agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
+        if agent.parent_agent_id is None:
             try:
                 self._fail_bots(agent)
             except Exception:
@@ -2606,7 +2634,7 @@ class AgentService:
             self.k8s.wait_for_termination(name, ns)
         assembled_bots: list[tuple[Agent, _AssembledAgent]] = []
         deleted_bots: list[Agent] = []
-        if not preflight and agent.parent_agent_id is None and agent.agent_type == AgentType.HERMES:
+        if not preflight and agent.parent_agent_id is None:
             deleted_bots = self.repository.find_deleted_bots(agent.id)
             for bot in self.repository.find_live_bots(agent.id):
                 if bot.suspended_at is not None:
@@ -2875,6 +2903,7 @@ class AgentService:
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
                 resources=resources,
+                bot_ids=[bot.id for bot, _ in bots],
             )
 
         # aai-cli integration secrets — all agent types.
@@ -2961,9 +2990,12 @@ class AgentService:
             for provider, content in decrypted.items()
         ]
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
-        if agent.parent_agent_id is not None:
-            aai_home = f"/opt/data/profiles/{agent.id}"
         aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
+        if agent.parent_agent_id is not None and agent.agent_type == AgentType.HERMES:
+            aai_home = f"/opt/data/profiles/{agent.id}"
+        elif agent.parent_agent_id is not None:
+            aai_home = f"/home/node/.openclaw/bots/{agent.id}"
+            aai_store_dir = f"{aai_home}/aai-cli"
         gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
         gog_shim_home_dir = None
         if agent.parent_agent_id is not None:
@@ -3166,7 +3198,10 @@ class AgentService:
         )
 
         tool_env_names = frozenset(artifacts.env) | frozenset(custom_artifacts.env)
-        if agent.parent_agent_id is not None or self.repository.find_live_bots(agent.id):
+        hermes_pod_with_bots = agent.agent_type == AgentType.HERMES and (
+            agent.parent_agent_id is not None or bool(self.repository.find_live_bots(agent.id))
+        )
+        if hermes_pod_with_bots:
             for env_name, value in secret.string_data.items():
                 if "\n" in value or "\r" in value:
                     raise AgentProvisioningPrecondition(
@@ -3179,7 +3214,14 @@ class AgentService:
                         detail=f"{env_name} contains ${{, which a Bot's environment file cannot hold",
                     )
         bots_manifest = None
-        if bots or deleted_bot_ids:
+        if agent.agent_type == AgentType.OPENCLAW and (bots or deleted_bot_ids):
+            bots_manifest = json.dumps(
+                {
+                    "bots": [{"id": str(bot.id), "slot": bot.bot_slot} for bot, _ in bots],
+                    "deleted_ids": [str(bot_id) for bot_id in deleted_bot_ids],
+                }
+            )
+        elif bots or deleted_bot_ids:
             passthrough = bot_passthrough_names(
                 [*secret.string_data, *[name for _, assembled in bots for name in assembled.env_names]],
                 [*tool_env_names, *[name for _, assembled in bots for name in assembled.tool_env_names]],
@@ -3218,6 +3260,14 @@ class AgentService:
                 bots_manifest=bots_manifest,
             )
         else:
+            assert overlay is not None
+            openclaw_bots = [
+                OpenClawBot(id=bot.id, slot=bot.bot_slot, overlay=assembled.overlay)
+                for bot, assembled in bots
+                if bot.bot_slot is not None and assembled.overlay is not None
+            ]
+            secret.string_data.update(multi_agent_runtime_env(secret.string_data, openclaw_bots))
+            overlay = multi_agent_gateway_config(overlay, openclaw_bots, parent_env_names=list(secret.string_data))
             config_map = build_config_map(
                 agent_id=agent.id,
                 org_id=org_id,
@@ -3238,6 +3288,7 @@ class AgentService:
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
+                bots_manifest=bots_manifest,
             )
 
         config_map.data["AGENTS.md"] += custom_artifacts.policy_md
@@ -3256,6 +3307,7 @@ class AgentService:
             memory_key=memory_key,
             env_names=frozenset(secret.string_data),
             tool_env_names=tool_env_names,
+            overlay=overlay,
         )
 
     def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:

@@ -20,7 +20,7 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 - Removed: the Platform workflow authoring setting (**Platform Settings → Workflows**, `GET/PUT /api/v1/platform/settings/workflows`) and every check of it. Creating, saving, changing the default Agent and archiving no longer return 409 for a disabled installation; the Organization's Tier still decides whether new workflows can be added or run. The Workflows navigation item and an Agent's Workflows tab no longer wait for the capability read.
 - Changed: `GET /workflow-capabilities` keeps `authoring`, always true, for clients that read it. `platform.workflow_authoring.changed` is no longer emitted and stays registered for stored events and audit records.
-- Migration: `463f987cd60d` after `0a07b0b57b62` drops `platform_workflow_settings`; its downgrade restores the table with authoring on.
+- Migration: `463f987cd60d` after `c87b17ccfe1a` drops `platform_workflow_settings`; its downgrade restores the table with authoring on.
 - Verification: workflow, run, Tier and contract API suites, the drop migration test, and the workflows, workflow-runs, navigation and Agent detail Playwright specs.
 
 ### 2026-11-17 — AF-439 — [PR #368](https://github.com/aai-labs/agent-barn/pull/368) — Organization Workflows page and Agent run history (UI)
