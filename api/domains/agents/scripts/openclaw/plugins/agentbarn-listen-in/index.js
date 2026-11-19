@@ -9,7 +9,13 @@
 // Slack gives each top-level message its own session, so the first turn of a Slack
 // room session reads the channel's recent messages. Failing to read them only
 // leaves the turn without that context.
+import fs from "node:fs";
+import { join as joinPath } from "node:path";
+
 const MAX_TRACKED = 1000;
+const MAIN_AGENT = "main";
+const SECRET_ROOT = process.env.BOT_SECRET_ROOT || "/run/agentbarn/bots";
+const AGENT_NAME = /^[A-Za-z0-9-]+$/;
 const ALLOWED_TOOLS = new Set(["message", "web_search", "web_fetch", "x_search"]);
 const BLOCK_REASON = "Not available in a listen-in room. Use message to post, or stay silent.";
 const ROOM_EVENT_MARKER = "[OpenClaw room event]";
@@ -37,6 +43,26 @@ function messageText(message) {
   const content = message?.content;
   if (typeof content === "string") return content;
   return Array.isArray(content) ? content.map((part) => part?.text ?? "").join("\n") : "";
+}
+
+function agentOf(ctx) {
+  if (ctx?.agentId) return ctx.agentId;
+  const scoped = /^agent:([^:]+):/.exec(ctx?.sessionKey ?? "");
+  return scoped ? scoped[1] : MAIN_AGENT;
+}
+
+function secretValue(agent, name) {
+  try {
+    return fs.readFileSync(joinPath(SECRET_ROOT, agent, name), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function slackToken(agent) {
+  if (agent === MAIN_AGENT) return process.env.SLACK_BOT_TOKEN;
+  if (!AGENT_NAME.test(agent) || secretValue(agent, "AGENT_ID") !== agent) return undefined;
+  return secretValue(agent, "SLACK_BOT_TOKEN") || undefined;
 }
 
 async function slackCall(method, params, token) {
@@ -91,6 +117,10 @@ export default {
   description: "Limit tools on unmentioned turns in listen-in rooms",
   register(api) {
     const slackRooms = new Set(api.pluginConfig?.slackRooms ?? []);
+    const agentSlackRooms = new Map(
+      Object.entries(api.pluginConfig?.agentSlackRooms ?? {}).map(([agent, rooms]) => [agent, new Set(rooms)]),
+    );
+    const roomsOf = (agent) => (agent === MAIN_AGENT ? slackRooms : agentSlackRooms.get(agent) ?? new Set());
 
     api.on("before_agent_run", (event, ctx) => {
       if (ctx.trigger !== "user" || !ctx.runId) return undefined;
@@ -100,10 +130,12 @@ export default {
 
     api.on("before_prompt_build", async (_event, ctx) => {
       const match = SLACK_SESSION.exec(ctx.sessionKey ?? "");
-      const token = process.env.SLACK_BOT_TOKEN;
-      if (!match || !token || historyRead.has(ctx.sessionKey)) return undefined;
+      if (!match || historyRead.has(ctx.sessionKey)) return undefined;
+      const agent = agentOf(ctx);
       const channel = match[1].toUpperCase();
-      if (!slackRooms.has(channel)) return undefined;
+      if (!roomsOf(agent).has(channel)) return undefined;
+      const token = slackToken(agent);
+      if (!token) return undefined;
       remember(historyRead, ctx.sessionKey, true);
       const prependContext = await slackHistory(channel, match[2], token, api.logger);
       return prependContext ? { prependContext } : undefined;

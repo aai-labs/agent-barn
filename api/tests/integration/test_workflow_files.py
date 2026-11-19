@@ -15,7 +15,7 @@ from api.tests.helpers.artifacts import garage_storage
 from api.tests.helpers.workflows import draft
 from api.tests.integration.test_artifacts import CONTENT, metadata, publish, runtime_auth, staged
 from api.tests.integration.test_workflow_runs import attempt, result, start
-from api.tests.integration.test_workflows import _GIVEN, auth, base
+from api.tests.integration.test_workflows import _GIVEN, agent_base, auth, base
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +28,7 @@ def file_workflow(context):
     body = draft()
     body["inputs"][0]["type"] = "file"
     body["steps"].append({**body["steps"][0], "id": str(uuid4()), "name": "Consume file"})
-    response = context.client.post(base(context) + "/workflows", headers=auth(context), json=body)
+    response = context.client.post(base(context) + "/workflows", headers=auth(context), json={"draft": body})
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -62,11 +62,9 @@ def test_exact_inputs_and_checkpoint_files_are_pinned_and_exposed_separately(sto
             "filename": source["filename"],
             "size": source["size"],
         }
-        repeated = context.client.post(
-            base(context) + f"/workflows/{saved['id']}/runs", headers=auth(context), json=payload
-        )
+        repeated = context.client.post(base(context) + "/workflow-runs", headers=auth(context), json=payload)
         assert repeated.json()["id"] == run_id
-        path = base(context) + f"/artifacts/{source['id']}"
+        path = agent_base(context) + f"/artifacts/{source['id']}"
         assert context.client.delete(path, headers=auth(context)).status_code == 409
         repository, first, token = attempt(context, run_id)
         handoff = context.injector.get(WorkflowRuntimeService).handoff(first.id, token)

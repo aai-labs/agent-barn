@@ -5,7 +5,7 @@ import { parseAsString, parseAsStringEnum, useQueryStates } from "nuqs";
 import { AppErrorState } from "@/components/app-error-state";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
-import { canAgent } from "@/features/agents/utils";
+import { agentLabels, canAgent, withBotsAfterTheirParents } from "@/features/agents/utils";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import { useTasks } from "../hooks/use-agent-tasks";
@@ -43,9 +43,9 @@ export function OrganizationTasksPage() {
   );
   const [openTask, setOpenTask] = useOpenTask();
   const { selectedOrganization } = useOrganizationContext();
-  const { agents, error: agentsError, refetch: refetchAgents } = useAllAgents();
-  const taskAgents = agents.filter((agent) => canAgent(agent, "task.read"));
-  const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
+  const { agents, error: agentsError, refetch: refetchAgents } = useAllAgents({ includeBots: true });
+  const taskAgents = withBotsAfterTheirParents(agents).filter((agent) => canAgent(agent, "task.read"));
+  const agentNames = agentLabels(agents);
   const agentFilter = isUuid(filters.agent) ? filters.agent : null;
   const scope = { kind: "organization", agentId: agentFilter } as const;
   const dates = taskWindow(filters.from, filters.to);
@@ -70,7 +70,7 @@ export function OrganizationTasksPage() {
             label="Agent"
             allLabel="All agents"
             value={agentFilter}
-            options={taskAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
+            options={taskAgents.map((agent) => ({ value: agent.id, label: agentNames.get(agent.id) ?? agent.name }))}
             onChange={(agent) => void setFilters({ agent })}
           />
           <DateRangePicker

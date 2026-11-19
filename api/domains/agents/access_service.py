@@ -76,6 +76,9 @@ class AgentAccessService:
             assignment_roles[membership.id] = role.id
             assignments.append(self._to_assignment(agent, membership, user, role_read))
 
+        if agent.parent_agent_id is not None:
+            self._require_bot_reachable(agent, agent.parent_agent_id, data.general_access_role_id, assignment_roles)
+
         # Non-Member assignees (the creator's system-managed row, or anyone else whose
         # org role since changed) are hidden from the Share dialog — see
         # _assigned_members_for_agent — so the client never resubmits them. Without
@@ -101,6 +104,29 @@ class AgentAccessService:
             general_access=AgentGeneralAccessRead(role=general_role_read),
             assignments=assignments,
         )
+
+    def _require_bot_reachable(
+        self,
+        bot: Agent,
+        parent_id: UUID,
+        general_access_role_id: UUID | None,
+        assignment_roles: dict[UUID, UUID],
+    ) -> None:
+        existing = {
+            access.membership_id for access in self.repository.find_access_assignments(bot.id, bot.organization_id)
+        }
+        for membership_id in assignment_roles.keys() - existing:
+            if not self.authorization.membership_has_permission(membership_id, parent_id, PermissionKey.AGENT_READ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A Bot can be shared only with members who can open its Parent Agent",
+                )
+        parent = self.repository.get_by_id(parent_id)
+        if general_access_role_id is not None and (parent is None or parent.general_access_role_id is None):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Give the Parent Agent General Access before giving it to one of its Bots",
+            )
 
     def _require_general_access_role(self, role_id: UUID | None, organization_id: UUID) -> AgentAccessRoleRead | None:
         if role_id is None:

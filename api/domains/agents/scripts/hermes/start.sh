@@ -15,6 +15,9 @@ if [ ! -f /opt/data/memories/USER.md ]; then
 fi
 
 cp /app/config/SOUL.md /opt/data/SOUL.md
+if [ -f /app/config/bots.json ]; then
+    python3 /app/config/bot-setup.py --sync-allowlists
+fi
 python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/config.yaml \
     || cp /app/config/hermes-config.yaml /opt/data/config.yaml
 
@@ -85,10 +88,17 @@ print(f'[hermes-start] Wrote {written} skill files')
 PYEOF
 fi
 
+if [ -f /app/config/bots.json ]; then
+    python3 /app/config/bot-setup.py
+fi
+
 python3 /app/config/file-sync.py --once || true
 python3 /app/config/file-sync.py &
 
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
 touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 python3 /app/config/boot-run.py &
+if [ -f /app/config/bots.json ]; then
+    python3 /app/config/bot-setup.py --launch
+fi
 exec hermes gateway run

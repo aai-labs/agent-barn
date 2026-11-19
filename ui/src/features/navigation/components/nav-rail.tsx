@@ -42,9 +42,18 @@ function RailLink({ item, tone }: { item: NavItem; tone: "neutral" | "platform" 
       href={item.href}
       aria-current={item.active ? "page" : undefined}
       title={item.label}
-      className={`flex w-[64px] flex-col items-center gap-[3px] rounded-xl px-1 pb-1.5 pt-2 text-center text-[10.5px] font-medium leading-tight transition-colors ${state}`}
+      className={`relative flex w-[64px] flex-col items-center gap-[3px] rounded-xl px-1 pb-1.5 pt-2 text-center text-[10.5px] font-medium leading-tight transition-colors ${state}`}
     >
       <Icon size={19} aria-hidden />
+      {item.badge ? (
+        <span
+          className="absolute right-2 top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white"
+          style={{ background: "var(--warn)" }}
+          aria-label={`${item.badge} waiting on you`}
+        >
+          {item.badge}
+        </span>
+      ) : null}
       <span className="max-w-full truncate">{item.label}</span>
     </Link>
   );

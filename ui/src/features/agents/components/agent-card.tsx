@@ -12,6 +12,7 @@ import { AgentMetaBadges } from "./agent-meta-badges";
 
 interface AgentCardProps {
   agent: Agent;
+  bots: Agent[];
   href: string;
 }
 
@@ -37,7 +38,23 @@ function presenceOf(status: Agent["status"], health: AgentHealth | null | undefi
   return { label: "Disconnected", dot: "var(--warn)", badge: { bg: "var(--warn-soft)", fg: "var(--warn)" } };
 }
 
-export function AgentCard({ agent, href }: AgentCardProps) {
+function BotCount({ bots }: { bots: Agent[] }) {
+  if (bots.length === 0) return null;
+  const needingAttention = bots.filter((bot) => bot.status === "ERROR").length;
+  return (
+    <div className="mt-2.5 text-xs" style={{ color: "var(--ink-3)" }}>
+      {bots.length} {bots.length === 1 ? "bot" : "bots"}
+      {needingAttention > 0 && (
+        <span style={{ color: "var(--err)" }}>
+          {" "}
+          · {needingAttention} {needingAttention === 1 ? "needs" : "need"} attention
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function AgentCard({ agent, bots, href }: AgentCardProps) {
   const hasActivityPermission = canAgent(agent, "activity.read");
   const { health } = useAgentHealth(
     agent.id,
@@ -111,6 +128,7 @@ export function AgentCard({ agent, href }: AgentCardProps) {
             {formatModelName(model)}
           </div>
         )}
+        <BotCount bots={bots} />
       </div>
 
       <div className="mt-auto flex min-h-16 items-center justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>

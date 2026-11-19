@@ -6,7 +6,7 @@ import { toastError } from "@/shared/toast";
 
 import { useRestartAgent } from "../hooks/use-restart-agent";
 import type { Agent } from "../schemas";
-import { currentModelOf, formatModelName } from "../utils";
+import { currentModelOf, formatModelName, podIdOf } from "../utils";
 
 /**
  * Says what a restart would switch this Agent onto.
@@ -31,7 +31,7 @@ export function PendingModelBanner({ agent, canRestart }: { agent: Agent; canRes
   const restartAgent = useRestartAgent();
   if (!agent.pendingModel) return null;
 
-  const restart = () => void restartAgent.restart(agent.id).catch(toastError);
+  const restart = () => void restartAgent.restart(podIdOf(agent)).catch(toastError);
   const busy = restartAgent.isPending || agent.updateInProgress;
 
   return (

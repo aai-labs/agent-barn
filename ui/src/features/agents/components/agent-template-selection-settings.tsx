@@ -53,7 +53,7 @@ export function AgentTemplateSelectionSettings({
   const [selectedValue, setSelectedValue] = useState<string | null>(null);
   const [groupChoices, setGroupChoices] = useState<Record<string, string>>({});
   const selectTemplate = useSelectAgentTemplate();
-  const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
+  const { applyAndRestart, restarts, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
   const {
     templates,
     isLoading: templatesLoading,
@@ -127,7 +127,7 @@ export function AgentTemplateSelectionSettings({
       ),
     ),
   ];
-  const isRunning = agent.status === "RUNNING";
+  const isRunning = restarts;
   const canApply = canEdit && (!isRunning || canAgent(agent, "agent.lifecycle.manage"));
   const isPending = selectTemplate.isPending || isRestartPending;
   const catalogLoading = templatesLoading || versionsLoading;
