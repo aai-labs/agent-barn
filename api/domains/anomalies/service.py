@@ -230,7 +230,10 @@ class AnomalyCheckService:
             (
                 AnomalySignal.LLM_CALLS_CAP,
                 override.max_llm_calls_per_hour if override else None,
-                history.observed_llm_calls,
+                # Failed calls still reach the provider, so the cap counts them.
+                history.observed_llm_calls + history.observed_llm_failures
+                if history.observed_llm_calls is not None and history.observed_llm_failures is not None
+                else None,
             ),
         )
         for signal, cap, observed in caps:
