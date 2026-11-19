@@ -169,6 +169,10 @@ class AnomalyCheckService:
                     logger.exception("Anomaly check failed for agent %s", agent_id)
         return CheckSummary(organizations=len(organizations), agents=agents, failures=failures)
 
+    def check_agent(self, organization_id: UUID, agent_id: UUID, now: datetime) -> None:
+        """One check of one Agent, as `run_checks` would make it at `now`."""
+        self._check_agent(organization_id, agent_id, *self.windows(now))
+
     def _check_agent(self, organization_id: UUID, agent_id: UUID, until: datetime, cost_until: datetime | None) -> None:
         override = self.settings_repository.get_override(agent_id)
         sensitivity = Sensitivity(override.sensitivity) if override is not None else Sensitivity.NORMAL

@@ -12,8 +12,9 @@ runs a check that flags it. Model-usage anomalies need the cost sync to have run
 
 Seeded rows are marked (tool call session `anomaly-seed`, cost request ids
 `anomaly-seed-…`), and `--clear` removes them together with the Agent's Anomalies,
-ledger and check state, so it can start over. Each run first forgets the Agent's
-check state, so the check relearns its history with the seeded rows in it.
+ledger and check state, so it can start over. Each run first does the same, so running
+it again replaces the earlier seed instead of adding to it, and the check relearns the
+Agent's history with the seeded rows in it. The checks it runs are of this Agent only.
 
 Refuses to run against anything but a local installation and a database on this host.
 
@@ -143,11 +144,11 @@ def _save(delegate: PostgresRepositoryDelegate, rows: list) -> None:
 
 def seed_history(delegate: PostgresRepositoryDelegate, agent_id: UUID, now: datetime) -> None:
     """Three steady hours on each of the last five days: 10 fetches from one host and
-    a `crm` read (11 tool calls), and 10 model calls of 1,000 tokens."""
+    a `crm` read (11 tool calls), and 10 model calls of 1,000 tokens. Replaces an
+    earlier seed."""
     with Session(delegate.engine, expire_on_commit=False) as session:
         agent = _agent(session, agent_id)
-        session.exec(sa.delete(AgentAnomalyState).where(col(AgentAnomalyState.agent_id) == agent_id))  # type: ignore[call-overload]
-        session.commit()
+    clear_seeded(delegate, agent_id)
     rows: list = []
     for day in range(1, HISTORY_DAYS + 1):
         for hour in HISTORY_HOURS:
@@ -195,6 +196,20 @@ def clear_seeded(delegate: PostgresRepositoryDelegate, agent_id: UUID) -> None:
         session.commit()
 
 
+def seed(
+    delegate: PostgresRepositoryDelegate, checks: AnomalyCheckService, agent_id: UUID, now: datetime, *, spike: bool
+) -> None:
+    """Seed the history and check the Agent so it is learned, then optionally seed a
+    spike and check again so it is flagged."""
+    with Session(delegate.engine) as session:
+        organization_id = _agent(session, agent_id).organization_id
+    seed_history(delegate, agent_id, now)
+    checks.check_agent(organization_id, agent_id, now - LEARN_BEFORE)
+    if spike:
+        seed_spike(delegate, agent_id, now)
+        checks.check_agent(organization_id, agent_id, now)
+
+
 def _require_local(config: Config) -> None:
     host = config.db_connection_url.hosts()[0].get("host") or ""
     try:
@@ -230,15 +245,10 @@ def main() -> None:
     if settings is None or not settings.enabled:
         raise SystemExit("Turn on unusual activity checks for this Agent's Organization first (Settings).")
 
-    checks = injector.get(AnomalyCheckService)
-    now = datetime.now(UTC)
-    seed_history(delegate, agent.id, now)
-    checks.run_checks(now - LEARN_BEFORE)
+    seed(delegate, injector.get(AnomalyCheckService), agent.id, datetime.now(UTC), spike=args.spike)
     print(f"Seeded {HISTORY_DAYS} days of history for {agent.name}; the check has learned it.")
     if args.spike:
-        seed_spike(delegate, agent.id, now)
-        summary = checks.run_checks(now)
-        print(f"Seeded a spike and checked {summary.agents} agents. See the Agent's Unusual activity tab.")
+        print("Seeded a spike and checked the Agent. See the Agent's Unusual activity tab.")
 
 
 if __name__ == "__main__":

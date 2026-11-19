@@ -4,17 +4,17 @@ It gives a real Agent a few days of steady activity, so checks flag things strai
 away instead of after three active days, and optionally an unusual hour on top.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from hamcrest import assert_that, empty, equal_to, has_item, has_properties
 from sqlmodel import Session, col, select
 
-from api.domains.anomalies.models import AgentAnomaly, AnomalySignal, OrganizationAnomalySettings
+from api.domains.anomalies.models import AgentAnomaly, AgentAnomalyState, AnomalySignal, OrganizationAnomalySettings
 from api.domains.anomalies.service import AnomalyCheckService
 from api.domains.costs.models import CostSyncState
 from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
-from api.scripts.seed_anomaly_history import clear_seeded, seed_history, seed_spike
+from api.scripts.seed_anomaly_history import clear_seeded, seed, seed_history
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
@@ -35,6 +35,15 @@ def detection_is_on_and_costs_synced():
     return step
 
 
+def there_is_another_agent_in_the_organization():
+    def step(context):
+        seeded = context.agent
+        there_is_an_agent(name="Not Seeded")(context)
+        context.other_agent, context.agent = context.agent, seeded
+
+    return step
+
+
 _GIVEN = [
     set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY}),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -48,14 +57,13 @@ _GIVEN = [
 
 
 def _seed(context, *, spike: bool) -> None:
-    delegate = context.injector.get(PostgresRepositoryDelegate)
-    checks = context.injector.get(AnomalyCheckService)
-    seed_history(delegate, context.agent.id, NOW)
-    # Learn the seeded history before anything unusual happens, as the script does.
-    checks.run_checks(NOW - timedelta(minutes=10))
-    if spike:
-        seed_spike(delegate, context.agent.id, NOW)
-    checks.run_checks(NOW)
+    seed(
+        context.injector.get(PostgresRepositoryDelegate),
+        context.injector.get(AnomalyCheckService),
+        context.agent.id,
+        NOW,
+        spike=spike,
+    )
 
 
 def _anomalies(context) -> list[AgentAnomaly]:
@@ -114,3 +122,25 @@ def test_the_history_counts_as_enough_days():
 
         assert_that(history, has_properties(active_days=5))
         assert_that(history.tool_calls, has_item(11.0))
+
+
+def test_seeding_again_replaces_the_earlier_seed_instead_of_adding_to_it():
+    with given(_GIVEN) as context:
+        _seed(context, spike=True)
+
+        _seed(context, spike=True)
+
+        checks = context.injector.get(AnomalyCheckService)
+        history = checks.history(context.agent.id, *checks.windows(NOW))
+        assert_that(history.tool_calls, equal_to([11.0] * 15))
+
+
+def test_seeding_checks_only_the_seeded_agent():
+    with given([*_GIVEN, there_is_another_agent_in_the_organization()]) as context:
+        _seed(context, spike=True)
+
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            other_state = session.exec(
+                select(AgentAnomalyState).where(col(AgentAnomalyState.agent_id) == context.other_agent.id)
+            ).all()
+        assert_that(other_state, empty())
