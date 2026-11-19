@@ -171,6 +171,7 @@ test.describe("Settings · Unusual activity", () => {
     const setting = anomaliesPage.detectionSetting();
     await expect(setting).toContainText("may use an AI model provider");
     await expect(setting).toContainText("billed to that Agent");
+    await expect(setting).toContainText("listed on the Agent's Unusual activity tab");
 
     const toggle = setting.getByRole("switch", { name: "Check Agents for unusual activity" });
     await expect(toggle).toHaveAttribute("aria-checked", "false");
