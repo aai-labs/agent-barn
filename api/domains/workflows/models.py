@@ -36,9 +36,18 @@ def default_destinations() -> list[Literal["web"]]:
     return ["web"]
 
 
+StepType = Literal["agent", "approval"]
+StepDecision = Literal["approve", "request_changes", "reject"]
+# Approve is always offered; an Approval step that could never let the run continue would only stop it.
+ALL_DECISIONS: tuple[StepDecision, ...] = ("approve", "request_changes", "reject")
+
+
 class WorkflowStep(StrictDTO):
     id: UUID
     name: Name
+    # An Agent step is run by the run's Agent; an Approval step waits for a person instead.
+    type: StepType = "agent"
+    # For an Approval step, what the person deciding should check.
     goal: Text
     # Retain criteria on historical snapshots; new steps need only a goal.
     completion_criteria: Text | None = None
@@ -47,6 +56,22 @@ class WorkflowStep(StrictDTO):
     required_capabilities: list[Literal["reasoning", "business_action", "native_command"]] = Field(
         default_factory=default_capabilities, min_length=1, max_length=3
     )
+    # The decisions the person at an Approval step may make; absent means all of them.
+    allowed_decisions: list[StepDecision] | None = None
+
+    @model_validator(mode="after")
+    def approval_steps_have_only_instructions(self) -> WorkflowStep:
+        if self.type == "approval" and (self.completion_criteria or self.artifact_description):
+            raise ValueError("An Approval step has only its instructions; it has no criteria or output description")
+        if self.type == "agent" and self.allowed_decisions is not None:
+            raise ValueError("Only an Approval step has allowed decisions")
+        if self.type == "approval":
+            chosen = set(self.allowed_decisions or ALL_DECISIONS)
+            if "approve" not in chosen:
+                raise ValueError("An Approval step always allows Approve")
+            # Stored in a fixed order so equal choices save as equal snapshots.
+            self.allowed_decisions = [decision for decision in ALL_DECISIONS if decision in chosen]
+        return self
 
 
 class WorkflowDraft(StrictDTO):
@@ -71,11 +96,47 @@ class WorkflowDraft(StrictDTO):
         _require_unique([str(step.id) for step in steps], "Steps", "id")
         return steps
 
+    @field_validator("steps")
+    @classmethod
+    def approval_steps_follow_agent_steps(cls, steps: list[WorkflowStep]) -> list[WorkflowStep]:
+        """Requesting changes reruns the step before an Approval step, so that step is always an Agent step."""
+        for index, step in enumerate(steps):
+            if step.type != "approval":
+                continue
+            if index == 0:
+                raise ValueError("Step 1 is an Approval step; an Approval step must follow an Agent step")
+            if steps[index - 1].type == "approval":
+                raise ValueError(
+                    f"Steps {index} and {index + 1} are both Approval steps; an Approval step must follow an Agent step"
+                )
+        return steps
+
     @field_validator("inputs")
     @classmethod
     def unique_input_keys(cls, inputs: list[WorkflowInput]) -> list[WorkflowInput]:
         _require_unique([item.key for item in inputs], "Inputs", "key")
         return inputs
+
+
+def snapshot_of(draft: WorkflowDraft) -> dict[str, Any]:
+    """The stored form of a draft. Agent steps are stored without a type, as before Approval steps
+    existed, so a version without Approval steps stays readable by an API that predates them."""
+    snapshot = draft.model_dump(mode="json")
+    for step in snapshot["steps"]:
+        if step.get("type") == "agent":
+            del step["type"]
+            del step["allowed_decisions"]
+    return snapshot
+
+
+def allowed_decisions(step: dict[str, Any]) -> list[StepDecision]:
+    """What the person at a stored Approval step may decide; versions saved before the choice allow all."""
+    return list(step.get("allowed_decisions") or ALL_DECISIONS)
+
+
+def is_approval(step: dict[str, Any]) -> bool:
+    """Whether a stored step waits for a person rather than running in the Agent."""
+    return step.get("type") == "approval"
 
 
 def _require_unique(values: list[str], noun: str, attribute: str) -> None:

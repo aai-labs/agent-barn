@@ -14,7 +14,7 @@ from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.usage.guard import UsageAction, UsageGuard
-from api.domains.workflows.models import WorkflowDraft, WorkflowVersion
+from api.domains.workflows.models import WorkflowDraft, WorkflowVersion, allowed_decisions, is_approval
 from api.domains.workflows.repository import WorkflowConflict, WorkflowRepository
 from api.domains.workflows.run_models import (
     DECIDABLE_APPROVAL_STATES,
@@ -25,6 +25,8 @@ from api.domains.workflows.run_models import (
     AttemptRead,
     AttemptResult,
     RunState,
+    StepApprovalDecisionCreate,
+    StepApprovalRead,
     WorkflowFileInput,
     WorkflowHistoryRead,
     WorkflowRun,
@@ -32,7 +34,7 @@ from api.domains.workflows.run_models import (
     WorkflowRunRead,
     WorkflowRunRerun,
 )
-from api.domains.workflows.run_repository import WorkflowRunRepository
+from api.domains.workflows.run_repository import DecisionNotAllowed, WorkflowRunRepository
 from api.infrastructure.shared.models import PaginatedItems
 
 
@@ -106,7 +108,14 @@ class WorkflowRunService:
         attempt: AttemptRead | None = None,
         approval: ApprovalRead | None = None,
         approvals: list[ApprovalRead] | None = None,
+        step_approval: StepApprovalRead | None = None,
+        step_approvals: list[StepApprovalRead] | None = None,
     ) -> WorkflowRunRead:
+        steps = version.snapshot["steps"]
+        records = step_records or {}
+        # The run's result is its last Agent step's, even when an Approval step ends the workflow.
+        last = max(index for index, step in enumerate(steps) if not is_approval(step))
+        succeeded = run.state == "SUCCEEDED"
         return WorkflowRunRead(
             id=run.id,
             workflow_id=run.workflow_id,
@@ -127,35 +136,50 @@ class WorkflowRunService:
                 {
                     "id": step["id"],
                     "name": step["name"],
-                    "state": "COMPLETED"
-                    if index < run.next_step
-                    else "RUNNING"
-                    if index == run.next_step and run.state == "RUNNING"
-                    else "PENDING",
+                    "type": step.get("type", "agent"),
+                    "state": self._step_state(run, index, step),
                     "output_description": step.get("artifact_description"),
-                    "artifacts": (step_records or {}).get(index, {}).get("artifacts", []),
-                    "summary": (step_records or {}).get(index, {}).get("summary"),
-                    "started_at": (step_records or {}).get(index, {}).get("started_at"),
-                    "completed_at": (step_records or {}).get(index, {}).get("completed_at"),
+                    "artifacts": records.get(index, {}).get("artifacts", []),
+                    "summary": records.get(index, {}).get("summary"),
+                    "started_at": records.get(index, {}).get("started_at"),
+                    "completed_at": records.get(index, {}).get("completed_at"),
+                    # How many times the step ran, or for an Approval step its rounds; above 1 after Request changes.
+                    "round": records.get(index, {}).get("round"),
+                    # What the person deciding at an Approval step should check.
+                    "instructions": step["goal"] if is_approval(step) else None,
+                    # What the person deciding at an Approval step may choose.
+                    "allowed_decisions": allowed_decisions(step) if is_approval(step) else None,
+                    "earlier_rounds": records.get(index, {}).get("earlier_rounds", []),
                 }
-                for index, step in enumerate(version.snapshot["steps"])
+                for index, step in enumerate(steps)
             ],
             reason=run.reason,
-            final_summary=(step_records or {}).get(len(version.snapshot["steps"]) - 1, {}).get("summary")
-            if run.state == "SUCCEEDED"
-            else None,
-            final_output_description=version.snapshot["steps"][-1].get("artifact_description"),
-            final_artifacts=(step_records or {}).get(len(version.snapshot["steps"]) - 1, {}).get("artifacts", [])
-            if run.state == "SUCCEEDED"
-            else [],
+            final_summary=records.get(last, {}).get("summary") if succeeded else None,
+            final_output_description=steps[last].get("artifact_description"),
+            final_artifacts=records.get(last, {}).get("artifacts", []) if succeeded else [],
             created_at=run.created_at,
             settled_at=run.settled_at,
             rerun_of_run_id=run.rerun_of_run_id,
-            allowed_actions=self._allowed_actions(run, can_write, self._can_start(agent, archived), approval),
+            allowed_actions=self._allowed_actions(
+                run, can_write, self._can_start(agent, archived), approval, step_approval
+            ),
             attempt=attempt,
             approval=approval,
             approvals=approvals or [],
+            step_approval=step_approval,
+            step_approvals=step_approvals or [],
         )
+
+    @staticmethod
+    def _step_state(run: WorkflowRun, index: int, step: dict[str, Any]) -> str:
+        if index < run.next_step:
+            return "COMPLETED"
+        if index == run.next_step and run.state == "RUNNING":
+            return "RUNNING"
+        if index == run.next_step and is_approval(step) and run.state in {"AWAITING_APPROVAL", "REJECTED"}:
+            # A run waits at its Approval step, and a rejected run stops there.
+            return "WAITING" if run.state == "AWAITING_APPROVAL" else "REJECTED"
+        return "PENDING"
 
     @staticmethod
     def _can_start(agent: Agent, archived: bool) -> bool:
@@ -163,8 +187,12 @@ class WorkflowRunService:
 
     @staticmethod
     def _allowed_actions(
-        run: WorkflowRun, can_write: bool, can_start: bool, approval: ApprovalRead | None = None
-    ) -> list[Literal["cancel", "rerun", "decide"]]:
+        run: WorkflowRun,
+        can_write: bool,
+        can_start: bool,
+        approval: ApprovalRead | None = None,
+        step_approval: StepApprovalRead | None = None,
+    ) -> list[Literal["cancel", "rerun", "decide", "decide_step"]]:
         if not can_write:
             return []
         if run.state in TERMINAL_STATES:
@@ -177,6 +205,8 @@ class WorkflowRunService:
             (approval.state == "LIVE" and run.state == "RUNNING" and approval.live_until > datetime.now(UTC))
             or (approval.state == "PARKED" and run.state == "AWAITING_APPROVAL")
         )
+        if step_approval is not None and step_approval.state == "WAITING" and run.state == "AWAITING_APPROVAL":
+            return ["decide_step", "cancel"]
         return ["decide", "cancel"] if decidable else ["cancel"]
 
     def get(self, run_id: UUID, context: CurrentUserContext) -> WorkflowRunRead:
@@ -188,6 +218,10 @@ class WorkflowRunService:
         approvals = [
             ApprovalRead.model_validate(item, from_attributes=True) for item in self.repository.approvals([run.id])
         ]
+        step_approvals = [
+            StepApprovalRead.model_validate(item, from_attributes=True)
+            for item in self.repository.step_approvals([run.id])
+        ]
         return self._read(
             run,
             version,
@@ -198,6 +232,8 @@ class WorkflowRunService:
             attempt=attempt,
             approval=approval,
             approvals=approvals,
+            step_approval=next((item for item in step_approvals if item.state == "WAITING"), None),
+            step_approvals=step_approvals,
         )
 
     def list_runs(
@@ -226,6 +262,10 @@ class WorkflowRunService:
             item.run_id: ApprovalRead.model_validate(item, from_attributes=True)
             for item in self.repository.approvals((run.id for run, _ in rows), DECIDABLE_APPROVAL_STATES)
         }
+        waiting = {
+            item.run_id: StepApprovalRead.model_validate(item, from_attributes=True)
+            for item in self.repository.step_approvals((run.id for run, _ in rows), waiting_only=True)
+        }
         agents = self.repository.agents(run.agent_id for run, _ in rows)
         writable = self._can_write(list(agents.values()), context)
         archived = self.repository.archived_workflow_ids({run.workflow_id for run, _ in rows})
@@ -241,6 +281,7 @@ class WorkflowRunService:
                     run.agent_id in writable,
                     run.workflow_id in archived,
                     approval=pending.get(run.id),
+                    step_approval=waiting.get(run.id),
                 )
                 for run, version in rows
             ],
@@ -344,6 +385,26 @@ class WorkflowRunService:
                 payload.decision == "approve",
                 payload.guidance,
             )
+        except WorkflowConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        self.dispatcher.enqueue_immediate(delivery_ids)
+        return self.get(run_id, context)
+
+    def decide_step(
+        self,
+        run_id: UUID,
+        approval_id: UUID,
+        payload: StepApprovalDecisionCreate,
+        context: CurrentUserContext,
+    ) -> WorkflowRunRead:
+        """A person's decision at an Approval step; like a command approval it needs agent.update now."""
+        self._writable(run_id, context)
+        try:
+            delivery_ids = self.repository.decide_step(
+                run_id, approval_id, self._write_scope(context), context.user.id, payload.decision, payload.note
+            )
+        except DecisionNotAllowed as exc:
+            raise HTTPException(422, str(exc)) from exc
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         self.dispatcher.enqueue_immediate(delivery_ids)

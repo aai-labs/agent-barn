@@ -1546,6 +1546,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/step-approvals/{approval_id}/decision",
+    "decide_step_approval_organizations__organization_id__workflow_runs__run_id__step_approvals__approval_id__decision_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/workflows",
     "create_workflow_organizations__organization_id__workflows_post"
   ],
