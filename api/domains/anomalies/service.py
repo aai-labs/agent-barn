@@ -3,6 +3,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import batched
 from uuid import UUID
 
 from injector import inject, singleton
@@ -10,6 +11,12 @@ from injector import inject, singleton
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.agents.service import AgentService
+from api.domains.anomalies.classification import (
+    MAX_ITEMS_PER_DECISION,
+    AgentContext,
+    classification_request,
+    read_classifications,
+)
 from api.domains.anomalies.destinations import destination_hosts
 from api.domains.anomalies.detection import (
     BASELINE_DAYS,
@@ -46,11 +53,13 @@ from api.domains.anomalies.repository import (
 from api.domains.auth.models import CurrentUserContext
 from api.domains.business_value.service import BusinessValueService
 from api.domains.costs.service import CostService
+from api.domains.decisions.service import DecisionService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.tool_calls.service import ToolCallService
+from api.infrastructure.litellm.decisions import DecisionError
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -180,6 +189,7 @@ class AnomalyCheckService:
     tool_call_service: ToolCallService
     cost_service: CostService
     business_value_service: BusinessValueService
+    decision_service: DecisionService
 
     def windows(self, now: datetime) -> tuple[datetime, datetime | None]:
         """Where the checked hour ends for tool and Business Action figures, and for LLM
@@ -210,34 +220,61 @@ class AnomalyCheckService:
 
     def _check_agent(self, organization_id: UUID, agent_id: UUID, until: datetime, cost_until: datetime | None) -> None:
         """Work out everything first, then record it in one transaction, and only if
-        detection has not been turned off (or off and on again) meanwhile."""
+        detection has not been turned off (or off and on again) meanwhile. What started
+        is classified after the transaction, so a slow provider never holds it open."""
         version = self.repository.detection_version(organization_id)
         if version is None:
             return
-        rates, enough = self._rate_findings(agent_id, until, cost_until)
+        rates, enough, context = self._rate_findings(agent_id, until, cost_until)
         found = self._first_use_findings(agent_id, until, enough)
+        started: list[UUID] = []
         with self.repository.check_writes(organization_id, agent_id, version) as writes:
             if writes is None:
                 logger.info("Detection changed while agent %s was checked; nothing was recorded", agent_id)
                 return
             for signal, verdict, at in rates:
                 if verdict is not None and verdict.flagged:
-                    writes.open_or_update(signal, verdict, at)
+                    if (anomaly_id := writes.open_or_update(signal, verdict, at)) is not None:
+                        started.append(anomaly_id)
                 else:
                     writes.end_ongoing(signal, at)
             for use in found.first_uses:
-                writes.record_first_use(use.signal, use.subject, use.at, use.uses)
+                started.append(writes.record_first_use(use.signal, use.subject, use.at, use.uses))
             writes.mark_seen(found.seen)
             writes.save_state(
                 tool_calls_read_through=found.tool_calls_read_through,
                 business_actions_read_through=found.business_actions_read_through,
             )
+        self._classify(agent_id, started, context)
+
+    def _classify(self, agent_id: UUID, anomaly_ids: list[UUID], context: AgentContext) -> None:
+        """Ask the decision model about Anomalies that started in this check, once.
+
+        Billed to the Agent. A failure, such as its spend limit, leaves them as the
+        statistics flagged them; they are not asked about again, so a spent budget does
+        not turn into a billed retry every check. Ongoing ones go along as context.
+        """
+        if not anomaly_ids:
+            return
+        anomalies = self.repository.get_anomalies(anomaly_ids)
+        other_ongoing = self.repository.ongoing_signals(agent_id, excluding=anomaly_ids)
+        for batch in batched(anomalies, MAX_ITEMS_PER_DECISION):
+            state, questions = classification_request(batch, context, other_ongoing=other_ongoing)
+            try:
+                result = self.decision_service.decide(agent_id, state, questions)
+            except DecisionError as error:
+                logger.warning("Anomaly classification failed for agent %s: %s", agent_id, error.failure.value)
+                return
+            for anomaly_id, classification in read_classifications(batch, result.answers).items():
+                self.repository.set_classification(
+                    anomaly_id, classification.category, classification.severity, classification.details
+                )
 
     def _rate_findings(
         self, agent_id: UUID, until: datetime, cost_until: datetime | None
-    ) -> tuple[list[RateFinding], bool]:
-        """A verdict per rate and cap (None ends what is ongoing), and whether the Agent
-        has enough history to be judged."""
+    ) -> tuple[list[RateFinding], bool, AgentContext]:
+        """A verdict per rate and cap (None ends what is ongoing), whether the Agent has
+        enough history to be judged, and what the decision model is told about it."""
         override = self.settings_repository.get_override(agent_id)
         sensitivity = Sensitivity(override.sensitivity) if override is not None else Sensitivity.NORMAL
         history = self.history(agent_id, until, cost_until)
@@ -274,7 +311,7 @@ class AnomalyCheckService:
             # The cost sync has stopped: nothing shows an LLM deviation still going, so
             # it ends where the synced figures do instead of staying open on them.
             findings += [(signal, None, cost_until) for signal in LLM_SIGNALS]
-        return findings, enough
+        return findings, enough, AgentContext(sensitivity=sensitivity, active_days=history.active_days)
 
     def history(self, agent_id: UUID, until: datetime, cost_until: datetime | None) -> AgentHistory:
         """Hourly figures over the baseline window, in whole hours, ending at the start

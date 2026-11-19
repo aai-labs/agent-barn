@@ -2,6 +2,7 @@ from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -16,6 +17,7 @@ from api.domains.anomalies.models import (
     AgentAnomalyOverride,
     AgentAnomalyState,
     AnomalySignal,
+    ClassificationState,
     OrganizationAnomalySettings,
     SeenKind,
 )
@@ -316,6 +318,46 @@ class AnomalyRepository:
             )
             session.commit()
 
+    def get_anomalies(self, anomaly_ids: Collection[UUID]) -> list[AgentAnomaly]:
+        """The given Anomalies, oldest first."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentAnomaly)
+                .where(col(AgentAnomaly.id).in_(list(anomaly_ids)))
+                .order_by(col(AgentAnomaly.started_at), col(AgentAnomaly.id))
+            )
+            return list(session.exec(query).all())
+
+    def ongoing_signals(self, agent_id: UUID, *, excluding: Collection[UUID]) -> list[AnomalySignal]:
+        """The signals of an Agent's ongoing Anomalies other than `excluding`, each once."""
+        with Session(self.delegate.engine) as session:
+            signals = session.exec(
+                select(AgentAnomaly.signal)
+                .where(
+                    col(AgentAnomaly.agent_id) == agent_id,
+                    col(AgentAnomaly.ended_at).is_(None),
+                    col(AgentAnomaly.id).not_in(list(excluding)),
+                )
+                .distinct()
+                .order_by(col(AgentAnomaly.signal))
+            ).all()
+            return [AnomalySignal(signal) for signal in signals]
+
+    def set_classification(self, anomaly_id: UUID, category: str, severity: float, details: dict[str, Any]) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentAnomaly)  # type: ignore[call-overload]
+                .where(col(AgentAnomaly.id) == anomaly_id)
+                .values(
+                    classification_state=ClassificationState.CLASSIFIED.value,
+                    classification_category=category,
+                    classification_severity=severity,
+                    classification=details,
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+
 
 @dataclass
 class CheckWrites:
@@ -327,8 +369,9 @@ class CheckWrites:
     organization_id: UUID
     agent_id: UUID
 
-    def open_or_update(self, signal: AnomalySignal, verdict: Verdict, at: datetime) -> None:
-        """Start an Anomaly for `signal`, or bring the ongoing one up to date.
+    def open_or_update(self, signal: AnomalySignal, verdict: Verdict, at: datetime) -> UUID | None:
+        """Start an Anomaly for `signal`, or bring the ongoing one up to date. Returns
+        the new Anomaly's id when one started, None when an ongoing one was updated.
 
         The observed value keeps the highest seen, so the record shows how far the
         deviation went; the usual value and threshold follow the latest check.
@@ -343,6 +386,7 @@ class CheckWrites:
             )
             .with_for_update()
         ).first()
+        started = ongoing is None
         if ongoing is None:
             ongoing = AgentAnomaly(
                 organization_id=self.organization_id,
@@ -359,6 +403,7 @@ class CheckWrites:
         ongoing.updated_at = datetime.now(UTC)
         self.session.add(ongoing)
         self.session.flush()
+        return ongoing.id if started else None
 
     def end_ongoing(self, signal: AnomalySignal, at: datetime) -> None:
         self.session.exec(
@@ -371,21 +416,21 @@ class CheckWrites:
             .values(ended_at=at, updated_at=datetime.now(UTC))
         )
 
-    def record_first_use(self, signal: AnomalySignal, subject: str, at: datetime, uses: int) -> None:
+    def record_first_use(self, signal: AnomalySignal, subject: str, at: datetime, uses: int) -> UUID:
         """A first use is a moment, not a stretch of time: it starts and ends at once."""
-        self.session.add(
-            AgentAnomaly(
-                organization_id=self.organization_id,
-                agent_id=self.agent_id,
-                signal=signal.value,
-                subject=subject,
-                observed_value=uses,
-                started_at=at,
-                last_observed_at=at,
-                ended_at=at,
-            )
+        anomaly = AgentAnomaly(
+            organization_id=self.organization_id,
+            agent_id=self.agent_id,
+            signal=signal.value,
+            subject=subject,
+            observed_value=uses,
+            started_at=at,
+            last_observed_at=at,
+            ended_at=at,
         )
+        self.session.add(anomaly)
         self.session.flush()
+        return anomaly.id
 
     def mark_seen(self, uses: list[SeenUse]) -> None:
         """Record uses (one per kind and subject), keeping the earliest first use and
