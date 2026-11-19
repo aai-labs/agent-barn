@@ -286,6 +286,8 @@ Apollo contracts run the patched aai-cli in both images against an offline loopb
 
 SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
 
+Stop-during-boot contracts (`../../api/runtime_tests/test_{hermes,openclaw}_stop_during_boot.py`) boot each image with the generated Deployment command, hold `start.sh` in setup on an unreachable memory gateway, and require `docker stop` to end the container on SIGTERM instead of waiting out the grace period. A builder unit test only shows the command; this proves the image's init forwards the signal.
+
 File sync contracts (`../../api/runtime_tests/test_{hermes,openclaw}_file_sync.py`) run each image's real `start.sh` from the generated ConfigMap with external networking disabled. A loopback ingest stub (`runtime_tests/fixtures/file_sync_ingest_stub.py`) logs every request, and a probe replaces the runtime command. They check:
 - the helper runs on the image's own `python3`;
 - its first round finishes before the runtime starts;

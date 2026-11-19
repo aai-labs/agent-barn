@@ -788,6 +788,7 @@ def build_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    hostname=name,
                     automount_service_account_token=False,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
@@ -814,7 +815,7 @@ def build_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            command=["sh", "/app/config/start.sh"],
+                            command=["/usr/bin/tini", "--", "sh", "/app/config/start.sh"],
                             resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
