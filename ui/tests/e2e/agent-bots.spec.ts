@@ -253,7 +253,10 @@ test.describe("Bot pages", () => {
     });
     await goto(page, SALES_ID, "?tab=activity");
 
-    await expect(panel(page, "Sales").getByRole("link", { name: "Activity" })).toHaveAttribute("aria-current", "page");
+    await expect(panel(page, "Sales").getByRole("link", { name: "Activity", exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
     await page.waitForTimeout(1_000);
     expect(asked).toEqual([]);
   });
