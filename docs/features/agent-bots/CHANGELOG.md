@@ -16,7 +16,7 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the full end-to-end run in local k3d on a fresh API image, including the staging merge's per-Bot work: transcripts, Tasks, listen-in and the organization Tasks page.
+- Next: the full end-to-end run in local k3d on a fresh API image, including the staging merge's per-Bot work: transcripts, Tasks, listen-in, the organization Tasks page and running workflows on a Bot.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -51,6 +51,12 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
 ## Changes
+
+### 2026-11-19 — AF-425 — Workflows run on Bots again
+
+- Fixed: AF-439 moved workflows to the Organization, and its "Run as" and default-Agent pickers read the first page of Agents without Bots. A Bot's Workflows tab linked to the run dialog with the Bot named, but the dialog dropped it, and a workflow that had belonged to a Bot (migrated with the Bot as its default Agent) could not run on it. The API already accepted a Bot.
+- Now both pickers read every Agent the viewer can see with `include_bots=true`, and name and place each Bot after its Parent Agent ("Bot · Parent Agent"), as the Organization Tasks page does. The ordering and naming helpers moved from the Tasks page to `features/agents/utils.ts`.
+- Follow-up: the end-to-end run.
 
 ### 2026-11-19 — AF-425 — Prune each Bot's sessions at start
 

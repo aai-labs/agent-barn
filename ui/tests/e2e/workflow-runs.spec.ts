@@ -1002,6 +1002,48 @@ test.describe("WF02 run progress and text results", () => {
     await expect(page).not.toHaveURL(/agent=/);
   });
 
+  const BOT_ID = "0000000b-0000-4000-8000-00000000000b";
+  const withBot = async (page: import("@playwright/test").Page) =>
+    new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: {
+        page: 1,
+        page_size: 100,
+        total: 3,
+        items: [
+          mockAgent,
+          { ...mockAgent, id: OTHER_AGENT_ID, name: "Rex" },
+          { ...mockAgent, id: BOT_ID, name: "Scout", parent_agent_id: MOCK_AGENT_ID },
+        ],
+      },
+    });
+
+  test("a link from a Bot's page preselects the Bot, named and placed after its Parent Agent", async ({
+    page,
+  }) => {
+    await withBot(page);
+    support.defaultAgentId = OTHER_AGENT_ID;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding(`?workflowsTab=workflows&agent=${BOT_ID}`);
+    await page.getByRole("button", { name: "Run Weekly pipeline report" }).click();
+    await expect(runs.runAs("Scout · Maya")).toBeChecked();
+    await expect(runs.dialog().getByRole("radio").nth(1)).toHaveAccessibleName("Scout · Maya");
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({ agent_id: BOT_ID });
+  });
+
+  test("a Bot that is the workflow's default is preselected", async ({ page }) => {
+    await withBot(page);
+    support.defaultAgentId = BOT_ID;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.runAs("Scout · Maya")).toBeChecked();
+  });
+
   test("with no default the dialog waits for an Agent, and files follow the Agent chosen", async ({
     page,
   }) => {
