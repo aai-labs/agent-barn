@@ -10,6 +10,9 @@ from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteL
 
 MODEL_ID = "agentbarn:openrouter"
 PRICE_LIST_URL = "http://litellm:4000/public/litellm_model_cost_map"
+MODEL_INFO_URL = "http://litellm:4000/model/info"
+MASTER_KEY = "master-key"
+ROUTE_PREFIX = "agentbarn:model:0190a1b2-0000-7000-8000-000000000001:"
 PROVIDER_KEY = "sk-or-provider-secret"
 LITELLM_PARAMS = {"model": "openrouter/*", "api_key": PROVIDER_KEY, "order": 1}
 MODEL_INFO = {"id": MODEL_ID, "disable_background_health_check": True}
@@ -338,3 +341,70 @@ def test_get_model_prices_raises_when_litellm_cannot_give_its_list(response):
 )
 def test_litellm_price_key_follows_each_providers_key_form(provider_type, model_id, key):
     assert litellm_price_key(provider_type, model_id) == key
+
+
+def _model_info_response(body: str, status_code: int = 200) -> httpx.Response:
+    return httpx.Response(status_code, content=body.encode(), request=httpx.Request("GET", MODEL_INFO_URL))
+
+
+def _list_model_deployments(response: httpx.Response | Exception) -> tuple[list[dict], MagicMock]:
+    client = _client()
+    side_effect = response if isinstance(response, Exception) else None
+    with patch.object(client, "_master_key", return_value=MASTER_KEY):
+        with patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            return_value=None if side_effect else response,
+            side_effect=side_effect,
+        ) as get:
+            routes = client.list_model_deployments(ROUTE_PREFIX)
+    return routes, get
+
+
+def test_list_model_deployments_asks_litellm_once_for_every_route():
+    _, get = _list_model_deployments(_model_info_response('{"data": []}'))
+
+    get.assert_called_once_with(MODEL_INFO_URL, headers=HEADERS, timeout=10)
+
+
+def test_list_model_deployments_keeps_only_the_routes_with_the_prefix():
+    ours = {
+        "model_name": "anthropic/claude-sonnet-4-5",
+        "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "input_cost_per_token": 3e-06},
+        "model_info": {"id": f"{ROUTE_PREFIX}0190a1b2-0000-5000-8000-000000000002"},
+    }
+    body = json.dumps(
+        {
+            "data": [
+                ours,
+                {"model_name": "openrouter/*", "model_info": {"id": MODEL_ID}},
+                {"model_name": "x", "model_info": {"id": "agentbarn:model:0190a1b2-0000-7000-8000-000000000009:1"}},
+                {"model_name": "no-info"},
+                {"model_name": "numeric-id", "model_info": {"id": 7}},
+                "not a route",
+            ]
+        }
+    )
+
+    routes, _ = _list_model_deployments(_model_info_response(body))
+
+    assert routes == [ours]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _model_info_response(f'{{"error": "{MASTER_KEY}"}}', status_code=500),
+        httpx.ConnectError(f"refused for {MASTER_KEY}"),
+        _model_info_response("not json"),
+        _model_info_response("{}"),
+        _model_info_response('{"data": {}}'),
+    ],
+)
+def test_list_model_deployments_raises_without_the_master_key(response, caplog):
+    with caplog.at_level("DEBUG"), pytest.raises(LiteLLMError, match="Failed to list the model routes") as raised:
+        _list_model_deployments(response)
+
+    assert MASTER_KEY not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True
+    assert MASTER_KEY not in caplog.text

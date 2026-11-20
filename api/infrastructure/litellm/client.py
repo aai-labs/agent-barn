@@ -69,6 +69,12 @@ def _non_negative_price(value: object) -> Decimal | None:
     return price if price is not None and price >= 0 else None
 
 
+def _route_id(route: object) -> str:
+    model_info = route.get("model_info") if isinstance(route, dict) else None
+    route_id = model_info.get("id") if isinstance(model_info, dict) else None
+    return route_id if isinstance(route_id, str) else ""
+
+
 def _model_price(key: str, entry: object) -> LiteLLMModelPrice | None:
     if not isinstance(entry, dict):
         return None
@@ -506,6 +512,21 @@ class LiteLLMClient:
         except httpx.HTTPError:
             raise LiteLLMError("Failed to delete the model route") from None
         return True
+
+    def list_model_deployments(self, id_prefix: str) -> list[dict]:
+        try:
+            response = httpx.get(
+                f"{self.config.litellm_base_url}/model/info",
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            routes = response.json()["data"]
+            if not isinstance(routes, list):
+                raise TypeError("Unexpected route list shape")
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError("Failed to list the model routes") from None
+        return [route for route in routes if _route_id(route).startswith(id_prefix)]
 
     def get_model_prices(self) -> dict[str, LiteLLMModelPrice]:
         try:

@@ -9,11 +9,16 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
 - Delivered: slice 2, connections to other providers ([feature doc](../llm-providers.md)). In Platform Admin settings and through the API, a Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita, and any number of Azure and Custom connections. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter deleted. Each key is checked with its provider before it is stored, and every addition, replacement and deletion is audited. OpenRouter's key is read from the connection list and replaced through `PUT .../openrouter/key`; the OpenRouter-only routes are gone.
-- Delivered: slice 3, PRs 1 to 3. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices; nothing writes it yet. `LiteLLMClient.get_model_prices()` reads that list; nothing calls it yet.
-- Next: slice 3, PR 4, listing a connection's LiteLLM routes; then models and prices per connection, with their LiteLLM routes.
+- Delivered: slice 3, PRs 1 to 4. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices; nothing writes it yet. `LiteLLMClient.get_model_prices()` reads that list and `list_model_deployments()` lists LiteLLM's routes by id prefix; nothing calls either yet.
+- Next: slice 3, PR 5, the deployment builder; then models and prices per connection, with their LiteLLM routes.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-20 — AF-447 — slice 3, PR 4
+
+- Delivered: `LiteLLMClient.list_model_deployments(id_prefix)` asks LiteLLM's `GET /model/info` once with the master key and returns the routes whose `model_info.id` starts with the prefix. At v1.108.6 that call lists every route, database routes included, for a key with no model, team or agent limits (`proxy/proxy_server.py:16842-16861,17093-17096`), and strips `api_key` from each route's `litellm_params` (`proxy/common_utils/openai_endpoint_utils.py:32`). A failed request or a body without a `data` list raises `LiteLLMError` without the key, and nothing is logged.
+- Follow-up: LiteLLM holds route prices as floats (`types/utils.py:3934-3939`), so `/model/info` returns the prices sent as floats, not the stored decimals. PR 6's reconcile compares them in the same form, or every route would look changed.
 
 ### 2026-11-20 — AF-447 — slice 3, PR 3
 
