@@ -267,3 +267,80 @@ publication; background worker scheduling itself was not part of this manual
 check. No recording SSH gateway or command-level policy is claimed. Existing
 remote sessions survive revocation, and authentication audit is not a complete
 remote command log. An epic change log is N/A: this is one implementation PR.
+
+## Bot lifecycle and native terminal follow-up — 2026-11-21
+
+Tested implementation: `7eca296d1291c727c3c203c17d4bcc2a32ead926`.
+The following evidence-only commit changes no executable source. The Bot epic
+log records this shared-runtime compatibility fix; SSH remains one implementation PR.
+
+The findings were reproduced through the real product API and PostgreSQL:
+applying SSH to a running Bot returned 200 and created a separate Bot deployment;
+starting a Parent Agent with credentials assigned only to its Bot omitted the
+SSH volume while reporting the selection applied. The initial regression run
+failed five cases, including the missing Parent lifecycle permission check, and
+passed the existing shared lifecycle-lock case. The lock already mapped Bots to
+their Parent Agent; restart target selection and runtime materialization were faulty.
+
+The fix uses the Parent Agent's restart permission, lifecycle lock and maintenance
+guards, and creates a generation-bound socket for each served Bot in the shared
+pod. Tests cover running and errored Bots. Native OpenClaw rejects overriding
+`SSH_AUTH_SOCK`, so its Bot environment hook passes `AGENTBARN_SSH_DIRECTORY`
+instead; managed SSH configuration resolves that directory to the socket. Hermes
+uses its real profile environment and secret scope. No private key is mounted.
+
+### Current verification
+
+```sh
+PYTEST_XDIST_AUTO_NUM_WORKERS=2 REDIS_URL=redis://127.0.0.1:1/0 \
+  PYTEST_ADDOPTS='-k "ssh or test_hermes_builders" --tb=short --show-capture=no -q' \
+  make test-api
+
+HERMES_TEST_IMAGE=agentbarn-hermes-base:ssh-review \
+  OPENCLAW_TEST_IMAGE=agentbarn-openclaw-base:ssh-review \
+  REDIS_URL=redis://127.0.0.1:1/0 \
+  PYTEST_ADDOPTS='--tb=short --show-capture=no -q' make test-ssh-runtime
+
+(cd ui && pnpm exec playwright test tests/e2e/ssh.spec.ts tests/e2e/integration-setup.spec.ts)
+make check-api check-migrations check-ssh
+make check-ui lint-ui
+git diff --check
+```
+
+- **140 API/unit/integration checks passed**, including nine Bot SSH lifecycle,
+  materialization, permission and locking cases, existing signing/security tests,
+  and the Hermes builder/startup checks.
+- **Six real runtime contracts passed:** ordinary Agent, Bot-only credentials,
+  and Parent/Bot sharing the same key, for both Hermes and OpenClaw. Every case
+  exercised login-shell and native terminal SSH, Git clone/commit/push/fetch,
+  scp/sftp, socket ownership/mode, revocation, and signing audit attribution.
+  Shared-key cases assert issued events belong to the Bot, not the Parent Agent.
+- **14 selected browser checks passed**, including the successful Bot restart
+  flow, an errored Bot with a running Parent, and a member lacking Parent restart
+  permission. These browser checks use mocked APIs; they do not prove backend RBAC.
+- API lint/format/types, UI TypeScript/ESLint, migration-head, SSH chart routing
+  and isolation, and diff checks passed.
+- A broader Agent/Bot regression selection passed 715 cases and exposed one
+  outdated start-script source-count assertion. It was replaced with an ordering
+  assertion that includes SSH startup; the final 140-case run above includes it.
+  This is not a claim that the complete API suite ran.
+
+The existing built runtime images were reused with the current generated
+ConfigMaps and Secrets. This follow-up changes mounted runtime scripts/plugins,
+not image contents, dependencies, schema, or deployment versions. Real Kubernetes
+scheduling/ingress enforcement, model turns, and sustained connection-limit load
+remain outside these contracts.
+
+### Bot UI happy path
+
+These three screenshots are from the successful browser test against its API
+adapter. The Bot initially needs attention while its Parent is running; saving
+returns the updated assignment and refreshed RUNNING state. The independent API
+and native runtime contracts above prove the actual restart and SSH behavior.
+
+1. [Selected SSH access](evidence/bot-ui-selection.png).
+2. [Confirmation explicitly names the Parent Agent and all Bots](evidence/bot-ui-confirm-restart.png).
+3. [Successful save and refreshed running Agent](evidence/bot-ui-access-saved.png).
+
+The browser test also writes and attaches this ordered flow to its Playwright
+results on every run.
