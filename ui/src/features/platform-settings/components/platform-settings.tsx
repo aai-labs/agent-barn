@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, KeyRound, Layers, Scale, Sparkles, Workflow } from "lucide-react";
+import { BookOpenCheck, Brain, Building2, CreditCard, Gauge, KeyRound, Layers, Scale, Sparkles } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -13,7 +13,6 @@ import { PlatformTrialSettings } from "@/features/onboarding/components/platform
 import { PlatformOrganizationSettings } from "@/features/organizations/components/platform-organization-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
 import { TiersSettings } from "@/features/tiers/components/tiers-settings";
-import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 export const PLATFORM_SETTINGS_SECTIONS = {
   "agent-memory": {
@@ -35,11 +34,6 @@ export const PLATFORM_SETTINGS_SECTIONS = {
     label: "Organizations",
     Icon: Building2,
     description: "What every organization gets unless you set something else for it.",
-  },
-  workflows: {
-    label: "Workflows",
-    Icon: Workflow,
-    description: "Workflow authoring shared by every Agent and Organization.",
   },
   playbooks: {
     label: "Playbooks",
@@ -91,7 +85,6 @@ export function PlatformSettings() {
         {active === "llm-providers" && <PlatformLlmProviderSettings />}
         {active === "agent-sizes" && <AgentSizesSettings />}
         {active === "organizations" && <PlatformOrganizationSettings />}
-        {active === "workflows" && <PlatformWorkflowSettings />}
         {active === "playbooks" && <PlatformPlaybookSettings />}
         {active === "decisions" && <PlatformDecisionSettings />}
         {active === "trials" && <PlatformTrialSettings />}

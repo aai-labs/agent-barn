@@ -25,7 +25,6 @@ import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { AgentWorkflowRuns } from "@/features/workflows/components/agent-workflow-runs";
-import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
@@ -53,11 +52,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, pod } = usePodAgent(loadedAgent);
   const canReadActivity = canAgent(agent, "activity.read");
   const { role } = useActiveOrgRole();
-  const workflowCapabilities = useWorkflowCapabilities(canAgent(agent, "agent.read"));
   const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
-  const tabs = visibleAgentPageTabs(agent, role, {
-    workflowAuthoring: workflowCapabilities.data?.authoring === true,
-  });
+  const tabs = visibleAgentPageTabs(agent, role);
   const canExtractPlaybooks = tabs.includes("playbooks");
   // The desktop path bar carries the Agent's lifecycle and Share actions; the page's own
   // copies wait for this check so the two never coexist.

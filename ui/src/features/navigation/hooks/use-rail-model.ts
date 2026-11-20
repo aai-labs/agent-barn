@@ -18,7 +18,6 @@ import { useOrganizationBilling } from "@/features/billing/hooks/use-organizatio
 import { usePlatformView } from "@/features/organizations/hooks/use-platform-view";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useAwaitingApprovals } from "@/features/workflows/hooks/use-workflow-runs";
-import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 
 import { PLATFORM_AREAS, isPlatformPageActive, type NavItem } from "../nav-model";
 
@@ -48,12 +47,11 @@ export function useRailModel(): RailModel {
     enabled: role === "OWNER" && !isPlatformView,
   });
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
-  // Workflows belong to the Organization and are open to every Member, where the
-  // installation offers them. The badge counts the approval requests the viewer may decide.
+  // Workflows belong to the Organization and are open to every Member. The badge counts
+  // the approval requests the viewer may decide.
   const inOrganization = Boolean(selectedOrganization) && !isPlatformView;
-  const workflows = useWorkflowCapabilities(inOrganization).data?.authoring === true;
   // The rail is on every page, so its badge checks less often than the inbox itself.
-  const awaiting = useAwaitingApprovals(undefined, inOrganization && workflows, 30_000);
+  const awaiting = useAwaitingApprovals(undefined, inOrganization, 30_000);
 
   if (isPlatformView) {
     return {
@@ -91,20 +89,16 @@ export function useRailModel(): RailModel {
       icon: ChartColumn,
       active: pathname === `${orgBase}/agents`,
     },
-    ...(workflows
-      ? [
-          {
-            key: "workflows",
-            label: "Workflows",
-            href: `${orgBase}/workflows`,
-            icon: Workflow,
-            active: pathname.startsWith(`${orgBase}/workflows`),
-            // Only requests this viewer may decide are waiting on them.
-            badge:
-              awaiting.data?.items.filter((run) => run.allowedActions.includes("decide")).length || undefined,
-          },
-        ]
-      : []),
+    {
+      key: "workflows",
+      label: "Workflows",
+      href: `${orgBase}/workflows`,
+      icon: Workflow,
+      active: pathname.startsWith(`${orgBase}/workflows`),
+      // Only requests this viewer may decide are waiting on them.
+      badge:
+        awaiting.data?.items.filter((run) => run.allowedActions.includes("decide")).length || undefined,
+    },
     // Costs and KPIs are owner/admin-only (their endpoints are gated too); hide them from members.
     ...(canManage
       ? [

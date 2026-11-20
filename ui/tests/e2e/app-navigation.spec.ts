@@ -95,7 +95,7 @@ test.describe("App navigation", () => {
     test("lists the organization's pages on the rail, with no way into Platform there", async () => {
       await navigation.gotoHome();
 
-      for (const name of ["Team", "Usage", "Costs", "KPIs", "Members", "Settings"]) {
+      for (const name of ["Team", "Usage", "Workflows", "Costs", "KPIs", "Members", "Settings"]) {
         await expect(navigation.mainLink(name)).toBeVisible();
       }
       await expect(navigation.mainLink("Team")).toHaveAttribute("aria-current", "page");
@@ -141,7 +141,8 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Signup & trials")).toBeVisible();
       await expect(navigation.panelLink("Tiers")).toBeVisible();
       await expect(navigation.breadcrumb()).toContainText("Settings/Agent Memory");
-      await expect(navigation.panelSections()).toHaveCount(10);
+      await expect(navigation.panelLink("Workflows")).toHaveCount(0);
+      await expect(navigation.panelSections()).toHaveCount(9);
       await expect(navigation.panelSections().nth(0)).toHaveText("Agent Memory");
 
       await navigation.gotoPlatform("/agents");

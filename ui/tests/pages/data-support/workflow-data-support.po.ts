@@ -68,7 +68,6 @@ export class WorkflowDataSupport {
     {
       saved = false,
       viewer = false,
-      authoring = true,
       organizationId = "*",
       stepId,
       paginated = false,
@@ -78,7 +77,6 @@ export class WorkflowDataSupport {
     }: {
       saved?: boolean;
       viewer?: boolean;
-      authoring?: boolean;
       organizationId?: string;
       stepId?: string;
       paginated?: boolean;
@@ -111,7 +109,7 @@ export class WorkflowDataSupport {
         ? route.abort()
         : route.fulfill({
         json: {
-          authoring,
+          authoring: true,
           execution: false,
           review_destinations: ["web"],
         },
