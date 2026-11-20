@@ -644,6 +644,8 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.interceptGetCustomApiConnectionsRequest(agentId);
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/ssh-credentials`, (route) => route.request().method() === "GET" ? route.fulfill({ json: { credentials: [], revision: 0, applied_ids: [], pending_apply: false, enabled: false, allowed_actions: [] } }) : route.fallback());
+    await this.page.route(`**/api/v1/organizations/*/ssh-credentials?*`, (route) => route.fulfill({ json: { items: [], total: 0 } }));
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();

@@ -44,12 +44,13 @@ _STANDARD = container_resources(
     memory_limit_bytes=STANDARD_MEMORY_LIMIT_BYTES,
 )
 
-# Supplied only for some Agents; start.sh guards each with `[ -f ... ]`.
+# Supplied only for some Agents; start.sh guards by file presence or the SSH token.
 _OPTIONAL = {
     "aai-cli-setup.sh",
     "aai-cli-config.toml",
     "gog-setup.sh",
     "skills.json",
+    "ssh-agent-relay.py",
     "bots.json",
     "bot-setup.py",
     "agentbarn-bot-env-index.js",

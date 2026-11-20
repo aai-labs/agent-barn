@@ -6,6 +6,12 @@ For current domain relationships and API runtime behavior, follow
 `../INDEX.md` rather than restating architecture here. Keep changes scoped;
 broad refactors require an explicit request.
 
+Use the [DDD crash course](https://dev.tasubo.com/2022/07/crash-course-domain-driven-design.html)
+to reason about domain vocabulary, aggregate invariants, identity-based links,
+and separation of business rules from infrastructure. Apply these principles
+within the feature boundaries below; introduce additional patterns only when
+they solve a concrete problem.
+
 ## API domain structure
 
 New domains live under `../../api/domains/<domain>/` with this baseline:

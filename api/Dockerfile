@@ -5,6 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv==0.4.15
 
 ENV PATH="/app/.venv/bin:$PATH"
@@ -23,5 +25,6 @@ EXPOSE 8000
 EXPOSE 8001
 EXPOSE 8003
 EXPOSE 8004
+EXPOSE 8005
 
 CMD ["sh", "api/start.sh"]

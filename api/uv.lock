@@ -172,6 +172,7 @@ dependencies = [
     { name = "sqlmodel" },
     { name = "stripe", extra = ["async"] },
     { name = "testcontainers" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -211,6 +212,7 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.39" },
     { name = "stripe", extras = ["async"], specifier = ">=15.6.1,<16" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.15.0" },
+    { name = "websockets", specifier = "==17.0" },
 ]
 
 [package.metadata.requires-dev]

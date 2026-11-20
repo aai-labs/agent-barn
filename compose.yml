@@ -16,6 +16,9 @@ x-api-env: &api-env
   PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
   ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
   WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
+  SSH_CA_CERTIFICATE: ${SSH_CA_CERTIFICATE:-}
+  SSH_ENABLED: ${SSH_ENABLED:-false}
+  SSH_SIGNER_URL: ${SSH_SIGNER_URL:-}
   MEMORY_DEFAULT_MODEL: ${MEMORY_DEFAULT_MODEL:-openrouter/openai/gpt-4.1-mini}
   HINDSIGHT_API_KEY: ""
   MEMORY_RUNTIME_SERVICE_KEY: ""
@@ -452,6 +455,36 @@ services:
       - ./api:/app/api
     ports:
       - "${GATEWAY_PORT:-8004}:8003"
+
+  ssh-signer:
+    profiles: [ssh]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    command: ["uvicorn", "api.ssh_main:app", "--host", "0.0.0.0", "--port", "8005", "--ws-max-size", "262144", "--ssl-keyfile", "/tls/key.pem", "--ssl-certfile", "/tls/cert.pem"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY:?AGENT_TOKEN_ENCRYPTION_KEY is required}
+      SECRET_SIGNING_KEY: "ssh-runtime-has-no-user-authentication"
+      PLATFORM_ADMIN_CREDENTIALS: ""
+      ORGANIZATION_DEFAULT_LLM_BUDGET_USD: "0"
+      AGENT_DEFAULT_LLM_BUDGET_USD: "0"
+      SSH_ENABLED: "true"
+      SSH_SOCKET_DIRECTORY: /tmp
+      ANALYTICS_ENABLED: "false"
+    volumes:
+      - ./.scratch/ssh-tls/key.pem:/tls/key.pem:ro
+      - ./.scratch/ssh-tls/cert.pem:/tls/cert.pem:ro
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=32m
+    ports:
+      - "${SSH_SIGNER_PORT:-8005}:8005"
 
   artifact-purge:
     build:

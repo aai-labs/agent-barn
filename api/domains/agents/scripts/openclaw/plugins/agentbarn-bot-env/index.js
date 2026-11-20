@@ -24,13 +24,15 @@ function readSecret(agentId) {
 }
 
 function parentEnv(parentNames) {
-  return Object.fromEntries(parentNames.map((name) => [name, process.env[name] ?? ""]));
+  // Native exec protects SSH_AUTH_SOCK. SSH resolves the profile's socket from
+  // AGENTBARN_SSH_DIRECTORY in its managed configuration instead.
+  return Object.fromEntries(parentNames.filter((name) => name !== "SSH_AUTH_SOCK").map((name) => [name, process.env[name] ?? ""]));
 }
 
 function botEnv(agentId, parentNames) {
   const env = {};
-  for (const name of parentNames) if (!SHARED.has(name)) env[name] = "";
-  for (const [name, value] of Object.entries(readSecret(agentId))) if (!SHARED.has(name)) env[name] = value;
+  for (const name of parentNames) if (!SHARED.has(name) && name !== "SSH_AUTH_SOCK") env[name] = "";
+  for (const [name, value] of Object.entries(readSecret(agentId))) if (!SHARED.has(name) && name !== "SSH_AUTH_SOCK") env[name] = value;
   env.AAI_CONFIG = `${STATE}/bots/${agentId}/.config/aai-cli/config.toml`;
   env.ARTIFACT_UPLOAD_ROOTS = `${STATE}/workspace-${agentId}`;
   return env;

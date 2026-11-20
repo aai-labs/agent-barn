@@ -20,6 +20,9 @@ The pod belongs to the Parent Agent.
 - Start, stop, restart, Agent Size, image updates and Restore Points act on the Parent Agent and are refused on a Bot. There is no way to stop one Bot.
 - A Bot's status mirrors its Parent Agent's, except that a Bot whose own setup fails is in error while the others run. When the Parent Agent fails to start or its runtime exits, its Bots go into error with it and their runtime keys are revoked.
 - Changing a Bot restarts the Parent Agent and all its Bots (Apply & Restart), also when the Bot is in error while its Parent Agent runs.
+- SSH access follows this shared restart rule and requires lifecycle permission
+  on the Parent Agent. Each served Bot gets its own signing token and ephemeral
+  socket; see [shared SSH access](ssh-access.md#runtime-and-signing-boundary).
 - Deleting a Bot takes effect at the Parent Agent's next restart. Deleting the Parent Agent deletes its Bots.
 - A Bot on a tier hold is not served. Holding a running Bot, or switching off one of its Slack, Telegram or Discord Connections, restarts its Parent Agent without it. A held Bot keeps its data and is served again once released and the Parent Agent restarts.
 - Every start issues each Bot fresh runtime keys. The LiteLLM key is created once per Agent and kept across starts.

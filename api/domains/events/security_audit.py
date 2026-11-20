@@ -80,6 +80,7 @@ from api.domains.events.catalog import (
     PLATFORM_WORKFLOW_AUTHORING_CHANGED,
     PLAYBOOK_EXTRACTION_REQUESTED,
     SECURITY_AUDIT_HANDLER,
+    SSH_EVENTS,
     TEMPLATE_CREATED,
     TEMPLATE_DELETED,
     TEMPLATE_UPDATED,
@@ -220,6 +221,8 @@ class SecurityAuditProjection:
         SupportedEvent(COMMUNICATION_DELIVERY_RETRY_REQUESTED, 1),
         SupportedEvent(COMMUNICATION_DELIVERY_RECOVERED, 1),
     )
+
+    supported_events = (*supported_events, *(SupportedEvent(name, 1) for name in SSH_EVENTS))
 
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
         del context

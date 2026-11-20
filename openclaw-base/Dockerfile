@@ -47,7 +47,7 @@ RUN set -eu; \
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini poppler-utils
+    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini poppler-utils openssh-client
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -124,6 +124,10 @@ COPY patch-hindsight-manifest.mjs /tmp/patch-hindsight-manifest.mjs
 RUN node /tmp/patch-hindsight-manifest.mjs \
       /opt/openclaw-preinstalled/npm/node_modules/@vectorize-io/hindsight-openclaw/openclaw.plugin.json && \
     rm /tmp/patch-hindsight-manifest.mjs
+
+# Keep relay dependencies separate from the runtime's own Python packages.
+RUN uv venv --python /usr/local/bin/python3 /opt/agentbarn-ssh && \
+    uv pip install --python /opt/agentbarn-ssh/bin/python 'websockets==17.0'
 
 USER node
 

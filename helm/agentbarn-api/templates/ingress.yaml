@@ -39,6 +39,15 @@ spec:
           # /api only: the outer app also serves /metrics, which must stay
           # cluster-internal (Prometheus scrapes the Service directly, not
           # the ingress) — a / prefix would expose it to the internet.
+          {{- if $.Values.ssh.enabled }}
+          - path: /ssh/v1/agent
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $.Release.Name }}-ssh
+                port:
+                  number: 8005
+          {{- end }}
           - path: /api
             pathType: Prefix
             backend:

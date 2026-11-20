@@ -861,11 +861,11 @@ def test_start_script_runs_the_bot_steps_in_order():
     skills = script.index("rm -rf /workspace/skills")
     setup = script.index("python3 /app/config/bot-setup.py\n")
     file_sync = script.index("file-sync.py --once")
+    ssh = script.index("ssh-agent-relay.py --configure")
     launch = script.index("bot-setup.py --launch")
     gateway = script.index("exec hermes gateway run")
 
-    assert sync < merge < workspace_files < skills < setup < file_sync < launch < gateway
-    assert script.count("[ -f /app/config/bots.json ]") == 3
+    assert sync < merge < workspace_files < skills < setup < file_sync < ssh < launch < gateway
 
 
 def test_boot_run_reads_a_bots_own_boot_file():

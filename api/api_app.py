@@ -76,6 +76,7 @@ from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
+from api.domains.ssh.routes import router as ssh_router
 from api.domains.subscriptions.routes import (
     organization_subscription_router,
     platform_organization_tier_router,
@@ -161,6 +162,7 @@ def create_app(injector: Injector | None = None):
 
     subapi.include_router(agents_router)
     subapi.include_router(custom_api_router)
+    subapi.include_router(ssh_router)
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_artifacts_router)
     subapi.include_router(workflows_router)

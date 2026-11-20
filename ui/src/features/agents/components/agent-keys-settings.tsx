@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { AgentSshPanel } from "@/features/ssh/components/agent-ssh-panel";
 import { useCustomApi } from "@/features/custom-api/hooks/use-custom-api";
 import { ConnectionIntegrations } from "@/features/custom-api/components/connection-integrations";
 import { connectionDraft, connectionPayload, type ConnectionDraft } from "@/features/custom-api/components/connection-drafts";
@@ -168,6 +169,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   }
 
   return (
+    <div className="space-y-8">
     <AgentConfigurationSection title="Integrations" description="Runtime integration credentials are separate from communication connection credentials. Secret values remain write-only and encrypted at rest."
       errorsShownInline
       canEdit={canEdit && !customApi.isLoadingConnections && !customApi.connectionsError} editing={editing} onEdit={beginEditing} onApply={applyChanges}
@@ -204,5 +206,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         </div>
       )}
     </AgentConfigurationSection>
+    <AgentSshPanel key={agent.id} agent={agent} />
+    </div>
   );
 }

@@ -1,0 +1,281 @@
+{
+  "environment": "local real product API + PostgreSQL + verified TLS signer + native Hermes terminal; Kubernetes and model provisioning mocked",
+  "ui": "http://127.0.0.1:28701",
+  "api": "http://127.0.0.1:28700",
+  "organization_id": "01a1e4c7-470e-7511-a742-5445b0e05be4",
+  "agent_id": "01a1e4c7-4723-76f0-861e-d970e8272164",
+  "key_id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+  "alias": "ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo",
+  "transcript": [
+    {
+      "command": "ssh ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo 'echo ssh-demo-connected; whoami'",
+      "exit_code": 0,
+      "output": "ssh-demo-connected\nroot"
+    },
+    {
+      "command": "ssh ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo 'git init --bare /tmp/demo.git >/dev/null' && git clone ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo:/tmp/demo.git /tmp/demo-clone && git -C /tmp/demo-clone config user.email fixture@example.com && git -C /tmp/demo-clone config user.name Fixture && printf ssh-demo-file > /tmp/demo-clone/report.txt && git -C /tmp/demo-clone add . && git -C /tmp/demo-clone commit -m Demo && git -C /tmp/demo-clone push origin HEAD && git -C /tmp/demo-clone fetch",
+      "exit_code": 0,
+      "output": "hint: Using 'master' as the name for the initial branch. This default branch name\nhint: is subject to change. To configure the initial branch name to use in all\nhint: of your new repositories, which will suppress this warning, call:\nhint: \nhint: \tgit config --global init.defaultBranch <name>\nhint: \nhint: Names commonly chosen instead of 'master' are 'main', 'trunk' and\nhint: 'development'. The just-created branch can be renamed via this command:\nhint: \nhint: \tgit branch -m <name>\nCloning into '/tmp/demo-clone'...\nwarning: You appear to have cloned an empty repository.\nhint: Using 'master' as the name for the initial branch. This default branch name\nhint: is subject to change. To configure the initial branch name to use in all\nhint: of your new repositories, which will suppress this warning, call:\nhint:\nhint: \tgit config --global init.defaultBranch <name>\nhint:\nhint: Names commonly chosen instead of 'master' are 'main', 'trunk' and\nhint: 'development'. The just-created branch can be renamed via this command:\nhint:\nhint: \tgit branch -m <name>\n[master (root-commit) 63c5a4d] Demo\n 1 file changed, 1 insertion(+)\n create mode 100644 report.txt\nTo ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo:/tmp/demo.git\n * [new branch]      HEAD -> master"
+    },
+    {
+      "command": "scp /tmp/demo-clone/report.txt ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo:/tmp/report.txt && printf 'get /tmp/report.txt /tmp/download.txt\\n' | sftp -b - ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo && cat /tmp/download.txt",
+      "exit_code": 0,
+      "output": "sftp> get /tmp/report.txt /tmp/download.txt\nssh-demo-file"
+    },
+    {
+      "command": "ssh -o StrictHostKeyChecking=no -o HostKeyAlias=unapproved-fixture -p 32812 ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo true",
+      "exit_code": 255,
+      "output": "Warning: Permanently added 'unapproved-fixture' (ED25519) to the list of known hosts.\r\nLoad key \"/run/agentbarn-ssh/01a1e4c7-4ba1-705f-b1de-98a5820f4f8e.pub\": error in libcrypto\r\nroot@127.0.0.1: Permission denied (publickey)."
+    },
+    {
+      "command": "ssh ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo true",
+      "exit_code": 255,
+      "output": "Load key \"/run/agentbarn-ssh/01a1e4c7-4ba1-705f-b1de-98a5820f4f8e.pub\": error in libcrypto\r\nroot@127.0.0.1: Permission denied (publickey)."
+    },
+    {
+      "command": "ssh ab-01a1e4c74ba1705fb1de98a5820f4f8e-demo 'printf fresh-generation-connected'",
+      "exit_code": 0,
+      "output": "fresh-generation-connected"
+    }
+  ],
+  "audit_events": {
+    "ssh.assignments.changed": 2,
+    "ssh.key.changed": 3,
+    "ssh.key.created": 1,
+    "ssh.signing.authorized": 8,
+    "ssh.signing.issued": 8
+  },
+  "public_files_and_socket": "/app/config/ssh-agent-relay.py\n/app/config/ssh-ca.pem\n/app/config/ssh-client.json\n/run/agentbarn-ssh/01a1e4c7-4ba1-705f-b1de-98a5820f4f8e.pub\n/run/agentbarn-ssh/config\n/run/agentbarn-ssh/known_hosts\n700 hermes /run/agentbarn-ssh\n600 hermes /run/agentbarn-ssh/agent.sock\n",
+  "api_requests": [
+    {
+      "method": "POST",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/ssh-credentials",
+      "status": 201,
+      "public_response": {
+        "mode": "restricted",
+        "servers": [],
+        "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+        "name": "Disposable demo server",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+        "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+        "algorithm": "ssh-ed25519",
+        "origin": "generate",
+        "enabled": true,
+        "revision": 1,
+        "created_at": "2026-11-16T14:33:48.705929Z",
+        "agent_count": 0
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/ssh-credentials/01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+      "status": 200,
+      "public_response": {
+        "mode": "restricted",
+        "servers": [
+          {
+            "name": "demo",
+            "hostname": "127.0.0.1",
+            "port": 32811,
+            "username": "root",
+            "host_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHpDQecSswSl8RtkW/uGKtK6dEqnXfAoJl5MkTGKzYv"
+            ]
+          }
+        ],
+        "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+        "name": "Disposable demo server",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+        "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+        "algorithm": "ssh-ed25519",
+        "origin": "generate",
+        "enabled": true,
+        "revision": 2,
+        "created_at": "2026-11-16T14:33:48.705929Z",
+        "agent_count": 0
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/agents/01a1e4c7-4723-76f0-861e-d970e8272164/ssh-credentials",
+      "status": 200,
+      "public_response": {
+        "credentials": [
+          {
+            "mode": "restricted",
+            "servers": [
+              {
+                "name": "demo",
+                "hostname": "127.0.0.1",
+                "port": 32811,
+                "username": "root",
+                "host_keys": [
+                  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHpDQecSswSl8RtkW/uGKtK6dEqnXfAoJl5MkTGKzYv"
+                ]
+              }
+            ],
+            "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+            "name": "Disposable demo server",
+            "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+            "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+            "algorithm": "ssh-ed25519",
+            "origin": "generate",
+            "enabled": true,
+            "revision": 2,
+            "created_at": "2026-11-16T14:33:48.705929Z",
+            "agent_count": 0
+          }
+        ],
+        "revision": 1,
+        "applied_ids": [],
+        "pending_apply": true,
+        "enabled": true,
+        "allowed_actions": [
+          "manage"
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/ssh-credentials/01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+      "status": 200,
+      "public_response": {
+        "mode": "restricted",
+        "servers": [
+          {
+            "name": "demo",
+            "hostname": "127.0.0.1",
+            "port": 32811,
+            "username": "root",
+            "host_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHpDQecSswSl8RtkW/uGKtK6dEqnXfAoJl5MkTGKzYv"
+            ]
+          }
+        ],
+        "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+        "name": "Disposable demo server",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+        "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+        "algorithm": "ssh-ed25519",
+        "origin": "generate",
+        "enabled": false,
+        "revision": 3,
+        "created_at": "2026-11-16T14:33:48.705929Z",
+        "agent_count": 1
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/ssh-credentials/01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+      "status": 200,
+      "public_response": {
+        "mode": "restricted",
+        "servers": [
+          {
+            "name": "demo",
+            "hostname": "127.0.0.1",
+            "port": 32811,
+            "username": "root",
+            "host_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHpDQecSswSl8RtkW/uGKtK6dEqnXfAoJl5MkTGKzYv"
+            ]
+          }
+        ],
+        "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+        "name": "Disposable demo server",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+        "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+        "algorithm": "ssh-ed25519",
+        "origin": "generate",
+        "enabled": true,
+        "revision": 4,
+        "created_at": "2026-11-16T14:33:48.705929Z",
+        "agent_count": 1
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/agents/01a1e4c7-4723-76f0-861e-d970e8272164/ssh-credentials",
+      "status": 200,
+      "public_response": {
+        "credentials": [
+          {
+            "mode": "restricted",
+            "servers": [
+              {
+                "name": "demo",
+                "hostname": "127.0.0.1",
+                "port": 32811,
+                "username": "root",
+                "host_keys": [
+                  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHpDQecSswSl8RtkW/uGKtK6dEqnXfAoJl5MkTGKzYv"
+                ]
+              }
+            ],
+            "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+            "name": "Disposable demo server",
+            "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+            "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+            "algorithm": "ssh-ed25519",
+            "origin": "generate",
+            "enabled": true,
+            "revision": 4,
+            "created_at": "2026-11-16T14:33:48.705929Z",
+            "agent_count": 0
+          }
+        ],
+        "revision": 1,
+        "applied_ids": [
+          "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e"
+        ],
+        "pending_apply": true,
+        "enabled": true,
+        "allowed_actions": [
+          "manage"
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/organizations/01a1e4c7-470e-7511-a742-5445b0e05be4/agents/01a1e4c7-4723-76f0-861e-d970e8272164/ssh-credentials",
+      "status": 200,
+      "public_response": {
+        "credentials": [
+          {
+            "mode": "restricted",
+            "servers": [
+              {
+                "name": "demo",
+                "hostname": "127.0.0.1",
+                "port": 32811,
+                "username": "root",
+                "host_keys": [
+                  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHpDQecSswSl8RtkW/uGKtK6dEqnXfAoJl5MkTGKzYv"
+                ]
+              }
+            ],
+            "id": "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e",
+            "name": "Disposable demo server",
+            "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICTyl8SnEij/SFvgT1uEOTJK7obPQwQCx7levVNBuSal",
+            "fingerprint": "SHA256:A/fsfqU3xIhi3eZc7+Ll35A6FGTy0VF5X060+lREskQ",
+            "algorithm": "ssh-ed25519",
+            "origin": "generate",
+            "enabled": true,
+            "revision": 4,
+            "created_at": "2026-11-16T14:33:48.705929Z",
+            "agent_count": 0
+          }
+        ],
+        "revision": 2,
+        "applied_ids": [
+          "01a1e4c7-4ba1-705f-b1de-98a5820f4f8e"
+        ],
+        "pending_apply": false,
+        "enabled": true,
+        "allowed_actions": [
+          "manage"
+        ]
+      }
+    }
+  ]
+}

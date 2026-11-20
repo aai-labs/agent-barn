@@ -95,6 +95,11 @@ fi
 python3 /app/config/file-sync.py --once || true
 python3 /app/config/file-sync.py &
 
+if [ -n "${AGENTBARN_SSH_SIGNER_TOKEN:-}" ] || [ -f /app/config/bots.json ]; then
+  /opt/agentbarn-ssh/bin/python /app/config/ssh-agent-relay.py --configure
+  /opt/agentbarn-ssh/bin/python /app/config/ssh-agent-relay.py &
+  /opt/agentbarn-ssh/bin/python /app/config/ssh-agent-relay.py --wait
+fi
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
 touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 python3 /app/config/boot-run.py &

@@ -1,0 +1,9 @@
+{
+  "date": "2026-11-16",
+  "source": "live UI with real API; requests held for loading and controlled HTTP 503 only for outage/retry",
+  "loading": "visible while real request held, then real data appeared",
+  "empty": "real backend unmatched search",
+  "failure": "controlled HTTP 503 showed retry",
+  "recovery": "Retry fetched real API data",
+  "permission": "real Member login saw public metadata and no create/save controls"
+}

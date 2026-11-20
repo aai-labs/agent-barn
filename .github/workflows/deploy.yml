@@ -314,6 +314,9 @@ jobs:
     env:
       MEMORY_DEFAULT_MODEL: ${{ vars[format('{0}MEMORY_DEFAULT_MODEL', github.ref_name == 'staging' && 'STAGING_' || '')] }}
       MEMORY_LITELLM_KEY_HASHES: ${{ vars[format('{0}MEMORY_LITELLM_KEY_HASHES', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+      SSH_ENABLED: ${{ vars[format('{0}SSH_ENABLED', github.ref_name == 'staging' && 'STAGING_' || '')] || 'false' }}
+      SSH_SIGNER_URL: ${{ vars[format('{0}SSH_SIGNER_URL', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+      SSH_CA_CERTIFICATE: ${{ vars[format('{0}SSH_CA_CERTIFICATE', github.ref_name == 'staging' && 'STAGING_' || '')] }}
 
     steps:
       - name: Checkout

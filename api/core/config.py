@@ -123,6 +123,13 @@ class Config(BaseSettings):
     # The credential gateway is a separate deployment because it sits on the request path
     # of every agent tool call; agent workloads reach it by Service name in-namespace.
     credential_gateway_base_url: str = "http://agentbarn-api-gateway:8003/gateway/v1"
+    ssh_enabled: bool = False
+    ssh_signer_url: str = ""
+    ssh_ca_certificate: str = ""
+    ssh_socket_directory: str = "/tmp"
+    ssh_max_connections: int = Field(default=64, ge=1, le=1024)
+    ssh_max_agent_connections: int = Field(default=8, ge=1, le=64)
+    ssh_idle_timeout_seconds: int = Field(default=60, ge=5, le=600)
     memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
     # Where the product API reaches the gateway's read-only viewer; Agents never use it.
     memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"

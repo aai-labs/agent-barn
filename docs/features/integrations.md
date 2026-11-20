@@ -118,6 +118,8 @@ Grants live on the sites, not in any token: every app-only token for the Teams a
 
 ## Runtime materialization
 
+SSH Credentials are a separate Organization-owned key type, managed alongside provider credentials in Shared Credentials. That settings section is visible to Members for public metadata; mutation remains Owner/Admin-only. SSH attachments use their own Agent Permission checks and signing service rather than Integration Plugins or provider credential materialization. See [Shared SSH access](ssh-access.md) for the authoritative contract.
+
 ### Optional credential isolation
 
 `agent_integration_isolation` stores desired isolation per Agent, provider and source. A stored Agent Secret owns its `agent_secret` choice even when it references a Shared Credential. The operator's virtual Firecrawl binding owns a separate `platform_default` choice. The Agent owns tenancy. New bindings default OFF; the migration preserves existing isolated GitHub, Jira, Confluence, Bitbucket, Pipedrive, Firecrawl and Google Workspace bindings and direct SharePoint bindings. Replacement, reconnect and shared-source changes preserve the choice. Credential creation and policy initialization share the existing secret/audit transaction; removal deletes only that credential source's policy. Hard Agent deletion cascades both sources.

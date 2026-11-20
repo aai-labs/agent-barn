@@ -157,6 +157,7 @@ def _service(openrouter, allowlist=None, default_model=""):
     agent_settings_lookup.resolve_default_model.return_value = default_model
 
     return AgentService(
+        ssh=MagicMock(),
         repository=MagicMock(),
         connection_repository=MagicMock(),
         conversation_repository=MagicMock(),
