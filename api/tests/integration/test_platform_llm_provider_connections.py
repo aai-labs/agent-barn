@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import Mock
 from uuid import UUID, uuid7
 
@@ -8,7 +9,13 @@ from sqlmodel import Session, col, select
 
 from api.core.config import Config
 from api.domains.events.models import OutboxMessage
-from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, LlmProviderConnection, ProviderType
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    LlmProviderConnection,
+    LlmProviderModel,
+    PriceSource,
+    ProviderType,
+)
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.llm_provider_keys.checker import (
@@ -44,6 +51,21 @@ KNOWN_PROVIDERS = [
     (ProviderType.FIREWORKS, "Fireworks"),
     (ProviderType.NOVITA, "Novita"),
 ]
+ROUTED_MODELS = ["gpt-4o", "gpt-4o-mini"]
+ROUTE_PRICES = {
+    "input_cost_per_token": 2.5e-06,
+    "output_cost_per_token": 1e-05,
+    "cache_read_input_token_cost": 1.25e-06,
+    "cache_creation_input_token_cost": 0.0,
+}
+OTHER_ROUTE_ID = "agentbarn:model:0190a1b2-0000-7000-8000-000000000009:0190a1b2-0000-7000-8000-000000000010"
+OTHER_ROUTE = {
+    "model_name": "anthropic/claude-sonnet-4-5",
+    "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": ANTHROPIC_KEY},
+    "model_info": {"id": OTHER_ROUTE_ID, "disable_background_health_check": True},
+}
+KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
+ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 
 
 def _setup(*steps):
@@ -1102,3 +1124,183 @@ def test_a_deleted_connection_has_no_key_to_replace():
 
         assert_that(response.status_code, equal_to(404))
         context.check.assert_not_called()
+
+
+def _model(context, connection: LlmProviderConnection, model_id: str) -> LlmProviderModel:
+    row = LlmProviderModel(
+        connection_id=connection.id,
+        model_id=model_id,
+        input_cost_per_token=Decimal("0.0000025"),
+        output_cost_per_token=Decimal("0.00001"),
+        cache_read_input_token_cost=Decimal("0.00000125"),
+        cache_creation_input_token_cost=Decimal(0),
+        price_source=PriceSource.MANUAL,
+    )
+    with _session(context) as session:
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+    return row
+
+
+def _models(context, connection: LlmProviderConnection) -> list[LlmProviderModel]:
+    with _session(context) as session:
+        return list(session.exec(select(LlmProviderModel).where(LlmProviderModel.connection_id == connection.id)))
+
+
+def _route_id(connection: LlmProviderConnection, model: LlmProviderModel) -> str:
+    return f"agentbarn:model:{connection.id}:{model.id}"
+
+
+def _other_routes() -> dict[str, dict]:
+    return {"agentbarn:openrouter": OPENROUTER_ROUTE, OTHER_ROUTE_ID: OTHER_ROUTE}
+
+
+def _azure_routes(context, key: str, base_url: str) -> dict[str, dict]:
+    return {
+        _route_id(context.connection, model): {
+            "model_name": f"azure-eu/{model.model_id}",
+            "litellm_params": {
+                "model": f"azure/{model.model_id}",
+                "api_base": base_url,
+                "api_version": "v1",
+                "api_key": key,
+                **ROUTE_PRICES,
+            },
+            "model_info": {"id": _route_id(context.connection, model), "disable_background_health_check": True},
+        }
+        for model in context.models
+    }
+
+
+def azure_with_routed_models(context):
+    routes: dict[str, dict] = {}
+    litellm = context.injector.get(LiteLLMClient)
+    litellm.list_model_deployments.side_effect = lambda id_prefix: [
+        route for route_id, route in routes.items() if route_id.startswith(id_prefix)
+    ]
+    litellm.upsert_model_deployment.side_effect = lambda **route: routes.update({route["model_info"]["id"]: route})
+    litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
+    context.routes = routes
+    azure_connected(context)
+    context.models = [_model(context, context.connection, model_id) for model_id in ROUTED_MODELS]
+    routes.update({**_other_routes(), **_azure_routes(context, AZURE_KEY, AZURE_BASE_URL)})
+
+
+def test_a_new_key_is_routed_for_every_model_before_it_is_stored():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        stored_while_routing = []
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+
+        def record(**route):
+            stored_while_routing.append(_stored(context, "azure-eu")[0])
+            write(**route)
+
+        upsert.side_effect = record
+
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(stored_while_routing, equal_to([AZURE_KEY, AZURE_KEY]))
+        assert_that(
+            context.routes, equal_to({**_other_routes(), **_azure_routes(context, REPLACED_KEY, AZURE_BASE_URL)})
+        )
+        assert_that(_stored(context, "azure-eu"), equal_to((REPLACED_KEY, AZURE_BASE_URL)))
+
+
+def test_a_new_base_url_is_routed_for_every_model():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        response = _replace(context, "azure-eu", base_url=FABRIKAM_BASE_URL)
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            context.routes, equal_to({**_other_routes(), **_azure_routes(context, REPLACED_KEY, FABRIKAM_BASE_URL)})
+        )
+        assert_that(_stored(context, "azure-eu"), equal_to((REPLACED_KEY, FABRIKAM_BASE_URL)))
+
+
+def test_a_route_failure_part_way_keeps_the_key_and_a_retry_leaves_one_route_per_model():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        leftover_id = f"agentbarn:model:{context.connection.id}:{uuid7()}"
+        context.routes[leftover_id] = {**OTHER_ROUTE, "model_info": {"id": leftover_id}}
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_second(**route):
+            written.append(route)
+            if len(written) == 2:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_second
+
+        failed = _replace(context, "azure-eu")
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+        upsert.side_effect = write
+        retried = _replace(context, "azure-eu")
+
+        assert_that(retried.status_code, equal_to(200), retried.text)
+        assert_that(
+            context.routes, equal_to({**_other_routes(), **_azure_routes(context, REPLACED_KEY, AZURE_BASE_URL)})
+        )
+
+
+def test_deleting_a_connection_removes_its_routes_before_its_models():
+    with given(_setup(admin, azure_with_routed_models)) as context:
+        models_while_removing = []
+        delete = context.injector.get(LiteLLMClient).delete_model_deployment
+        remove = delete.side_effect
+
+        def record(model_id):
+            models_while_removing.append(len(_models(context, context.connection)))
+            return remove(model_id)
+
+        delete.side_effect = record
+
+        response = _delete(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(204), response.text)
+        assert_that(models_while_removing, equal_to([2, 2]))
+        assert_that(context.routes, equal_to(_other_routes()))
+        assert_that(_models(context, context.connection), has_length(0))
+        [row] = _rows(context, "azure-eu")
+        assert_that(row.deleted_at, is_not(none()))
+
+
+@pytest.mark.parametrize("failing", ["list_model_deployments", "delete_model_deployment"])
+def test_a_route_removal_failure_deletes_nothing(failing):
+    with given(_setup(admin, azure_with_routed_models)) as context:
+        getattr(context.injector.get(LiteLLMClient), failing).side_effect = LiteLLMError("proxy down")
+
+        response = _delete(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": ROUTES_NOT_REMOVED}))
+        [row] = _rows(context, "azure-eu")
+        assert_that(row.deleted_at, none())
+        assert_that(_stored(context, "azure-eu"), equal_to((AZURE_KEY, AZURE_BASE_URL)))
+        assert_that(_models(context, context.connection), has_length(2))
+        assert_that(_deleted_events(context), has_length(0))
+
+
+def test_a_key_replaced_while_the_connection_is_deleted_routes_nothing():
+    with given(_setup(admin, azure_with_routed_models)) as context:
+
+        def delete_while_checking(*_):
+            assert_that(_delete(context, "azure-eu").status_code, equal_to(204))
+            return True
+
+        context.injector.get(LlmProviderKeyChecker).check = Mock(side_effect=delete_while_checking)
+
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        assert_that(context.routes, equal_to(_other_routes()))
+        assert_that(_changed_events(context), has_length(0))

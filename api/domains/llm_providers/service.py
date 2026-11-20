@@ -10,6 +10,11 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher
+from api.domains.llm_providers.litellm_deployments import (
+    LiteLLMDeployment,
+    build_model_deployment,
+    model_route_prefix,
+)
 from api.domains.llm_providers.models import (
     BASE_URL_PROVIDER_TYPES,
     KNOWN_PROVIDER_NAMES,
@@ -26,6 +31,7 @@ from api.domains.llm_providers.models import (
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
+    LlmProviderModel,
     ProviderType,
 )
 from api.domains.llm_providers.repository import (
@@ -56,6 +62,8 @@ BASE_URL_NOT_TAKEN = "Only Azure and Custom connections take a base URL."
 NOT_FOUND = "That connection does not exist."
 OPENROUTER_FIXED = "OpenRouter can't be deleted."
 CHANGED_WHILE_CHECKING = "The connection changed while the key was checked. Nothing was saved."
+KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
+ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 PROVIDER_TYPE_NAMES = frozenset(provider_type.value for provider_type in ProviderType)
 
 
@@ -157,10 +165,8 @@ class PlatformLlmProviderService:
             raise HTTPException(422, BASE_URL_NOT_TAKEN)
         base_url = _checked_base_url(data.base_url) if data.base_url is not None else connection.base_url
         api_key = data.api_key.get_secret_value()
-        apply = None
         if provider_type == ProviderType.OPENROUTER:
             self._check_openrouter_key(api_key)
-            apply = partial(self._route_openrouter_key, api_key)
         elif base_url is not None:
             self._check_key(connection.name, partial(self.key_checker.check, provider_type, api_key, base_url))
         else:
@@ -174,7 +180,7 @@ class PlatformLlmProviderService:
                 context.user.full_name or context.user.email,
                 seen_base_url=connection.base_url,
                 base_url=base_url,
-                apply=apply,
+                apply=partial(self._route_key, api_key),
             )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
@@ -191,7 +197,9 @@ class PlatformLlmProviderService:
         if slug == OPENROUTER_SLUG:
             raise HTTPException(409, OPENROUTER_FIXED)
         try:
-            ids = self.repository.delete(slug, context.user.id, context.user.full_name or context.user.email)
+            ids = self.repository.delete(
+                slug, context.user.id, context.user.full_name or context.user.email, apply=self._remove_routes
+            )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
         self.dispatcher.enqueue_immediate(ids)
@@ -219,20 +227,44 @@ class PlatformLlmProviderService:
         if not accepted:
             raise HTTPException(422, "OpenRouter did not accept this key. Your key was not changed.")
 
-    def _route_openrouter_key(self, api_key: str) -> None:
+    def _route_key(self, api_key: str, connection: LlmProviderConnection, models: list[LlmProviderModel]) -> None:
         try:
-            self.litellm.upsert_model_deployment(
-                model_name=OPENROUTER_ROUTE_MODEL,
-                litellm_params={
-                    "model": OPENROUTER_ROUTE_MODEL,
-                    "api_key": api_key,
-                    "api_base": OPENROUTER_ROUTE_API_BASE,
-                    "order": OPENROUTER_ROUTE_ORDER,
-                },
-                model_info={"id": OPENROUTER_ROUTE_ID, "disable_background_health_check": True},
-            )
+            if connection.provider_type == ProviderType.OPENROUTER:
+                self.litellm.upsert_model_deployment(
+                    model_name=OPENROUTER_ROUTE_MODEL,
+                    litellm_params={
+                        "model": OPENROUTER_ROUTE_MODEL,
+                        "api_key": api_key,
+                        "api_base": OPENROUTER_ROUTE_API_BASE,
+                        "order": OPENROUTER_ROUTE_ORDER,
+                    },
+                    model_info={"id": OPENROUTER_ROUTE_ID, "disable_background_health_check": True},
+                )
+            else:
+                self._reconcile_routes(
+                    connection, [build_model_deployment(connection, model, api_key) for model in models]
+                )
         except LiteLLMError:
-            raise HTTPException(503, "The model proxy could not be updated. Your key was not changed.") from None
+            raise HTTPException(503, KEY_NOT_ROUTED) from None
+
+    def _remove_routes(self, connection: LlmProviderConnection) -> None:
+        try:
+            self._reconcile_routes(connection, [])
+        except LiteLLMError:
+            raise HTTPException(503, ROUTES_NOT_REMOVED) from None
+
+    def _reconcile_routes(self, connection: LlmProviderConnection, wanted: list[LiteLLMDeployment]) -> None:
+        listed = self.litellm.list_model_deployments(model_route_prefix(connection.id))
+        for deployment in wanted:
+            self.litellm.upsert_model_deployment(
+                model_name=deployment.model_name,
+                litellm_params=deployment.litellm_params,
+                model_info=deployment.model_info,
+            )
+        wanted_ids = {deployment.model_info["id"] for deployment in wanted}
+        for route in listed:
+            if route["model_info"]["id"] not in wanted_ids:
+                self.litellm.delete_model_deployment(route["model_info"]["id"])
 
     def _to_read(self, connection: LlmProviderConnection, updated_by: str | None) -> LlmProviderConnectionRead:
         has_api_key = connection.api_key_encrypted is not None

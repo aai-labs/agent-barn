@@ -19,6 +19,7 @@ from api.domains.llm_providers.models import (
     BASE_URL_PROVIDER_TYPES,
     OPENROUTER_SLUG,
     LlmProviderConnection,
+    LlmProviderModel,
     ProviderType,
 )
 from api.domains.users.models import User
@@ -91,13 +92,14 @@ class LlmProviderRepository:
         *,
         seen_base_url: str | None,
         base_url: str | None,
-        apply: Callable[[], None] | None = None,
+        apply: Callable[[LlmProviderConnection, list[LlmProviderModel]], None],
     ) -> list[UUID]:
         """Store a new key and the base URL it was checked at, calling `apply` first under the
         connection's lock.
 
-        `apply` pushes the key to LiteLLM; if it raises, nothing is stored. Raises ConnectionChanged
-        when the stored base URL is no longer `seen_base_url`, the one read before the key was checked.
+        `apply` gets the connection, already carrying the new base URL, and its models, and pushes
+        the key to LiteLLM; if it raises, nothing is stored. Raises ConnectionChanged when the stored
+        base URL is no longer `seen_base_url`, the one read before the key was checked.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
@@ -112,11 +114,10 @@ class LlmProviderRepository:
             if previous_base_url != seen_base_url:
                 raise ConnectionChanged(slug)
             replaced_existing = connection.api_key_encrypted is not None
-            if apply is not None:
-                apply()
+            connection.base_url = base_url
+            apply(connection, self._models(session, connection))
             now = datetime.now(UTC)
             connection.api_key_encrypted = api_key_encrypted
-            connection.base_url = base_url
             connection.api_key_last4 = api_key_last4
             connection.updated_by = actor_id
             connection.updated_at = now
@@ -189,9 +190,18 @@ class LlmProviderRepository:
             session.commit()
             return ids
 
-    def delete(self, slug: str, actor_id: UUID, actor_display: str) -> list[UUID]:
-        """Soft-delete the connection and purge its key under the connection's lock.
+    def delete(
+        self,
+        slug: str,
+        actor_id: UUID,
+        actor_display: str,
+        *,
+        apply: Callable[[LlmProviderConnection], None],
+    ) -> list[UUID]:
+        """Delete the connection's models, soft-delete the connection and purge its key, calling
+        `apply` first under the connection's lock.
 
+        `apply` removes the connection's routes from LiteLLM; if it raises, nothing is deleted.
         Raises ConnectionNotFound when no connection with this slug is live.
         """
         with Session(self.delegate.engine) as session:
@@ -203,6 +213,8 @@ class LlmProviderRepository:
             ).one_or_none()
             if connection is None:
                 raise ConnectionNotFound(slug)
+            apply(connection)
+            session.exec(sa.delete(LlmProviderModel).where(col(LlmProviderModel.connection_id) == connection.id))
             key_purged = connection.api_key_encrypted is not None
             now = datetime.now(UTC)
             connection.api_key_encrypted = None
@@ -224,6 +236,16 @@ class LlmProviderRepository:
             )
             session.commit()
             return ids
+
+    @staticmethod
+    def _models(session: Session, connection: LlmProviderConnection) -> list[LlmProviderModel]:
+        return list(
+            session.exec(
+                select(LlmProviderModel)
+                .where(LlmProviderModel.connection_id == connection.id)
+                .order_by(col(LlmProviderModel.model_id))
+            )
+        )
 
     @staticmethod
     def _lock(session: Session, slug: str) -> None:
