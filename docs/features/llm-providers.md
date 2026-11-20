@@ -70,6 +70,17 @@ LiteLLM sends a request to the lowest-order healthy route, so once a key is save
 
 A replaced key applies at once only on LiteLLM v1.101.0 or later. Earlier versions never removed a wildcard route's replaced entry from their router, so the old key kept serving `openrouter/*` until LiteLLM restarted.
 
+Each LLM Provider Model of a connection other than OpenRouter gets a route of its own, built by `build_model_deployment` in `api/domains/llm_providers/litellm_deployments.py`; nothing writes these routes yet. A route is named `<slug>/<model_id>`, its id is `agentbarn:model:<connection id>:<model row id>`, its background health check is off, and it carries the connection's key and all four of the model's prices, sent as floats because LiteLLM holds route prices as floats.
+
+| Provider | `model` | Also sent |
+| --- | --- | --- |
+| OpenAI, Anthropic, Gemini, xAI | `openai/<id>`, `anthropic/<id>`, `gemini/<id>`, `xai/<id>` | — |
+| DeepSeek | `deepseek/<id>` | `api_base` `https://api.deepseek.com`; LiteLLM's own default is `https://api.deepseek.com/beta` |
+| Fireworks | `fireworks_ai/<id>` | — |
+| Novita | `novita/<id>` | `api_base` `https://api.novita.ai/openai`; LiteLLM's own default is `https://api.novita.ai/v3/openai` |
+| Azure | `azure/<deployment>` | `api_base` the stored resource endpoint and `api_version` `v1`, so LiteLLM calls `{api_base}/openai/v1/` |
+| Custom | `openai/<id>` | `api_base` the stored base URL, unchanged |
+
 ## The API's own OpenRouter calls
 
 `OpenRouterKeyLookup.api_key()` returns the saved key, else `OPENROUTER_API_KEY`, else empty. The platform credit balance, cost repair (`CostSynchronizer`) and the `agentbarn_openrouter_credits_remaining` metric resolve it each time they run, so a new key reaches them without a restart; the metric polls again at once when the key changes and reports `scrape_ok` 0 when the key cannot be read. The model catalogue is fetched without a key. See [Costs](costs.md).
