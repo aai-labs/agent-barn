@@ -45,11 +45,31 @@ sequenceDiagram
 
 Both runtimes receive `SSH_AUTH_SOCK=/run/agentbarn-ssh/agent.sock`, `AGENTBARN_SSH_SIGNER_URL`, `AGENTBARN_SSH_SIGNER_TOKEN`, and, for a private CA, `AGENTBARN_SSH_CA_FILE`. Public ConfigMap files contain the relay, server profiles, and optional CA certificate. An init step owns a dedicated memory-backed `emptyDir` for the runtime UID. Startup writes public identities, SSH configuration, and pinned host keys there, creates a mode-0600 Unix socket in the mode-0700 directory, and prepends its managed Include to `~/.ssh/config`. No private key or socket is written to the Agent PVC or restore archive. The runtime image contains the relay's isolated Python environment at `/opt/agentbarn-ssh`.
 
+A Bot receives its own `SSH_AUTH_SOCK=/run/agentbarn-ssh/<bot-id>/agent.sock`
+and generation token. The Parent Agent's pod mounts ephemeral SSH storage when
+any served Bot needs it, even when the Parent Agent has no assigned keys. The
+common relay serves each socket with its owning Agent's token and CA; public
+aliases and host pins share the pod's SSH configuration. SSH resolves
+`IdentityAgent ${AGENTBARN_SSH_DIRECTORY}/agent.sock` from the owning profile's
+environment, including when several Bots share the same key. Hermes passes the
+socket and directory through the profile's terminal environment. OpenClaw's Bot
+exec hook passes the directory from the Bot's own Secret and leaves the protected
+`SSH_AUTH_SOCK` variable out of exec overrides. This preserves attribution,
+not isolation: [Bots share one workload trust boundary](agent-bots.md#what-bots-share).
+
 Profiles receive stable aliases `ab-<full-key-UUID-without-hyphens>-<server-name>`, listed in the Agent's SSH settings and generated `AGENTS.md`. Normal `ssh <alias>` and `git clone <alias>:<repository>` discover the socket and public identity automatically. Every local Unix connection owns one authenticated WSS connection and one isolated OpenSSH `ssh-agent`; messages remain ordered so session binding cannot leak between clients. There is no generic execution endpoint. Decrypted keys are supplied to OpenSSH through stdin, never temporary private-key files. Signing processes disable core dumps.
 
 ## Apply, revocation, and failure
 
 Adding a key to a running Agent requires explicit Apply & Restart. A stopped Agent saves its selection for its next start. Lifecycle preflight validates the proposed materialization before stopping the current Agent; the lifecycle lock covers selection and restart. Disabled SSH or a missing/invalid signer URL rejects starts with assigned keys before teardown. A signer network outage refuses SSH operations while the Agent can otherwise run. Disabled keys remain assigned and do not sign.
+
+For a Bot, Apply & Restart requires `agent.lifecycle.manage` on its Parent
+Agent and restarts that Parent Agent and all served Bots. Selection changes
+use the Parent Agent's lifecycle lock, managed-update guard, and restore guard;
+the Bot's proposed SSH configuration is preflighted before interruption. A Bot
+in error still needs this restart when its Parent Agent is running. No Bot
+deployment is created. The UI explains the shared restart and uses the Parent
+Agent's status and permissions.
 
 Assignment removal, key disable/policy changes, stop, failed start, deletion, and generation replacement are checked on the next protocol request. A changed connection key/revision snapshot closes that connection; new connections use the current policy. Re-adding a removed key does not restore the old token's applied grant. Policy/profile changes mark settings pending: signer policy changes immediately, while client aliases and pins update at restart. Existing SSH sessions and signatures already issued cannot be revoked; a request racing a policy change may already have been authorized. Revocation limits future authentication, not commands on an established remote session.
 

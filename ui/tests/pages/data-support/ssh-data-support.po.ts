@@ -6,6 +6,8 @@ import userContext from "../../fixtures/user-context.json";
 import { MOCK_AGENT_ID, mockAgent } from "./agent-data-support.po";
 import { DataSupport } from "./data-support.po";
 
+const PARENT_AGENT_ID = "a0000000-0000-4000-8000-000000000001";
+
 export class SshDataSupport {
   readonly requests: Record<string, unknown>[] = [];
   readonly assignmentRequests: Record<string, unknown>[] = [];
@@ -13,7 +15,7 @@ export class SshDataSupport {
   private keys: (typeof sshCredential)[] = [];
   constructor(private page: Page) {}
 
-  async setup({ member = false, assigned = false } = {}) {
+  async setup({ member = false, assigned = false, bot = false, parentCanRestart = true } = {}) {
     const data = new DataSupport(this.page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest({
@@ -33,9 +35,16 @@ export class SshDataSupport {
     await data.agents.interceptGetAgentConfigurationRequest();
     await data.agents.interceptGetAgentHealthRequest();
     await data.agents.interceptGetCustomApiConnectionsRequest();
-    await data.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, status: "RUNNING" },
-    });
+    const agent = { ...mockAgent, status: bot ? "ERROR" : "RUNNING",
+      ...(bot ? { parent_agent_id: PARENT_AGENT_ID } : {}) };
+    await data.agents.interceptGetAgentRequest({ body: agent });
+    if (bot) {
+      await data.agents.interceptGetAgentRequest({
+        agentId: PARENT_AGENT_ID,
+        body: { ...mockAgent, id: PARENT_AGENT_ID, name: "Parent Agent", status: "RUNNING",
+          allowed_actions: parentCanRestart ? mockAgent.allowed_actions : ["agent.read"] },
+      });
+    }
     this.keys = assigned ? [{ ...sshCredential }] : [];
     await this.page.route(
       `**/api/v1/organizations/${TEST_ORG_ID}/shared-credentials?*`,
@@ -74,6 +83,7 @@ export class SshDataSupport {
               status: 409,
               json: { detail: this.failure },
             });
+          agent.status = "RUNNING";
         }
         return route.fulfill({
           json: {

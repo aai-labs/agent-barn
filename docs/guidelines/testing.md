@@ -287,6 +287,9 @@ The SSH fixture copies its read-only host inputs into root-owned server files
 before starting sshd. This keeps `StrictModes` enabled when a CI runner's UID
 owns the source files; Agent runtime containers still receive public material only.
 
+`tests/integration/test_ssh_bots.py` covers Parent-only restarts, Parent lifecycle
+permission, shared lifecycle locking, and Bot-only credentials on both runtimes.
+
 Run `make test-ssh-runtime` with both built image variables. The tests use each
 image's configured user and isolated relay environment, the generated public
 ConfigMap files, real TLS signing, and a temporary SSH server; they exercise a
@@ -294,6 +297,11 @@ generated volume-owner init command in each runtime image as root, verify its
 resulting ownership and permissions, then use the runtime's configured user for a
 login-shell SSH command and each runtime's native terminal/exec tool, Git clone/commit/push/fetch, scp/sftp, socket ownership
 and mode, and revocation. They mount no private key into the runtime container.
+Each runtime runs the contract for an ordinary Agent, a Bot whose Parent Agent
+has no SSH keys, and a Bot sharing its Parent Agent's key. Signing audit events
+must name the calling Agent even with a shared key. The Bot cases exercise
+Hermes profile setup and secret scope, or OpenClaw's pinned Bot hook runner,
+before the native terminal command.
 These are container contracts, not evidence of production ingress or cluster
 NetworkPolicy enforcement. Both runtime image CI suites include their SSH wrapper;
 changes to the common relay/SSH contracts trigger both image workflows.

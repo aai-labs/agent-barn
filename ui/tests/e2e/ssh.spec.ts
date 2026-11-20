@@ -115,4 +115,37 @@ test.describe("Shared SSH access", () => {
       restart: true,
     });
   });
+
+  test("applying SSH changes to an errored Bot explains the shared restart and succeeds", async ({ page }, testInfo) => {
+    const data = new SshDataSupport(page);
+    const ui = new SshPage(page);
+    async function capture(name: string) {
+      const path = testInfo.outputPath(`${name}.png`);
+      await page.screenshot({ path, animations: "disabled" });
+      await testInfo.attach(name, { path, contentType: "image/png" });
+    }
+    await data.setup({ assigned: true, bot: true });
+    await data.openAgent();
+    await ui.section().getByRole("button", { name: "Edit", exact: true }).click();
+    await capture("01-bot-ssh-selection");
+    await ui.section().getByRole("button", { name: "Apply & Restart", exact: true }).click();
+    await expect(page.getByRole("dialog")).toContainText("Parent Agent and all of its Bots");
+    await capture("02-bot-shared-restart-confirmation");
+    await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
+    await expect(ui.section().getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    await capture("03-bot-ssh-applied");
+    expect(data.assignmentRequests).toEqual([{
+      credential_ids: [sshCredential.id], expected_revision: 1, restart: true,
+    }]);
+  });
+
+  test("Bot SSH changes cannot restart a Parent Agent the member can only read", async ({ page }) => {
+    const data = new SshDataSupport(page);
+    const ui = new SshPage(page);
+    await data.setup({ assigned: true, bot: true, parentCanRestart: false });
+    await data.openAgent();
+    await ui.section().getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(ui.section().getByRole("button", { name: "Apply & Restart", exact: true })).toBeDisabled();
+    expect(data.assignmentRequests).toEqual([]);
+  });
 });

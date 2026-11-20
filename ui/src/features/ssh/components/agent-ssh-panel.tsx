@@ -4,16 +4,19 @@ import { useState } from "react";
 
 import { AgentConfigurationSection } from "@/features/agents/components/agent-configuration-section";
 import type { Agent } from "@/features/agents/schemas";
+import { useAgent } from "@/features/agents/hooks/use-agent";
 
 import { useAgentSsh, useSshCredentials } from "../hooks/use-ssh";
 
 export function AgentSshPanel({ agent }: { agent: Agent }) {
-  const query = useAgentSsh(agent.id);
+  const { agent: parent } = useAgent(agent.parentAgentId ?? "");
+  const pod = agent.parentAgentId ? parent : agent;
+  const query = useAgentSsh(agent.id, agent.parentAgentId ?? agent.id);
   const [search, setSearch] = useState("");
   const available = useSshCredentials(1, search);
   const [draft, setDraft] = useState<string[] | null>(null);
-  const running = agent.status === "RUNNING";
-  const canRestart = agent.allowedActions.includes("agent.lifecycle.manage");
+  const running = pod?.status === "RUNNING";
+  const canRestart = Boolean(pod?.allowedActions.includes("agent.lifecycle.manage"));
   const canManage = Boolean(query.data?.allowedActions.includes("manage"));
   const choices = Array.from(
     new Map(
@@ -60,13 +63,17 @@ export function AgentSshPanel({ agent }: { agent: Agent }) {
         }}
         onApplied={() => setDraft(null)}
         restartOnApply={running}
+        restartDescription={agent.parentAgentId
+          ? "This saves the SSH changes and restarts the Parent Agent and all of its Bots."
+          : undefined}
         errorsShownInline
         applyDisabled={
           !query.data ||
+          !pod ||
           query.mutation.isPending ||
           Boolean(available.error) ||
           (running && !canRestart) ||
-          agent.updateInProgress ||
+          pod.updateInProgress ||
           (!query.data.enabled && Boolean(draft?.length))
         }
       >

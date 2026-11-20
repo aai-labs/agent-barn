@@ -11,6 +11,7 @@ import { SettingsSection } from "@/components/settings/settings-section";
  */
 export function AgentConfigurationSection({
   restartOnApply = false,
+  restartDescription,
   ...props
 }: {
   title: string;
@@ -25,6 +26,7 @@ export function AgentConfigurationSection({
   applyDisabled?: boolean;
   errorsShownInline?: boolean;
   restartOnApply?: boolean;
+  restartDescription?: string;
   actionsRenderer?: (actions: ReactNode) => ReactNode;
   unstyled?: boolean;
   children: ReactNode;
@@ -39,7 +41,7 @@ export function AgentConfigurationSection({
           ? {
               title: "Apply changes and restart the Agent?",
               description:
-                "This saves the changes, stops the Agent, and starts it again with the updated configuration.",
+                restartDescription ?? "This saves the changes, stops the Agent, and starts it again with the updated configuration.",
             }
           : {
               title: "Apply changes to the Agent?",

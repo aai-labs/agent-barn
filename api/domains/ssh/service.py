@@ -124,16 +124,18 @@ class SshService:
         )
 
     def apply(self, agent_id: UUID, data: SshAssignmentsUpdate, context: CurrentUserContext) -> SshAssignmentsRead:
-        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
+        pod_id = agent.parent_agent_id or agent_id
         if data.restart:
-            self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        with self.agents.lifecycle_lock(agent_id) as acquired:
+            self.authorization.require_action(context, pod_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        with self.agents.lifecycle_lock(pod_id) as acquired:
             if not acquired:
                 raise HTTPException(409, "Agent already has a lifecycle operation in progress")
             agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
-            _refuse_during_managed_update(agent)
-            if self.lifecycle.restore_points.has_blocking_operation(agent_id):
+            pod = self.lifecycle.pod_of(agent)
+            _refuse_during_managed_update(pod)
+            if self.lifecycle.restore_points.has_blocking_operation(pod_id):
                 raise HTTPException(409, "Agent has a restore operation in progress")
             scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_SECRET_MANAGE)
             state = self.repository.state(agent_id, agent.organization_id)
@@ -142,14 +144,17 @@ class SshService:
             keys = [self._key(key_id, agent.organization_id) for key_id in sorted(data.credential_ids)]
             previous = self.repository.assigned(agent_id, scope)
             additions = set(data.credential_ids) - {key.id for key in previous}
-            if agent.status == AgentStatus.RUNNING and additions and not data.restart:
+            if pod.status == AgentStatus.RUNNING and additions and not data.restart:
                 raise HTTPException(409, "Adding SSH credentials to a running Agent requires Apply & Restart")
             actor = resolve_actor_identity(context, agent.organization_id)
             if data.restart:
+                self.authorization.require_action(context, pod_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
                 self.lifecycle._provision_and_start(agent, preflight=True, ssh_keys_override=keys)
-                if agent.status == AgentStatus.RUNNING:
-                    agent = self.lifecycle._stop_agent_unchecked(agent, actor)
+                if pod_id != agent_id:
+                    self.lifecycle._provision_and_start(pod, preflight=True)
+                if pod.status == AgentStatus.RUNNING:
+                    pod = self.lifecycle._stop_agent_unchecked(pod, actor)
             self.repository.replace_assignments(agent_id, scope, data.credential_ids, data.expected_revision, actor)
             if data.restart:
-                self.lifecycle._start_agent_unchecked(agent, actor)
+                self.lifecycle._start_agent_unchecked(pod, actor)
         return self.assignments(agent_id, context)

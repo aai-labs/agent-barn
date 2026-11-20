@@ -62,7 +62,7 @@ export function useSshCredentials(page = 1, search = "") {
   };
 }
 
-export function useAgentSsh(agentId: string) {
+export function useAgentSsh(agentId: string, podId = agentId) {
   const base = useOrganizationApiBase();
   const client = useQueryClient();
   const url = `${base}/agents/${agentId}/ssh-credentials`;
@@ -89,6 +89,10 @@ export function useAgentSsh(agentId: string) {
         client.invalidateQueries({ queryKey: agentsKey.detail(agentId) }),
         client.invalidateQueries({ queryKey: agentsKey.lists() }),
         client.invalidateQueries({ queryKey: agentsKey.health(agentId) }),
+        ...(podId === agentId ? [] : [
+          client.invalidateQueries({ queryKey: agentsKey.detail(podId) }),
+          client.invalidateQueries({ queryKey: agentsKey.health(podId) }),
+        ]),
       ]);
     },
   });

@@ -3047,11 +3047,13 @@ class AgentService:
             store_dir=aai_store_dir,
         )
         ssh_keys = ssh_keys_override if ssh_keys_override is not None else self.ssh.runtime_keys(agent.id, org_id)
+        ssh_directory = "/run/agentbarn-ssh" + (f"/{agent.id}" if agent.parent_agent_id else "")
         ssh_artifacts = materialize_ssh(
             ssh_keys,
             enabled=self.config.ssh_enabled,
             url=self.config.ssh_signer_url,
             ca_certificate=self.config.ssh_ca_certificate,
+            socket_directory=ssh_directory,
         )
         gateway_tokens = []
         runtime = None
@@ -3084,6 +3086,7 @@ class AgentService:
                     url=self.config.ssh_signer_url,
                     token=ssh_value,
                     ca_certificate=self.config.ssh_ca_certificate,
+                    socket_directory=ssh_directory,
                 )
             else:
                 self.ssh.revoke(agent.id)
@@ -3226,6 +3229,12 @@ class AgentService:
         )
 
         tool_env_names = frozenset(artifacts.env) | frozenset(custom_artifacts.env)
+        if ssh_keys:
+            tool_env_names |= {"SSH_AUTH_SOCK", "AGENTBARN_SSH_DIRECTORY"}
+            if hermes_cfg is not None:
+                hermes_cfg.setdefault("terminal", {}).setdefault("env_passthrough", []).extend(
+                    ["SSH_AUTH_SOCK", "AGENTBARN_SSH_DIRECTORY"]
+                )
         hermes_pod_with_bots = agent.agent_type == AgentType.HERMES and (
             agent.parent_agent_id is not None or bool(self.repository.find_live_bots(agent.id))
         )
@@ -3323,7 +3332,7 @@ class AgentService:
         config_map.data["AGENTS.md"] += custom_artifacts.policy_md + ssh_artifacts.policy_md
         from api.domains.agents.builders.ssh import attach_ssh_volume
 
-        if ssh_keys:
+        if ssh_keys or any("SSH_AUTH_SOCK" in bot.tool_env_names for _, bot in bots):
             attach_ssh_volume(
                 deployment, "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw"
             )

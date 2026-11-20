@@ -12,7 +12,13 @@ RELAY = (Path(__file__).parents[1] / "agents/scripts/ssh-agent-relay.py").read_t
 
 
 def materialize(
-    keys: list[SshCredential], *, enabled: bool, url: str, token: str = "", ca_certificate: str = ""
+    keys: list[SshCredential],
+    *,
+    enabled: bool,
+    url: str,
+    token: str = "",
+    ca_certificate: str = "",
+    socket_directory: str = str(Path(SOCKET).parent),
 ) -> RuntimeArtifacts:
     if keys and (not enabled or urlsplit(url).scheme != "wss" or not urlsplit(url).hostname):
         raise ValueError("SSH access requires an enabled signer and a verified wss:// URL")
@@ -41,7 +47,8 @@ def materialize(
     return RuntimeArtifacts(
         files=files,
         env={
-            "SSH_AUTH_SOCK": SOCKET,
+            "SSH_AUTH_SOCK": f"{socket_directory}/agent.sock",
+            "AGENTBARN_SSH_DIRECTORY": socket_directory,
             "AGENTBARN_SSH_SIGNER_URL": url,
             "AGENTBARN_SSH_SIGNER_TOKEN": token,
             **({"AGENTBARN_SSH_CA_FILE": "/app/config/ssh-ca.pem"} if ca_certificate else {}),
