@@ -704,6 +704,98 @@ def test_downgrade_preserves_keys_until_explicitly_removed():
             command.upgrade(migration, "head")
 
 
+def organization_cascades_visit(first_table):
+    def step(context):
+        from sqlalchemy import text
+
+        engine = context.injector.get(PostgresRepositoryDelegate).engine
+        quote = engine.dialect.identifier_preparer.quote
+        order = (first_table, "agent" if first_table == "ssh_credential" else "ssh_credential")
+        # Recreating equivalent FKs represents a valid restore/rebuild ordering.
+        # Exercise both sibling cascade orders instead of relying on migration OIDs.
+        with engine.begin() as connection:
+            for table in order:
+                name, definition = connection.execute(
+                    text(
+                        "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+                        "WHERE conrelid = to_regclass(:table) AND confrelid = 'organization'::regclass AND contype = 'f'"
+                    ),
+                    {"table": table},
+                ).one()
+                connection.execute(text(f"ALTER TABLE {quote(table)} DROP CONSTRAINT {quote(name)}"))
+                connection.execute(text(f"ALTER TABLE {quote(table)} ADD CONSTRAINT {quote(name)} {definition}"))
+            ordered = (
+                connection.execute(
+                    text(
+                        "SELECT c.conrelid::regclass::text FROM pg_trigger t "
+                        "JOIN pg_constraint c ON c.oid = t.tgconstraint JOIN pg_proc p ON p.oid = t.tgfoid "
+                        "WHERE t.tgrelid = 'organization'::regclass AND p.proname = 'RI_FKey_cascade_del' "
+                        "AND c.conrelid IN ('agent'::regclass, 'ssh_credential'::regclass) ORDER BY t.tgname"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert_that(ordered[0], equal_to(first_table))
+
+    return step
+
+
+@pytest.mark.parametrize("first_table", ["ssh_credential", "agent"])
+def test_organization_hard_delete_cleans_up_assigned_ssh_keys_in_either_cascade_order(first_table):
+    from api.domains.agents.models import Agent
+    from api.domains.organizations.models import Organization
+    from api.domains.organizations.repository import OrganizationRepository
+    from api.domains.ssh.models import AgentSshCredential, SshCredential, SshRuntimeCredential
+
+    with given(
+        [*_GIVEN, there_are_shared_ssh_keys(), the_ssh_keys_are_assigned(), organization_cascades_visit(first_table)]
+    ) as context:
+        key_id = UUID(context.ssh_keys[0]["id"])
+        with when("the Organization is hard-deleted at the persistence boundary"):
+            removed = context.injector.get(OrganizationRepository).delete(context.organization.id)
+
+        with then("the Organization, Agent and all SSH ownership rows are removed together"):
+            assert_that(removed, equal_to(True))
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                assert_that(session.get(Organization, context.organization.id), equal_to(None))
+                assert_that(session.get(Agent, context.agent.id), equal_to(None))
+                assert_that(session.get(SshCredential, key_id), equal_to(None))
+                assert_that(
+                    session.exec(
+                        select(AgentSshCredential).where(AgentSshCredential.agent_id == context.agent.id)
+                    ).all(),
+                    has_length(0),
+                )
+                assert_that(
+                    session.exec(
+                        select(SshRuntimeCredential).where(SshRuntimeCredential.agent_id == context.agent.id)
+                    ).all(),
+                    has_length(0),
+                )
+
+
+def test_the_database_still_refuses_direct_deletion_of_an_assigned_ssh_key():
+    from sqlalchemy.exc import IntegrityError
+
+    from api.domains.ssh.models import SshCredential
+
+    with given([*_GIVEN, there_are_shared_ssh_keys(), the_ssh_keys_are_assigned()]) as context:
+        key_id = UUID(context.ssh_keys[0]["id"])
+        with when("an assigned key is deleted directly in the database"):
+            with (
+                pytest.raises(IntegrityError) as refused,
+                Session(context.injector.get(PostgresRepositoryDelegate).engine) as session,
+            ):
+                session.delete(session.get(SshCredential, key_id))
+                session.commit()
+
+        with then("the foreign key refuses deletion and the selection is preserved"):
+            assert_that(str(getattr(refused.value.orig, "pgcode", None)), is_in(("23001", "23503")))
+            saved = context.client.get(assignments(context), headers=headers(context)).json()
+            assert_that([key["id"] for key in saved["credentials"]], equal_to([str(key_id)]))
+
+
 def test_tenant_foreign_keys_and_stale_generations_are_enforced():
     from fastapi import HTTPException
     from sqlalchemy.exc import IntegrityError

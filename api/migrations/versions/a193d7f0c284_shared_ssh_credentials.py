@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "a193d7f0c284"
-down_revision = "22b93965859f"
+down_revision = "c87b17ccfe1a"
 branch_labels = None
 depends_on = None
 
@@ -54,7 +54,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["credential_id", "organization_id"],
             ["ssh_credential.id", "ssh_credential.organization_id"],
-            ondelete="RESTRICT",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
         ),
     )
     for column in ("agent_id", "organization_id", "credential_id"):

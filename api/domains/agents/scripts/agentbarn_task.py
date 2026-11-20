@@ -145,6 +145,14 @@ def main() -> int:
     listing.add_argument("--page-size", type=int, choices=range(1, 101), metavar="1-100")
     show = commands.add_parser("show", help="Show one Task with its notes and files.")
     show.add_argument("task_id")
+    commands.add_parser(
+        "schedule-intent",
+        help="Ask whether a new schedule's runs are part of the Task for the request; JSON on standard input.",
+    )
+    commands.add_parser(
+        "turn-end",
+        help="Ask which Tasks about to be marked done are not finished; JSON on standard input.",
+    )
     remove = commands.add_parser("remove-file", help="Remove a file from a Task, by the file id `show` lists.")
     remove.add_argument("task_id")
     remove.add_argument("file_id")
@@ -220,6 +228,22 @@ def main() -> int:
         if not body or len(raw) > NOTE_LIMIT:
             return fail(f"Provide the note, between 1 and {NOTE_LIMIT} characters, on standard input.")
         return send(json_request(f"{task_url}/notes", "POST", {"body": body}))
+    if args.command == "schedule-intent":
+        try:
+            asked = json.loads(sys.stdin.read(100_001))
+        except ValueError:
+            asked = None
+        if not isinstance(asked, dict):
+            return fail("Provide the request, schedule and task as a JSON object on standard input.")
+        return send(json_request(f"{tasks_url}/schedule-intent", "POST", asked))
+    if args.command == "turn-end":
+        try:
+            turn = json.loads(sys.stdin.read(200_001))
+        except ValueError:
+            turn = None
+        if not isinstance(turn, dict):
+            return fail("Provide the turn as a JSON object on standard input.")
+        return send(json_request(f"{tasks_url}/turn-end", "POST", turn))
     if args.command == "list":
         filters = {"status": args.status, "page_size": args.page_size}
         query = urlencode({name: value for name, value in filters.items() if value is not None})

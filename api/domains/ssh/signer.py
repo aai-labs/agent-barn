@@ -93,7 +93,8 @@ class OpenSshSigner:
         return self._read(size)
 
     def _read(self, size: int) -> bytes:
-        assert self.connection is not None
+        if self.connection is None:
+            raise RuntimeError("SSH signer is closed")
         result = bytearray()
         while len(result) < size:
             part = self.connection.recv(size - len(result))

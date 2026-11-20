@@ -15,6 +15,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-11-18 — AF-458 — Hermes observer keeps the gateway's lock on state.db — PR pending
+
+- Fixed: the Hermes `agentbarn-observer` plugin polled `state.db` through a SQLite connection Hermes could not see. When a turn or cron run opened Hermes's session store during a poll, Hermes read the file header as a plain file, and closing it cancelled the gateway's POSIX lock on `state.db` until the pod restarted. The next process to open and close `state.db`, such as the Agent querying its own history with `sqlite3`, then deleted the WAL under the running gateway, which lost committed writes and corrupted the database. The observer now opens `state.db` through Hermes's connection registry and closes it after each poll. Running Hermes Agents show an update until they restart, and the restart also restores a lock that was already lost. The runtime configuration digest changes.
+
 ### 2026-11-07 — MDP-118 — OpenClaw guard decides per run; no auto-threads beside listen-in — PR pending
 
 - Fixed: the OpenClaw listen-in guard decided from a per-session queue of dispatched messages, so a mention steered into a running turn, or a command, left a stale entry that shifted every later turn: unmentioned chatter could reach `exec` and a mention could lose its tools. It now decides per run from OpenClaw's room-event marker in the run's own messages.

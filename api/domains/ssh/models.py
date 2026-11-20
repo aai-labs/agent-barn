@@ -46,7 +46,12 @@ class AgentSshCredential(BaseModel, table=True):
         sa.ForeignKeyConstraint(
             ["credential_id", "organization_id"],
             ["ssh_credential.id", "ssh_credential.organization_id"],
-            ondelete="RESTRICT",
+            # Organization sibling cascades can visit keys before assignments.
+            # Check at commit so those cascades finish; standalone key deletion
+            # still fails when its transaction commits.
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
         ),
     )
     organization_id: UUID = SqlField(index=True)

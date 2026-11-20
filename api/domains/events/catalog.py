@@ -49,7 +49,10 @@ ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
 PLATFORM_WORKFLOW_AUTHORING_CHANGED = "platform.workflow_authoring.changed"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
+PLATFORM_DECISION_MODEL_CHANGED = "platform.decision_model.changed"
+PLATFORM_LLM_PROVIDER_CREATED = "platform.llm_provider.created"
 PLATFORM_LLM_PROVIDER_CHANGED = "platform.llm_provider.changed"
+PLATFORM_LLM_PROVIDER_DELETED = "platform.llm_provider.deleted"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
@@ -350,11 +353,44 @@ class PlatformPlaybookModelChangedPayload(BaseModel):
     subject_display: str
 
 
+class PlatformDecisionModelChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: str
+    current: str
+    actor_display: str
+    subject_display: str
+
+
+class PlatformLlmProviderCreatedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: UUID
+    slug: str
+    provider_type: str
+    base_url: str | None = None
+    revived: bool
+    actor_display: str
+    subject_display: str
+
+
 class PlatformLlmProviderChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     connection_id: UUID
     slug: str
     replaced_existing: bool
+    provider_type: str | None = None
+    previous_base_url: str | None = None
+    base_url: str | None = None
+    actor_display: str
+    subject_display: str
+
+
+class PlatformLlmProviderDeletedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: UUID
+    slug: str
+    provider_type: str
+    base_url: str | None = None
+    key_purged: bool
     actor_display: str
     subject_display: str
 
@@ -1231,9 +1267,36 @@ def build_default_event_registry() -> DomainEventRegistry:
     )
     registry.register(
         DomainEventDefinition(
+            event_name=PLATFORM_DECISION_MODEL_CHANGED,
+            schema_version=1,
+            payload_model=PlatformDecisionModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_LLM_PROVIDER_CREATED,
+            schema_version=1,
+            payload_model=PlatformLlmProviderCreatedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
             event_name=PLATFORM_LLM_PROVIDER_CHANGED,
             schema_version=1,
             payload_model=PlatformLlmProviderChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_LLM_PROVIDER_DELETED,
+            schema_version=1,
+            payload_model=PlatformLlmProviderDeletedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )

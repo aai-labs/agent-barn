@@ -34,7 +34,7 @@ OPENCLAW_IMAGE_REPOSITORY=agentbarn-openclaw-base
 API_IMAGE_TAG=0.13.0
 UI_IMAGE_TAG=0.13.0
 OPENCLAW_IMAGE_TAG=0.7.9
-HERMES_IMAGE_TAG=0.2.12
+HERMES_IMAGE_TAG=0.2.13
 
 # ── Postgres (app DB) ────────────────────────────────────────────────────────
 POSTGRES_APP_USER=agentfarm

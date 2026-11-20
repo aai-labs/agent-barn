@@ -26,8 +26,8 @@ export function AgentMemorySettings({
   onEdit: () => void;
 }) {
   const setMemory = useSetAgentMemory(agent.id);
-  const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
-  const restartOnSave = agent.status === "RUNNING" && agent.allowedActions.includes("agent.lifecycle.manage");
+  const { applyAndRestart, restarts, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
+  const restartOnSave = restarts && agent.allowedActions.includes("agent.lifecycle.manage");
   const [applyError, setApplyError] = useState<unknown>(null);
   const [draft, setDraft] = useState(agent.memoryEnabled);
   const isDirty = draft !== agent.memoryEnabled;
@@ -134,7 +134,7 @@ export function AgentMemorySettings({
             <li>
               Turning it on applies the next time the Agent starts. Save and Restart applies changes to a running Agent.
             </li>
-            {agent.status === "RUNNING" && !agent.allowedActions.includes("agent.lifecycle.manage") && (
+            {restarts && !agent.allowedActions.includes("agent.lifecycle.manage") && (
               <li>You can save this setting; someone with lifecycle access must restart the Agent to activate it.</li>
             )}
             <li>

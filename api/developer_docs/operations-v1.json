@@ -121,6 +121,11 @@
   ],
   [
     "DELETE",
+    "/platform/settings/llm-providers/{slug}",
+    "delete_connection_platform_settings_llm_providers__slug__delete"
+  ],
+  [
+    "DELETE",
     "/platform/skills/{skill_id}",
     "delete_platform_skill_platform_skills__skill_id__delete"
   ],
@@ -318,6 +323,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/download-link",
     "artifact_download_link_organizations__organization_id__agents__agent_id__artifacts__artifact_id__download_link_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/bots",
+    "list_agent_bots_organizations__organization_id__agents__agent_id__bots_get"
   ],
   [
     "GET",
@@ -566,41 +576,6 @@
   ],
   [
     "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-capabilities",
-    "get_workflow_capabilities_organizations__organization_id__agents__agent_id__workflow_capabilities_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
-    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
-    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
-    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows",
-    "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}",
-    "get_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
-    "list_workflow_versions_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_get"
-  ],
-  [
-    "GET",
     "/organizations/{organization_id}/billing",
     "read_billing_organizations__organization_id__billing_get"
   ],
@@ -816,6 +791,41 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/workflow-capabilities",
+    "get_workflow_capabilities_organizations__organization_id__workflow_capabilities_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs",
+    "list_runs_organizations__organization_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows",
+    "list_workflows_organizations__organization_id__workflows_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows/{workflow_id}",
+    "get_workflow_organizations__organization_id__workflows__workflow_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows/{workflow_id}/versions",
+    "list_workflow_versions_organizations__organization_id__workflows__workflow_id__versions_get"
+  ],
+  [
+    "GET",
     "/platform/agent-sizes",
     "list_agent_sizes_platform_agent_sizes_get"
   ],
@@ -931,8 +941,18 @@
   ],
   [
     "GET",
-    "/platform/settings/llm-providers/openrouter",
-    "read_openrouter_connection_platform_settings_llm_providers_openrouter_get"
+    "/platform/settings/decisions",
+    "read_settings_platform_settings_decisions_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/decisions/models",
+    "list_models_platform_settings_decisions_models_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/llm-providers",
+    "list_connections_platform_settings_llm_providers_get"
   ],
   [
     "GET",
@@ -1106,6 +1126,11 @@
   ],
   [
     "PATCH",
+    "/organizations/{organization_id}/workflows/{workflow_id}",
+    "update_workflow_organizations__organization_id__workflows__workflow_id__patch"
+  ],
+  [
+    "PATCH",
     "/platform/agent-sizes/{size_id}",
     "update_agent_size_platform_agent_sizes__size_id__patch"
   ],
@@ -1223,6 +1248,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
     "provision_storage_organizations__organization_id__agents__agent_id__artifacts_storage_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/bots",
+    "create_agent_bot_organizations__organization_id__agents__agent_id__bots_post"
   ],
   [
     "POST",
@@ -1386,41 +1416,6 @@
   ],
   [
     "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
-    "decide_approval_organizations__organization_id__agents__agent_id__workflow_runs__run_id__approvals__request_id__decision_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
-    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/re-run",
-    "rerun_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__re_run_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows",
-    "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
-    "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
-    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
-    "save_workflow_version_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_post"
-  ],
-  [
-    "POST",
     "/organizations/{organization_id}/billing/checkout",
     "create_checkout_organizations__organization_id__billing_checkout_post"
   ],
@@ -1556,6 +1551,41 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/workflow-runs",
+    "start_run_organizations__organization_id__workflow_runs_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
+    "decide_approval_organizations__organization_id__workflow_runs__run_id__approvals__request_id__decision_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/re-run",
+    "rerun_run_organizations__organization_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows",
+    "create_workflow_organizations__organization_id__workflows_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows/{workflow_id}/archive",
+    "archive_workflow_organizations__organization_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows/{workflow_id}/versions",
+    "save_workflow_version_organizations__organization_id__workflows__workflow_id__versions_post"
+  ],
+  [
+    "POST",
     "/platform/agent-sizes",
     "create_agent_size_platform_agent_sizes_post"
   ],
@@ -1578,6 +1608,11 @@
     "POST",
     "/platform/organizations/{organization_id}/subscription/end-period",
     "end_subscription_period_platform_organizations__organization_id__subscription_end_period_post"
+  ],
+  [
+    "POST",
+    "/platform/settings/llm-providers",
+    "add_connection_platform_settings_llm_providers_post"
   ],
   [
     "POST",
@@ -1726,8 +1761,13 @@
   ],
   [
     "PUT",
-    "/platform/settings/llm-providers/openrouter",
-    "replace_openrouter_key_platform_settings_llm_providers_openrouter_put"
+    "/platform/settings/decisions",
+    "update_settings_platform_settings_decisions_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/llm-providers/{slug}/key",
+    "replace_key_platform_settings_llm_providers__slug__key_put"
   ],
   [
     "PUT",

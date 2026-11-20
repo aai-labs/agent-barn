@@ -3,6 +3,8 @@
 Calls are appended to $FAKE_TASK_LOG as JSON lines. `list` answers with $FAKE_TASK_LIST
 (a JSON list of Tasks, filtered by --status), fails when $FAKE_TASK_LIST_FAIL is set, and
 waits $FAKE_TASK_LIST_SLEEP seconds first; a value of "fail" makes any call fail.
+`schedule-intent` answers with $FAKE_SCHEDULE_INTENT ("setup" or "runs"), or no intent when unset.
+`turn-end` holds every closing Task in $FAKE_TURN_END ("in_progress" or "open"), or none when unset.
 """
 
 import json
@@ -13,7 +15,11 @@ import time
 argv = sys.argv[1:]
 stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 with open(os.environ["FAKE_TASK_LOG"], "a") as log:
-    log.write(json.dumps({"argv": argv, "stdin": stdin, "cwd": os.getcwd()}) + "\n")
+    identity = {
+        name: os.environ.get(name)
+        for name in ("AGENT_ID", "INGEST_URL", "INGEST_API_KEY", "ARTIFACT_URL", "ARTIFACT_API_KEY")
+    }
+    log.write(json.dumps({"argv": argv, "stdin": stdin, "cwd": os.getcwd(), "env": identity}) + "\n")
 
 options = dict(arg[2:].split("=", 1) for arg in argv if arg.startswith("--") and "=" in arg)
 if "fail" in argv or "fail" in options.values():
@@ -28,5 +34,10 @@ if argv[0] == "list":
     status = options.get("status")
     items = [task for task in tasks if status is None or task["status"] == status]
     print(json.dumps({"items": items, "total": len(items), "page": 1, "page_size": 25}))
+elif argv[0] == "schedule-intent":
+    print(json.dumps({"intent": os.environ.get("FAKE_SCHEDULE_INTENT") or None}))
+elif argv[0] == "turn-end":
+    held = os.environ.get("FAKE_TURN_END")
+    print(json.dumps({"holds": {task_id: held for task_id in json.loads(stdin)["closing"]} if held else {}}))
 else:
     print(json.dumps({"id": "0199f1d2-0000-7000-8000-0000000000aa", "status": "open"}))

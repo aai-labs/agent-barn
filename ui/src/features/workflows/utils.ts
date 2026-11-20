@@ -1,3 +1,5 @@
+import { type KeyboardEvent } from "react";
+
 import { type WorkflowDraft } from "./schemas";
 
 const KEY_MAX = 64;
@@ -36,6 +38,32 @@ export function inputKeyFromLabel(label: string): string {
   return key;
 }
 
+const SHORT_MAX = 80;
+
+/**
+ * A short title from free text: its first line with whitespace collapsed, cut at a
+ * word near 80 characters.
+ */
+function shortTitle(text: string): string {
+  const line = (text.trim().split("\n")[0] ?? "").replace(/\s+/g, " ").trim();
+  // Code points, as the API counts them, so a cut never splits an emoji in two.
+  const points = [...line];
+  if (points.length <= SHORT_MAX) return line;
+  const cut = points.slice(0, SHORT_MAX - 1).join("");
+  const space = cut.lastIndexOf(" ");
+  return `${(space > SHORT_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** A step's name, shown in run lists and the step timeline, from its prompt. */
+export const stepNameFromGoal = (goal: string) => shortTitle(goal);
+
+/** Help text under an input's label: its description, unless the label already says it all. */
+export const inputHelp = (input: { label: string; description: string }) =>
+  input.description.trim() === input.label ? null : input.description;
+
+/** An input's label, shown on the start-run form, from its description. */
+export const inputLabelFromDescription = (description: string) => shortTitle(description);
+
 const SHOWN_MAX = 200;
 const shown = (value: string | null) => {
   const text = value ?? "none";
@@ -66,4 +94,49 @@ export function changedByOthers(
       `Inputs are now: ${latest.inputs.map((input) => input.label).join(", ") || "none"}`,
     );
   return lines;
+}
+
+/**
+ * A step's expected output is part of its instructions. Versions saved before that kept
+ * it in a separate field; opening one for editing folds the text into the goal, the same
+ * way the API folds it on save.
+ */
+export function foldStepOutputs(draft: WorkflowDraft): WorkflowDraft {
+  return {
+    ...draft,
+    steps: draft.steps.map((step) =>
+      step.artifactDescription
+        ? {
+            ...step,
+            goal: `${step.goal}\n\nOutput: ${step.artifactDescription}`,
+            artifactDescription: null,
+          }
+        : { ...step, artifactDescription: null },
+    ),
+  };
+}
+
+const RADIO_STEP: Record<string, number> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
+/**
+ * Arrow keys in a `role="radiogroup"` of buttons: focus moves to the next enabled radio
+ * and chooses it, wrapping at the ends, as native radio buttons do.
+ */
+export function onRadioGroupKeyDown(event: KeyboardEvent<HTMLElement>) {
+  const step = RADIO_STEP[event.key];
+  if (!step) return;
+  const radios = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]:not(:disabled)'),
+  ];
+  const index = radios.findIndex((radio) => radio === document.activeElement);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = radios[(index + step + radios.length) % radios.length];
+  next.focus();
+  next.click();
 }

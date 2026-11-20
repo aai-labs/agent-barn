@@ -658,7 +658,7 @@ export function AgentChannelSettings({
   const [retiring, setRetiring] = useState<CommunicationConnection | null>(
     null,
   );
-  const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const { applyAndRestart, restarts } = useAgentApplyAndRestart(agent);
   const [restartChange, setRestartChange] = useState<{
     confirmLabel: string;
     run: () => Promise<void>;
@@ -824,7 +824,7 @@ export function AgentChannelSettings({
   function restartsAgent(key: string | undefined) {
     const transport = connections.data?.find((connection) => connection.platformKey === key)?.transport
       ?? platforms.data?.find((platform) => platform.key === key)?.transport;
-    return agent.status === "RUNNING" && (transport === "native"
+    return restarts && (transport === "native"
       || (transport === undefined && Boolean(key) && agent.nativePlatformKeys.includes(key!)));
   }
 

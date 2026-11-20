@@ -8,10 +8,13 @@ authorization: new or more use of what the Tier leaves out is refused with `403`
 edited, disabled and deleted.
 """
 
+from uuid import uuid4
+
 import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_entries, instance_of, is_, none, not_
 
+from api.domains.agents.models import AgentStatus
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.templates.service import TemplateService
@@ -23,6 +26,7 @@ from api.tests.helpers.workflows import authoring_is_enabled, draft
 from api.tests.integration.test_agent_webhooks import _create_webhook
 from api.tests.integration.test_spend_limits import events_named
 from api.tests.integration.test_trial_organizations import the_organization_is_a_trial
+from api.tests.integration.test_workflow_runs import settle
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -413,7 +417,9 @@ def _gated_requests():
             json={"name": "Mine", "files": [{"path": "SKILL.md", "content": "# Skill"}]},
             headers=auth(c.access_token),
         ),
-        "workflow": lambda c: c.client.post(agent_url(c, "/workflows"), json=draft(), headers=auth(c.access_token)),
+        "workflow": lambda c: c.client.post(
+            org_url(c, "/workflows"), json={"draft": draft()}, headers=auth(c.access_token)
+        ),
         "agent webhook": lambda c: c.client.post(
             agent_url(c, "/webhooks"),
             json={"display_name": "Hook", "delivery_platform": "slack"},
@@ -447,6 +453,45 @@ def test_free_refuses_what_it_leaves_out(action):
         response = _gated_requests()[action](context)
 
         refused_by_tier(response, feature=_FEATURE_OF[action])
+
+
+def test_free_refuses_starting_or_rerunning_a_workflow_saved_before_the_tier_changed():
+    def start(context, saved):
+        return context.client.post(
+            org_url(context, "/workflow-runs"),
+            json={
+                "workflow_id": saved["id"],
+                "agent_id": str(context.agent.id),
+                "version_id": saved["version"]["id"],
+                "client_request_id": str(uuid4()),
+                "inputs": {"period": "This week"},
+            },
+            headers=auth(context.access_token),
+        )
+
+    with given(_setup(there_is_an_agent(status=AgentStatus.RUNNING), authoring_is_enabled)) as context:
+        created = context.client.post(
+            org_url(context, "/workflows"), json={"draft": draft()}, headers=auth(context.access_token)
+        )
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED), created.text)
+        first = start(context, created.json())
+        assert_that(first.status_code, equal_to(status.HTTP_202_ACCEPTED), first.text)
+        settle(context, first.json()["id"])
+        on_tier("free")(context)
+
+        with when("a Member starts the saved workflow, or re-runs its run"):
+            started = start(context, created.json())
+            rerun = context.client.post(
+                org_url(context, f"/workflow-runs/{first.json()['id']}/re-run"),
+                json={"client_request_id": str(uuid4())},
+                headers=auth(context.access_token),
+            )
+
+        with then("the Tier refuses both and no run is added"):
+            refused_by_tier(started, feature="workflows")
+            refused_by_tier(rerun, feature="workflows")
+            runs = context.client.get(org_url(context, "/workflow-runs"), headers=auth(context.access_token))
+            assert_that(runs.json()["total"], equal_to(1))
 
 
 def test_free_may_invite_teammates_but_the_none_tier_may_not():

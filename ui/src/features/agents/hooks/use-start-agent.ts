@@ -7,6 +7,7 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
+import { refreshBotsOf } from "./use-bots";
 
 export function useStartAgent() {
   const queryClient = useQueryClient();
@@ -25,6 +26,7 @@ export function useStartAgent() {
       queryClient.setQueryData(agentsKey.detail(data.id), data);
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: agentsKey.health(data.id) });
+      refreshBotsOf(queryClient, data.id);
     },
     onError: (_error, agentId) => {
       void queryClient.invalidateQueries({ queryKey: agentsKey.detail(agentId) });

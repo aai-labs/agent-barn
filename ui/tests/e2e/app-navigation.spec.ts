@@ -141,7 +141,7 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Signup & trials")).toBeVisible();
       await expect(navigation.panelLink("Tiers")).toBeVisible();
       await expect(navigation.breadcrumb()).toContainText("Settings/Agent Memory");
-      await expect(navigation.panelSections()).toHaveCount(9);
+      await expect(navigation.panelSections()).toHaveCount(10);
       await expect(navigation.panelSections().nth(0)).toHaveText("Agent Memory");
 
       await navigation.gotoPlatform("/agents");
@@ -288,14 +288,15 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Overview")).toHaveAttribute("aria-current", "page");
     });
 
-    test("lists File sync among an Agent's Work sections, after Logs and before Activity", async () => {
+    test("lists File sync among an Agent's pod-wide sections, after Logs and before Resource usage", async () => {
       await navigation.gotoAgent(MOCK_AGENT_ID);
       await expect(navigation.panelLink("Overview")).toBeVisible();
 
       const sections = await navigation.panelSections().allTextContents();
 
       expect(sections.indexOf("File sync")).toBeGreaterThan(sections.indexOf("Logs"));
-      expect(sections.indexOf("File sync")).toBeLessThan(sections.indexOf("Activity"));
+      expect(sections.indexOf("File sync")).toBeLessThan(sections.indexOf("Resource usage"));
+      expect(sections.indexOf("Activity")).toBeLessThan(sections.indexOf("Logs"));
     });
 
     test("gives Chat the panel for its threads, with a way up to the Overview and back", async () => {

@@ -183,6 +183,59 @@ not change executable application code or require new UI captures. The routed
 code/testing guides link the requested DDD and GivenPy references while retaining
 the repository's feature structure, local GivenPy helpers and test isolation.
 
+## Review fixes — 2026-11-20
+
+The Organization hard-delete regression uses the real migrated PostgreSQL 18
+database and recreates equivalent Organization foreign keys in both orders. It
+verifies which cascade is first before invoking `OrganizationRepository.delete`.
+With the original `RESTRICT` key reference, the key-first case failed with
+`RestrictViolation`; the Agent-first case and direct assigned-key deletion
+protection passed (one failure, two passes). Changing only to `NO ACTION` still
+failed the key-first case with `ForeignKeyViolation`. A separate disposable
+PostgreSQL probe also reproduced failure with `DEFERRABLE INITIALLY IMMEDIATE`.
+
+The model and unreleased migration now both use `NO ACTION DEFERRABLE INITIALLY
+DEFERRED`. The same three regression cases then passed: either cascade order
+removes the Organization, Agent, key, assignment and runtime-credential rows;
+standalone assigned-key deletion still fails at commit and preserves selection.
+The API commits before returning success. See the [constraint contract](../ssh-access.md)
+and [PostgreSQL's constraint documentation](https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-FK).
+
+The private signer read helper now raises an explicit closed-signer error rather
+than relying on an assertion. Under `python -O`, calling the closed helper
+previously produced `AttributeError`; it now produces `RuntimeError("SSH signer
+is closed")`, as the public exchange guard already did.
+
+Staging `277b059f` introduced the startup assembly boundary. The merge forwards
+SSH preflight overrides into `_assemble_agent`, issues credentials only after a
+runtime generation exists, and retains SSH revocation alongside Bot shutdown.
+The SSH migration follows staging head `c87b17ccfe1a`. Hermes advances to 0.2.13
+because staging now occupies immutable version 0.2.12; OpenClaw remains 0.7.9.
+
+The final API selection passed **610 checks**, including the deletion regressions,
+Agent lifecycle/provisioning, Bots, Organization behavior, public API inventory,
+runtime ConfigMaps and events. **12 browser checks** passed for SSH and adjacent
+integration setup. API lint/format/types, UI types/ESLint, migration-head checks,
+SSH chart checks and diff checks passed. Both runtime images rebuilt from the
+merged source and passed their real native SSH contracts (one Hermes and one
+OpenClaw, including normal SSH/Git/file transfer and revocation). No visual
+product changes were made by these review fixes; the
+earlier happy-path captures remain attributed to their original tested commits.
+The tested merge commit is recorded in the PR description.
+
+```bash
+PYTEST_XDIST_AUTO_NUM_WORKERS=4 REDIS_URL=redis://127.0.0.1:1/0 \
+PYTEST_ADDOPTS='-k "ssh or test_agents or agent_bots or agent_provisioning or runtime_config_map_contract or public_api_contract or test_organizations or domain_events or agent_runtime_digest" --tb=short --show-capture=no -q' \
+make test-api
+(cd ui && pnpm exec playwright test tests/e2e/ssh.spec.ts tests/e2e/integration-setup.spec.ts)
+```
+
+Each native contract used both `HERMES_TEST_IMAGE=agentbarn-hermes-base:ssh-review`
+and `OPENCLAW_TEST_IMAGE=agentbarn-openclaw-base:ssh-review`, with
+`REDIS_URL=redis://127.0.0.1:1/0`. The exact selections were
+`PYTEST_ADDOPTS='-k hermes --tb=short --show-capture=no -q' make test-ssh-runtime`
+and `PYTEST_ADDOPTS='-k openclaw --tb=short --show-capture=no -q' make test-ssh-runtime`.
+
 ## Review limits and delivery
 
 Staging integration (`bc6cf138`, 2026-11-16) retained both deployment-guide
@@ -203,8 +256,10 @@ The ADR and current contracts live in [Shared SSH access](../ssh-access.md) and
 its linked documents; this file records observations only. Rollout order and
 rollback are in [operations](../../guidelines/operations.md#ssh-signing-deployment).
 The feature defaults off. The chart is 0.20.0; compatible runtime versions start
-at Hermes 0.2.12 and OpenClaw 0.7.9. Migration `a193d7f0c284` follows staging head
-`22b93965859f` after the staging update; no existing provider credentials are converted.
+at Hermes 0.2.13 and OpenClaw 0.7.9 after the November 20 staging update. Migration
+`a193d7f0c284` now follows staging head `c87b17ccfe1a`; no existing provider
+credentials are converted. Earlier evidence above records the versions and
+migration parents actually tested at those earlier commits.
 
 Cluster-level ingress/network enforcement and paid provider/model execution are
 unverified here. The audit processor was invoked directly after real broker

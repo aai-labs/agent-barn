@@ -15,6 +15,7 @@ queued message has no Journal timeline of its own, because recording it as the
 latest inbound would attribute the running turn's stages to it.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -26,6 +27,14 @@ import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
+
+try:
+    # Hermes reads state.db as a plain file when it believes no connection to it is open, and
+    # closing that file cancels every POSIX lock this process holds on state.db. Opening ours
+    # through Hermes's registry keeps that read from running while our connection is open.
+    from hermes_cli.sqlite_safe_read import connect_tracked  # ty: ignore[unresolved-import]
+except ImportError:  # outside the Hermes runtime there is no registry to join
+    connect_tracked = None
 
 logger = logging.getLogger(__name__)
 
@@ -175,13 +184,31 @@ def _record_first_response(runner, response: str, source, adapter) -> None:
     )
 
 
+def _own_profile() -> str | None:
+    try:
+        home = Path(__file__).resolve().parents[2]
+    except IndexError:
+        return None
+    return _status_source(home)[1]
+
+
+def _owned(adapter, source) -> bool:
+    profile = None
+    for candidate in (getattr(source, "profile", None), getattr(adapter, "_owner_profile", None)):
+        if isinstance(candidate, str) and candidate.strip():
+            profile = None if candidate == "default" else candidate
+            break
+    return profile == _own_profile()
+
+
 def _patch_first_response(runner_class) -> None:
     original = runner_class._deliver_queued_first_response
 
     async def deliver(self, response, source, adapter, *args, **kwargs):
         await original(self, response, source, adapter, *args, **kwargs)
         try:
-            _record_first_response(self, response, source, adapter)
+            if _owned(adapter, source):
+                _record_first_response(self, response, source, adapter)
         except Exception as exc:
             logger.warning("agentbarn-observer could not record a first response: %s", exc)
 
@@ -213,7 +240,8 @@ def _patch_ingress(adapter_class) -> None:
 
     async def handle_message(self, event):
         try:
-            _observe_arrival(event)
+            if _owned(self, getattr(event, "source", None)):
+                _observe_arrival(event)
         except Exception as exc:
             logger.warning("agentbarn-observer could not record an arrival: %s", exc)
         return await original(self, event)
@@ -271,14 +299,22 @@ def _on_approval(stage: str):
     return hook
 
 
-def poll_platform_health(status_path: Path, last: dict[str, str]) -> None:
+def _status_source(home: Path) -> tuple[Path, str | None]:
+    if home.parent.name == "profiles":
+        return home.parent.parent / "gateway_state.json", home.name
+    return home / "gateway_state.json", None
+
+
+def poll_platform_health(status_path: Path, last: dict[str, str], profile: str | None = None) -> None:
     try:
         platforms = json.loads(status_path.read_text()).get("platforms") or {}
     except (OSError, ValueError):
         return
-    for platform, payload in platforms.items():
-        if ":" in platform or not isinstance(payload, dict):
-            continue  # secondary-profile entries; Agent Barn runs one profile
+    for name, payload in platforms.items():
+        owner, separator, suffix = name.partition(":")
+        if not isinstance(payload, dict) or (owner != profile if separator else profile is not None):
+            continue
+        platform = suffix if separator else name
         state = payload.get("state")
         stage = platform_stage(state)
         if stage and last.get(platform) != state:
@@ -286,11 +322,20 @@ def poll_platform_health(status_path: Path, last: dict[str, str]) -> None:
             _emit(stage, platform, error_code=(payload.get("error_code") or "")[:100] or None)
 
 
+def _open_state_db(db_path: Path) -> sqlite3.Connection:
+    uri = f"file:{db_path}?mode=ro"
+    if connect_tracked is None:
+        return sqlite3.connect(uri, uri=True, timeout=1)
+    return connect_tracked(uri, uri=True, timeout=1)
+
+
 def poll_obligations(db_path: Path, watermark: list[float]) -> None:
     if not db_path.exists():
         return
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1) as conn:
+        # ``closing``: a sqlite3 ``with`` block only ends the transaction, and Hermes releases
+        # its registry entry on ``close()``.
+        with contextlib.closing(_open_state_db(db_path)) as conn:
             rows = conn.execute(
                 "SELECT obligation_id, session_key, platform, chat_id, thread_id, content, state, updated_at"
                 " FROM delivery_obligations"
@@ -349,20 +394,35 @@ def _loop(url: str, api_key: str, home: Path) -> None:
     health: dict[str, str] = {}
     # Start at boot so a restart does not replay the whole ledger.
     watermark = [time.time()]
+    status_path, profile = _status_source(home)
     while True:
         time.sleep(_POLL_SECONDS)
         try:
-            poll_platform_health(home / "gateway_state.json", health)
+            poll_platform_health(status_path, health, profile)
             poll_obligations(home / "state.db", watermark)
             _flush(url, api_key)
         except Exception as exc:
             logger.warning("agentbarn-observer poll failed: %s", exc)
 
 
+def _identity():
+    try:
+        lines = (Path(__file__).resolve().parents[2] / ".env").read_text(encoding="utf-8").splitlines()
+    except (OSError, IndexError):
+        return os.environ
+    values = {}
+    for line in lines:
+        name, separator, value = line.partition("=")
+        if separator:
+            values[name] = value[1:-1].replace('\\"', '"').replace("\\\\", "\\") if value.startswith('"') else value
+    return values if values.get("AGENT_ID") else os.environ
+
+
 def register(ctx):
-    agent_id = os.environ.get("AGENT_ID", "")
-    ingest_url = os.environ.get("INGEST_URL", "")
-    api_key = os.environ.get("INGEST_API_KEY", "")
+    identity = _identity()
+    agent_id = identity.get("AGENT_ID", "")
+    ingest_url = identity.get("INGEST_URL", "")
+    api_key = identity.get("INGEST_API_KEY", "")
     if not agent_id or not ingest_url or not api_key:
         return
 
@@ -373,6 +433,10 @@ def register(ctx):
     ctx.register_hook("pre_approval_request", _on_approval("approval_requested"))
     ctx.register_hook("post_approval_response", _on_approval("approval_answered"))
 
-    home = Path(os.environ.get("HERMES_HOME", "/opt/data"))
+    home = (
+        Path(os.environ.get("HERMES_HOME", "/opt/data"))
+        if identity is os.environ
+        else Path(__file__).resolve().parents[2]
+    )
     url = f"{ingest_url}/agents/{agent_id}/communication-events"
     threading.Thread(target=_loop, args=(url, api_key, home), daemon=True).start()

@@ -12,6 +12,12 @@ The API exposes Organization-scoped `/ssh-credentials` CRUD (`PUT /ssh-credentia
 
 ## Destination policy
 
+The assignment-to-key foreign key uses `ON DELETE NO ACTION DEFERRABLE INITIALLY
+DEFERRED`: it checks consistency at transaction commit so an Organization
+hard-delete can complete its sibling Agent/key cascades in either order. A
+standalone deletion of an assigned key still fails at commit; the API commits
+before reporting success. Key deletion does not cascade to live assignments.
+
 Every key has an explicit mode. **Restricted** is the default; an empty server list grants no use. Each server has a unique short name, hostname, port, username, and one or more verified public host keys. Administrators must obtain those keys through a trusted channel; collecting an unverified key does not establish trust. **Unrestricted** deliberately permits general signing with that key; only the remote account and server configuration then limit its use.
 
 For restricted keys, the signing service loads OpenSSH destination constraints using `ssh-add -h` and an isolated public known-hosts file. OpenSSH validates `session-bind@openssh.com`, the host's signature, the SSH authentication payload, and remote username. The protocol accepts first-hop binding only and rejects forwarded binding. Restricted clients must support OpenSSH destination constraints/session binding (OpenSSH 8.9 or newer); both shipped runtime images provide compatible clients. Agent mutation/provider/lock operations are refused.

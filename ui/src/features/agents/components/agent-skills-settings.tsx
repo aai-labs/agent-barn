@@ -21,7 +21,7 @@ export function AgentSkillsSettings({
   const panelRef = useRef<AgentConfigurationEditHandle>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [isValid, setIsValid] = useState(true);
-  const { applyAndRestart } = useAgentApplyAndRestart(agent);
+  const { applyAndRestart, restarts } = useAgentApplyAndRestart(agent);
   const configuredProviders = new Set((agent.secrets ?? []).map((secret) => secret.provider));
 
   async function applyChanges() {
@@ -38,7 +38,7 @@ export function AgentSkillsSettings({
       editing={canEdit}
       onApply={applyChanges}
       applyDisabled={!isDirty || !isValid}
-      restartOnApply={agent.status === "RUNNING"}
+      restartOnApply={restarts}
       unstyled={canEdit}
       actionsRenderer={
         canEdit

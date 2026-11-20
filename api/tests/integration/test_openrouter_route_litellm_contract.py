@@ -25,7 +25,7 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 
 pytestmark = pytest.mark.xdist_group("heavy_containers")
 
-BASE = "/api/v1/platform/settings/llm-providers/openrouter"
+KEY_URL = "/api/v1/platform/settings/llm-providers/openrouter/key"
 ENV_KEY = "sk-or-v1-environment-key-0e0e"
 FIRST_KEY = "sk-or-v1-first-saved-key-a1a1"
 SECOND_KEY = "sk-or-v1-second-saved-key-b2b2"
@@ -52,7 +52,9 @@ def the_api_routes_through_the_pinned_litellm(monkeypatch):
 
 
 def _save(context, key: str) -> httpx.Response:
-    return context.client.put(BASE, headers={"Authorization": f"Bearer {context.access_token}"}, json={"api_key": key})
+    return context.client.put(
+        KEY_URL, headers={"Authorization": f"Bearer {context.access_token}"}, json={"api_key": key}
+    )
 
 
 def _key_openrouter_received(context) -> str:

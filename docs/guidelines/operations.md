@@ -110,7 +110,7 @@ Deleting a secret before step 2 leaves LiteLLM with no OpenRouter route, so ever
 
 SSH is opt-in (`SSH_ENABLED=false`, Helm `ssh.enabled=false`). Deploy the schema,
 API/UI, signing service, and both updated runtime images before attaching keys.
-Hermes 0.2.12 and OpenClaw 0.7.9 add `/opt/agentbarn-ssh`; older images cannot run the injected relay. Existing
+Hermes 0.2.13 and OpenClaw 0.7.9 add `/opt/agentbarn-ssh`; older images cannot run the injected relay. Existing
 Agents receive new public profiles/socket/token only on restart. The default
 deployment remains unchanged until SSH is enabled.
 
@@ -427,6 +427,13 @@ The Playbook Extraction model is chosen at Platform Settings. Until then the API
 and Helm deployments use the default. The worker calls LiteLLM directly for these runs, so its
 Deployment and Compose service receive `LITELLM_BASE_URL` like the API, and the Compose worker also
 receives `MEMORY_VIEW_BASE_URL` to read long-term memories (Helm supplies it through the API Secret).
+
+The decision model is chosen at Platform Settings by name. `DECISION_MODELS` (JSON, name to LiteLLM
+slug) lists the choices and `DECISION_DEFAULT_MODEL` (`jev` when unset) applies until then; the API
+refuses to start if the default names no entry. Compose reads both from `.env`, and Helm deployments
+use the defaults. Decision calls use LiteLLM's System One route, which needs LiteLLM v1.104.3 or later.
+Data-collection and zero-data-retention preferences for these calls are set on the OpenRouter account;
+see [`../features/decisions.md`](../features/decisions.md#data-retention).
 
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
@@ -1007,7 +1014,7 @@ journal to preserve dispatch deduplication across restarts. Failed/expired attem
 block for inspection rather than replaying possible external effects. Parked runs
 keep file pins until cancellation; see the [file workflow contract](../features/agent-workflows.md#file-workflow-inputs-and-results).
 The Platform Admin authoring setting controls definition changes only. Before
-running saved workflows, apply the migration. The owning Agent must be running,
+running saved workflows, apply the migration. The Agent chosen for a run must be running,
 and Agents started before this release must be restarted once so their trigger
 server can accept workflow steps. Each step runs as a session in that Agent, under
 its tools, Integrations, approval mode and spend limits. No runtime image pinning,
@@ -1028,7 +1035,7 @@ value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
 Workflow limits and text retention are hard coded in
 `api/domains/workflows/config.py`; they are not environment or Helm options.
 Workflow admission has no active-run concurrency cap. Runs execute as sessions
-in the owning Agent and share its resources. Waiting for an unreachable Agent consumes
+in the Agent chosen for each run and share its resources. Waiting for an unreachable Agent consumes
 the attempt deadline. Non-successful Agent dispatch responses are logged with
 the run identity and HTTP status. A 404 on the workflow step route indicates an
 older trigger server; pause and start that Agent to load the current configuration.
@@ -1053,12 +1060,19 @@ attachments to this execution model. The [artifact contract](../features/agent-a
 and [Garage operations guide](garage.md) own storage configuration, migrations
 and rollback.
 
+Migration `e4b439a1c7d2` follows `3f9f88255e3b` and moves workflows from their
+Agent to the Organization, recording the Agent on each run instead. It needs no
+Agent update or restart. Its downgrade is lossy and deletes workflows and runs
+that the earlier one-Agent model cannot hold; take a backup first. The
+[feature specification](../features/agent-workflows.md#organization-ownership-migration-af-439)
+owns the column changes and the exact downgrade behavior.
+
 ## Workflow authoring (WF01)
 
 After migrating and verifying WF01, Platform Administrators can enable authoring
 at **Platform Settings → Workflows** and save the choice. It takes effect on
 subsequent API requests without a redeploy and allows manual definition creation,
-version saving and archive across all Organizations. Definition/version reads
+version saving, default-Agent changes and archive across all Organizations. Definition/version reads
 remain available when disabled. Authoring defaults to `false` until a Platform
 Admin saves a choice. The persisted choice survives restarts, with no environment
 or Helm override. Disable authoring through Platform Settings to stop new

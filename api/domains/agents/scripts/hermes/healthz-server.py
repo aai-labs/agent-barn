@@ -1,3 +1,4 @@
+import hashlib
 import http.client
 import json
 import os
@@ -55,16 +56,24 @@ _BUDGET_EXHAUSTED_STATUS = 402
 # runtime does not carry the reason out reliably (it can replace this proxy's
 # message with its own), so the refusal is recorded here and read there.
 _LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
+_ACTIVE_BOTS = os.path.join(os.environ.get("BOT_ENV_DIR", "/run/agentbarn/env"), "active-bots.json")
 
 
-def _record_terminal_llm_error(code: str) -> None:
+def _llm_error_marker(api_key: str) -> str:
+    if os.environ.get("GATEWAY_MULTIPLEX_PROFILES") != "1":
+        return _LLM_ERROR_MARKER
+    return f"{_LLM_ERROR_MARKER}.{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
+
+
+def _record_terminal_llm_error(code: str, api_key: str) -> None:
     """Best effort: a failed write costs the person chatting a precise reason, never
     the response itself."""
     try:
-        tmp = f"{_LLM_ERROR_MARKER}.tmp"
+        marker = _llm_error_marker(api_key)
+        tmp = f"{marker}.tmp"
         with open(tmp, "w") as handle:
             json.dump({"code": code, "at": time.time()}, handle)
-        os.replace(tmp, _LLM_ERROR_MARKER)
+        os.replace(tmp, marker)
     except OSError:
         pass
 
@@ -267,6 +276,14 @@ def _resource_metrics_text() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _with_served_bots(body: dict) -> dict:
+    try:
+        with open(_ACTIVE_BOTS) as handle:
+            return {**body, "served_bots": [entry["id"] for entry in json.load(handle)]}
+    except (OSError, ValueError, TypeError, KeyError):
+        return body
+
+
 def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
     if ok is None:
         return 503, {"status": "starting"}
@@ -297,7 +314,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_text(200, _metrics_text(ok, ever) + _resource_metrics_text())
         elif self.path == "/healthz":
             code, body = _healthz_result(*_snapshot())
-            self._send(code, body)
+            self._send(code, _with_served_bots(body))
         else:
             self.send_response(404)
             self.end_headers()
@@ -385,7 +402,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # usually says 429, which the runtime retries as a rate limit
                     # indefinitely, so the person chatting would never hear back.
                     status = _BUDGET_EXHAUSTED_STATUS
-                    _record_terminal_llm_error(_SPENT_CODE)
+                    _record_terminal_llm_error(
+                        _SPENT_CODE, self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+                    )
                     completion = _spend_limit_completion(self.path, body)
                     if completion is not None:
                         content_type, completion_body = completion

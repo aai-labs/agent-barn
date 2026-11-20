@@ -21,6 +21,7 @@ text, so they can't run slash commands or answer approval prompts.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -119,6 +120,44 @@ def _runner():
     return _gateway_runner_ref()
 
 
+def _own_profile() -> str | None:
+    try:
+        home = Path(__file__).resolve().parents[2]
+    except IndexError:
+        return None
+    return home.name if home.parent.name == "profiles" else None
+
+
+def _home() -> Path:
+    if _own_profile() is not None:
+        return Path(__file__).resolve().parents[2]
+    return Path(os.environ.get("HERMES_HOME", "/opt/data"))
+
+
+def _owned(adapter, source) -> bool:
+    profile = None
+    for candidate in (getattr(source, "profile", None), getattr(adapter, "_owner_profile", None)):
+        if isinstance(candidate, str) and candidate.strip():
+            profile = None if candidate == "default" else candidate
+            break
+    return profile == _own_profile()
+
+
+def _own_session() -> bool:
+    key = _session_env("HERMES_SESSION_KEY")
+    if not key.startswith("agent:"):
+        return True
+    return key.split(":")[1] == (_own_profile() or "main")
+
+
+def _session_key(source) -> str:
+    profile = _own_profile()
+    if profile is not None and not getattr(source, "profile", None):
+        source = copy.copy(source)
+        source.profile = profile
+    return _runner()._session_key_for_source(source)
+
+
 def _session_env(name: str) -> str:
     from gateway.session_context import get_session_env  # ty: ignore[unresolved-import]
 
@@ -205,7 +244,7 @@ def _classify(adapter, event) -> None:
         event.allow_gateway_control = False
     elif event.is_command() and _is_known_command(event.get_command()):
         return
-    key = _runner()._session_key_for_source(event.source)
+    key = _session_key(event.source)
     with _lock:
         _queues.setdefault(key, deque()).append(not addressed)
         _queues.move_to_end(key)
@@ -214,7 +253,7 @@ def _classify(adapter, event) -> None:
 
 
 def _in_room_session() -> bool:
-    if _session_env("HERMES_CRON_SESSION") == "1":
+    if _session_env("HERMES_CRON_SESSION") == "1" or not _own_session():
         return False
     if _session_env("HERMES_SESSION_KEY") in _queues:
         return True
@@ -332,7 +371,11 @@ def _on_pre_tool_call(tool_name=None, **_):
 
 def _adapter(platform: str):
     runner = _runner()
-    for name, adapter in runner.adapters.items() if runner else ():
+    profile = _own_profile()
+    adapters = (
+        {} if runner is None else runner.adapters if profile is None else runner._profile_adapters.get(profile, {})
+    )
+    for name, adapter in adapters.items():
         if str(getattr(name, "value", name)) == platform:
             return adapter
     return None
@@ -404,7 +447,8 @@ def _patch_ingress(adapter_class) -> None:
         global _loop
         _loop = asyncio.get_running_loop()
         try:
-            _classify(self, event)
+            if _owned(self, getattr(event, "source", None)):
+                _classify(self, event)
         except Exception:
             logger.exception("agentbarn-listen-in classification failed")
         return await original(self, event)
@@ -438,7 +482,7 @@ def _install_memory_guard() -> None:
 
 
 def register(ctx):
-    rooms = _load_rooms(Path(os.environ.get("HERMES_HOME", "/opt/data")) / "config.yaml")
+    rooms = _load_rooms(_home() / "config.yaml")
     if not rooms:
         return
     _rooms.clear()

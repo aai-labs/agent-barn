@@ -1,4 +1,6 @@
+import copy
 import json
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from uuid import UUID
 
@@ -20,7 +22,7 @@ from .artifacts import (
     artifact_command_mount,
     artifact_command_volume,
 )
-from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids, bot_mounts, bot_volumes
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_TOOL_INSTRUCTIONS,
@@ -45,6 +47,8 @@ HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
+BOT_SETUP_PY: str = (_SCRIPTS / "bot-setup.py").read_text()
+BOT_RUN_PY: str = (_SCRIPTS / "bot-run.py").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
@@ -66,6 +70,7 @@ _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
 # Turns one Hermes run may take before the runtime stops it. An Agent's own
 # `max_turns` replaces it; a review of a large pull request needs more than this.
 HERMES_DEFAULT_MAX_TURNS = 50
+HERMES_SESSION_RETENTION_DAYS = 30
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # Hermes shows a first-message onboarding notice whenever this variable is
@@ -109,6 +114,12 @@ _LISTEN_IN_ROOM_SETTINGS = {
 
 # Persistent working directory for the agent's terminal and messaging layer.
 HERMES_WORKSPACE_DIR = "/workspace"
+BOT_ENV_DIR = "/run/agentbarn/env"
+_BOT_ENV_VOLUME = "bot-env"
+_BOT_ENV_VOLUME_SIZE = "1Mi"
+_BOT_PASSTHROUGH_PREFIXES = ("AF_GATEWAY_", "MEMORY_", "ARTIFACT_", "GOG_")
+_BOT_PASSTHROUGH_ALWAYS = ("AAI_CONFIG", "AGENT_ID", "INGEST_URL", "INGEST_API_KEY")
+_NEVER_PASSTHROUGH_PREFIXES = ("OPENAI_", "OPENROUTER_", "API_SERVER_", "FIRECRAWL_")
 
 
 def _hermes_config_core(
@@ -164,6 +175,10 @@ def _hermes_config_core(
         # Deliver scheduled results as the agent wrote them, without Hermes'
         # "Cronjob Response" header and "stop reminder" footer.
         "cron": {"wrap_response": False},
+        # Hermes keeps every session in state.db unless pruned; frequent crons grew one
+        # Agent's past 1 GB, where checkpoints lag and corruption costs the most. Pruning
+        # runs at gateway start, at most daily, and only touches ended sessions.
+        "sessions": {"auto_prune": True, "retention_days": HERMES_SESSION_RETENTION_DAYS},
         "group_sessions_per_user": False,
         "plugins": {
             "enabled": enabled_plugins,
@@ -307,6 +322,55 @@ def build_hermes_gateway_config(
     if rooms_by_platform := {platform: rooms for platform, rooms in listen_in.items() if rooms}:
         _enable_listen_in(config, rooms_by_platform)
     return config
+
+
+def bot_passthrough_names(bot_env_names: Iterable[str], tool_env_names: Iterable[str]) -> list[str]:
+    matched = {name for name in bot_env_names if name.startswith(_BOT_PASSTHROUGH_PREFIXES)}
+    tools = {name for name in tool_env_names if not name.startswith(_NEVER_PASSTHROUGH_PREFIXES)}
+    return sorted({*_BOT_PASSTHROUGH_ALWAYS, *matched, *tools})
+
+
+def with_passthrough_placeholders(env: dict[str, str], names: Iterable[str]) -> None:
+    for name in names:
+        env.setdefault(name, "")
+
+
+def bot_gateway_config(
+    config: dict,
+    *,
+    slack_settings: dict | None = None,
+    telegram_settings: dict | None = None,
+    discord_settings: dict | None = None,
+) -> dict:
+    profile = copy.deepcopy(config)
+    platforms = profile.setdefault("platforms", {})
+    platforms["api_server"] = {"enabled": False}
+    if slack_settings is not None:
+        extra = platforms.setdefault("slack", {}).setdefault("extra", {})
+        extra["require_mention"] = True
+        extra["thread_require_mention"] = slack_settings.get("thread_mention_policy") != "start_only"
+        extra["disable_dms"] = slack_settings.get("dm_policy", "off") == "off"
+        if slack_settings.get("group_policy", "allowlist") == "allowlist":
+            extra["allowed_channels"] = list(slack_settings.get("channel_ids") or [])
+    if telegram_settings is not None:
+        extra = platforms.setdefault("telegram", {}).setdefault("extra", {})
+        extra["require_mention"] = True
+        if telegram_settings.get("group_policy", "allowlist") == "open":
+            extra["group_allowed_chats"] = "*"
+        elif chat_ids := _setting_ids(telegram_settings, "allowed_chat_ids"):
+            extra["allowed_chats"] = extra["group_allowed_chats"] = chat_ids
+    if discord_settings is not None:
+        extra = platforms.setdefault("discord", {}).setdefault("extra", {})
+        extra["require_mention"] = extra["thread_require_mention"] = discord_settings.get("require_mention", True)
+    for platform, settings in (
+        ("slack", slack_settings),
+        ("telegram", telegram_settings),
+        ("discord", discord_settings),
+    ):
+        if settings is not None:
+            setting = _LISTEN_IN_ROOM_SETTINGS[platform]
+            platforms[platform]["extra"][setting] = list((profile.get(platform) or {}).get(setting) or [])
+    return profile
 
 
 def native_slack_env(
@@ -462,6 +526,7 @@ def build_hermes_config_map(
     skills_json: str | None = None,
     memory_enabled: bool = False,
     artifacts_enabled: bool = False,
+    bots_manifest: str | None = None,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -517,6 +582,10 @@ def build_hermes_config_map(
         data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
+    if bots_manifest is not None:
+        data["bots.json"] = bots_manifest
+        data["bot-setup.py"] = BOT_SETUP_PY
+        data["bot-run.py"] = BOT_RUN_PY
     return client.V1ConfigMap(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),
@@ -568,6 +637,26 @@ def build_secret_hermes_runtime(
     )
 
 
+def _bot_env(bot_ids: Sequence[UUID]) -> list[client.V1EnvVar]:
+    return [client.V1EnvVar(name="GATEWAY_MULTIPLEX_PROFILES", value="1")] if bot_ids else []
+
+
+def _bot_mounts(bot_ids: Sequence[UUID]) -> list[client.V1VolumeMount]:
+    if not bot_ids:
+        return []
+    return [client.V1VolumeMount(name=_BOT_ENV_VOLUME, mount_path=BOT_ENV_DIR), *bot_mounts(bot_ids)]
+
+
+def _bot_volumes(bot_ids: Sequence[UUID]) -> list[client.V1Volume]:
+    if not bot_ids:
+        return []
+    env_volume = client.V1Volume(
+        name=_BOT_ENV_VOLUME,
+        empty_dir=client.V1EmptyDirVolumeSource(medium="Memory", size_limit=_BOT_ENV_VOLUME_SIZE),
+    )
+    return [env_volume, *bot_volumes(bot_ids)]
+
+
 def build_hermes_deployment(
     agent_id: UUID,
     org_id: UUID,
@@ -576,6 +665,7 @@ def build_hermes_deployment(
     image_pull_secret: str = "",
     *,
     resources: client.V1ResourceRequirements,
+    bot_ids: Sequence[UUID] = (),
 ) -> client.V1Deployment:
     """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
 
@@ -626,7 +716,7 @@ def build_hermes_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            command=["sh", "/app/config/start.sh"],
+                            command=["/usr/bin/tini", "--", "sh", "/app/config/start.sh"],
                             resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
@@ -656,6 +746,7 @@ def build_hermes_deployment(
                                 # ocbw sets both alongside terminal.cwd — mirror it.
                                 client.V1EnvVar(name="TERMINAL_CWD", value=HERMES_WORKSPACE_DIR),
                                 client.V1EnvVar(name="MESSAGING_CWD", value=HERMES_WORKSPACE_DIR),
+                                *_bot_env(bot_ids),
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
@@ -681,10 +772,12 @@ def build_hermes_deployment(
                                     mount_path=HERMES_WORKSPACE_DIR,
                                     sub_path="workspace",
                                 ),
+                                *_bot_mounts(bot_ids),
                             ],
                         )
                     ],
                     volumes=[
+                        *_bot_volumes(bot_ids),
                         memory_command_volume(name),
                         task_command_volume(name),
                         artifact_command_volume(name),

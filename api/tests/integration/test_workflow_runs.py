@@ -17,7 +17,8 @@ from api.domains.workflows.run_repository import WorkflowRunRepository
 from api.domains.workflows.run_service import WorkflowRunService
 from api.domains.workflows.runtime_service import WorkflowRuntimeService
 from api.tests.core.givenpy import given
-from api.tests.integration.test_workflows import _GIVEN, auth, base, create, switch_member
+from api.tests.helpers.workflows import legacy_version
+from api.tests.integration.test_workflows import _GIVEN, auth, base, create, post_draft, switch_member
 
 _RUN_GIVEN = _GIVEN
 
@@ -27,29 +28,51 @@ def test_final_output_description_follows_last_step(reverse: bool) -> None:
     from api.tests.helpers.workflows import draft
 
     with given(_RUN_GIVEN) as context:
+        # Versions saved before a step's output became part of its goal keep describing it on their runs.
         body = draft()
+        body["steps"][0]["artifact_description"] = "First output"
         body["steps"].append({**body["steps"][0], "id": str(uuid4()), "artifact_description": "Second output"})
         if reverse:
             body["steps"].reverse()
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        saved = create(context)
+        saved["version"]["id"] = str(legacy_version(context, saved["id"], body))
         response, _, _ = start(context, saved)
         assert response.status_code == 202, response.text
         assert response.json()["final_output_description"] == body["steps"][-1]["artifact_description"]
+        assert [step["output_description"] for step in response.json()["steps"]] == [
+            step["artifact_description"] for step in body["steps"]
+        ]
 
 
-def start(context, saved=None, **changes):
-    context.agent.status = AgentStatus.RUNNING
-    context.injector.get(AgentRepository).save(context.agent)
-    saved = saved or create(context)
-    payload = {
+def test_runs_of_a_new_version_carry_no_separate_output_description() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        assert response.json()["final_output_description"] is None
+        assert [step["output_description"] for step in response.json()["steps"]] == [None]
+
+
+def runs_url(context) -> str:
+    return base(context) + "/workflow-runs"
+
+
+def run_payload(context, saved, agent=None, **changes) -> dict:
+    return {
+        "workflow_id": saved["id"],
+        "agent_id": str((agent or context.agent).id),
         "version_id": saved["version"]["id"],
         "client_request_id": str(uuid4()),
         "inputs": {"period": "This week"},
         **changes,
     }
-    response = context.client.post(
-        base(context) + f"/workflows/{saved['id']}/runs", headers=auth(context), json=payload
-    )
+
+
+def start(context, saved=None, agent=None, headers=None, **changes):
+    agent = agent or context.agent
+    agent.status = AgentStatus.RUNNING
+    context.injector.get(AgentRepository).save(agent)
+    saved = saved or create(context)
+    payload = run_payload(context, saved, agent, **changes)
+    response = context.client.post(runs_url(context), headers=headers or auth(context), json=payload)
     return response, saved, payload
 
 
@@ -89,8 +112,8 @@ def test_start_pins_version_inputs_actor_and_transactional_wakeup() -> None:
 
 def test_duplicate_start_is_stable_and_conflicting_reuse_is_rejected() -> None:
     with given(_RUN_GIVEN) as context:
-        response, saved, payload = start(context)
-        path = base(context) + f"/workflows/{saved['id']}/runs"
+        response, _, payload = start(context)
+        path = runs_url(context)
         with ThreadPoolExecutor(max_workers=2) as pool:
             duplicates = list(
                 pool.map(lambda _: context.client.post(path, headers=auth(context), json=payload), range(2))
@@ -115,7 +138,7 @@ def test_declared_capabilities_do_not_gate_execution(capability) -> None:
     with given(_RUN_GIVEN) as context:
         body = draft()
         body["steps"][0]["required_capabilities"] = [capability]
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        saved = post_draft(context, body).json()
         response, _, _ = start(context, saved)
         assert_that(response.status_code, equal_to(202), response.text)
 
@@ -141,15 +164,7 @@ def test_concurrent_starts_are_accepted_across_an_agents_workflows() -> None:
         definitions = [create(context), create(context)]
 
         def submit(saved):
-            return context.client.post(
-                base(context) + f"/workflows/{saved['id']}/runs",
-                headers=auth(context),
-                json={
-                    "version_id": saved["version"]["id"],
-                    "client_request_id": str(uuid4()),
-                    "inputs": {"period": "This week"},
-                },
-            )
+            return context.client.post(runs_url(context), headers=auth(context), json=run_payload(context, saved))
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             responses = list(pool.map(submit, definitions))
@@ -220,7 +235,7 @@ def test_duplicate_wakeups_do_not_reemit_pause_after_a_completed_step() -> None:
     with given(_RUN_GIVEN) as context:
         body = draft()
         body["steps"].append({**body["steps"][0], "id": str(uuid4()), "name": "Next step"})
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        saved = post_draft(context, body).json()
         response, _, _ = start(context, saved)
         repository, row, token = attempt(context, response.json()["id"])
         context.injector.get(WorkflowRunService).result(row.id, token, result())
@@ -244,7 +259,7 @@ def test_lost_attempt_blocks_without_replaying_checkpoint() -> None:
     with given(_RUN_GIVEN) as context:
         body = draft()
         body["steps"].append({**body["steps"][0], "id": str(uuid4()), "name": "Next step"})
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        saved = post_draft(context, body).json()
         response, _, _ = start(context, saved)
         repository, first, token = attempt(context, response.json()["id"])
         first_result = result()
@@ -459,10 +474,14 @@ def test_rerun_refuses_a_source_whose_inputs_were_removed_after_it_was_read() ->
         repository = context.injector.get(WorkflowRunRepository)
         with pytest.raises(WorkflowConflict):
             repository.start(
-                UUID(saved["id"]),
-                context.agent.id,
                 AuthorizationScope(organization_id=context.organization.id),
-                WorkflowRunCreate(version_id=UUID(saved["version"]["id"]), client_request_id=uuid4(), inputs={}),
+                WorkflowRunCreate(
+                    workflow_id=UUID(saved["id"]),
+                    agent_id=context.agent.id,
+                    version_id=UUID(saved["version"]["id"]),
+                    client_request_id=uuid4(),
+                    inputs={},
+                ),
                 context.user.id,
                 context.organization_user.id,
                 "openclaw",
@@ -476,7 +495,7 @@ def test_viewer_reads_runs_but_cannot_start_or_cancel(general) -> None:
     from api.tests.steps.agent import there_is_agent_access
 
     with given(_RUN_GIVEN) as context:
-        response, saved, payload = start(context)
+        response, _, payload = start(context)
         run_id = response.json()["id"]
         switch_member(context)
         if general:
@@ -491,9 +510,7 @@ def test_viewer_reads_runs_but_cannot_start_or_cancel(general) -> None:
             context.client.get(base(context) + "/workflow-runs", headers=auth(context)).json()["total"], equal_to(1)
         )
         assert_that(
-            context.client.post(
-                base(context) + f"/workflows/{saved['id']}/runs", headers=auth(context), json=payload
-            ).status_code,
+            context.client.post(runs_url(context), headers=auth(context), json=payload).status_code,
             equal_to(403),
         )
         assert_that(
@@ -578,7 +595,7 @@ def test_text_retention_expires_settled_content_but_preserves_active_checkpoints
     with given(_RUN_GIVEN) as context:
         body = draft()
         body["steps"].append({**body["steps"][0], "id": str(uuid4()), "name": "Next step"})
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        saved = post_draft(context, body).json()
         active, _, _ = start(context, saved)
         repository, current, token = attempt(context, active.json()["id"])
         repository.complete(current.id, token, result())
@@ -746,7 +763,7 @@ def test_worker_events_dispatch_each_step_without_a_maintenance_pass(monkeypatch
     with given(_RUN_GIVEN) as context:
         body = draft()
         body["steps"].append({**body["steps"][0], "id": str(uuid4()), "name": "Review report"})
-        saved = context.client.post(base(context) + "/workflows", headers=auth(context), json=body).json()
+        saved = post_draft(context, body).json()
         _agent_reachable(context)
         response, _, _ = start(context, saved)
         run_id = UUID(response.json()["id"])
@@ -989,6 +1006,7 @@ def test_recovery_active_runs_are_not_starved_by_parked_runs() -> None:
                 session.add(
                     WorkflowRun(
                         workflow_id=active.workflow_id,
+                        agent_id=active.agent_id,
                         version_id=active.version_id,
                         initiating_user_id=active.initiating_user_id,
                         initiating_membership_id=active.initiating_membership_id,
@@ -1018,6 +1036,7 @@ def test_recovery_rotates_active_runs_that_make_no_progress() -> None:
                 session.add(
                     WorkflowRun(
                         workflow_id=source.workflow_id,
+                        agent_id=source.agent_id,
                         version_id=source.version_id,
                         initiating_user_id=source.initiating_user_id,
                         initiating_membership_id=source.initiating_membership_id,
