@@ -1,11 +1,15 @@
+import json
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.domains.llm_providers.models import ProviderType
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice, litellm_price_key
 
 MODEL_ID = "agentbarn:openrouter"
+PRICE_LIST_URL = "http://litellm:4000/public/litellm_model_cost_map"
 PROVIDER_KEY = "sk-or-provider-secret"
 LITELLM_PARAMS = {"model": "openrouter/*", "api_key": PROVIDER_KEY, "order": 1}
 MODEL_INFO = {"id": MODEL_ID, "disable_background_health_check": True}
@@ -206,3 +210,131 @@ def test_delete_model_deployment_raises_on_other_failures():
         with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(500)):
             with pytest.raises(LiteLLMError):
                 client.delete_model_deployment(MODEL_ID)
+
+
+def _price_list_response(body: str, status_code: int = 200) -> httpx.Response:
+    return httpx.Response(status_code, content=body.encode(), request=httpx.Request("GET", PRICE_LIST_URL))
+
+
+def _get_model_prices(response: httpx.Response | Exception) -> tuple[dict[str, LiteLLMModelPrice], MagicMock]:
+    client = _client()
+    side_effect = response if isinstance(response, Exception) else None
+    with patch.object(client, "_master_key") as master_key:
+        with patch(
+            "api.infrastructure.litellm.client.httpx.get",
+            return_value=None if side_effect else response,
+            side_effect=side_effect,
+        ) as get:
+            prices = client.get_model_prices()
+    master_key.assert_not_called()
+    return prices, get
+
+
+def test_get_model_prices_reads_the_built_in_list_without_a_key():
+    _, get = _get_model_prices(_price_list_response("{}"))
+
+    get.assert_called_once_with(PRICE_LIST_URL, params={"catalog_only": "true"}, timeout=10)
+
+
+def test_get_model_prices_maps_the_four_prices_exactly_and_the_mode():
+    body = (
+        '{"claude-sonnet-4-5": {"input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05,'
+        ' "cache_read_input_token_cost": 3e-07, "cache_creation_input_token_cost": 3.75e-06,'
+        ' "mode": "chat", "litellm_provider": "anthropic"}}'
+    )
+
+    prices, _ = _get_model_prices(_price_list_response(body))
+
+    assert prices == {
+        "claude-sonnet-4-5": LiteLLMModelPrice(
+            key="claude-sonnet-4-5",
+            mode="chat",
+            input_cost_per_token=Decimal("0.000003"),
+            output_cost_per_token=Decimal("0.000015"),
+            cache_read_input_token_cost=Decimal("3E-7"),
+            cache_creation_input_token_cost=Decimal("0.00000375"),
+        )
+    }
+
+
+def test_get_model_prices_leaves_a_missing_or_negative_cache_price_unset():
+    body = json.dumps(
+        {
+            "gpt-4o": {"input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05, "mode": "chat"},
+            "deepseek/deepseek-chat": {
+                "input_cost_per_token": 2,
+                "output_cost_per_token": 4,
+                "cache_read_input_token_cost": -1,
+                "cache_creation_input_token_cost": 0,
+            },
+        }
+    )
+
+    prices, _ = _get_model_prices(_price_list_response(body))
+
+    assert prices["gpt-4o"].cache_read_input_token_cost is None
+    assert prices["gpt-4o"].cache_creation_input_token_cost is None
+    assert prices["deepseek/deepseek-chat"] == LiteLLMModelPrice(
+        key="deepseek/deepseek-chat",
+        mode=None,
+        input_cost_per_token=Decimal(2),
+        output_cost_per_token=Decimal(4),
+        cache_read_input_token_cost=None,
+        cache_creation_input_token_cost=Decimal(0),
+    )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"output_cost_per_token": 1e-05},
+        {"input_cost_per_token": None, "output_cost_per_token": 1e-05},
+        {"input_cost_per_token": 0.0, "output_cost_per_token": 1e-05},
+        {"input_cost_per_token": 2.5e-06, "output_cost_per_token": 0},
+        {"input_cost_per_token": -2.5e-06, "output_cost_per_token": 1e-05},
+        {"input_cost_per_token": "2.5e-06", "output_cost_per_token": 1e-05},
+        {"input_cost_per_token": True, "output_cost_per_token": 1e-05},
+        "not an entry",
+    ],
+)
+def test_get_model_prices_leaves_out_an_entry_that_cannot_give_a_price(entry):
+    prices, _ = _get_model_prices(_price_list_response(json.dumps({"gpt-4o": entry})))
+
+    assert prices == {}
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _price_list_response("{}", status_code=500),
+        httpx.ConnectError("refused"),
+        _price_list_response("not json"),
+        _price_list_response("[]"),
+    ],
+)
+def test_get_model_prices_raises_when_litellm_cannot_give_its_list(response):
+    with pytest.raises(LiteLLMError, match="Failed to read LiteLLM's price list"):
+        _get_model_prices(response)
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "model_id", "key"),
+    [
+        (ProviderType.OPENAI, "gpt-4o", "gpt-4o"),
+        (ProviderType.ANTHROPIC, "claude-sonnet-4-5", "claude-sonnet-4-5"),
+        (ProviderType.GEMINI, "gemini-2.5-pro", "gemini/gemini-2.5-pro"),
+        (ProviderType.XAI, "grok-4.3", "xai/grok-4.3"),
+        (ProviderType.DEEPSEEK, "deepseek-chat", "deepseek/deepseek-chat"),
+        (
+            ProviderType.FIREWORKS,
+            "accounts/fireworks/models/llama-v3p1-8b-instruct",
+            "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
+        ),
+        (ProviderType.NOVITA, "deepseek/deepseek-r1", "novita/deepseek/deepseek-r1"),
+        (ProviderType.AZURE, "gpt-4o", "azure/gpt-4o"),
+        (ProviderType.OPENROUTER, "openai/gpt-4o", None),
+        (ProviderType.CUSTOM, "llama-3", None),
+    ],
+)
+def test_litellm_price_key_follows_each_providers_key_form(provider_type, model_id, key):
+    assert litellm_price_key(provider_type, model_id) == key

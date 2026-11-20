@@ -2,11 +2,13 @@ import base64
 import hashlib
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 import httpx
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.llm_providers.models import ProviderType
 from api.infrastructure.kubernetes.client import KubernetesClient
 
 logger = logging.getLogger(__name__)
@@ -15,6 +17,16 @@ logger = logging.getLogger(__name__)
 # A spend limit granted once, such as trial credit. LiteLLM has no name for it: a budget
 # with no budget_duration simply never resets, so the window is sent as None.
 ONE_OFF_BUDGET_WINDOW = "once"
+PRICE_LIST_PATH = "/public/litellm_model_cost_map"
+BARE_PRICE_KEY_PROVIDERS = frozenset({ProviderType.OPENAI, ProviderType.ANTHROPIC})
+PRICE_KEY_PREFIXES = {
+    ProviderType.GEMINI: "gemini",
+    ProviderType.XAI: "xai",
+    ProviderType.DEEPSEEK: "deepseek",
+    ProviderType.FIREWORKS: "fireworks_ai",
+    ProviderType.NOVITA: "novita",
+    ProviderType.AZURE: "azure",
+}
 
 
 def _budget_duration(window: str | None) -> str | None:
@@ -27,6 +39,52 @@ class LiteLLMError(Exception):
 
 class LiteLLMKeyNotFound(LiteLLMError):
     """LiteLLM has no record of the key — not the same as a key with no team."""
+
+
+def litellm_price_key(provider_type: ProviderType, model_id: str) -> str | None:
+    if provider_type in BARE_PRICE_KEY_PROVIDERS:
+        return model_id
+    prefix = PRICE_KEY_PREFIXES.get(provider_type)
+    return None if prefix is None else f"{prefix}/{model_id}"
+
+
+@dataclass(frozen=True)
+class LiteLLMModelPrice:
+    key: str
+    mode: str | None
+    input_cost_per_token: Decimal
+    output_cost_per_token: Decimal
+    cache_read_input_token_cost: Decimal | None
+    cache_creation_input_token_cost: Decimal | None
+
+
+def _price(value: object) -> Decimal | None:
+    if isinstance(value, bool) or not isinstance(value, int | Decimal):
+        return None
+    return Decimal(value)
+
+
+def _non_negative_price(value: object) -> Decimal | None:
+    price = _price(value)
+    return price if price is not None and price >= 0 else None
+
+
+def _model_price(key: str, entry: object) -> LiteLLMModelPrice | None:
+    if not isinstance(entry, dict):
+        return None
+    input_price = _price(entry.get("input_cost_per_token"))
+    output_price = _price(entry.get("output_cost_per_token"))
+    if input_price is None or output_price is None or input_price <= 0 or output_price <= 0:
+        return None
+    mode = entry.get("mode")
+    return LiteLLMModelPrice(
+        key=key,
+        mode=mode if isinstance(mode, str) else None,
+        input_cost_per_token=input_price,
+        output_cost_per_token=output_price,
+        cache_read_input_token_cost=_non_negative_price(entry.get("cache_read_input_token_cost")),
+        cache_creation_input_token_cost=_non_negative_price(entry.get("cache_creation_input_token_cost")),
+    )
 
 
 @inject
@@ -448,6 +506,22 @@ class LiteLLMClient:
         except httpx.HTTPError:
             raise LiteLLMError("Failed to delete the model route") from None
         return True
+
+    def get_model_prices(self) -> dict[str, LiteLLMModelPrice]:
+        try:
+            response = httpx.get(
+                f"{self.config.litellm_base_url}{PRICE_LIST_PATH}",
+                params={"catalog_only": "true"},
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            price_list = response.json(parse_float=Decimal)
+            if not isinstance(price_list, dict):
+                raise TypeError("Unexpected price list shape")
+        except httpx.HTTPError, ValueError, TypeError:
+            raise LiteLLMError("Failed to read LiteLLM's price list") from None
+        prices = (_model_price(key, entry) for key, entry in price_list.items())
+        return {price.key: price for price in prices if price is not None}
 
     def delete_key(self, key: str) -> bool:
         """Deletes a LiteLLM virtual key outright. Returns True only for a

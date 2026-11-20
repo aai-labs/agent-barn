@@ -9,11 +9,18 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
 - Delivered: slice 2, connections to other providers ([feature doc](../llm-providers.md)). In Platform Admin settings and through the API, a Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita, and any number of Azure and Custom connections. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter deleted. Each key is checked with its provider before it is stored, and every addition, replacement and deletion is audited. OpenRouter's key is read from the connection list and replaced through `PUT .../openrouter/key`; the OpenRouter-only routes are gone.
-- Delivered: slice 3, PRs 1 and 2. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices; nothing writes it yet.
-- Next: slice 3, PR 3, `LiteLLMClient.get_model_prices()`; then models and prices per connection, with their LiteLLM routes.
+- Delivered: slice 3, PRs 1 to 3. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices; nothing writes it yet. `LiteLLMClient.get_model_prices()` reads that list; nothing calls it yet.
+- Next: slice 3, PR 4, listing a connection's LiteLLM routes; then models and prices per connection, with their LiteLLM routes.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-20 — AF-447 — slice 3, PR 3
+
+- Delivered: `LiteLLMClient.get_model_prices()` reads LiteLLM's built-in price list from `GET /public/litellm_model_cost_map?catalog_only=true`, which needs no key and leaves out entries LiteLLM registers for its routes (`proxy/public_endpoints/public_endpoints.py:498-512`, `proxy/_types.py:739` at v1.108.6). Each entry gives its key, `mode` and four per-token prices as exact decimals; an entry whose input or output price is missing, zero or not a number is left out, and a missing or negative cache price is unset. A failed request or a body that is not an object raises `LiteLLMError`.
+- Delivered: `litellm_price_key()` gives the key a model is priced under: the bare id for OpenAI and Anthropic; `gemini/`, `xai/`, `deepseek/`, `fireworks_ai/`, `novita/` or `azure/` and the id for the rest, an Azure deployment using the model it runs; none for OpenRouter and Custom.
+- Changed: checked against v1.108.6's bundled list, 3,090 entries give a price, 2,791 of them chat models. 13 chat entries of our providers are priced 0 and 6 have no price, so they get none here.
+- Follow-up: 43 entries, 20 of them for our providers and mostly Novita, have prices with more than 18 decimal places, such as `0.000015000020000000002`, which `NUMERIC(24,18)` rounds. PR 11's service rounds list prices to 18 decimal places before it shows, stores or compares them; the client keeps LiteLLM's values as they are.
 
 ### 2026-11-18 — AF-447 — slice 3, PR 2
 
