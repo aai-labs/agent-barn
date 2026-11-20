@@ -605,6 +605,53 @@ def test_workflow_file_retrieval_runs_concurrently_and_preserves_manifest_order(
     assert [item["artifact_id"] for item in result] == [item["artifact_id"] for item in files]
 
 
+def test_a_pod_with_bots_names_the_agent_in_the_openclaw_session_header(trigger_server) -> None:
+    trigger_server.RUNTIME_SESSION_PREFIX = "agent:bot-1:"
+
+    headers = trigger_server._runtime_headers("workflow-a")
+
+    assert headers["X-OpenClaw-Session-Key"] == "agent:bot-1:workflow-a"
+
+
+def test_a_pod_without_bots_keeps_the_openclaw_session_header(trigger_server) -> None:
+    assert trigger_server._runtime_headers("workflow-a")["X-OpenClaw-Session-Key"] == "workflow-a"
+
+
+def _created_arguments(monkeypatch, trigger_server, runtime_model: str) -> list[str]:
+    calls = []
+    monkeypatch.setattr(trigger_server, "_openclaw_json", lambda arguments: calls.append(arguments) or {"id": "job"})
+    monkeypatch.setattr(trigger_server, "RUNTIME_MODEL", runtime_model)
+    trigger_server._openclaw_create("agentbarn-hook-1", "Do it", "telegram")
+    return calls[0]
+
+
+def _option(arguments: list[str], name: str) -> str | None:
+    return arguments[arguments.index(name) + 1] if name in arguments else None
+
+
+def test_a_bots_trigger_server_schedules_the_job_as_that_bot_on_its_own_account(monkeypatch, trigger_server) -> None:
+    bot = "0000000a-0000-4000-8000-00000000000a"
+
+    arguments = _created_arguments(monkeypatch, trigger_server, f"openclaw/{bot}")
+
+    assert (_option(arguments, "--agent"), _option(arguments, "--account")) == (bot, bot)
+    assert _option(arguments, "--channel") == "telegram"
+
+
+def test_a_parent_with_bots_schedules_its_jobs_as_main_on_its_default_account(monkeypatch, trigger_server) -> None:
+    arguments = _created_arguments(monkeypatch, trigger_server, "openclaw/main")
+
+    assert (_option(arguments, "--agent"), _option(arguments, "--account")) == ("main", "default")
+
+
+@pytest.mark.parametrize("runtime_model", ["openclaw/default", ""])
+def test_a_pod_without_bots_schedules_jobs_as_before(monkeypatch, trigger_server, runtime_model) -> None:
+    arguments = _created_arguments(monkeypatch, trigger_server, runtime_model)
+
+    assert "--agent" not in arguments
+    assert "--account" not in arguments
+
+
 class _FakeHermesWithApproval:
     """Hermes over real HTTP: the first run pauses a command until it is answered or stopped."""
 

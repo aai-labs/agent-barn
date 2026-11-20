@@ -7,12 +7,12 @@ import Link from "next/link";
 import type { Agent, AgentHealth } from "../schemas";
 import { canAgent, currentModelOf, formatModelName, isQuiet, isRecent } from "../utils";
 import { useAgentHealth } from "../hooks/use-agent-health";
-import { useBots } from "../hooks/use-bots";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
 
 interface AgentCardProps {
   agent: Agent;
+  bots: Agent[];
   href: string;
 }
 
@@ -38,8 +38,7 @@ function presenceOf(status: Agent["status"], health: AgentHealth | null | undefi
   return { label: "Disconnected", dot: "var(--warn)", badge: { bg: "var(--warn-soft)", fg: "var(--warn)" } };
 }
 
-function BotCount({ parentAgentId }: { parentAgentId: string }) {
-  const { bots } = useBots(parentAgentId);
+function BotCount({ bots }: { bots: Agent[] }) {
   if (bots.length === 0) return null;
   const needingAttention = bots.filter((bot) => bot.status === "ERROR").length;
   return (
@@ -55,7 +54,7 @@ function BotCount({ parentAgentId }: { parentAgentId: string }) {
   );
 }
 
-export function AgentCard({ agent, href }: AgentCardProps) {
+export function AgentCard({ agent, bots, href }: AgentCardProps) {
   const hasActivityPermission = canAgent(agent, "activity.read");
   const { health } = useAgentHealth(
     agent.id,
@@ -129,7 +128,7 @@ export function AgentCard({ agent, href }: AgentCardProps) {
             {formatModelName(model)}
           </div>
         )}
-        {agent.agentType === "hermes" && <BotCount parentAgentId={agent.id} />}
+        <BotCount bots={bots} />
       </div>
 
       <div className="mt-auto flex min-h-16 items-center justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>

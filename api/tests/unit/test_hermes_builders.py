@@ -28,10 +28,9 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
+from api.domains.agents.builders.common import BOT_CONFIG_ROOT, BOT_SECRET_ROOT
 from api.domains.agents.builders.hermes import (
-    BOT_CONFIG_ROOT,
     BOT_ENV_DIR,
-    BOT_SECRET_ROOT,
     HERMES_BOOT_RUN_PY,
     HERMES_BOOTLOADER_FOOTER,
     HERMES_DEFAULT_MAX_TURNS,
@@ -507,6 +506,12 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
 
     assert deployment.spec.replicas == 1
     assert deployment.spec.template.spec.containers[0].name == "agent"
+
+
+def test_deployment_runs_start_sh_under_tini() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
+
+    assert deployment.spec.template.spec.containers[0].command == ["/usr/bin/tini", "--", "sh", "/app/config/start.sh"]
 
 
 def test_init_container_costs_no_more_quota_than_the_agent() -> None:

@@ -1,8 +1,8 @@
 # Agent Bots — change log
 
 Status: Active
-Epic: AF-425
-Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md`](../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md), [`../rbac/IMPLEMENTATION-BRIEF.md`](../rbac/IMPLEMENTATION-BRIEF.md), [`../../guidelines/epics.md`](../../guidelines/epics.md)
+Epic: AF-425 (Hermes), AF-445 (OpenClaw)
+Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md`](../../adr/2026-11-05-bots-share-their-parent-agents-gateway.md), [`../../adr/2026-11-11-openclaw-bots-are-agents-in-the-parent-gateway.md`](../../adr/2026-11-11-openclaw-bots-are-agents-in-the-parent-gateway.md), [`../rbac/IMPLEMENTATION-BRIEF.md`](../rbac/IMPLEMENTATION-BRIEF.md), [`../../guidelines/epics.md`](../../guidelines/epics.md)
 
 ## Current state
 
@@ -15,8 +15,9 @@ Related context: [`../agent-bots.md`](../agent-bots.md), [`../../adr/2026-11-05-
   - `GET /agents/{id}/bots`;
   - `POST /agents/{id}/bots`.
   Starting a Parent Agent now serves its Bots from its pod. Not yet verified in a real pod.
+- OpenClaw (AF-445): the feature contract, terminology and ADR, the database rule that a Parent Agent and its Bots share a runtime (`865ce7d7db04`), and `POST /agents/{id}/bots` on OpenClaw Parent Agents with the OpenClaw Bot rules, and starting an OpenClaw Parent Agent serves its Bots from its pod. Not yet verified in a real pod.
 - In transition: nothing.
-- Next: the full end-to-end run in local k3d on a fresh API image, including the staging merge's per-Bot work: transcripts, Tasks, listen-in, the organization Tasks page and running workflows on a Bot.
+- Next: the end-to-end runs in local k3d: Hermes on a fresh API image, including the staging merge's per-Bot work (transcripts, Tasks, listen-in, the organization Tasks page and running workflows on a Bot); OpenClaw with real Slack, Telegram and Discord apps.
 - Accepted: a Bot's scheduled-job history stays in the Parent Agent's `state.db`, because Hermes opens that database itself; keeping it per Bot would need a Hermes patch.
 - Blockers: none.
 
@@ -50,7 +51,53 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 
 **Not covered:** Slack access rules across two homes (the local image predates the plugin), Discord, and memory under 10 concurrent runs.
 
+## OpenClaw runtime evidence
+
+From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real OpenClaw Parent Agent and two Bots, created through the API, served as three agents by one gateway with a hand-built configuration. Later slices may rely on these.
+
+**Observed working:**
+- `openclaw config validate` accepted `agents.ownership: "explicit"`, `main` plus two Bot entries, and per-Bot workspace, agent directory and model. Each agent answered through `openclaw/<id>`, and its commands ran in its own workspace.
+- One model provider per Bot, `litellm-bot-<slot>`, with a file secret reference: a Bot's call was billed to its own LiteLLM key only.
+- A `before_tool_call` plugin on `exec` at priority -1000 gave each agent its own `AGENT_ID` and artifact key, in foreground and background commands. A model-supplied `env` could not override them, and a test value never appeared in sessions, state, logs or the `tool_call` table.
+- Two Slack apps, two Telegram bots and two Discord bots, as `default` and Bot accounts in one gateway, each replied as itself, and each conversation landed in its own agent's sessions.
+- A scheduled job created with `--agent <bot>` ran as that Bot. On Telegram, the Bot's jobs, pinned to its account or not, posted from the Bot's account, and the Parent Agent's from `default`.
+- `openclaw channels status --probe --json` reported each account's connection.
+- With one Bot's Secret missing, that Bot failed closed with no fallback key; the Parent Agent and the other Bot kept working.
+- A Parent Agent's sessions continued as `agent:main:…` after Bots were added, and with its old key after the last Bot was removed.
+
+**Observed behaviour that shapes the design:**
+- `openclaw/default` fails once there are several agents, so a Parent Agent with Bots is reached as `openclaw/main`.
+- Session keys without an agent prefix fail with several agents; they must be `agent:<id>:…`.
+- The file secret provider refuses a symlink, and Secret volume files are symlinks, so Bot keys are copied at boot into private files.
+- `init-openclaw.js` merges into the volume's `openclaw.json`, so removing the last Bot left multi-agent settings that broke `openclaw/default` until they were deleted.
+- Every tool call was filed under the Parent Agent, because `telemetry-push` reads one `AGENT_ID`.
+- Agent Barn's `agentbarn-tasks` plugin, on staging and not on this branch, shows the Parent Agent's Tasks to every agent in the pod. It needs per-Bot identity on both runtimes.
+
+**Measured:** Parent Agent with two Bots, 578 MiB during a scheduled run and 890 MiB idle later, with six platform accounts connected.
+
+**Not covered:** Hindsight session exclusion and the memory tool per Bot, the exec plugin failing closed, compaction and utility-model billing, the Parent Agent's job on a platform only a Bot uses, and five Bots.
+
 ## Changes
+
+### 2026-11-19 — AF-445 — A Bot's scheduled run can end its own schedule
+
+- Fixed: in local k3d, a Bot asked in Web Chat for "every minute, 3 quotes, then delete the schedule" could not delete it. Each run's `automations list` returned no jobs, so the run said the schedule was removed and set its Task done; the Tasks plugin put it back in progress, and the job kept running. `agentbarn-bot-env` pinned the job's unrouted delivery to the Bot's account, while OpenClaw recorded the job's owner account from the Web Chat turn, which has none (`default`). OpenClaw runs a job under its delivery account and lets a run list, read or remove its own job only when that matches the owner account. The Parent Agent was unaffected: both are `default`, and its run removed its job and finished its Task.
+- Now a Bot's job that names no platform is pinned only when the Bot was asked for it on its own account (the tool call's `requester.accountId`). A new `message_sending` hook cancels any post from a Bot's session on a platform from an account other than its own, so an unpinned job still never posts from the Parent Agent's account.
+- Known limit: a job a Bot is asked for in Web Chat that names a platform is still pinned, so its runs can't remove it themselves; it can be removed in a conversation.
+- Follow-up: the end-to-end runs.
+
+### 2026-11-19 — AF-445 — A Bot's workflow files go to its own workspace
+
+- Fixed: an OpenClaw Bot's Secret carries the runtime's upload root, the Parent Agent's workspace. `agentbarn-bot-env` and the Tasks plugin replace it for the Bot's commands, but `bot-run.py` passed it unchanged to the Bot's helpers, so the Bot's trigger server wrote a workflow step's input files into the Parent Agent's workspace. The Bot could still read them, because OpenClaw's file tools are not limited to the workspace (`tools.fs.workspaceOnly` defaults off and is not set), but they were outside the Bot's own workspace.
+- Now `bot-run.py` sets `ARTIFACT_UPLOAD_ROOTS` to the Bot's workspace (`workspace-<bot-id>`), the folder `bot-setup.py` creates and `agentbarn-bot-env` uses.
+- Follow-up: the end-to-end runs.
+
+### 2026-11-19 — AF-445 — Staging merge (schedule-linked Tasks per agent)
+
+- Merged: staging, bringing the AF-425 merge, AF-412's schedule-linked Tasks and turn-end holds, and AF-439's Organization workflows.
+- Fixed: AF-412's OpenClaw Tasks plugin code ran its commands in the one-agent form, which the per-agent plugin answers with "Tasks are unavailable". After the merge every schedule question, run Note, turn-end question and finished status for a linked Task failed, for the Parent Agent too. Staging's new turn state now also carries the turn's agent. Each is now sent as its agent: the turn's, or for a scheduled run or a removed job the one its schedule link records. A link saved without an agent belongs to the Parent Agent.
+- Changed: the conflicted files keep both sides. Migration `c87b17ccfe1a` joins this branch's `3e9d8fca9996` with staging's `0a07b0b57b62`. `ui.md` now says the Bot switcher shows on every Agent, as `path-bar.tsx` already does on this branch.
+- Follow-up: the end-to-end runs.
 
 ### 2026-11-19 — AF-425 — Workflows run on Bots again
 
@@ -69,6 +116,31 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 - Fixed: staging's schedule-linked Tasks (AF-412) kept every profile's schedule links in the pod's `HERMES_HOME`, the Parent Agent's folder, and read that folder's `cron/jobs.json`, while Hermes keeps a Bot's jobs in its own profile. When the Parent Agent had a job file, the next turn of any profile in the pod marked a Bot's linked Task `done` while its schedule still ran. When it had none, the Bot's runs were noted without the run limit, so the link never ended and the Task stayed `in_progress` after the last run.
 - Now the Tasks plugin's `_home()` returns the Bot's profile folder when its copy is installed under `profiles/`, the same rule the observer uses. The Parent Agent's copy still uses `HERMES_HOME`.
 - Follow-up: the end-to-end run.
+
+### 2026-11-16 — AF-445 — Home reads every Bot in one list
+
+- Fixed: once Bots came to OpenClaw, the Agent card's Bot count was no longer limited to Hermes, so Home sent one `/agents/{id}/bots` request per card, including for every Agent with no Bots. Home now reads the Agents list once with `include_bots=true`, one request per 100 Agents, groups the Bots by Parent Agent and passes each card its own. The list already shows a Bot only to someone who can read its Parent Agent.
+- Changed: if that list fails, the cards show no Bot count; the Agents still load from their own list.
+- Follow-up: the end-to-end runs.
+
+### 2026-11-16 — AF-445 — Remove every multi-agent setting with the last Bot
+
+- Fixed: `init-openclaw.js` deep-merges `plugins.entries` and never removed `tools.agentToAgent`, so after the last Bot was deleted the saved `openclaw.json` kept `plugins.entries["agentbarn-bot-env"]`, with its `parentNames` and `platforms`, and `tools.agentToAgent`, although the plugin was no longer loaded. OpenClaw only warned about the stale entry, but the Lifecycle section says these settings are removed. Both are now removed with the other Bot-only paths when the new config doesn't name them.
+- Follow-up: Home reads every Bot in one list.
+
+### 2026-11-16 — AF-445 — `agentbarn-bot-env` names the agent from its session and pins a Bot's unrouted posts
+
+- Fixed: both `agentbarn-bot-env` hooks refused every command and message when the hook context had no `agentId`, which OpenClaw 2026.8.2 treats as optional, so the Parent Agent's own calls failed too. They now take the agent from `agent:<id>:` in the session key, as the other plugins do, and refuse only when neither names one. They never fall back to the Parent Agent.
+- Fixed: a Bot's message, or scheduled job delivery, with no platform, `last` or `current` went out unpinned. With no turn account, as in a scheduled run or Web Chat, OpenClaw then picked the platform's default account, which is the Parent Agent's. A Bot's route is now always pinned to its own account, and OpenClaw refuses that account on a platform where the Bot has none. The Parent Agent's unrouted posts are unchanged.
+- Changed: none for scheduled jobs that name another agent. Verified in the pinned 2026.8.2 core that the cron tool sets a session's job to the calling agent and refuses another, and that the gateway checks add, update, remove and run against the caller's agent.
+- Follow-up: remove every multi-agent setting with the last Bot.
+
+### 2026-11-16 — AF-445 — AF-425 merge (review fixes, tiers)
+
+- Merged: `AF-425-hermes-multi-persona-feat`, bringing its review fixes, tier holds on Bots and staging's tiers, subscriptions and usage.
+- Changed: the conflicted files keep both sides. Migration `3e9d8fca9996` joins this branch's `d3c8e1f4a2b7` with AF-425's `7aca1d608723`.
+- Changed: a Parent Agent's failure now fails its Bots on OpenClaw too, removing their Secrets and ConfigMaps, revoking their tokens and putting each live Bot in ERROR. AF-425 had limited it to Hermes. Held Bots are left out of an OpenClaw gateway at start, as on Hermes. Tier holds, Bot access and Apply & Restart on an errored Bot needed no runtime change.
+- Follow-up: the end-to-end runs.
 
 ### 2026-11-16 — AF-425 — Tier holds on Bots
 
@@ -100,6 +172,36 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
 - Fixed: a failed start or an observed runtime exit put only the Parent Agent in ERROR and revoked only its gateway tokens. Its Bots kept their status and their fresh tokens, and their Secrets stayed in the cluster. Now the Parent Agent's failure also removes its Bots' Secrets and ConfigMaps, revokes their tokens, deleted Bots' included, and puts each live Bot in ERROR with the Parent Agent's error.
 - Fixed: a start assembled each Bot, beginning its integration generation and issuing its gateway tokens, before the Parent Agent removed a stale Deployment. The already-running refusal and the stale Deployment removal now come first.
 - Follow-up: refuse `${` in a Bot pod's values.
+
+### 2026-11-13 — AF-445 — OpenClaw listen-in per agent
+
+- Delivered:
+  - `multi_agent_gateway_config` gives each Bot's entry its own `groupChat.unmentionedInbound`, from its own overlay, and leaves the Parent Agent's `messages.groupChat.unmentionedInbound` as its own rooms set it. Verified in the pinned core and the pinned `@openclaw/slack` that Slack, Discord and Telegram resolve it for the routed agent.
+  - When any agent has a listen-in room, it loads the `agentbarn-listen-in` guard once, with `slackRooms` from the Parent Agent and `agentSlackRooms` per Bot. The plugin manifest's schema accepts `agentSlackRooms`.
+  - The guard takes a turn's agent from `ctx.agentId`, else `agent:<id>:` in the session key. It reads Slack history for a Bot only in that Bot's own rooms and with `SLACK_BOT_TOKEN` from `/run/agentbarn/bots/<id>`, when that Secret's `AGENT_ID` matches, and otherwise reads nothing.
+- Changed:
+  - Superseded the AF-445 rule that any Bot's listen-in room turned room events on for the whole gateway. With per-agent room events, Discord auto-threading stops only for an agent that listens in, as each agent's own config already sets, and the per-Agent Require @mention refusal stays correct.
+  - The OpenClaw Bots image contract's check scripts now install `agentbarn-tasks` and `agentbarn-listen-in`. Since the AF-425 merge, every config loads the Tasks plugin, and its validation failed without it.
+- Follow-up: the end-to-end runs.
+
+### 2026-11-13 — AF-445 — OpenClaw Tasks per agent
+
+- Delivered: the OpenClaw `agentbarn-tasks` plugin registers its tool as a factory and takes each call's agent from `ctx.agentId`, else `agent:<id>:` in the session key, else `main`.
+  - `main` runs `agentbarn-task` as before, with the gateway's environment in `workspace`.
+  - A Bot runs it with `AGENT_ID`, `INGEST_URL`, `INGEST_API_KEY`, `ARTIFACT_URL`, `ARTIFACT_API_KEY` and `ARTIFACT_MAX_BYTES` from `/run/agentbarn/bots/<id>`, in `workspace-<id>`, with `ARTIFACT_UPLOAD_ROOTS` set to that workspace. Its written files resolve against that workspace, and its file size limit is its own.
+  - A Bot whose Secret is missing, names another agent or has no ingest URL or key runs nothing.
+  - The open-Tasks list is cached per agent.
+- Changed: verified in the pinned 2026.8.2 core that each run's plugin tool context names the session's agent and that the real loader registers the factory as `agentbarn_task`; a Bot's call through it ran with the Bot's identity and workspace, and an unknown agent's was refused. The unit driver builds factory tools with each step's context.
+- Follow-up: OpenClaw listen-in per agent.
+
+### 2026-11-13 — AF-445 — AF-425 merge (Agent Tasks, listen-in, workflow approvals)
+
+- Merged: `AF-425-hermes-multi-persona-feat` through `11ce0477`, bringing staging's Agent Tasks, OpenClaw and Hermes listen-in and workflow approvals, and the Hermes Bot work on top of them.
+- Changed: the conflicted files keep both sides. Migration `d3c8e1f4a2b7` joins this branch's `865ce7d7db04` with AF-425's `ed009c1e7a7c`.
+- Known gaps, from staging's OpenClaw plugins assuming one agent per gateway:
+  - `agentbarn-tasks` runs `agentbarn-task` with the Parent Agent's identity and workspace and caches one open-Tasks list for the pod, so a Bot records its work as the Parent Agent and is shown the Parent Agent's Tasks;
+  - the `agentbarn-listen-in` guard is loaded only when the Parent Agent has listen-in rooms, reads Slack history only for the Parent Agent's rooms and with its app, and Discord auto-threads stop only on the account that has the rooms.
+- Follow-up: OpenClaw Tasks per agent, then OpenClaw listen-in per agent.
 
 ### 2026-11-13 — AF-425 — Listen-in test type checking
 
@@ -148,6 +250,99 @@ From a spike on 2026-11-06 against Hermes `v2026.8.19` in local k3d: a real Pare
   - the listen-in plugin and its startup check never reach a Bot's profile, though a Bot's config enables its rooms;
   - the organization Tasks page shows Bot Tasks without a name or a filter entry.
 - Follow-up: fix those four areas, in that order, before the end-to-end run.
+
+### 2026-11-12 — AF-445 — Bots on OpenClaw in the UI
+
+- Delivered: the Bot switcher, the pod-wide "Agent" menu group and the Home Bot count now show for OpenClaw Agents too. The New bot dialog leaves out command approval for an OpenClaw parent and sends none.
+- Changed: maintainer decision on 2026-11-12 that every OpenClaw Agent, with or without Bots, groups Logs, File sync, Resource usage, Restore points and Size under "Agent", as Hermes Agents already do. Two navigation tests were updated to that layout.
+- Follow-up: the end-to-end run.
+
+### 2026-11-12 — AF-445 — OpenClaw Bot Restore Point exclusions
+
+- Delivered: `restore_point_job.py` leaves out, for each top-level `workspace-<id>/`, the Markdown `bot-setup.py` rewrites and `skills/`, and for each `bots/<id>/`, `.config` (aai-cli config, direct-mode gog keyring), `.local` and `aai-cli` (encrypted store and key). A Bot's `agents/<id>` sessions, `USER.md`, own work and trigger receipts are kept. Tests tie each rule to the code that writes the path.
+- Changed: none outside the exclusion sets. Capture tests need `os.O_NOFOLLOW`, so they run on Linux only; all 104 passed there.
+- Follow-up: the UI.
+
+### 2026-11-12 — AF-445 — OpenClaw account guard
+
+- Delivered: `agentbarn-bot-env` gains a `before_tool_call` guard on `message` and `automations` (alias `cron`), at priority -1000. When a message, or a scheduled job's `delivery`, `delivery.failureDestination` or `failureAlert`, names a platform, it is pinned to the calling agent's own account (`default` for the Parent Agent, the Bot's id for a Bot). It is blocked, with a reason the model sees, when the agent has no account on that platform or names another agent's account. Routes without a platform, or `last`, and scheduler reads are left alone. The builder passes each agent's platforms in the plugin's config.
+- Changed: observed in the pinned image, the scheduler tool is named `automations` and already refuses a job owned by another agent, and `conversations_send` is limited to the calling agent's own conversations, so neither needs more.
+- Follow-up: Restore Point exclusions.
+
+### 2026-11-12 — AF-445 — OpenClaw trigger server per Bot
+
+- Delivered: on OpenClaw, `agent-trigger-server.py` reads its agent from `RUNTIME_MODEL` and creates webhook jobs with `--agent <id> --account <id>`, or `--agent main --account default` for a Parent Agent with Bots. A pod without Bots (`openclaw/default`) creates jobs as before. Each Bot's receipts already live in its own file (`bot-run.py`).
+- Changed: nothing else; workflow steps already run as the agent through `RUNTIME_MODEL` and the session prefix.
+- Follow-up: the account guard.
+
+### 2026-11-12 — AF-445 — OpenClaw per-Bot identity
+
+- Delivered:
+  - `telemetry-push` and `agentbarn-observer` resolve each event's agent from `ctx.agentId`, else `agent:<id>:` in the session key, else a non-default `accountId`, and post it to `/agents/<id>/…` with that agent's `INGEST_API_KEY` from `/run/agentbarn/bots/<id>`. The parent keeps its own environment identity; an agent with no matching Secret is dropped. `agent:<id>:main` counts as a DM for every agent, not only `main`.
+  - `healthz-server.js` reports each account in `openclaw health --json` (`channels.<platform>.accounts`) under its agent, `default` being the parent, so a platform only a Bot uses is no longer reported as the parent's. `/healthz` lists `served_bots` from `/tmp/agentbarn-active-bots.json`. When the pod has Bots, the spent-limit marker is keyed by a hash of the caller's key, and the adapter reads the one for its own `LITELLM_API_KEY`.
+- Changed: `HEALTHZ_HEALTH_COMMAND` overrides the health command for tests only.
+- Follow-up: the trigger server per Bot.
+
+### 2026-11-12 — AF-445 — Start and stop OpenClaw Bots
+
+- Delivered: starting an OpenClaw Parent Agent assembles each live Bot (its own Secret and ConfigMap, a Bot that fails is in error and left out), builds the multi-agent gateway config from the Bots' own overlays, sets `RUNTIME_MODEL=openclaw/main`, `RUNTIME_SESSION_PREFIX=agent:main:` and the union of platforms on the parent's Secret, loads `agentbarn-bot-env` with the parent's Secret names, mounts each Bot's Secret and ConfigMap, opens `trg-<slot>` ports and ships `bots.json` with live and deleted Bots. Stopping and deleting already covered every runtime.
+- Changed: the line-break refusal now applies to Hermes pods only, since OpenClaw Bots never write an env file. A parent without Bots, or whose last Bot was deleted, gets its single-agent overlay and `openclaw/default`. Pod memory stays the Parent Agent's Agent Size; the feature doc says a parent with several Bots may need a larger one, to be measured in the end-to-end run.
+- Follow-up: per-Bot identity.
+
+### 2026-11-12 — AF-445 — OpenClaw command environment plugin
+
+- Delivered: plugin `scripts/openclaw/plugins/agentbarn-bot-env`, on `before_tool_call` for `exec` at priority -1000.
+  - A Bot's commands get every value in `/run/agentbarn/bots/<id>`, `AAI_CONFIG` under `bots/<id>` and `ARTIFACT_UPLOAD_ROOTS` set to `workspace-<id>`. Every name in the Parent Agent's Secret that the Bot does not define is blanked, except `FIRECRAWL_API_KEY`, `FIRECRAWL_API_URL`, `LITELLM_BASE_URL`, `LITELLM_PROXY_TARGET` and `LLM_PROXY_PORT`.
+  - The Parent Agent's commands get its own values for its Secret's names. The model's `env` is kept but never wins over either.
+  - An agent with no matching Secret, or no agent id, is refused; the pinned hook runner treats `before_tool_call` as fail-closed and refuses the command. A Bot's code-mode command is refused.
+  - `multi_agent_gateway_config(..., parent_env_names=...)` loads the plugin with the parent's Secret names; the ConfigMap ships it with `bots.json` and `start.sh` installs it.
+- Changed: observed in the pinned runner, `before_tool_call` gives each handler its own copy of the event and keeps the last handler's `params`, so this plugin wins over any earlier one and also replaces that plugin's own parameter changes. None of today's plugins rewrite `exec`.
+- Follow-up: start and stop wiring, which passes the parent's Secret names.
+
+### 2026-11-11 — AF-445 — OpenClaw in-pod boot
+
+- Delivered:
+  - `init-openclaw.js` replaces `agents.entries` and deletes `agents.ownership`, `agents.defaults.systemAgent`, `agents.entries`, `litellm-bot-<n>` providers and `bot<n>` secret providers the overlay leaves out; other secret providers stay.
+  - `scripts/openclaw/bot-setup.py` writes each Bot's workspace (`workspace-<id>`, instructions pointed at it, skills, its own `USER.md` kept), agent and home directories, runs its aai-cli and gog setup from `/app/bots/<id>`, and writes `/tmp/agentbarn-keys/<id>.json` (0600) with only its LiteLLM key and platform tokens. A Bot without a matching Secret, a LiteLLM key or its ConfigMap, or whose setup fails, is removed from `openclaw.json` and left out of `/tmp/agentbarn-active-bots.json`. Deleted Bots' files go at start; `--clean-jobs` removes their scheduled jobs in the background once the gateway lists them.
+  - `scripts/openclaw/bot-run.py` runs a served Bot's adapter and trigger server with its own Secret, the parent's gateway token and URL, `openclaw/<id>`, port `8100 + slot` and its own receipts file.
+  - `start.sh` sets Bots up after the parent's integrations and launches their helpers and the job cleanup just before the gateway.
+  - The adapter and trigger server prefix OpenClaw session keys with `RUNTIME_SESSION_PREFIX`; a parent with Bots gets `agent:main:`, a Bot `agent:<id>:`.
+- Changed: the parent's ConfigMap ships `bot-setup.py` and `bot-run.py` with `bots.json`. Observed in the spike pod: a job whose agent was removed failed with "cron job agent is unavailable" instead of running as the parent.
+- Follow-up: the exec plugin.
+
+### 2026-11-11 — AF-445 — OpenClaw multi-agent builders
+
+- Delivered, in `builders/openclaw.py` and not yet called by the service:
+  - `multi_agent_gateway_config` turns a parent's gateway config into a multi-agent one: explicit ownership with `main` as the system agent, one entry per Bot with its own workspace, agent directory and `litellm-bot-<slot>` provider, whose key is a file reference to `/tmp/agentbarn-keys/<bot-id>.json`.
+  - On a platform a Bot uses, the parent moves to account `default` and each Bot gets account `<bot-id>` with its own token references; the channel root keeps no policy. A platform only the parent uses stays as it was. Every account has a binding to its agent.
+  - Channel plugins and the observer cover every Bot's platform. Active memory covers every agent. Hindsight ignores `agent:<bot-id>:**` sessions, and a Bot's own memory setting never turns automatic memory on. `tools.agentToAgent` is off.
+  - `multi_agent_runtime_env` gives a parent with Bots `RUNTIME_MODEL=openclaw/main` and the union of platforms in `AGENTBARN_NATIVE_CHANNELS`.
+  - `build_deployment(bot_ids=...)` mounts each Bot's Secret and ConfigMap, and `build_config_map(bots_manifest=...)` ships `bots.json`.
+  - Without Bots every output is unchanged.
+- Changed: the per-Bot Secret and ConfigMap mounts moved to `builders/common.py`; the Hermes Deployment is unchanged. New image contract `runtime_tests/test_openclaw_bots.py`.
+- Follow-up: in-pod boot.
+
+### 2026-11-11 — AF-445 — Bots on OpenClaw Parent Agents in the API
+
+- Delivered:
+  - `POST /agents/{id}/bots` on an OpenClaw Parent Agent creates a stopped OpenClaw Bot with approval `auto`, no turn limit and File Sync off.
+  - The Hermes-only Bot rules (manual-approval mixing, read-only turn limit) skip OpenClaw Bots; OpenClaw's own 400s for approval, verbose mode and turn limit apply instead.
+  - An OpenClaw Bot's own or shared Firecrawl credential is refused with 400, on create and on update.
+  - An OpenClaw Bot's integration files live under `/home/node/.openclaw/bots/<id>`, with its aai-cli store in `aai-cli` below it and the shared gog shim in `/home/node`.
+- Changed: the 400 "Only Hermes Agents can hold Bots" is gone. No schema or contract change. Agent Memory needs no API rule; the memory tool per Bot comes with the runtime slices.
+- Follow-up: the multi-agent configuration builders.
+
+### 2026-11-11 — AF-445 — Bots share their parent's runtime
+
+- Delivered: migration `865ce7d7db04`. `trg_agent_bot_parent` now requires a Bot to use its Parent Agent's runtime, Hermes or OpenClaw, and refuses changing a Parent Agent's runtime while it has Bots. Downgrade restores the Hermes-only rule without rechecking existing rows.
+- Changed: schema rule only; no model or API change.
+- Follow-up: Bot creation for OpenClaw Parent Agents.
+
+### 2026-11-11 — AF-445 — OpenClaw Bots documentation
+
+- Delivered: the OpenClaw Bots contract in the feature doc, the runtime-neutral Bot terms, the ADR, and the OpenClaw spike evidence.
+- Changed: docs only. `CONTEXT.md` drops the superseded rule that a Bot cannot share a Platform with its Parent Agent.
+- Follow-up: the migration letting a Parent Agent and its Bots share either runtime.
 
 ### 2026-11-09 — AF-425 — Staging merge
 

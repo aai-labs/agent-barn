@@ -2288,11 +2288,11 @@ def test_start_agent_deployment_runs_init_script():
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the Deployment command runs start.sh"):
+        with then("the Deployment command runs start.sh under tini"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             deployment = k8s.create_deployment.call_args.args[1]
             command = deployment.spec.template.spec.containers[0].command
-            assert_that(command, equal_to(["sh", "/app/config/start.sh"]))
+            assert_that(command, equal_to(["/usr/bin/tini", "--", "sh", "/app/config/start.sh"]))
 
 
 def test_start_agent_uses_default_model_when_empty():
