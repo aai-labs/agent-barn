@@ -513,7 +513,8 @@ runs; the runs remain readable as described under
 [Ownership and authority](#ownership-and-authority). Hard Agent deletion cascades
 that Agent's runs, and Organization deletion cascades definitions and runs. Active runs
 retain their checkpoint summaries. Settled inputs, checkpoints, content-bearing
-history and approval commands and guidance expire after the module-owned 90-day
+history, approval commands and guidance, and notes at Approval steps (including the
+note quoted in a rejected run's reason) expire after the module-owned 90-day
 retention period, while run status and metadata (including who decided each
 approval, and when) remain. File retention and purge are independent and follow the
 [shared artifact lifecycle](agent-artifacts.md#retention-deletion-and-recovery).

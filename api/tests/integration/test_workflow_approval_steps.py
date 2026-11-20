@@ -6,7 +6,7 @@ operation answers 403.
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,11 +15,14 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.repository import AgentRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_VIEWER_ROLE_ID
+from api.domains.workflows import config as workflow_config
 from api.domains.workflows.models import WorkflowVersion
-from api.domains.workflows.run_models import AttemptResult, WorkflowCheckpoint, WorkflowStepApproval
+from api.domains.workflows.run_models import AttemptResult, WorkflowCheckpoint, WorkflowRun, WorkflowStepApproval
 from api.domains.workflows.run_repository import WorkflowRunRepository
 from api.domains.workflows.runtime_service import REVISION_INSTRUCTIONS, WorkflowRuntimeService
 from api.tests.core.givenpy import given
+from api.tests.integration.test_workflow_approvals import _decide as _decide_command
+from api.tests.integration.test_workflow_approvals import _raise as _raise_command
 from api.tests.integration.test_workflow_runs import _RUN_GIVEN, attempt, start
 from api.tests.integration.test_workflows import auth, base, post_draft, switch_member
 from api.tests.steps.agent import there_is_agent_access
@@ -252,6 +255,28 @@ def test_requesting_changes_reruns_the_step_before_with_the_notes_then_asks_agai
         assert_that(packet, is_not(contains_string("First draft")))
 
 
+def test_a_step_run_again_does_not_continue_a_command_decided_in_its_earlier_round() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context, _saved(context, DRAFT, REVIEW, PUBLISH))
+        run_id = response.json()["id"]
+        repository, row, token = attempt(context, run_id)
+        request_id = _raise_command(context, row, token)
+        # Approved while live; the step then finishes without the runtime confirming the release.
+        assert_that(_decide_command(context, run_id, request_id, "approve").status_code, equal_to(200))
+        repository.complete(row.id, token, AttemptResult(summary="First draft", criteria_met=True))
+        waiting = _run(context, run_id)["step_approval"]
+        _decide(context, run_id, waiting["id"], "request_changes", "Shorten the intro")
+
+        repository, row, token = attempt(context, run_id)
+        handoff = context.injector.get(WorkflowRuntimeService).handoff(row.id, token)
+        # A fresh session with the notes, not the earlier round's session told to run the command again.
+        assert_that(handoff["resume"], equal_to(False))
+        assert_that(handoff["prompt"], contains_string(REVISION_INSTRUCTIONS))
+        assert_that(handoff["prompt"], is_not(contains_string('"continuation"')))
+        assert_that(_history(context, run_id)[-1], equal_to("ATTEMPT_STARTED"))
+        assert_that(_run(context, run_id)["state"], equal_to("RUNNING"))
+
+
 # --- Rejecting -------------------------------------------------------------------------------------------------
 
 
@@ -272,6 +297,21 @@ def test_rejecting_settles_the_run_as_rejected_with_the_reason() -> None:
         settled = context.client.get(base(context) + "/workflow-runs?status=settled", headers=auth(context)).json()
         assert_that([item["id"] for item in settled["items"]], equal_to([run["id"]]))
         assert_that(_decide(context, run["id"], run["step_approval"]["id"], "approve").status_code, equal_to(409))
+
+
+def test_expiring_a_rejected_runs_content_removes_the_note_from_its_reason() -> None:
+    with given(_RUN_GIVEN) as context:
+        run = _waiting_run(context, DRAFT, REVIEW, PUBLISH)
+        _decide(context, run["id"], run["step_approval"]["id"], "reject", "Wrong quarter")
+        with Session(context.postgres_delegate.engine) as session:
+            stored = session.get_one(WorkflowRun, UUID(run["id"]))
+            stored.settled_at = datetime.now(UTC) - timedelta(days=workflow_config.HISTORY_RETENTION_DAYS + 1)
+            session.add(stored)
+            session.commit()
+        context.injector.get(WorkflowRunRepository).expire_content()
+        expired = _run(context, run["id"])
+        assert_that(expired["reason"], equal_to("Rejected at step 2"))
+        assert_that([item["note"] for item in expired["step_approvals"]], equal_to([None]))
 
 
 # --- Fencing ---------------------------------------------------------------------------------------------------

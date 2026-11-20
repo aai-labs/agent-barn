@@ -668,6 +668,7 @@ class WorkflowRunRepository:
             .order_by(col(WorkflowStepApproval.round).desc())
             .limit(1)
         ).one_or_none()
+        # Defence in depth: the step before an Approval step runs again only after Request changes.
         if requested is None or requested.state != "CHANGES_REQUESTED":
             return None
         previous = session.exec(
@@ -1016,6 +1017,7 @@ class WorkflowRunRepository:
                 or approval.run_id != run.id
                 or approval.state != "WAITING"
                 or run.state != "AWAITING_APPROVAL"
+                # Defence in depth: a waiting round always matches the run's state and step today.
                 or run.next_step != approval.step_index
             ):
                 raise WorkflowConflict("This approval step is no longer awaiting a decision")
@@ -1048,6 +1050,18 @@ class WorkflowRunRepository:
                         col(WorkflowCheckpoint.superseded_at).is_(None),
                     )
                     .values(superseded_at=now, updated_at=now)
+                )
+                # A command decided in an earlier round belongs to that round's session; the fresh
+                # session must not continue it, even when the runtime never confirmed its release.
+                session.exec(
+                    sa.update(WorkflowApprovalRequest)
+                    .where(
+                        col(WorkflowApprovalRequest.run_id) == run.id,
+                        col(WorkflowApprovalRequest.step_index) == reviewed,
+                        col(WorkflowApprovalRequest.state).in_(("APPROVED", "DECLINED")),
+                        col(WorkflowApprovalRequest.continued_by_attempt_id).is_(None),
+                    )
+                    .values(continued_by_attempt_id=WorkflowApprovalRequest.attempt_id, updated_at=now)
                 )
                 run.next_step, run.state = reviewed, "QUEUED"
                 run.reason = None
@@ -1226,6 +1240,9 @@ class WorkflowRunRepository:
             for run in settled:
                 run.inputs = {}
                 run.content_expired = True
+                if run.state == "REJECTED":
+                    # The reason quotes the decider's note; a rejected run stops at its Approval step.
+                    run.reason = f"Rejected at step {run.next_step + 1}"
                 session.add(run)
                 session.exec(sa.delete(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run.id))
                 session.exec(

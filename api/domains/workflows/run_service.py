@@ -205,6 +205,7 @@ class WorkflowRunService:
             (approval.state == "LIVE" and run.state == "RUNNING" and approval.live_until > datetime.now(UTC))
             or (approval.state == "PARKED" and run.state == "AWAITING_APPROVAL")
         )
+        # Defence in depth: callers pass only a waiting round, and a run waits at it while Awaiting approval.
         if step_approval is not None and step_approval.state == "WAITING" and run.state == "AWAITING_APPROVAL":
             return ["decide_step", "cancel"]
         return ["decide", "cancel"] if decidable else ["cancel"]
