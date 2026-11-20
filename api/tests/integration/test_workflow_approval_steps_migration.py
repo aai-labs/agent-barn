@@ -14,7 +14,7 @@ from api.tests.integration.test_workflow_approval_steps import DRAFT, REVIEW, _d
 from api.tests.integration.test_workflow_runs import _RUN_GIVEN, attempt
 
 REVISION = "b7e2c41d9a63"
-PREVIOUS = "0a07b0b57b62"
+PREVIOUS = "c87b17ccfe1a"
 
 
 def _engine(context):

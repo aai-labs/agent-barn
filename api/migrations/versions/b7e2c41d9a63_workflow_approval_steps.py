@@ -1,14 +1,14 @@
 """Approval steps: rounds at an Approval step, step results per round and the Rejected run state.
 
 Revision ID: b7e2c41d9a63
-Revises: 0a07b0b57b62
+Revises: c87b17ccfe1a
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b7e2c41d9a63"
-down_revision: str | None = "0a07b0b57b62"
+down_revision: str | None = "c87b17ccfe1a"
 branch_labels: str | None = None
 depends_on: str | None = None
 
