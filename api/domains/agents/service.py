@@ -4043,6 +4043,11 @@ class AgentService:
                 failures.append((agent, exc))
         return restarted, failures
 
+    def live_agent_ids(self, organization_id: UUID) -> list[UUID]:
+        """An Organization's non-deleted Agents. Background work only (the scheduled
+        anomaly check): no caller and no authorization scope."""
+        return self.repository.find_live_ids_by_org(organization_id)
+
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
         deletion) to decide whether an org can be safely torn down."""
