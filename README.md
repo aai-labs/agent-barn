@@ -2,22 +2,42 @@
 
 <img src=".github/assets/agent-barn-logo.webp" alt="Agent Barn" width="96">
 
-# Agent Barn
+<a id="agent-barn"></a>
+
+# Agent Barn — self-hosted AI agent control plane
 
 **AI coworkers in Slack, Microsoft Teams, Telegram, and Discord, running on your infrastructure.**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2)](https://discord.gg/A3vJF5ZKnu)
 
-[Website](https://agentbarn.dev) · [Docs](https://agentbarn.dev/guides) · [Recipes](https://agentbarn.dev/recipes) · [Discord](https://discord.gg/A3vJF5ZKnu)
+[Website](https://agentbarn.dev) · [Docs](https://agentbarn.dev/guides) · [Quick start](#quick-start) · [Discord](https://discord.gg/A3vJF5ZKnu)
 
 </div>
 
 ---
 
-Agent Barn is an open-source control plane for AI agents. Define an agent once,
-connect it to the tools your team already uses, and run it in your own
-Kubernetes cluster. No seat licence, no second workspace to check.
+Agent Barn is an open-source, self-hosted AI agent control plane for teams that
+want to operate OpenClaw and Hermes agents on their own Kubernetes infrastructure.
+Connect agents to Slack, Microsoft Teams, Telegram, or Discord; give each a role,
+model, and tool access; then review its activity and costs from one place.
+
+![Agent Barn workflow run view with two completed steps and a final summary](docs/features/agent-workflows/evidence/af-389/05-completed.png)
+
+*UI preview using synthetic Playwright fixtures. The screenshot illustrates the
+workflow interface, not a live model run or a performance benchmark.
+[Capture context](docs/features/agent-workflows/evidence/af-389/README.md).*
+
+| Start with | Configure | Check the result |
+| --- | --- | --- |
+| Turn a Slack request into a Jira task | Jira Task Helper template, a Slack Connection, and a scoped Jira credential | Review the draft before confirming creation; check the resulting issue key. |
+| Review a pull request | PR Reviewer template and access to the intended repository | Read the review and compare its findings with the actual diff. |
+| Report on team activity | General Purpose agent with access to the chosen source systems | Ask for a bounded report with source links; verify its facts and per-agent cost. |
+
+These are setup examples, not preconfigured integrations or guaranteed outcomes.
+[Follow the workflow walkthroughs](docs/use-cases.md),
+[install locally](#quick-start), or explore
+[managed plans and pilots](https://agentbarn.dev/pricing).
 
 - **Talk to your tools.** Agents live in Slack, Microsoft Teams, Telegram, and Discord.
 - **A model per agent.** Each gets its own virtual key on a LiteLLM proxy in your namespace.
@@ -35,6 +55,8 @@ Credentials are encrypted at rest in your own PostgreSQL.
 
 ## Contents
 
+- [Common questions](#common-questions)
+- [Workflow walkthroughs](docs/use-cases.md)
 - [Quick start](#quick-start) — [before you begin](#before-you-begin), then six steps to a running agent
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
@@ -42,6 +64,36 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step), [connecting OneDrive](#connecting-onedrive-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
+
+## Common questions
+
+### How do I run OpenClaw and Hermes together?
+
+Choose a runtime per Agent. Agent Barn manages their Kubernetes resources,
+configuration, Skills, and lifecycle in the same control plane. It does not
+replace either runtime, and their command-approval behavior differs.
+[Runtime selection and boundaries](docs/use-cases.md#run-openclaw-and-hermes-together).
+
+### How do I connect a Slack agent to Jira?
+
+Connect Slack for messaging and attach a separate Jira credential and Skill for
+tool access. The Jira Task Helper drafts a ticket and asks for confirmation
+before creating it. [Slack-to-Jira walkthrough](docs/use-cases.md#turn-a-slack-request-into-a-jira-task).
+
+### How do I track costs separately for each AI agent?
+
+Each Agent has its own LiteLLM virtual key. Imported cost records attribute calls
+to an Agent and Organization; recent calls can take time to appear after cost
+synchronization. [Cost checks and limits](docs/use-cases.md#track-per-agent-model-costs).
+
+### What does Agent Barn add to running an agent runtime directly?
+
+Agent Barn adds shared administration: Organizations, Agent Access, reusable
+Templates and Skills, Kubernetes lifecycle management, conversation and tool-call
+history, and per-agent spend reporting. Your team still operates the cluster,
+connected tools, and model-provider configuration.
+[Architecture](docs/architecture/system-map.md) ·
+[Self-hosting](https://agentbarn.dev/guides/self-hosting).
 
 ## Quick start
 
@@ -248,8 +300,8 @@ bootstrap the platform lineages once; after that, new versions are authored
 through the platform admin flow, and organisations fork or override them per
 agent. Details:
 [`docs/features/templates-and-skills.md`](docs/features/templates-and-skills.md).
-Each template has a guided setup at
-[agentbarn.dev/recipes](https://agentbarn.dev/recipes).
+See [Templates and Skills documentation](https://agentbarn.dev/guides/templates-and-skills/templates)
+for the template model and [workflow walkthroughs](docs/use-cases.md) for setup examples.
 
 ### Skills
 
@@ -609,119 +661,9 @@ in the [testing guidelines](docs/guidelines/testing.md).
 
 ### Troubleshooting
 
-Symptoms you're likely to hit once, with the actual cause.
-
-<details>
-<summary><b>API exits at startup with <code>500: Error while initializing startup data</code></b></summary>
-
-Scroll up in the log for the real error. The usual cause is the password in
-`PLATFORM_ADMIN_CREDENTIALS` failing the API's own policy (≥8 characters, upper,
-lower, digit) while bootstrapping the platform admin.
-
-</details>
-
-<details>
-<summary><b>Containerized API can't reach the cluster: <code>x509: certificate is valid for 127.0.0.1, ... not host.docker.internal</code></b></summary>
-
-`kubeconfig-internal.yaml` dials the API server by that hostname and verifies the
-certificate, so the name has to be in the cert's SAN list. A cluster **created
-before this was fixed** may carry the old certificate — `./stop.sh --clean` then
-`./run.sh` reissues it. Host mode (`make dev-api`) is immune because it connects
-to `127.0.0.1`.
-
-</details>
-
-<details>
-<summary><b>Starting an agent fails with <code>Invalid kube-config file. No configuration found.</code></b></summary>
-
-The configured kubeconfig path doesn't resolve to a real file — either
-`API_K8S_KUBECONFIG_PATH`/`K8S_KUBECONFIG_PATH` is unset, or it's a relative path
-resolved against the wrong working directory. `run.sh` sets
-`API_K8S_KUBECONFIG_PATH` for you; in native mode `K8S_KUBECONFIG_PATH` must be
-relative to `api/` (the directory `make dev-api` runs from) or absolute. Verify
-inside the container:
-
-```bash
-docker exec aai_api ls -l "$(grep '^API_K8S_KUBECONFIG_PATH=' .env | cut -d= -f2-)"
-```
-
-It must be `/app/.k3d/kubeconfig-internal.yaml` — `compose.yml` mounts `./.k3d`
-read-only at `/app/.k3d`.
-
-</details>
-
-<details>
-<summary><b>Agent pod stuck in <code>ErrImagePull</code> / <code>ImagePullBackOff</code></b></summary>
-
-The base image for that tag isn't in _that_ cluster. Pods run
-`imagePullPolicy=IfNotPresent` against a private registry, so an image that was
-never imported cannot be pulled. Compare what's in the cluster against what the
-API asks for:
-
-```bash
-docker exec k3d-${K3D_CLUSTER:-agentfarm-dev}-server-0 crictl images | grep -E 'openclaw|hermes'
-grep -E '^(OPENCLAW|HERMES)_IMAGE=' .env
-```
-
-Fix by running `./run.sh` again (it reloads any image missing from the cluster),
-or `bash docker/k3d/k3d-load-images.sh` directly with the same `K3D_CLUSTER`.
-
-A second, less obvious cause: an image that _was_ imported can still disappear
-later. Imported images are unreferenced whenever no agent is running one, and
-kubelet garbage-collects unreferenced images under disk pressure (seen at
-`usage=87 highThreshold=85` on a constrained host). With
-`imagePullPolicy=IfNotPresent` against a private registry and no pull secret
-seeded locally, a GC'd image can't be re-pulled — only reimported.
-`docker system df` / `docker stats --no-stream` will show whether disk pressure
-is the actual trigger before you re-run the fix above.
-
-</details>
-
-<details>
-<summary><b>Warning <code>FailedToRetrieveImagePullSecret (registry-pull-secret)</code> repeating on a pod</b></summary>
-
-Expected locally and harmless on its own — the local flow imports images instead
-of pulling, and nothing seeds that secret. It becomes the real error only when
-the image is genuinely absent, in which case you'll also see `ErrImagePull`
-above.
-
-</details>
-
-<details>
-<summary><b>Agent pod <code>CrashLoopBackOff</code> with <code>OOMKilled</code> / exit code 137</b></summary>
-
-Hermes and OpenClaw pods request `320Mi` and have a `1Gi` memory limit. Inspect
-the pod with `kubectl -n agent-farm describe pod POD_NAME` to see whether it
-hit that limit. Exit code 137 can also result from memory pressure on the k3d
-node or Docker VM; check `docker stats --no-stream` and the Docker Desktop
-memory allocation too.
-
-</details>
-
-<details>
-<summary><b>Agent runs but never answers, or its conversations and tool calls stay empty</b></summary>
-
-Both paths go through the host, so a loopback address in `.env` resolves to the
-pod itself. `AGENT_LITELLM_BASE_URL` must be
-`http://host.docker.internal:<litellm port>` — it's handed to the pod as
-`LITELLM_PROXY_TARGET` and used by the in-pod proxy on `:8090` that the runtime
-actually talks to. For empty activity, check ingest is reachable (see **Runtime
-telemetry** above).
-
-</details>
-
-<details>
-<summary><b>A base-image build crawls or times out fetching Debian packages</b></summary>
-
-The default archive CDN has likely handed you a degraded edge (seen at ~30KB/s,
-stalling the build for over an hour). Point the build at another full mirror — it
-must carry both `/debian` and `/debian-security`:
-
-```bash
-APT_MIRROR=mirror.csclub.uwaterloo.ca bash docker/k3d/k3d-load-images.sh
-```
-
-</details>
+See [local startup troubleshooting](docs/guidelines/local-troubleshooting.md)
+for bootstrap passwords, kubeconfig/certificate errors, image pulls, memory
+pressure, missing runtime activity, and slow package downloads.
 
 ## Deploying to Kubernetes
 
@@ -864,6 +806,11 @@ at `/llms.txt`. See the [API quickstart](api/developer_docs/quickstart.md) for
 a Bearer-token example.
 
 ## Getting help and contributing
+
+New contributors can browse [good first issues](https://github.com/aai-labs/agent-barn/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+and [help wanted](https://github.com/aai-labs/agent-barn/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22).
+Read the [contribution process](CONTRIBUTING.md#choose-a-first-contribution) before starting.
+To follow shipped changes, choose **Watch → Custom → Releases** on this repository.
 
 Support, issue, discussion, and pull-request routes are collected in
 [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately by

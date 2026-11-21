@@ -34,6 +34,21 @@ You do not need to write code to help.
 Search existing issues and discussions before opening a new one. If you are not
 sure whether a problem is a bug, ask in Discord first rather than opening an issue.
 
+### Choose a first contribution
+
+Browse [good first issues](https://github.com/aai-labs/agent-barn/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+and [help wanted](https://github.com/aai-labs/agent-barn/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22).
+An empty list means no tasks are currently advertised under that label.
+Comment on an open issue before starting so a maintainer can confirm scope and
+avoid duplicate work. A beginner task should name its maintainer sponsor, starting
+files, expected result, and verification steps. Do not post credentials or customer
+data in examples or evidence.
+
+Maintainers can review the [starter-task drafts](docs/contributing/starter-tasks.md)
+and follow the [publication checklist](docs/guidelines/repository-discovery.md#publish-approachable-contributor-tasks).
+Drafts are not assigned work or promises of support until a sponsor agrees and an
+issue is opened.
+
 ### Report a bug
 
 Include enough information for another person to reproduce the problem:
