@@ -15,6 +15,7 @@ import { useOrganizationSwitch } from "@/features/organizations/hooks/use-organi
 import { useRailModel } from "../hooks/use-rail-model";
 import { PLATFORM_RAIL_BACKGROUND, RAIL_BACKGROUND, type NavItem } from "../nav-model";
 import { PanelLink } from "./context-panel";
+import { LinkPendingHint } from "./link-pending-hint";
 
 const PRIMARY_COUNT = 3;
 
@@ -79,10 +80,11 @@ function BarLink({ item, idle }: { item: NavItem; idle: string }) {
     <Link
       href={item.href}
       aria-current={item.active ? "page" : undefined}
-      className={`flex min-h-[60px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[10.5px] font-medium ${item.active ? "text-white" : idle}`}
+      className={`relative flex min-h-[60px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[10.5px] font-medium ${item.active ? "text-white" : idle}`}
     >
       <Icon size={20} aria-hidden />
       <span className="max-w-full truncate">{item.label}</span>
+      <LinkPendingHint />
     </Link>
   );
 }
