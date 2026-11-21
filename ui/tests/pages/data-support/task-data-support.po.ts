@@ -8,6 +8,10 @@ export const MOCK_TASK_ID = "aaaaaaaa-0000-4000-8000-0000000000a1";
 export const MOCK_TASK_FILE_ID = "aaaaaaaa-0000-4000-8000-0000000000f1";
 export const MOCK_TASK_ARTIFACT_ID = "aaaaaaaa-0000-4000-8000-0000000000c1";
 
+// Relative to now: the Tasks pages show the last 30 days by default, so a fixed date ages out of view.
+const TASK_STARTED = Date.now() - 24 * 60 * 60 * 1000;
+const minutesIn = (minutes: number) => new Date(TASK_STARTED + minutes * 60 * 1000).toISOString();
+
 const MOCK_TASK = {
   id: MOCK_TASK_ID,
   agent_id: MOCK_AGENT_ID,
@@ -15,8 +19,8 @@ const MOCK_TASK = {
   description: "Match every March invoice to a payment",
   status: "done",
   origin: "agent",
-  created_at: "2026-10-20T09:00:00Z",
-  updated_at: "2026-10-20T09:30:00Z",
+  created_at: minutesIn(0),
+  updated_at: minutesIn(30),
 };
 
 /** A Task as the lists return it, with what it produced. */
@@ -33,7 +37,7 @@ export function mockTask(overrides: Json = {}): Json {
 export function mockTaskDetail(overrides: Json = {}): Json {
   return {
     ...MOCK_TASK,
-    notes: [{ id: "aaaaaaaa-0000-4000-8000-0000000000b1", body: "Two invoices had no payment", created_at: "2026-10-20T09:20:00Z" }],
+    notes: [{ id: "aaaaaaaa-0000-4000-8000-0000000000b1", body: "Two invoices had no payment", created_at: minutesIn(20) }],
     files: [
       {
         id: MOCK_TASK_FILE_ID,
@@ -41,7 +45,7 @@ export function mockTaskDetail(overrides: Json = {}): Json {
         filename: "march-reconciliation.csv",
         content_type: "text/csv",
         size_bytes: 2048,
-        created_at: "2026-10-20T09:29:00Z",
+        created_at: minutesIn(29),
       },
     ],
     ...overrides,

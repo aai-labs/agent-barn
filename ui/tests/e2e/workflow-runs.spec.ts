@@ -411,6 +411,144 @@ test.describe("WF02 run progress and text results", () => {
     await expect(page.getByLabel("Approval required")).toBeVisible();
   });
 
+  test("a run waiting at an approval step shows what to check and the result, and approves it", async ({
+    page,
+  }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByRole("status").getByText("Awaiting approval")).toBeVisible();
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await expect(panel.getByRole("heading")).toHaveText("Approve step 1 before the run continues?");
+    await expect(panel.getByText("Step 1: Draft the report", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Check the numbers and the tone")).toBeVisible();
+    await expect(panel.getByText("Q3 pipeline")).toBeVisible();
+    await expect(
+      page.getByLabel("Step progress").getByText("Waiting for approval"),
+    ).toBeVisible();
+    // Notes are needed only to request changes.
+    await expect(panel.getByRole("button", { name: "Request changes" })).toBeDisabled();
+    await panel.getByRole("button", { name: "Approve" }).click();
+    await expect(panel).toHaveCount(0);
+    expect(support.stepDecisions).toEqual([{ decision: "approve" }]);
+    await expect(page.getByRole("status").getByText("Completed")).toBeVisible();
+  });
+
+  test("requesting changes sends the notes and the step shows its earlier round", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await panel.getByRole("textbox").fill("Use last quarter's numbers");
+    await panel.getByRole("button", { name: "Request changes" }).click();
+    await expect(panel).toHaveCount(0);
+    expect(support.stepDecisions).toEqual([
+      { decision: "request_changes", note: "Use last quarter's numbers" },
+    ]);
+    await expect(page.getByLabel("Run summary").getByRole("heading")).toHaveText("Waiting to start");
+
+    // The step ran again and the run waits for round 2.
+    support.earlierRounds = [
+      {
+        round: 1,
+        summary: "Draft round 1: the old numbers.",
+        artifacts: [],
+        completed_at: "2026-10-17T10:01:54Z",
+      },
+    ];
+    support.state = "AWAITING_APPROVAL";
+    await page.reload();
+    await expect(page.getByLabel("Approval step", { exact: true })).toContainText("round 2");
+    await expect(page.getByLabel("Approval step", { exact: true })).toContainText(
+      "“Use last quarter's numbers”",
+    );
+    await runs.selectStep("Step 1: Draft the report");
+    const detail = page.getByLabel("Step detail");
+    await expect(detail.getByText("Round 2: revised after changes were requested.")).toBeVisible();
+    await detail.getByText(/^Round 1 · /).click();
+    await expect(detail.getByText("Draft round 1: the old numbers.")).toBeVisible();
+  });
+
+  test("rejecting asks first, then the run reads as rejected with the reason", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await panel.getByRole("textbox").fill("Wrong quarter");
+    await panel.getByRole("button", { name: "Reject" }).click();
+    const dialog = page.getByRole("dialog", { name: "Reject this run?" });
+    await expect(dialog).toContainText("with your note as the reason");
+    await dialog.getByRole("button", { name: "Reject run" }).click();
+    expect(support.stepDecisions).toEqual([{ decision: "reject", note: "Wrong quarter" }]);
+    await expect(page.getByRole("status").getByText("Rejected")).toBeVisible();
+    const summary = page.getByLabel("Run summary");
+    await expect(summary.getByRole("heading")).toHaveText("Run rejected");
+    await expect(summary.getByText("Rejected at step 2: Wrong quarter")).toBeVisible();
+    await expect(page.getByLabel("Step progress").getByText("Rejected")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run again" })).toBeVisible();
+  });
+
+  test("an approval step offers only the decisions its author allowed", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    support.allowedDecisions = ["approve"];
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await expect(panel.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Request changes" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Reject" })).toHaveCount(0);
+    await expect(panel.getByText("Notes for Maya (optional)")).toBeVisible();
+  });
+
+  test("the approval decision sits in the approval step's pane, which the run opens on", async ({
+    page,
+  }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    const pane = page.getByLabel("Selected run view");
+    await expect(pane.getByLabel("Approval step", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Run summary")).toHaveCount(0);
+
+    await runs.selectStep("Step 1: Draft the report");
+    await expect(page.getByLabel("Approval step", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Step detail")).toBeVisible();
+
+    await page.getByRole("button", { name: "Run overview" }).click();
+    const summary = page.getByLabel("Run summary");
+    await expect(summary).toContainText("Step 2 waits for a decision on step 1.");
+    await summary.getByRole("button", { name: "Open approval step" }).click();
+    await expect(pane.getByLabel("Approval step", { exact: true })).toBeVisible();
+  });
+
+  test("Viewers see a waiting approval step but cannot decide it", async ({ page }) => {
+    support.approvalStep = true;
+    support.viewer = true;
+    support.state = "AWAITING_APPROVAL";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await expect(panel.getByText("Check the numbers and the tone")).toBeVisible();
+    await expect(panel.getByRole("button")).toHaveCount(0);
+    await expect(panel.getByText(/Ask someone who can edit Maya/)).toBeVisible();
+  });
+
+  test("the inbox lists a run waiting at an approval step and the badge counts it", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    const inbox = page.getByLabel("Waiting on your approval");
+    await expect(inbox.getByText("Approval step 2 · Review the draft")).toBeVisible();
+    await expect(inbox.getByText(/^Waiting · /)).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Workflows/ }).getByLabel("1 waiting on you"),
+    ).toBeVisible();
+    await inbox.getByRole("button", { name: "Review →" }).click();
+    await expect(page.getByLabel("Approval step", { exact: true })).toBeVisible();
+  });
+
   test("the Workflows page opens on runs, keeps New workflow and lists saved workflows", async ({ page }) => {
     support.state = "SUCCEEDED";
     const runs = new WorkflowRunsPage(page);

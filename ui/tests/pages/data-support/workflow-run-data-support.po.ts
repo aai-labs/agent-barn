@@ -2,6 +2,7 @@ import { type Page } from "@playwright/test";
 import { workflowFixture, WORKFLOW_ID } from "../../fixtures/workflows";
 import { artifactFixture } from "../../fixtures/artifacts";
 import { TEST_ORG_ID } from "../../constants";
+import UserContext from "../../fixtures/user-context.json";
 
 export const RUN_ID = "12345678-1234-4234-8234-123456789abc";
 export const RERUN_ID = "87654321-4321-4432-8432-cba987654321";
@@ -55,6 +56,71 @@ export class WorkflowRunDataSupport {
   defaultAgentId: string | null = null;
   /** Overrides the step list with this many-step progression (for walkthrough captures). */
   stepStates: string[] | null = null;
+  /** The run's workflow is an Agent step followed by an Approval step, waiting or decided. */
+  approvalStep = false;
+  /** Rounds at the Approval step, oldest first; the last one waits while the run does. */
+  stepApprovals: Record<string, unknown>[] = [];
+  /** Results of the reviewed step sent back with Request changes. */
+  earlierRounds: Record<string, unknown>[] = [];
+  stepDecisions: Record<string, unknown>[] = [];
+  /** The decisions the workflow's author offered at the Approval step. */
+  allowedDecisions = ["approve", "request_changes", "reject"];
+  /** The Approval step round the run waits at, as the API reads it. */
+  waitingRound(round = this.stepApprovals.length + 1) {
+    return {
+      id: `00000000-0000-4000-8000-0000000000d${round}`,
+      step_index: 1,
+      round,
+      state: "WAITING",
+      created_at: "2026-10-17T10:02:00Z",
+      decided_by_user_id: null,
+      decided_at: null,
+      note: null,
+    };
+  }
+  /** What a run of the reviewed workflow reads as, by the run's state. */
+  private reviewedRun(): Record<string, unknown> {
+    if (!this.approvalStep) return {};
+    const waiting = this.state === "AWAITING_APPROVAL";
+    const rounds = waiting ? [...this.stepApprovals, this.waitingRound()] : this.stepApprovals;
+    const round = rounds.length;
+    return {
+      next_step: this.state === "SUCCEEDED" ? 2 : this.state === "QUEUED" ? 0 : 1,
+      steps: [
+        {
+          id: "00000000-0000-4000-8000-0000000000e1",
+          name: "Draft the report",
+          type: "agent",
+          state: this.state === "QUEUED" ? "PENDING" : "COMPLETED",
+          ...stepTimes[0],
+          summary: this.state === "QUEUED" ? null : `Draft round ${this.earlierRounds.length + 1}: **Q3 pipeline** grew 12%.`,
+          artifacts: [],
+          round: this.earlierRounds.length + 1,
+          earlier_rounds: this.earlierRounds,
+        },
+        {
+          id: "00000000-0000-4000-8000-0000000000e2",
+          name: "Review the draft",
+          type: "approval",
+          state: waiting ? "WAITING" : this.state === "REJECTED" ? "REJECTED" : this.state === "SUCCEEDED" ? "COMPLETED" : "PENDING",
+          instructions: "Check the numbers and the tone",
+          allowed_decisions: this.allowedDecisions,
+          summary: this.state === "SUCCEEDED" ? "A person approved the previous step's result." : null,
+          round: round || null,
+        },
+      ],
+      final_summary: this.state === "SUCCEEDED" ? "Draft round 1: **Q3 pipeline** grew 12%." : null,
+      step_approval: waiting ? rounds.at(-1) : null,
+      step_approvals: rounds,
+      allowed_actions: this.viewer
+        ? []
+        : waiting
+          ? ["decide_step", "cancel"]
+          : ["SUCCEEDED", "REJECTED"].includes(this.state)
+            ? ["rerun"]
+            : ["cancel"],
+    };
+  }
   constructor(private page: Page) {}
   async intercept(agentId: string) {
     // A deleted Agent's files are gone with it, as the API answers.
@@ -147,10 +213,12 @@ export class WorkflowRunDataSupport {
       approval: this.approval,
       approvals: this.approvals,
       created_at: "2026-10-17T10:00:00Z",
-      settled_at: ["SUCCEEDED", "CANCELLED", "FAILED"].includes(this.state)
+      settled_at: ["SUCCEEDED", "CANCELLED", "FAILED", "REJECTED"].includes(this.state)
         ? "2026-10-17T10:02:18Z"
         : null,
       rerun_of_run_id: null,
+      step_approval: null,
+      step_approvals: [],
       // The server advertises Run again on settled runs and Cancel on the rest.
       allowed_actions: this.viewer
         ? []
@@ -159,6 +227,7 @@ export class WorkflowRunDataSupport {
           : ["LIVE", "PARKED"].includes(String(this.approval?.state))
             ? ["decide", "cancel"]
             : ["cancel"],
+      ...this.reviewedRun(),
       ...over,
     });
     const rerunRun = () =>
@@ -297,6 +366,22 @@ export class WorkflowRunDataSupport {
         await route.fulfill({ status: 202, json: rerunRun() });
       } else if (path.endsWith(RERUN_ID)) {
         await route.fulfill({ json: rerunRun() });
+      } else if (path.includes("/step-approvals/")) {
+        const body = route.request().postDataJSON();
+        this.stepDecisions.push(body);
+        const decided = {
+          ...this.waitingRound(),
+          state: { approve: "APPROVED", request_changes: "CHANGES_REQUESTED", reject: "REJECTED" }[
+            body.decision as "approve"
+          ],
+          decided_by_user_id: UserContext.id,
+          decided_at: "2026-10-17T10:03:00Z",
+          note: body.note ?? null,
+        };
+        this.stepApprovals = [...this.stepApprovals, decided];
+        this.state = { approve: "SUCCEEDED", request_changes: "QUEUED", reject: "REJECTED" }[body.decision as "approve"];
+        if (this.state === "REJECTED") this.runReason = `Rejected at step 2${body.note ? `: ${body.note}` : ""}`;
+        await route.fulfill({ json: run() });
       } else if (path.endsWith("/decision")) {
         const body = route.request().postDataJSON();
         this.decisions.push(body);
@@ -311,7 +396,12 @@ export class WorkflowRunDataSupport {
       else if (new URL(route.request().url()).searchParams.get("awaiting_decision") === "true") {
         this.awaitingQueries.push(new URL(route.request().url()).search);
         await route.fulfill({
-          json: page(["LIVE", "PARKED"].includes(String(this.approval?.state)) ? [run()] : []),
+          json: page(
+            ["LIVE", "PARKED"].includes(String(this.approval?.state)) ||
+              (this.approvalStep && this.state === "AWAITING_APPROVAL")
+              ? [run()]
+              : [],
+          ),
         });
       } else {
         const query = new URL(route.request().url()).searchParams;

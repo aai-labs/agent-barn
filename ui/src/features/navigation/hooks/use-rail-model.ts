@@ -18,6 +18,7 @@ import { useOrganizationBilling } from "@/features/billing/hooks/use-organizatio
 import { usePlatformView } from "@/features/organizations/hooks/use-platform-view";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useAwaitingApprovals } from "@/features/workflows/hooks/use-workflow-runs";
+import { waitsOnViewer } from "@/features/workflows/run-schemas";
 import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 
 import { PLATFORM_AREAS, isPlatformPageActive, type NavItem } from "../nav-model";
@@ -49,7 +50,7 @@ export function useRailModel(): RailModel {
   });
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
   // Workflows belong to the Organization and are open to every Member, where the
-  // installation offers them. The badge counts the approval requests the viewer may decide.
+  // installation offers them. The badge counts the approvals (commands and Approval steps) the viewer may decide.
   const inOrganization = Boolean(selectedOrganization) && !isPlatformView;
   const workflows = useWorkflowCapabilities(inOrganization).data?.authoring === true;
   // The rail is on every page, so its badge checks less often than the inbox itself.
@@ -99,9 +100,9 @@ export function useRailModel(): RailModel {
             href: `${orgBase}/workflows`,
             icon: Workflow,
             active: pathname.startsWith(`${orgBase}/workflows`),
-            // Only requests this viewer may decide are waiting on them.
+            // Only approvals this viewer may decide are waiting on them.
             badge:
-              awaiting.data?.items.filter((run) => run.allowedActions.includes("decide")).length || undefined,
+              awaiting.data?.items.filter(waitsOnViewer).length || undefined,
           },
         ]
       : []),
