@@ -2,6 +2,7 @@ import axios from "axios";
 import { camelizeKeys } from "humps";
 import { ApiError } from "../error/errors";
 import { handleError } from "../error/error-handler";
+import { isServerUnavailable } from "../error/server-unavailable";
 import { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { AuthConfig, AuthTokens } from "../types";
 
@@ -19,7 +20,7 @@ type AuthAwareRequestConfig = InternalAxiosRequestConfig & {
 function isRefreshRejected(error: unknown): boolean {
   if (!axios.isAxiosError(error) || !error.response) return false;
   const { status } = error.response;
-  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+  return status >= 400 && status < 500 && !isServerUnavailable(status);
 }
 
 export class AuthInterceptor {
