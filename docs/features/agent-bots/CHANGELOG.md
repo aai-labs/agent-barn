@@ -79,6 +79,16 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-22 — Shared SSH access — disabled startup compatibility
+
+- SSH startup discovers actual Parent/Bot signing credentials with system Python
+  before invoking the optional relay environment. Empty and unkeyed Bot manifests
+  no longer break Parents pinned to older images, including deleted-Bot cleanup.
+- Real container regressions execute both startup guards without the SSH interpreter
+  or third-party discovery dependencies. Keyed Parent/Bot runtime contracts also
+  verify discovery before native SSH, Git and file-transfer use. See
+  [SSH execution evidence](../ssh-access/EVIDENCE.md).
+
 ### 2026-11-21 — Shared SSH access — PR #376
 
 - Corrected SSH Apply & Restart to act on the Parent Agent, require its lifecycle

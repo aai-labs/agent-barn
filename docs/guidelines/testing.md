@@ -297,6 +297,7 @@ generated volume-owner init command in each runtime image as root, verify its
 resulting ownership and permissions, then use the runtime's configured user for a
 login-shell SSH command and each runtime's native terminal/exec tool, Git clone/commit/push/fetch, scp/sftp, socket ownership
 and mode, and revocation. They mount no private key into the runtime container.
+Both runtime suites also execute the actual startup guard with the optional SSH interpreter unavailable and no signing credentials, for empty and unkeyed Bot manifests. Discovery must use only the standard library. The normal-tool contracts verify credential discovery for keyed Parents and Bots.
 Each runtime runs the contract for an ordinary Agent, a Bot whose Parent Agent
 has no SSH keys, and a Bot sharing its Parent Agent's key. Signing audit events
 must name the calling Agent even with a shared key. The Bot cases exercise

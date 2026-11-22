@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
@@ -9,6 +10,7 @@ import docker
 import docker.errors
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from hamcrest import assert_that, equal_to, has_length, not_
 from testcontainers.postgres import PostgresContainer
 
 from api.core.config import Config
@@ -19,15 +21,16 @@ from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.runtime_tests.memory_helpers import selected_image
 from api.ssh_app import create_ssh_app
-from api.tests.core.givenpy import given
+from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import set_env_variable
 from api.tests.helpers.ssh_runtime import ssh_server, tls_listener
 from api.tests.integration.test_ssh import _GIVEN, assign, create_key, headers, path, ssh_audit_events
 from api.tests.steps.agent import there_is_an_agent
 
 
-def ssh_should_run(runtime: str, tmp_path: Path, *, with_bot: bool = False, shared_key: bool = False) -> None:
-    image = selected_image(runtime)
+@contextmanager
+def prepared_ssh_runtime(scenario, runtime: str, tmp_path: Path, *, with_bot: bool, shared_key: bool):
+    image = scenario.image
     root = Path(__file__).resolve().parents[2]
     with PostgresContainer("postgres:18", driver="psycopg2") as postgres:  # noqa: SIM117
         with given(
@@ -171,9 +174,7 @@ def ssh_should_run(runtime: str, tmp_path: Path, *, with_bot: bool = False, shar
                                     str(socket_root): {"bind": "/run/agentbarn-ssh", "mode": "rw"},
                                 },
                             )
-                            assert socket_root.stat().st_uid == int(uid)
-                            assert socket_root.stat().st_gid == int(gid)
-                            assert socket_root.stat().st_mode & 0o777 == 0o700
+                            socket_owner = socket_root.stat()
 
                             def run(refused: bool = False) -> bytes:
                                 return client.containers.run(
@@ -194,20 +195,72 @@ def ssh_should_run(runtime: str, tmp_path: Path, *, with_bot: bool = False, shar
                                     },
                                 )
 
+                            scenario.execute = run
+                            scenario.runtime_context = context
+                            scenario.uid, scenario.gid = int(uid), int(gid)
+                            scenario.socket_owner = socket_owner
                             try:
-                                result = json.loads(run())
-                            except docker.errors.ContainerError as exc:
-                                raise AssertionError((exc.stderr or b"").decode()) from None
-                            assert result["ssh"] and result["git"] and result["scp"] and result["sftp"]
-                            assert result["native_terminal"] is True
-                            assert result["bot"] is with_bot
-                            assert result["uid"] == int(uid)
-                            assert result["socket_mode"] == "0o600"
-                            issued = [
-                                event for event in ssh_audit_events(context) if event.event_name == "ssh.signing.issued"
-                            ]
-                            assert issued
-                            assert all(event.payload["agent_id"] == str(context.agent.id) for event in issued)
-                            repository.revoke(context.agent.id)
-                            assert json.loads(run(refused=True))["refused"] is True
-                            client.close()
+                                yield
+                            finally:
+                                client.close()
+
+
+def there_is_a_prepared_ssh_runtime(runtime, tmp_path, *, with_bot, shared_key):
+    def step(context):
+        return prepared_ssh_runtime(context, runtime, tmp_path, with_bot=with_bot, shared_key=shared_key)
+
+    return step
+
+
+def exercise_ssh_runtime(context):
+    try:
+        result = json.loads(context.execute())
+    except docker.errors.ContainerError as exc:
+        raise AssertionError((exc.stderr or b"").decode()) from None
+    runtime = context.runtime_context
+    issued = [event for event in ssh_audit_events(runtime) if event.event_name == "ssh.signing.issued"]
+    runtime.injector.get(SshRepository).revoke(runtime.agent.id)
+    refused = json.loads(context.execute(refused=True))
+    return {
+        "tools": result,
+        "refused": refused["refused"],
+        "uid": context.uid,
+        "gid": context.gid,
+        "owner_uid": context.socket_owner.st_uid,
+        "owner_gid": context.socket_owner.st_gid,
+        "directory_mode": context.socket_owner.st_mode & 0o777,
+        "audit_agents": [event.payload["agent_id"] for event in issued],
+        "agent_id": str(runtime.agent.id),
+    }
+
+
+def the_runtime_image_is_available(runtime):
+    def step(context):
+        context.image = selected_image(runtime)
+
+    return step
+
+
+def ssh_should_run(runtime: str, tmp_path: Path, *, with_bot: bool = False, shared_key: bool = False) -> None:
+    with given(
+        [
+            the_runtime_image_is_available(runtime),
+            there_is_a_prepared_ssh_runtime(runtime, tmp_path, with_bot=with_bot, shared_key=shared_key),
+        ]
+    ) as context:
+        with when("the runtime authenticates with ordinary tools before and after its signing grant is revoked"):
+            evidence = exercise_ssh_runtime(context)
+        with then("ordinary tools and the native terminal use the owning Agent's socket"):
+            for name in ("ssh", "git", "scp", "sftp", "native_terminal"):
+                assert_that(evidence["tools"][name], equal_to(True), name)
+            assert_that(evidence["tools"]["bot"], equal_to(with_bot))
+            assert_that(evidence["tools"]["uid"], equal_to(evidence["uid"]))
+            assert_that(evidence["tools"]["socket_mode"], equal_to("0o600"))
+        with then("the generated init command creates storage owned only by the runtime user"):
+            assert_that(evidence["owner_uid"], equal_to(evidence["uid"]))
+            assert_that(evidence["owner_gid"], equal_to(evidence["gid"]))
+            assert_that(evidence["directory_mode"], equal_to(0o700))
+        with then("audit identifies the caller and revocation prevents further authentication"):
+            assert_that(evidence["audit_agents"], not_(has_length(0)))
+            assert_that(set(evidence["audit_agents"]), equal_to({evidence["agent_id"]}))
+            assert_that(evidence["refused"], equal_to(True))

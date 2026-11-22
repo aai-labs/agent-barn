@@ -10,9 +10,6 @@ import time
 from pathlib import Path
 from uuid import UUID
 
-from websockets.asyncio.client import connect
-from websockets.typing import Subprotocol
-
 MAX_FRAME = 256 * 1024
 SUBPROTOCOL = "agentbarn.ssh-agent.v1"
 
@@ -72,6 +69,9 @@ class Relay:
         self.environment = environment
 
     async def handle(self, reader, writer):
+        from websockets.asyncio.client import connect
+        from websockets.typing import Subprotocol
+
         if self.active >= 8:
             writer.close()
             await writer.wait_closed()
@@ -173,6 +173,9 @@ async def serve_all(connections):
 def main():
     root = Path(os.environ.get("AGENTBARN_SSH_DIRECTORY") or "/run/agentbarn-ssh")
     connections = runtime_connections(root)
+    if sys.argv[1:] == ["--needed"]:
+        # Discovery uses only the standard library, including on pre-SSH images.
+        raise SystemExit(0 if connections else 1)
     if not connections:
         return
     if sys.argv[1:] == ["--wait"]:

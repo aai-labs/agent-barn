@@ -17,9 +17,9 @@ test.describe("Shared SSH access", () => {
     await ui.addGenerated("Deployment key");
     await ui.save();
     await expect(
-      page.getByRole("dialog", { name: "SSH credential saved" }),
+      ui.savedDialog(),
     ).toBeVisible();
-    await expect(page.getByLabel("SSH public key")).toContainText(
+    await expect(ui.publicKey()).toContainText(
       sshCredential.public_key,
     );
     expect(data.requests).toEqual([
@@ -31,7 +31,7 @@ test.describe("Shared SSH access", () => {
       },
     ]);
     await expect(
-      page.getByRole("textbox", { name: "Private key", exact: true }),
+      ui.privateKey(),
     ).toHaveCount(0);
   });
 
@@ -44,30 +44,23 @@ test.describe("Shared SSH access", () => {
     await data.openSettings();
     await ui.addGenerated("Imported key");
     await ui.chooseImport();
-    await ui
-      .editor()
-      .getByRole("textbox", { name: "Private key", exact: true })
-      .fill("test-private-input");
-    await ui
-      .editor()
-      .getByLabel("Passphrase (optional)")
-      .fill("test-passphrase");
+    await ui.enterPrivateKey("test-private-input", "test-passphrase");
     await ui.chooseUnrestricted();
     data.failure = "Invalid private key";
     await ui.save();
-    await expect(ui.editor().getByRole("alert")).toContainText(
+    await expect(ui.editorError()).toContainText(
       "Invalid private key",
     );
     await expect(
-      ui.editor().getByRole("textbox", { name: "Private key", exact: true }),
+      ui.privateKey(),
     ).toHaveValue("test-private-input");
     data.failure = "";
     await ui.save();
     await expect(
-      page.getByRole("dialog", { name: "SSH credential saved" }),
+      ui.savedDialog(),
     ).toBeVisible();
     await expect(
-      page.getByRole("textbox", { name: "Private key", exact: true }),
+      ui.privateKey(),
     ).toHaveCount(0);
     expect(data.requests[1]).toMatchObject({
       source: "import",
@@ -81,13 +74,14 @@ test.describe("Shared SSH access", () => {
     page,
   }) => {
     const data = new SshDataSupport(page);
+    const ui = new SshPage(page);
     await data.setup({ member: true, assigned: true });
     await data.openSettings();
     await expect(
-      page.getByRole("button", { name: "Production deployment", exact: false }),
+      ui.credentialButton("Production deployment"),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Add SSH credential", exact: true }),
+      ui.addButton(),
     ).toHaveCount(0);
   });
 
@@ -98,17 +92,14 @@ test.describe("Shared SSH access", () => {
     const ui = new SshPage(page);
     await data.setup({ assigned: true });
     await data.openAgent();
-    await ui
-      .section()
-      .getByRole("button", { name: "Edit", exact: true })
-      .click();
-    await ui.section().getByRole("checkbox").uncheck();
+    await ui.editAssignments();
+    await ui.detachKey();
     data.failure = "SSH assignments changed; refresh and try again";
     await ui.applyAssignments();
-    await expect(ui.section().getByRole("alert")).toContainText(
+    await expect(ui.assignmentError()).toContainText(
       "SSH assignments changed",
     );
-    await expect(ui.section().getByRole("checkbox")).not.toBeChecked();
+    await expect(ui.assignmentCheckbox()).not.toBeChecked();
     expect(data.assignmentRequests[0]).toEqual({
       credential_ids: [],
       expected_revision: 1,
@@ -126,13 +117,13 @@ test.describe("Shared SSH access", () => {
     }
     await data.setup({ assigned: true, bot: true });
     await data.openAgent();
-    await ui.section().getByRole("button", { name: "Edit", exact: true }).click();
+    await ui.editAssignments();
     await capture("01-bot-ssh-selection");
-    await ui.section().getByRole("button", { name: "Apply & Restart", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText("Parent Agent and all of its Bots");
+    await ui.requestApply();
+    await expect(ui.restartDialog()).toContainText("Parent Agent and all of its Bots");
     await capture("02-bot-shared-restart-confirmation");
-    await page.getByRole("dialog").getByRole("button", { name: "Apply & Restart", exact: true }).click();
-    await expect(ui.section().getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    await ui.confirmRestart();
+    await expect(ui.editButton()).toBeVisible();
     await capture("03-bot-ssh-applied");
     expect(data.assignmentRequests).toEqual([{
       credential_ids: [sshCredential.id], expected_revision: 1, restart: true,
@@ -144,8 +135,8 @@ test.describe("Shared SSH access", () => {
     const ui = new SshPage(page);
     await data.setup({ assigned: true, bot: true, parentCanRestart: false });
     await data.openAgent();
-    await ui.section().getByRole("button", { name: "Edit", exact: true }).click();
-    await expect(ui.section().getByRole("button", { name: "Apply & Restart", exact: true })).toBeDisabled();
+    await ui.editAssignments();
+    await expect(ui.applyButton()).toBeDisabled();
     expect(data.assignmentRequests).toEqual([]);
   });
 });

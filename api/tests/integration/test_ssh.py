@@ -16,7 +16,6 @@ from api.domains.events.models import OutboxMessage
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.ssh.protocol import string
 from api.domains.ssh.repository import SshRepository, token_digest
-from api.domains.ssh.signer import OpenSshSigner
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.ssh_app import SUBPROTOCOL, create_ssh_app
 from api.tests.core.givenpy import given, then, when
@@ -339,71 +338,133 @@ def test_ssh_configuration_injection_is_refused(hostname):
             assert_that(response.status_code, equal_to(422))
 
 
-def test_generation_revocation_and_readding_do_not_restore_old_authority():
-    with given(_GIVEN) as context:
-        key = create_key(context, mode="unrestricted").json()
-        assert assign(context, [key["id"]]).status_code == 200
-        token = activate(context, [key])
-        repository = context.injector.get(SshRepository)
-        assert len(repository.authorize(token_digest(token))[1]) == 1
-        assert assign(context, [], revision=1).status_code == 200
-        assert repository.authorize(token_digest(token))[1] == []
-        # Re-adding to a live Agent requires explicit restart; it cannot revive the old snapshot.
-        assert assign(context, [key["id"]], revision=2).status_code == 409
-        repository.revoke(context.agent.id)
-        from fastapi import HTTPException
+def there_is_an_active_signing_key(*, restricted=True, empty=False):
+    def step(context):
+        context.host = Ed25519PrivateKey.generate()
+        context.session_id = os.urandom(32)
+        host_public = context.host.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode()
+        policy = {"mode": "unrestricted"} if not restricted else {}
+        if restricted and not empty:
+            policy["servers"] = [
+                {"name": "prod", "hostname": "prod.example", "username": "deploy", "host_keys": [host_public]}
+            ]
+        there_are_shared_ssh_keys(**policy)(context)
+        the_ssh_keys_are_assigned()(context)
+        context.key = context.ssh_keys[0]
+        context.public = base64.b64decode(context.key["public_key"].split()[1])
+        context.token = activate(context, [context.key])
 
-        with pytest.raises(HTTPException):
-            repository.authorize(token_digest(token))
-
-
-def test_real_signer_restricts_host_account_and_all_keyring_mutations(tmp_path):
-    with given(_GIVEN) as context:
-        host = Ed25519PrivateKey.generate()
-        host_public = host.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode()
-        created = create_key(
-            context,
-            servers=[{"name": "prod", "hostname": "prod.example", "username": "deploy", "host_keys": [host_public]}],
-        ).json()
-        assert assign(context, [created["id"]]).status_code == 200
-        token = activate(context, [created])
-        public = base64.b64decode(created["public_key"].split()[1])
-        session = os.urandom(32)
-        client = TestClient(create_ssh_app(context.injector))
-        with client.websocket_connect(
-            "/ssh/v1/agent", subprotocols=[SUBPROTOCOL], headers={"Authorization": "Bearer " + token}
-        ) as ws:
-            ws.send_bytes(b"\x0b")
-            assert ws.receive_bytes()[0] == 12
-            ws.send_bytes(sign_request(public, session))
-            assert ws.receive_bytes() == b"\x05"
-            ws.send_bytes(bind(host, session))
-            assert ws.receive_bytes() == b"\x06"
-            ws.send_bytes(sign_request(public, session))
-            assert ws.receive_bytes()[0] == 14
-            ws.send_bytes(sign_request(public, session, b"root"))
-            assert ws.receive_bytes() == b"\x05"
-            for operation in [9, 17, 18, 19, 20, 21, 22, 23, 25, 26]:
-                ws.send_bytes(bytes([operation]))
-                assert ws.receive_bytes() == b"\x05"
-            ws.send_bytes(sign_request(public, session))
-            assert ws.receive_bytes()[0] == 14
-        delegate = context.injector.get(PostgresRepositoryDelegate)
-        with Session(delegate.engine) as database:
-            outcomes = database.exec(
-                select(OutboxMessage.event_name).where(col(OutboxMessage.event_name).like("ssh.signing.%"))
-            ).all()
-            assert outcomes.count("ssh.signing.issued") == 2
-            assert outcomes.count("ssh.signing.refused") == 2
+    return step
 
 
-def test_empty_restricted_policy_never_loads_unrestricted_key(tmp_path):
-    with given(_GIVEN) as context:
-        created = create_key(context).json()
-        key = context.injector.get(SshRepository).key(UUID(created["id"]), context.organization.id)
-        with OpenSshSigner([key], TEST_ENCRYPTION_KEY, str(tmp_path)) as signer:
-            response = signer.exchange(b"\x0b")
-            assert response == b"\x0c\x00\x00\x00\x00"
+def there_is_a_signing_connection(*, bound=False, wrong_host=False, limit=8):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def step(context):
+        from api.core.config import Config
+
+        context.injector.get(Config).ssh_max_agent_connections = limit
+        context.signing_client = TestClient(create_ssh_app(context.injector))
+        context.connection = {"subprotocols": [SUBPROTOCOL], "headers": {"Authorization": "Bearer " + context.token}}
+        with context.signing_client.websocket_connect("/ssh/v1/agent", **context.connection) as socket:
+            context.socket = socket
+            if bound:
+                host = Ed25519PrivateKey.generate() if wrong_host else context.host
+                assert_that(exchange(context, bind(host, context.session_id)), equal_to(b"\x06"))
+            yield
+
+    return step
+
+
+def exchange(context, payload):
+    context.socket.send_bytes(payload)
+    return context.socket.receive_bytes()
+
+
+def request_signature(context, user=b"deploy"):
+    return exchange(context, sign_request(context.public, context.session_id, user))
+
+
+def the_signing_credential_is_revoked():
+    def step(context):
+        context.injector.get(SshRepository).revoke(context.agent.id)
+
+    return step
+
+
+def authorize_signing_credential(context):
+    return context.injector.get(SshRepository).authorize(token_digest(context.token))
+
+
+def test_detaching_a_key_immediately_removes_its_applied_grant():
+    with given([*_GIVEN, there_is_an_active_signing_key(restricted=False)]) as context:
+        with when("the running Agent's key is detached"):
+            response = assign(context, [], revision=1)
+        with then("the old token no longer grants the key"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(authorize_signing_credential(context)[1], has_length(0))
+
+
+def test_readding_a_detached_key_does_not_restore_old_authority():
+    with given(
+        [*_GIVEN, there_is_an_active_signing_key(restricted=False), the_ssh_keys_have_been_detached()]
+    ) as context:
+        with when("the key is re-added without Apply & Restart"):
+            response = assign(context, [context.key["id"]], revision=2)
+        with then("the addition is refused and the old token remains without a grant"):
+            assert_that(response.status_code, equal_to(409))
+            assert_that(authorize_signing_credential(context)[1], has_length(0))
+
+
+def test_revoked_signing_credentials_are_refused():
+    from fastapi import HTTPException
+
+    with given(
+        [*_GIVEN, there_is_an_active_signing_key(restricted=False), the_signing_credential_is_revoked()]
+    ) as context:
+        with when("the old signing credential is authorized"):
+            with pytest.raises(HTTPException) as refused:
+                authorize_signing_credential(context)
+        with then("the runtime has no signing authority"):
+            assert_that(refused.value.status_code, equal_to(403))
+
+
+@pytest.mark.parametrize(
+    "bound,wrong_host,user,expected",
+    [(False, False, b"deploy", 5), (True, False, b"deploy", 14), (True, False, b"root", 5), (True, True, b"deploy", 5)],
+    ids=["unbound", "allowed", "wrong-account", "wrong-host"],
+)
+def test_restricted_signing_requires_a_verified_host_and_allowed_account(bound, wrong_host, user, expected):
+    with given(
+        [*_GIVEN, there_is_an_active_signing_key(), there_is_a_signing_connection(bound=bound, wrong_host=wrong_host)]
+    ) as context:
+        with when("the client requests an authentication signature"):
+            response = request_signature(context, user)
+        with then("OpenSSH enforces host and account constraints"):
+            assert_that(response[0], equal_to(expected))
+        with then("both authorization and the signing result are durably recorded"):
+            outcomes = [event.event_name for event in ssh_audit_events(context)]
+            assert_that(outcomes.count("ssh.signing.authorized"), equal_to(1))
+            assert_that(outcomes.count("ssh.signing.issued" if expected == 14 else "ssh.signing.refused"), equal_to(1))
+
+
+@pytest.mark.parametrize("operation", [9, 17, 18, 19, 20, 21, 22, 23, 25, 26])
+def test_keyring_mutations_are_refused_without_removing_the_allowed_key(operation):
+    with given([*_GIVEN, there_is_an_active_signing_key(), there_is_a_signing_connection(bound=True)]) as context:
+        with when("the client attempts to mutate the signer's keyring"):
+            response = exchange(context, bytes([operation]))
+        with then("the operation is refused and the original key still signs"):
+            assert_that(response, equal_to(b"\x05"))
+            assert_that(request_signature(context)[0], equal_to(14))
+
+
+def test_empty_restricted_policy_never_loads_an_unrestricted_key():
+    with given([*_GIVEN, there_is_an_active_signing_key(empty=True), there_is_a_signing_connection()]) as context:
+        with when("the client requests available identities"):
+            response = exchange(context, b"\x0b")
+        with then("the empty restricted policy exposes no signing identity"):
+            assert_that(response, equal_to(b"\x0c\x00\x00\x00\x00"))
 
 
 @pytest.mark.parametrize("surface", ["shared-keys", "agent-assignments"])
@@ -417,22 +478,20 @@ def test_ssh_credentials_cannot_be_read_without_authentication(surface):
             assert_that(response.status_code, equal_to(401))
 
 
-def test_normal_ssh_git_scp_sftp_through_real_tls_relay(tmp_path):
-    import importlib.util
-    import json
-    import subprocess
-    import sys
-    import time
+def there_is_a_real_ssh_destination(root):
+    from contextlib import contextmanager
 
     from api.domains.ssh.runtime import materialize
-    from api.tests.helpers.ssh_runtime import ssh_server, tls_listener
+    from api.tests.helpers.ssh_runtime import relay_client, ssh_server, tls_listener
 
-    with given(_GIVEN) as context:
-        created = create_key(context, mode="unrestricted").json()
-        with ssh_server(tmp_path / "server", created["public_key"]) as (port, host_public):
+    @contextmanager
+    def step(context):
+        there_are_shared_ssh_keys(mode="unrestricted")(context)
+        key = context.ssh_keys[0]
+        with ssh_server(root / "server", key["public_key"]) as (port, host_public):
             update = {
                 "expected_revision": 1,
-                "name": created["name"],
+                "name": key["name"],
                 "enabled": True,
                 "mode": "restricted",
                 "servers": [
@@ -445,90 +504,88 @@ def test_normal_ssh_git_scp_sftp_through_real_tls_relay(tmp_path):
                     }
                 ],
             }
-            assert (
-                context.client.put(
-                    path(context, "/" + created["id"]), headers=headers(context), json=update
-                ).status_code
-                == 200
+            response = context.client.put(path(context, "/" + key["id"]), headers=headers(context), json=update)
+            assert_that(response.status_code, equal_to(200))
+            the_ssh_keys_are_assigned()(context)
+            token = activate(context, [key])
+            keys = context.injector.get(SshRepository).runtime_keys(context.agent.id, context.organization.id)
+            with tls_listener(create_ssh_app(context.injector), root) as (url, ca):
+                context.artifacts = materialize(keys, enabled=True, url=url, token=token)
+                with relay_client(context.artifacts, ca, root) as relay:
+                    context.relay = relay
+                    yield
+
+    return step
+
+
+def run_ordinary_ssh_tools(context, root):
+    import subprocess
+
+    relay = context.relay
+    ssh = ["ssh", "-F", relay.config, relay.alias]
+    connections = [relay.run([*ssh, "printf ssh-connected"]) for _ in range(12)]
+    initialized = relay.run([*ssh, "git init --bare /tmp/fixture.git >/dev/null"])
+    clone = subprocess.run(
+        ["git", "clone", f"{relay.alias}:/tmp/fixture.git", str(root / "clone")],
+        env=relay.git_env,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    content = root / "report.txt"
+    content.write_text("transferred without a private key")
+    sent = relay.run(["scp", "-F", relay.config, str(content), f"{relay.alias}:/tmp/report.txt"])
+    received = root / "download.txt"
+    downloaded = relay.run(
+        ["sftp", "-F", relay.config, "-b", "-", relay.alias], input=f"get /tmp/report.txt {received}\n".encode()
+    )
+    return connections, [initialized, clone, sent, downloaded], received
+
+
+def test_normal_ssh_git_scp_sftp_through_real_tls_relay(tmp_path):
+    with given([*_GIVEN, there_is_a_real_ssh_destination(tmp_path)]) as context:
+        with when("ordinary SSH, Git and file-transfer tools use the real TLS relay"):
+            connections, transfers, received = run_ordinary_ssh_tools(context, tmp_path)
+        with then("repeated independent SSH sessions and all file-transfer operations succeed"):
+            for result in [*connections, *transfers]:
+                assert_that(result.returncode, equal_to(0), result.stderr.decode())
+            assert_that([result.stdout for result in connections], equal_to([b"ssh-connected"] * 12))
+            assert_that(received.read_text(), equal_to("transferred without a private key"))
+        with then("the Agent receives no private key"):
+            assert_that(str(context.artifacts), not_(contains_string("PRIVATE KEY")))
+
+
+def the_client_does_not_trust_the_server():
+    def step(context):
+        (context.relay.directory / "known_hosts").write_text("")
+
+    return step
+
+
+def test_ordinary_ssh_refuses_an_untrusted_server(tmp_path):
+    with given([*_GIVEN, there_is_a_real_ssh_destination(tmp_path), the_client_does_not_trust_the_server()]) as context:
+        with when("ordinary SSH connects without a trusted server key"):
+            result = context.relay.run(["ssh", "-F", context.relay.config, context.relay.alias, "true"])
+        with then("client host verification refuses the connection"):
+            assert_that(result.returncode, not_(equal_to(0)))
+            assert_that(result.stderr.decode(), contains_string("Host key verification failed"))
+
+
+def test_ordinary_ssh_refuses_revoked_credentials_even_when_client_trust_is_bypassed(tmp_path):
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_real_ssh_destination(tmp_path),
+            the_client_does_not_trust_the_server(),
+            the_signing_credential_is_revoked(),
+        ]
+    ) as context:
+        with when("the client bypasses local host checks after its signing token is revoked"):
+            result = context.relay.run(
+                ["ssh", "-F", context.relay.config, "-o", "StrictHostKeyChecking=no", context.relay.alias, "true"]
             )
-            assert assign(context, [created["id"]]).status_code == 200
-            token = activate(context, [created])
-            repository = context.injector.get(SshRepository)
-            keys = repository.runtime_keys(context.agent.id, context.organization.id)
-            with tls_listener(create_ssh_app(context.injector), tmp_path) as (url, ca):
-                artifacts = materialize(keys, enabled=True, url=url, token=token)
-                assert "PRIVATE KEY" not in str(artifacts)
-                relay = tmp_path / "ssh-agent-relay.py"
-                relay.write_text(artifacts.files["ssh-agent-relay.py"])
-                manifest = tmp_path / "profiles.json"
-                manifest.write_text(artifacts.files["ssh-client.json"])
-                spec = importlib.util.spec_from_file_location("ssh_relay_fixture", relay)
-                assert spec is not None and spec.loader is not None
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                root = tmp_path / "relay"
-                module.configure(root, str(manifest), tmp_path / "home/config")
-                env = {
-                    **os.environ,
-                    **artifacts.env,
-                    "SSH_AUTH_SOCK": str(root / "agent.sock"),
-                    "AGENTBARN_SSH_DIRECTORY": str(root),
-                    "AGENTBARN_SSH_CA_FILE": str(ca),
-                }
-                process = subprocess.Popen(
-                    [sys.executable, str(relay)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-                )
-                try:
-                    deadline = time.monotonic() + 10
-                    while not (root / "agent.sock").exists():
-                        assert process.poll() is None, "Relay must start"
-                        assert time.monotonic() < deadline
-                        time.sleep(0.02)
-                    alias = json.loads(manifest.read_text())[0]["alias"]
-                    config = str(root / "config")
-
-                    def run(command, *, check=True, **kwargs):
-                        result = subprocess.run(
-                            command, env=env, capture_output=True, timeout=30, check=False, **kwargs
-                        )
-                        if check:
-                            assert result.returncode == 0, result.stderr.decode()
-                        return result
-
-                    for _ in range(12):
-                        result = run(["ssh", "-vvv", "-F", config, alias, "printf ssh-connected"])
-                        assert result.stdout == b"ssh-connected"
-                    run(["ssh", "-F", config, alias, "git init --bare /tmp/fixture.git >/dev/null"])
-                    git_env = {**env, "GIT_SSH_COMMAND": f"ssh -vvv -F {config}"}
-                    clone = subprocess.run(
-                        ["git", "clone", f"{alias}:/tmp/fixture.git", str(tmp_path / "clone")],
-                        env=git_env,
-                        capture_output=True,
-                        timeout=30,
-                        check=False,
-                    )
-                    assert clone.returncode == 0, clone.stderr.decode()
-                    content = tmp_path / "report.txt"
-                    content.write_text("transferred without a private key")
-                    run(["scp", "-F", config, str(content), f"{alias}:/tmp/report.txt"])
-                    received = tmp_path / "download.txt"
-                    run(["sftp", "-F", config, "-b", "-", alias], input=f"get /tmp/report.txt {received}\n".encode())
-                    assert received.read_text() == content.read_text()
-                    # Client-side host checking and signer-side policy are independent.
-                    (root / "known_hosts").write_text("")
-                    refused = run(["ssh", "-F", config, alias, "true"], check=False)
-                    assert refused.returncode != 0
-                    assert b"Host key verification failed" in refused.stderr
-                    repository.revoke(context.agent.id)
-                    refused = run(["ssh", "-F", config, "-o", "StrictHostKeyChecking=no", alias, "true"], check=False)
-                    assert refused.returncode != 0
-                finally:
-                    process.terminate()
-                    process.wait(timeout=5)
-                    assert process.stderr is not None
-                    stderr = process.stderr.read().decode()
-                    if stderr:
-                        print("Relay diagnostics:", stderr)
+        with then("signer-side revocation still prevents authentication"):
+            assert_that(result.returncode, not_(equal_to(0)))
 
 
 def there_is_an_organization_member_with_agent_access(role_name):
@@ -587,55 +644,49 @@ def test_ssh_access_respects_organization_and_agent_authority(role_name, read_st
             assert_that(response.text, not_(contains_string("PRIVATE KEY")))
 
 
-def test_wrong_host_and_forged_bindings_fail_and_changed_policy_closes_live_socket():
+def forged_binding(context):
+    payload = bytearray(bind(context.host, context.session_id))
+    payload[-2] ^= 0xFF
+    return bytes(payload)
+
+
+def test_forged_session_binding_is_refused():
+    with given([*_GIVEN, there_is_an_active_signing_key(), there_is_a_signing_connection()]) as context:
+        with when("the client submits a forged host signature"):
+            response = exchange(context, forged_binding(context))
+        with then("OpenSSH rejects the session binding"):
+            assert_that(response, equal_to(b"\x05"))
+
+
+def the_active_key_policy_is_disabled():
+    def step(context):
+        update = {"name": context.key["name"], "enabled": False, "mode": "restricted", "expected_revision": 1}
+        response = context.client.put(path(context, "/" + context.key["id"]), headers=headers(context), json=update)
+        assert_that(response.status_code, equal_to(200))
+
+    return step
+
+
+def test_changed_policy_closes_the_existing_signing_connection():
     from starlette.websockets import WebSocketDisconnect
 
-    with given(_GIVEN) as context:
-        allowed = Ed25519PrivateKey.generate()
-        public = allowed.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode()
-        created = create_key(
-            context,
-            servers=[{"name": "allowed", "hostname": "allowed.example", "username": "deploy", "host_keys": [public]}],
-        ).json()
-        assert assign(context, [created["id"]]).status_code == 200
-        token = activate(context, [created])
-        client = TestClient(create_ssh_app(context.injector))
-        with client.websocket_connect(
-            "/ssh/v1/agent", subprotocols=[SUBPROTOCOL], headers={"Authorization": "Bearer " + token}
-        ) as ws:
-            wrong = Ed25519PrivateKey.generate()
-            session = os.urandom(32)
-            ws.send_bytes(bind(wrong, session))
-            assert ws.receive_bytes() == b"\x06"
-            ws.send_bytes(sign_request(base64.b64decode(created["public_key"].split()[1]), session))
-            assert ws.receive_bytes() == b"\x05"
-        with client.websocket_connect(
-            "/ssh/v1/agent", subprotocols=[SUBPROTOCOL], headers={"Authorization": "Bearer " + token}
-        ) as ws:
-            forged = bytearray(bind(allowed, os.urandom(32)))
-            forged[-2] ^= 0xFF
-            ws.send_bytes(bytes(forged))
-            assert ws.receive_bytes() == b"\x05"
-            update = {"name": created["name"], "enabled": False, "mode": "restricted", "expected_revision": 1}
-            assert (
-                context.client.put(
-                    path(context, "/" + created["id"]), headers=headers(context), json=update
-                ).status_code
-                == 200
-            )
-            ws.send_bytes(b"\x0b")
-            with pytest.raises(WebSocketDisconnect):
-                ws.receive_bytes()
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_active_signing_key(),
+            there_is_a_signing_connection(),
+            the_active_key_policy_is_disabled(),
+        ]
+    ) as context:
+        with when("the existing connection requests identities after a policy change"):
+            with pytest.raises(WebSocketDisconnect) as refused:
+                exchange(context, b"\x0b")
+        with then("the connection with the obsolete policy is closed"):
+            assert_that(refused.value.code, equal_to(1008))
 
 
-@pytest.mark.parametrize("failed_outcome", ["authorized", "issued"])
-def test_failed_audit_does_not_release_signature(monkeypatch, failed_outcome):
-    from starlette.websockets import WebSocketDisconnect
-
-    with given(_GIVEN) as context:
-        key = create_key(context, mode="unrestricted").json()
-        assert assign(context, [key["id"]]).status_code == 200
-        token = activate(context, [key])
+def audit_persistence_fails(monkeypatch, failed_outcome):
+    def step(context):
         repository = context.injector.get(SshRepository)
         original = repository.record_signing
 
@@ -645,63 +696,143 @@ def test_failed_audit_does_not_release_signature(monkeypatch, failed_outcome):
             original(state, key, outcome, request_id, host_fingerprint)
 
         monkeypatch.setattr(repository, "record_signing", fail_outcome)
-        with TestClient(create_ssh_app(context.injector)).websocket_connect(
-            "/ssh/v1/agent", subprotocols=[SUBPROTOCOL], headers={"Authorization": "Bearer " + token}
-        ) as ws:
-            ws.send_bytes(sign_request(base64.b64decode(key["public_key"].split()[1]), os.urandom(32)))
-            with pytest.raises(WebSocketDisconnect):
-                ws.receive_bytes()
+
+    return step
 
 
-def test_protocol_rejects_forwarding_malformed_frames_and_excess_connections():
+@pytest.mark.parametrize("failed_outcome", ["authorized", "issued"])
+def test_failed_audit_does_not_release_signature(monkeypatch, failed_outcome):
     from starlette.websockets import WebSocketDisconnect
 
-    from api.core.config import Config
-
-    with given(_GIVEN) as context:
-        key = create_key(context, mode="unrestricted").json()
-        assert assign(context, [key["id"]]).status_code == 200
-        token = activate(context, [key])
-        context.injector.get(Config).ssh_max_agent_connections = 1
-        client = TestClient(create_ssh_app(context.injector))
-        connection = {"subprotocols": [SUBPROTOCOL], "headers": {"Authorization": "Bearer " + token}}
-        with client.websocket_connect("/ssh/v1/agent", **connection) as ws:
-            with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ssh/v1/agent", **connection):
-                pass
-            for payload in [b"", b"\x0d", b"\x0bextra", b"\x1b" + string(b"unknown"), b"x" * (256 * 1024 + 1)]:
-                ws.send_bytes(payload)
-                assert ws.receive_bytes() == b"\x05"
-            forwarded = bind(Ed25519PrivateKey.generate(), os.urandom(32))[:-1] + b"\x01"
-            ws.send_bytes(forwarded)
-            assert ws.receive_bytes() == b"\x05"
-            ws.send_bytes(b"\x0b")
-            assert ws.receive_bytes()[0] == 12
-            metrics = client.get("/metrics").text
-            assert "agentbarn_ssh_connections 1.0" in metrics
-            assert token not in metrics and key["id"] not in metrics
-            context.injector.get(SshRepository).revoke(context.agent.id)
-            ws.send_bytes(b"\x0bextra")
-            with pytest.raises(WebSocketDisconnect):
-                ws.receive_bytes()
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_active_signing_key(restricted=False),
+            audit_persistence_fails(monkeypatch, failed_outcome),
+            there_is_a_signing_connection(),
+        ]
+    ) as context:
+        with when("a signature is requested while audit persistence fails"):
+            with pytest.raises(WebSocketDisconnect) as refused:
+                request_signature(context)
+        with then("the client receives no signature and the connection closes"):
+            assert_that(refused.value.code, equal_to(1011))
+            outcomes = [event.event_name for event in ssh_audit_events(context)]
+            assert_that(outcomes.count("ssh.signing.issued"), equal_to(0))
+            assert_that(outcomes.count("ssh.signing.authorized"), equal_to(0 if failed_outcome == "authorized" else 1))
 
 
-def test_downgrade_preserves_keys_until_explicitly_removed():
+@pytest.mark.parametrize(
+    "payload",
+    [b"", b"\x0d", b"\x0bextra", b"\x1b" + string(b"unknown"), b"x" * (256 * 1024 + 1)],
+    ids=["empty", "incomplete-signature", "trailing-data", "unknown-extension", "oversize"],
+)
+def test_malformed_agent_frames_are_refused_without_closing_the_connection(payload):
+    with given([*_GIVEN, there_is_an_active_signing_key(restricted=False), there_is_a_signing_connection()]) as context:
+        with when("the client sends a malformed or unsupported frame"):
+            response = exchange(context, payload)
+        with then("the frame is refused and the connection remains usable"):
+            assert_that(response, equal_to(b"\x05"))
+            assert_that(exchange(context, b"\x0b")[0], equal_to(12))
+
+
+def test_forwarded_session_binding_is_refused():
+    with given([*_GIVEN, there_is_an_active_signing_key(restricted=False), there_is_a_signing_connection()]) as context:
+        payload = bind(context.host, context.session_id)[:-1] + b"\x01"
+        with when("the client requests a forwarded session binding"):
+            response = exchange(context, payload)
+        with then("the forwarded binding is refused"):
+            assert_that(response, equal_to(b"\x05"))
+
+
+def test_excess_connections_are_refused_without_disrupting_the_existing_connection():
+    from starlette.websockets import WebSocketDisconnect
+
+    with given(
+        [*_GIVEN, there_is_an_active_signing_key(restricted=False), there_is_a_signing_connection(limit=1)]
+    ) as context:
+        with when("a second connection exceeds the Agent's connection limit"):
+            with pytest.raises(WebSocketDisconnect) as refused:
+                with context.signing_client.websocket_connect("/ssh/v1/agent", **context.connection):
+                    pass
+        with then("the excess connection is refused and the existing client still works"):
+            assert_that(refused.value.code, equal_to(1013))
+            assert_that(exchange(context, b"\x0b")[0], equal_to(12))
+
+
+def test_metrics_expose_connection_count_without_runtime_identity():
+    with given([*_GIVEN, there_is_an_active_signing_key(restricted=False), there_is_a_signing_connection()]) as context:
+        with when("the internal metrics endpoint is inspected"):
+            metrics = context.signing_client.get("/metrics").text
+        with then("counts are visible without signing credentials or key IDs"):
+            assert_that(metrics, contains_string("agentbarn_ssh_connections 1.0"))
+            assert_that(metrics, not_(contains_string(context.token)))
+            assert_that(metrics, not_(contains_string(context.key["id"])))
+
+
+def test_revocation_closes_existing_connections_even_for_malformed_requests():
+    from starlette.websockets import WebSocketDisconnect
+
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_active_signing_key(restricted=False),
+            there_is_a_signing_connection(),
+            the_signing_credential_is_revoked(),
+        ]
+    ) as context:
+        with when("a revoked client sends a malformed request"):
+            with pytest.raises(WebSocketDisconnect) as refused:
+                exchange(context, b"\x0bextra")
+        with then("revocation takes precedence over frame rejection"):
+            assert_that(refused.value.code, equal_to(1008))
+
+
+def downgrade_ssh_schema():
     from pathlib import Path
 
     from alembic import command
     from alembic.config import Config as AlembicConfig
 
-    with given(_GIVEN) as context:
-        key = create_key(context).json()
-        migration = AlembicConfig(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
-        with pytest.raises(RuntimeError, match="Detach and delete SSH credentials"):
-            command.downgrade(migration, "-1")
-        assert context.client.get(path(context, "/" + key["id"]), headers=headers(context)).status_code == 200
-        assert context.client.delete(path(context, "/" + key["id"]), headers=headers(context)).status_code == 204
+    migration = AlembicConfig(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    command.downgrade(migration, "-1")
+
+
+def test_downgrade_preserves_keys_until_explicitly_removed():
+    with given([*_GIVEN, there_are_shared_ssh_keys()]) as context:
+        with when("schema rollback is attempted while a shared key exists"):
+            with pytest.raises(RuntimeError) as refused:
+                downgrade_ssh_schema()
+        with then("the migration refuses rollback without deleting the key"):
+            assert_that(str(refused.value), contains_string("Detach and delete SSH credentials"))
+            saved = context.client.get(path(context, "/" + context.ssh_keys[0]["id"]), headers=headers(context))
+            assert_that(saved.status_code, equal_to(200))
+
+
+def the_ssh_key_has_been_deleted():
+    def step(context):
+        response = context.client.delete(path(context, "/" + context.ssh_keys[0]["id"]), headers=headers(context))
+        assert_that(response.status_code, equal_to(204))
+
+    return step
+
+
+def test_downgrade_succeeds_after_keys_are_explicitly_removed():
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+    from sqlalchemy import inspect
+
+    with given([*_GIVEN, there_are_shared_ssh_keys(), the_ssh_key_has_been_deleted()]) as context:
         try:
-            command.downgrade(migration, "-1")
+            with when("schema rollback is requested without stored keys"):
+                downgrade_ssh_schema()
+            with then("the SSH tables are removed"):
+                tables = inspect(context.injector.get(PostgresRepositoryDelegate).engine).get_table_names()
+                assert_that(tables, not_(has_items("ssh_credential")))
         finally:
-            command.upgrade(migration, "head")
+            command.upgrade(AlembicConfig(str(Path(__file__).resolve().parents[2] / "alembic.ini")), "head")
 
 
 def organization_cascades_visit(first_table):
@@ -796,50 +927,78 @@ def test_the_database_still_refuses_direct_deletion_of_an_assigned_ssh_key():
             assert_that([key["id"] for key in saved["credentials"]], equal_to([str(key_id)]))
 
 
-def test_tenant_foreign_keys_and_stale_generations_are_enforced():
-    from fastapi import HTTPException
+def test_tenant_foreign_keys_refuse_cross_organization_assignments():
     from sqlalchemy.exc import IntegrityError
 
     from api.domains.ssh.models import AgentSshCredential
 
-    with given(_GIVEN) as context:
-        key = create_key(context, mode="unrestricted").json()
-        assert assign(context, [key["id"]]).status_code == 200
+    with given([*_GIVEN, there_are_shared_ssh_keys()]) as context:
         delegate = context.injector.get(PostgresRepositoryDelegate)
-        with pytest.raises(IntegrityError):
-            delegate.save(
-                AgentSshCredential(agent_id=context.agent.id, credential_id=UUID(key["id"]), organization_id=uuid4())
-            )
-        token = activate(context, [key])
+        with when("an assignment is persisted with the wrong Organization"):
+            with pytest.raises(IntegrityError) as refused:
+                delegate.save(
+                    AgentSshCredential(
+                        agent_id=context.agent.id,
+                        credential_id=UUID(context.ssh_keys[0]["id"]),
+                        organization_id=uuid4(),
+                    )
+                )
+        with then("a tenant foreign key rejects the assignment"):
+            assert_that(getattr(refused.value.orig, "pgcode", None), equal_to("23503"))
+
+
+def a_new_runtime_generation_has_replaced_the_signing_generation():
+    def step(context):
         context.injector.get(IntegrationRepository).begin(context.agent.id, {})
-        with pytest.raises(HTTPException):
-            context.injector.get(SshRepository).authorize(token_digest(token))
+
+    return step
+
+
+def test_stale_generations_cannot_authorize_signing():
+    from fastapi import HTTPException
+
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_active_signing_key(restricted=False),
+            a_new_runtime_generation_has_replaced_the_signing_generation(),
+        ]
+    ) as context:
+        with when("the previous generation's signing credential is presented"):
+            with pytest.raises(HTTPException) as refused:
+                authorize_signing_credential(context)
+        with then("the obsolete generation has no signing authority"):
+            assert_that(refused.value.status_code, equal_to(403))
+
+
+def start_the_agent(context):
+    return context.client.post(assignments(context).removesuffix("ssh-credentials") + "start", headers=headers(context))
 
 
 def test_agent_start_materializes_only_public_ssh_files_and_generation_token():
     from api.infrastructure.crypto import decrypt_token
     from api.infrastructure.kubernetes.client import KubernetesClient
 
-    with given(_GIVEN) as context:
-        key = create_key(context, mode="unrestricted").json()
-        stored = context.injector.get(SshRepository).key(UUID(key["id"]), context.organization.id)
-        assert stored is not None
+    with given([*_GIVEN, there_are_shared_ssh_keys(mode="unrestricted"), the_ssh_keys_are_assigned()]) as context:
+        stored = context.injector.get(SshRepository).key(UUID(context.ssh_keys[0]["id"]), context.organization.id)
         private_body = decrypt_token(stored.private_key_encrypted, TEST_ENCRYPTION_KEY).splitlines()[1]
-        assert assign(context, [key["id"]]).status_code == 200
-        response = context.client.post(
-            assignments(context).removesuffix("ssh-credentials") + "start", headers=headers(context)
-        )
-        assert response.status_code == 200, response.text
-        k8s = context.injector.get(KubernetesClient)
-        secret = k8s.create_secret.call_args[0][1]
-        assert secret.string_data["SSH_AUTH_SOCK"] == "/run/agentbarn-ssh/agent.sock"
-        assert secret.string_data["AGENTBARN_SSH_SIGNER_URL"].startswith("wss://")
-        assert secret.string_data["AGENTBARN_SSH_SIGNER_TOKEN"].startswith("abssh_")
-        assert private_body not in str(secret.string_data)
-        assert stored.private_key_encrypted not in str(secret.string_data)
-        config = k8s.create_config_map.call_args[0][1]
-        assert "ssh-agent-relay.py" in config.data
-        assert private_body not in str(config.data)
-        assert stored.private_key_encrypted not in str(config.data)
-        token = secret.string_data["AGENTBARN_SSH_SIGNER_TOKEN"]
-        assert len(context.injector.get(SshRepository).authorize(token_digest(token))[1]) == 1
+        with when("the Agent starts with a shared SSH key"):
+            response = start_the_agent(context)
+        with then("its generated Secret has a generation token and local socket, with no private material"):
+            assert_that(response.status_code, equal_to(200), response.text)
+            k8s = context.injector.get(KubernetesClient)
+            secret = k8s.create_secret.call_args[0][1]
+            assert_that(secret.string_data["SSH_AUTH_SOCK"], equal_to("/run/agentbarn-ssh/agent.sock"))
+            assert_that(secret.string_data["AGENTBARN_SSH_SIGNER_URL"], contains_string("wss://"))
+            assert_that(secret.string_data["AGENTBARN_SSH_SIGNER_TOKEN"], contains_string("abssh_"))
+            assert_that(str(secret.string_data), not_(contains_string(private_body)))
+            assert_that(str(secret.string_data), not_(contains_string(stored.private_key_encrypted)))
+        with then("its ConfigMap contains only public relay files and its signing token resolves the key"):
+            config = k8s.create_config_map.call_args[0][1]
+            assert_that(config.data, has_key("ssh-agent-relay.py"))
+            assert_that(str(config.data), not_(contains_string(private_body)))
+            assert_that(str(config.data), not_(contains_string(stored.private_key_encrypted)))
+            keys = context.injector.get(SshRepository).authorize(
+                token_digest(secret.string_data["AGENTBARN_SSH_SIGNER_TOKEN"])
+            )[1]
+            assert_that(keys, has_length(1))

@@ -112,7 +112,7 @@ SSH is opt-in (`SSH_ENABLED=false`, Helm `ssh.enabled=false`). Deploy the schema
 API/UI, signing service, and both updated runtime images before attaching keys.
 Hermes 0.2.13 and OpenClaw 0.7.9 add `/opt/agentbarn-ssh`; older images cannot run the injected relay. Existing
 Agents receive new public profiles/socket/token only on restart. The default
-deployment remains unchanged until SSH is enabled.
+deployment remains unchanged until SSH is enabled. Startup discovers actual Parent/Bot signing credentials using system Python before invoking the optional relay environment; unkeyed Bots and deleted-Bot cleanup do not require an updated SSH image.
 
 Set `SSH_ENABLED=true` and `SSH_SIGNER_URL=wss://<public-host>/ssh/v1/agent` for the
 product API/Helmfile. The URL must be reachable from Agent pods, have a valid TLS

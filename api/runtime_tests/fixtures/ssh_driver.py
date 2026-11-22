@@ -27,6 +27,7 @@ if bot_id and sys.argv[1] == "hermes":
     run([sys.executable, "/app/config/bot-setup.py"])
     served = json.loads(Path("/run/agentbarn/env/active-bots.json").read_text())
     assert bot_id in [entry["id"] for entry in served], "Bot setup must succeed before its terminal is tested"
+run(["python3", relay, "--needed"])
 run([relay_python, relay, "--configure"])
 process = subprocess.Popen([relay_python, relay], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:

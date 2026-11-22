@@ -120,3 +120,59 @@ def ssh_server(root: Path, public_key: str):
     finally:
         container.remove(force=True)
         client.close()
+
+
+@contextmanager
+def relay_client(artifacts, ca: Path, root: Path):
+    """Run the shipped relay with only its public files and generation token."""
+    import importlib.util
+    import json
+    import os
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    relay = root / "ssh-agent-relay.py"
+    relay.write_text(artifacts.files["ssh-agent-relay.py"])
+    manifest = root / "profiles.json"
+    manifest.write_text(artifacts.files["ssh-client.json"])
+    spec = importlib.util.spec_from_file_location("ssh_relay_fixture", relay)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Relay module cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    directory = root / "relay"
+    module.configure(directory, str(manifest), root / "home/config")
+    env = {
+        **os.environ,
+        **artifacts.env,
+        "SSH_AUTH_SOCK": str(directory / "agent.sock"),
+        "AGENTBARN_SSH_DIRECTORY": str(directory),
+        "AGENTBARN_SSH_CA_FILE": str(ca),
+    }
+    process = subprocess.Popen([sys.executable, str(relay)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 10
+        while not (directory / "agent.sock").exists():
+            if process.poll() is not None or time.monotonic() > deadline:
+                raise RuntimeError("Relay did not start")
+            time.sleep(0.02)
+        config = str(directory / "config")
+
+        def run(command, **kwargs):
+            return subprocess.run(command, env=env, capture_output=True, timeout=30, check=False, **kwargs)
+
+        yield SimpleNamespace(
+            run=run,
+            alias=json.loads(manifest.read_text())[0]["alias"],
+            config=config,
+            directory=directory,
+            git_env={**env, "GIT_SSH_COMMAND": f"ssh -vvv -F {config}"},
+        )
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+        if process.stderr:
+            stderr = process.stderr.read().decode()
+            if stderr:
+                print("Relay diagnostics:", stderr)
