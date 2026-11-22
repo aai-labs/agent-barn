@@ -15,6 +15,6 @@ export function SessionExpirationHandler() {
     router.replace("/login");
   }, [queryClient, router]);
 
-  return <AuthLoadingFallback message="Session expired. Redirecting..." />;
+  return <AuthLoadingFallback message="Your session ended. Taking you to log in…" />;
 }
 

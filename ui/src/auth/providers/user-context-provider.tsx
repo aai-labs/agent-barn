@@ -36,7 +36,7 @@ export function UserContextProvider({ children }: { children: ReactNode }) {
   }, [expireSession, shouldRedirectToLogin]);
 
   if (isPending || shouldRedirectToLogin) {
-    return <AuthLoadingFallback message="Loading your account..." />;
+    return <AuthLoadingFallback message="Loading your account…" />;
   }
 
   if (isError || !userContext) {
