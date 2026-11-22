@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import os
+import re
 import tempfile
 import time
 from collections.abc import Generator
@@ -17,10 +19,41 @@ from kubernetes import config as k8s_config
 from kubernetes.client.exceptions import ApiException
 from kubernetes.stream import portforward as k8s_portforward
 from kubernetes.stream import stream as k8s_stream
+from urllib3.exceptions import ReadTimeoutError
 
 from api.core.config import Config
 
 _SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+# (connect, read) seconds for every cluster call that does not set its own. The read
+# timeout bounds each wait for the next bytes, not the whole response. Without it a
+# call waits forever on a stalled API server and holds its request thread meanwhile.
+_DEFAULT_REQUEST_TIMEOUT = (5, 15)
+
+# How long a followed log may stay silent before stream_pod_logs hands control back.
+LOG_STREAM_IDLE_SECONDS = 15
+# Extra seconds read back when a followed log resumes, to cover clock skew between the
+# API pod and the node that stamps the lines; the overlap is dropped by timestamp.
+_LOG_RESUME_MARGIN_SECONDS = 5
+_LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z ")
+
+
+def _log_line_stamp(line: str) -> tuple[str, str] | None:
+    """A sortable key for the RFC 3339 timestamp the kubelet puts on a log line.
+
+    The fraction is trimmed of trailing zeros, so it is padded before comparing.
+    """
+    match = _LOG_TIMESTAMP.match(line)
+    if match is None:
+        return None
+    return match.group(1), (match.group(2) or "").ljust(9, "0")
+
+
+class _DefaultTimeoutApiClient(client.ApiClient):
+    """An ApiClient whose calls time out unless the call sets ``_request_timeout``."""
+
+    def call_api(self, *args, _request_timeout=None, **kwargs):
+        return super().call_api(*args, _request_timeout=_request_timeout or _DEFAULT_REQUEST_TIMEOUT, **kwargs)
 
 
 @inject
@@ -59,9 +92,10 @@ class KubernetesClient:
                         "~/.kube/config, and K8S_KUBECONFIG_PATH is unset). Agent lifecycle "
                         "features need a real cluster; set K8S_KUBECONFIG_PATH to point at one."
                     ) from e
-        self._apps_v1_client = client.AppsV1Api()
-        self._core_v1_client = client.CoreV1Api()
-        self._batch_v1_client = client.BatchV1Api()
+        api_client = _DefaultTimeoutApiClient()
+        self._apps_v1_client = client.AppsV1Api(api_client=api_client)
+        self._core_v1_client = client.CoreV1Api(api_client=api_client)
+        self._batch_v1_client = client.BatchV1Api(api_client=api_client)
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
@@ -571,25 +605,51 @@ class KubernetesClient:
         namespace: str,
         tail_lines: int = 0,
         container: str = "agent",
-    ) -> Generator[str]:
+    ) -> Generator[str | None]:
+        """Follows the pod's log, yielding each line as it arrives.
+
+        After ``LOG_STREAM_IDLE_SECONDS`` without a line it yields ``None`` rather than
+        keep waiting, so the caller, and the thread it reads on, regains control even
+        from a silent pod: a stream whose client has gone can then be dropped. Reading
+        on resumes from the last line seen, without repeating or skipping any.
+        """
         pod_name = self.get_pod_name_for_deployment(deployment_name, namespace)
         if pod_name is None:
             return
-        resp = self._core_v1.read_namespaced_pod_log(
-            pod_name,
-            namespace,
-            container=container,
-            tail_lines=tail_lines,
-            follow=True,
-            timestamps=True,
-            _preload_content=False,
-        )
-        try:
-            for raw_line in resp:
-                yield raw_line.decode("utf-8", errors="replace").rstrip("\n")
-        finally:
-            resp.close()
-            resp.release_conn()
+        last_stamp: tuple[str, str] | None = None
+        while True:
+            if last_stamp is None:
+                window = {"tail_lines": tail_lines}
+            else:
+                last_at = datetime.strptime(last_stamp[0], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=UTC)
+                behind = (datetime.now(UTC) - last_at).total_seconds()
+                window = {"since_seconds": max(1, math.ceil(behind)) + _LOG_RESUME_MARGIN_SECONDS}
+            resp = self._core_v1.read_namespaced_pod_log(
+                pod_name,
+                namespace,
+                container=container,
+                follow=True,
+                timestamps=True,
+                _preload_content=False,
+                _request_timeout=(_DEFAULT_REQUEST_TIMEOUT[0], LOG_STREAM_IDLE_SECONDS),
+                **window,
+            )
+            try:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                    stamp = _log_line_stamp(line)
+                    if stamp is not None:
+                        if last_stamp is not None and stamp <= last_stamp:
+                            continue
+                        last_stamp = stamp
+                    yield line
+                return
+            except ReadTimeoutError:
+                pass
+            finally:
+                resp.close()
+                resp.release_conn()
+            yield None
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
         ws = k8s_stream(

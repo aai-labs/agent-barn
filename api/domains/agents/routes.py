@@ -8,6 +8,7 @@ from fastapi_injector import Injected
 from api.domains.agent_sizes.models import AgentSizeChoice
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
+from api.domains.agents.log_stream import log_stream_events
 from api.domains.agents.models import (
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
@@ -150,13 +151,8 @@ def stream_agent_logs(
     tail_lines: Annotated[int, Query(ge=0, le=1000)] = 0,
 ):
     lines = service.stream_agent_logs(agent_id, context, tail_lines=tail_lines)
-
-    def event_generator():
-        for line in lines:
-            yield f"data: {line}\n\n"
-
     return StreamingResponse(
-        event_generator(),
+        log_stream_events(lines),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

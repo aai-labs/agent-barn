@@ -13,6 +13,8 @@ from kubernetes.client import (
     V1Service,
 )
 from kubernetes.client.exceptions import ApiException
+from urllib3 import HTTPConnectionPool
+from urllib3.exceptions import ReadTimeoutError
 
 from api.core.config import Config
 from api.infrastructure.kubernetes import client as k8s_client_module
@@ -482,3 +484,92 @@ def test_runtime_diagnostics_does_not_expose_arbitrary_cluster_reason():
 def test_runtime_diagnostics_missing_pod_is_not_healthy():
     result = _make_client().get_runtime_diagnostics("agent-id", "agent-farm")
     assert_that(result["available"], equal_to(False))
+
+
+class _ScriptedLogApi(_FakeCoreApi):
+    """Follow reads that replay one scripted response per call, recording the kwargs."""
+
+    def __init__(self, responses):
+        super().__init__(pods=[_running_pod()])
+        self._responses = list(responses)
+        self.log_calls: list[dict] = []
+
+    def read_namespaced_pod_log(self, pod_name, namespace, **kwargs):
+        self.log_calls.append(kwargs)
+        return self._responses.pop(0)
+
+
+class _StallingStreamResponse(_FakeStreamResponse):
+    """Sends its lines, then goes quiet past the read timeout, as a silent pod does."""
+
+    def __iter__(self):
+        yield from self._lines
+        raise ReadTimeoutError(cast(HTTPConnectionPool, None), "/log", "Read timed out.")
+
+
+def test_stream_pod_logs_hands_back_control_when_idle_and_resumes_without_gaps():
+    core = _ScriptedLogApi(
+        [
+            _StallingStreamResponse("2026-11-22T12:00:00.1Z one\n2026-11-22T12:00:00.12Z two\n"),
+            # Resuming reads back a margin: the older and the already-seen lines come again.
+            _FakeStreamResponse(
+                "2026-11-22T12:00:00.1Z one\n2026-11-22T12:00:00.12Z two\n2026-11-22T12:00:00.2Z three\n"
+            ),
+        ]
+    )
+    k8s = _make_client(core_api=core)
+
+    with when("I follow a pod that goes quiet between lines"):
+        lines = list(k8s.stream_pod_logs("agent-abc", "agent-farm", tail_lines=5))
+
+        with then("the idle interval comes through as None, and no line is lost or repeated"):
+            assert_that(
+                lines,
+                equal_to(
+                    [
+                        "2026-11-22T12:00:00.1Z one",
+                        "2026-11-22T12:00:00.12Z two",
+                        None,
+                        "2026-11-22T12:00:00.2Z three",
+                    ]
+                ),
+            )
+        with then("the first read honours tail_lines and the resume reads back from the last line seen"):
+            first, resume = core.log_calls
+            assert_that(first["tail_lines"], equal_to(5))
+            assert_that("since_seconds" in first, equal_to(False))
+            assert_that("tail_lines" in resume, equal_to(False))
+            assert_that(resume["since_seconds"] >= 6, equal_to(True))
+        with then("every follow read waits at most the idle interval for the next bytes"):
+            for call in core.log_calls:
+                assert_that(call["_request_timeout"], equal_to((5, k8s_client_module.LOG_STREAM_IDLE_SECONDS)))
+
+
+def test_cluster_calls_get_a_default_timeout():
+    with patch("kubernetes.client.ApiClient.call_api") as call_api:
+        api_client = k8s_client_module._DefaultTimeoutApiClient()
+
+        with when("a call sets no timeout of its own"):
+            api_client.call_api("/api/v1/pods", "GET")
+
+            with then("it gets the default (connect, read) timeout"):
+                assert_that(call_api.call_args.kwargs["_request_timeout"], equal_to((5, 15)))
+
+        with when("a call sets its own timeout"):
+            api_client.call_api("/api/v1/pods", "GET", _request_timeout=10)
+
+            with then("that timeout is kept"):
+                assert_that(call_api.call_args.kwargs["_request_timeout"], equal_to(10))
+
+
+def test_configured_client_uses_the_default_timeout_api_client():
+    config = SimpleNamespace(k8s_kubeconfig_path=None, k8s_namespace="agent-farm")
+    with patch("kubernetes.config.load_incluster_config"):
+        k8s = KubernetesClient(cast(Config, config))
+
+        with when("the client configures itself on first use"):
+            core, apps, batch = k8s._core_v1, k8s._apps_v1, k8s._batch_v1
+
+            with then("every API group shares the timeout-defaulting ApiClient"):
+                for api in (core, apps, batch):
+                    assert_that(isinstance(api.api_client, k8s_client_module._DefaultTimeoutApiClient), equal_to(True))
