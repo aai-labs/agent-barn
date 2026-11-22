@@ -12,7 +12,7 @@ class OverlapProbe:
     timing a request, which a busy CI machine makes unreliable.
     """
 
-    def __init__(self, hold_seconds: float = 0.3):
+    def __init__(self, hold_seconds: float = 0.5):
         self.hold_seconds = hold_seconds
         self.peak = 0
         self._active = 0

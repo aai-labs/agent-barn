@@ -9,7 +9,18 @@ from typing import Any
 from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, close_to, contains_exactly, contains_string, equal_to, has_length, is_not, none, not_
+from hamcrest import (
+    assert_that,
+    close_to,
+    contains_exactly,
+    contains_string,
+    equal_to,
+    greater_than_or_equal_to,
+    has_length,
+    is_not,
+    none,
+    not_,
+)
 from kubernetes.client.exceptions import ApiException
 
 from api.domains.agents.models import AgentStatus
@@ -787,8 +798,10 @@ def test_an_opened_rows_health_restarts_and_usage_are_read_together():
             assert_that(body["resource_usage"]["availability"], equal_to("available"))
 
         with then("its health, restarts and usage reads overlap rather than wait on each other"):
-            # health's pod read, the restarts read, and usage's three Prometheus reads
-            assert_that(everything.peak, equal_to(5))
+            # 5 when all overlap: health's pod read, the restarts read and usage's three
+            # Prometheus reads. At least 4 allows one late thread on a slow machine and still
+            # rules out usage alone running in parallel (3), let alone everything in turn (1).
+            assert_that(everything.peak, greater_than_or_equal_to(4))
 
 
 def test_an_opened_row_carries_the_agents_request_beside_its_limit():

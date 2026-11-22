@@ -2,9 +2,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { useCatchUpWhenPolling } from "./use-catch-up-when-polling";
-
 import { api } from "@/shared/api";
+
+import { useCatchUpWhenPolling } from "./use-catch-up-when-polling";
 
 import { PlatformAgentDetailsSchema, type PlatformAgentDetails } from "../schemas";
 import { RESOURCE_USAGE_REFETCH_MS, resourceUsageKey } from "../utils";

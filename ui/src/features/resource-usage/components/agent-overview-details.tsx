@@ -8,7 +8,6 @@ import type { AgentHealth } from "@/features/agents/schemas";
 import { canAgent } from "@/features/agents/utils";
 import { useAgentCost } from "@/features/costs/hooks/use-agent-cost";
 import { formatCallSpend, formatSpend } from "@/features/costs/format";
-
 import { useInView } from "@/hooks/use-in-view";
 
 import { useAgentResourceUsage } from "../hooks/use-agent-resource-usage";

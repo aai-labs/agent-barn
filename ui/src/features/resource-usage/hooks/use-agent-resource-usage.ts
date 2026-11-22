@@ -2,10 +2,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { useCatchUpWhenPolling } from "./use-catch-up-when-polling";
-
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { api } from "@/shared/api";
+
+import { useCatchUpWhenPolling } from "./use-catch-up-when-polling";
 
 import {
   AgentResourceUsageSchema,
