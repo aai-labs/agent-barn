@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -101,8 +101,18 @@ function MoreSheetBody({
   const router = useRouter();
   const { user } = useCurrentUser();
   const { logout, isLoggingOut } = useLogout();
-  const { organizations, selectedOrganization, isPlatformView, selectOrganization, canCreateOrganization } =
-    useOrganizationSwitch();
+  const {
+    organizations,
+    selectedOrganization,
+    isPlatformView,
+    selectOrganization,
+    canCreateOrganization,
+    prefetchSwitchTargets,
+  } = useOrganizationSwitch();
+  // The sheet is open whenever this renders: get the other Organizations ready to switch to.
+  useEffect(() => {
+    prefetchSwitchTargets();
+  }, [prefetchSwitchTargets]);
 
   return (
     <div className="flex flex-col gap-4 [&_a]:min-h-11">
