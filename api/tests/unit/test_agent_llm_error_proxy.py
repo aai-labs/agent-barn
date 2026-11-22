@@ -5,6 +5,7 @@ A budget rejection arrives as a 400 whose error type is `budget_exceeded`, and i
 upstream text names an internal team id — replacing it is the point.
 """
 
+import itertools
 import json
 import os
 import shutil
@@ -91,10 +92,33 @@ sys.exit(3)
 )
 
 
+# Readiness is "something accepts on the child's port", so the port must be one nothing
+# else can be on. A port from bind(0) is released before the child binds it, and under
+# pytest-xdist another worker's bind(0) (say, a stand-in upstream answering 400) can take it
+# first: the child then fails to bind while that stranger answers in its place. So each
+# worker picks from a range of its own below every OS's ephemeral range (Linux 32768+,
+# macOS 49152+), where neither the OS nor another worker hands out ports.
+_PORT_RANGE_START = 20_000
+_PORTS_PER_WORKER = 300  # 40 workers fit below 32768
+_next_port = itertools.count()
+
+
+def _worker_index() -> int:
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    return int(worker.removeprefix("gw")) if worker.startswith("gw") else 0
+
+
 def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    base = _PORT_RANGE_START + (_worker_index() % 40) * _PORTS_PER_WORKER
+    for _ in range(_PORTS_PER_WORKER):
+        port = base + next(_next_port) % _PORTS_PER_WORKER
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue  # still held by an earlier child of this worker
+        return port
+    raise RuntimeError(f"no free port in {base}-{base + _PORTS_PER_WORKER - 1}")
 
 
 @contextmanager
@@ -233,6 +257,18 @@ def _post_stream(base: str) -> tuple[int, str, list[str]]:
         text = response.read().decode()
         events = [line.removeprefix("data: ") for line in text.splitlines() if line.startswith("data: ")]
         return response.status, response.headers.get("Content-Type", ""), events
+
+
+def test_a_childs_port_is_this_workers_own_and_never_one_the_os_hands_out(monkeypatch):
+    """Under xdist a port the OS gave someone else (bind(0)) once answered in place of
+    the proxy; a child's port must come from the worker's own range below them."""
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
+    start = _PORT_RANGE_START + 3 * _PORTS_PER_WORKER
+
+    ports = [_free_port() for _ in range(_PORTS_PER_WORKER + 5)]
+
+    assert_that(all(start <= port < start + _PORTS_PER_WORKER for port in ports), equal_to(True))
+    assert_that(max(ports) < 32_768, equal_to(True))
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
