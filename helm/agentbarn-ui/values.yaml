@@ -19,6 +19,13 @@ imagePullSecrets:
 service:
   port: 3000
 
+# The API Service that the ingress sends /api to directly. It must live in
+# the same namespace as this release. Set serviceName to "" to send /api
+# through the Next server's rewrite instead.
+apiBackend:
+  serviceName: agentbarn-api
+  port: 8000
+
 ingress:
   hosts: "agent-farm.k8s.aai-labs.com"
   clusterIssuer: letsencrypt-http01
