@@ -169,11 +169,11 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   }, [deletingOrganizationId, urlOrganizationId, setDeletingOrganizationId]);
 
   if (!userContext) {
-    return <AuthLoadingFallback message="Unable to load organizations." />;
+    return <AuthLoadingFallback message="Unable to load organizations." busy={false} />;
   }
 
   if (!hasHydrated) {
-    return <AuthLoadingFallback message="Loading organizations..." />;
+    return <AuthLoadingFallback message="Loading organizations…" />;
   }
 
   return (

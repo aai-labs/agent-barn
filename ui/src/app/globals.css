@@ -417,3 +417,24 @@
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+/* Full-page loading screen: the pixel barn builds itself, holds, and dissolves */
+.af-barn-ghost {
+  fill: var(--ink-5);
+  opacity: .28;
+}
+.af-barn-cell {
+  fill: #f45a17;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.af-barn-build[data-busy="true"] .af-barn-cell {
+  animation: af-barn-build 3.2s cubic-bezier(.2,.7,.2,1) var(--af-barn-delay) infinite both;
+}
+@keyframes af-barn-build {
+  0%       { opacity: 0; transform: translateY(-70%) scale(.6); }
+  10%, 70% { opacity: 1; transform: none; }
+  82%, 100% { opacity: 0; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .af-barn-build[data-busy="true"] .af-barn-cell { animation: none; }
+}
