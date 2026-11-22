@@ -4318,8 +4318,8 @@ class AgentService:
         Only the Agents the viewer may read activity for, and only running or failed ones;
         the rest are left out rather than refused. The pods' readiness comes from one cluster
         read and their healthz from parallel calls, so the list costs one request, not one
-        per Agent. A pod that cannot be reached reads ``error``/``unreachable``, which the
-        single-Agent route answers with a 503.
+        per Agent. A pod that cannot be reached reads ``error`` with no reason: what the UI
+        makes of the single-Agent route's 503, so a reason never surfaces as a banner.
         """
         scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
         agents = [
@@ -4333,7 +4333,8 @@ class AgentService:
         for agent in running:
             self._observe_integration_readiness(agent, readiness[pod_of[agent.id]][0])
 
-        ready_pods = {pod for pod, (pod_status, _) in readiness.items() if pod_status == "ready"}
+        # Only the pods of the Agents the viewer may read, whatever else readiness holds.
+        ready_pods = {pod for pod in set(pod_of.values()) if readiness[pod][0] == "ready"}
         futures = {pod: _HEALTHZ_FETCHES.submit(self._fetch_healthz, pod) for pod in ready_pods}
         wait_for_futures(futures.values(), timeout=_HEALTHZ_BATCH_DEADLINE_SECONDS)
         healthz = {pod: future.result() if future.done() else None for pod, future in futures.items()}
@@ -4346,7 +4347,7 @@ class AgentService:
                 pod = pod_of[agent.id]
                 pod_status, pod_reason = readiness[pod]
                 health = self._health_from(agent, pod_status, pod_reason, lambda pod=pod: healthz.get(pod))
-            health = health or AgentHealthRead(status="error", reason="unreachable")
+            health = health or AgentHealthRead(status="error")
             items.append(AgentHealthItemRead(agent_id=agent.id, status=health.status, reason=health.reason))
         return items
 

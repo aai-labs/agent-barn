@@ -27,10 +27,18 @@ export function useAgentsHealth(agentIds: string[], refetchIntervalMs: number) {
     queryFn: async () => {
       // One agent_ids parameter per Agent, as the API reads a list.
       const query = new URLSearchParams(ids.map((id) => ["agent_ids", id]));
-      const response = await api.get<z.infer<typeof AgentHealthItemsSchema>>(
-        `${orgApiBase}/agents/health?${query.toString()}`,
-        { schema: AgentHealthItemsSchema },
-      );
+      let response;
+      try {
+        response = await api.get<z.infer<typeof AgentHealthItemsSchema>>(
+          `${orgApiBase}/agents/health?${query.toString()}`,
+          { schema: AgentHealthItemsSchema },
+        );
+      } catch (error) {
+        // Unknown now, rather than the last answer: each Agent reads as an error, as a
+        // failed request of its own used to.
+        for (const id of ids) queryClient.setQueryData<AgentHealth>(agentsKey.health(id), { status: "error" });
+        throw error;
+      }
       for (const { agentId, ...health } of response.data) {
         queryClient.setQueryData<AgentHealth>(agentsKey.health(agentId), health);
       }

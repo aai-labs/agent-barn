@@ -929,7 +929,7 @@ export class AgentDataSupport {
   }
 
   /** The Team and Usage pages ask for every Agent's health at once; answer from the
-   *  per-Agent mocks, the way the API does (a failing pod reads error/unreachable). */
+   *  per-Agent mocks, the way the API does (a pod that fails to answer reads error). */
   private async routeBatchHealth() {
     if (this.batchHealthRouted) return;
     this.batchHealthRouted = true;
@@ -943,7 +943,7 @@ export class AgentDataSupport {
       const items = agentIds.flatMap((agentId) => {
         const mock = this.healthMocks.get(agentId);
         if (!mock) return [];
-        const health = mock.status === 200 ? (mock.body ?? { status: "ok" }) : { status: "error", reason: "unreachable" };
+        const health = mock.status === 200 ? (mock.body ?? { status: "ok" }) : { status: "error" };
         return [{ agent_id: agentId, ...(health as object) }];
       });
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(items) });

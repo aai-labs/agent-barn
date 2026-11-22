@@ -90,6 +90,34 @@ test.describe("Dashboard Page", () => {
     expect(perCard.map((request) => request.count)).toEqual([0, 0, 0]);
   });
 
+  test("an unreachable pod reads Disconnected, and opening the Agent shows no raw reason", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentHealthRequest({
+      status: 503,
+      body: { detail: { status: "error", reason: "unreachable" } },
+    });
+    await dataSupportPage.agents.interceptGetAgentRequest();
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dashboardPage.goto();
+    await expect(dashboardPage.agentCard("Maya").getByText("Disconnected", { exact: true })).toBeVisible();
+
+    // Client-side, so the Agent page starts from the Team page's cached health.
+    await dashboardPage.agentCard("Maya").click();
+    await page.waitForURL(new RegExp(`/agents/${MOCK_AGENT_ID}`));
+    await expect(page.getByRole("heading", { name: "Maya" }).first()).toBeVisible();
+    await expect(page.getByTestId("agent-health-banner")).toHaveCount(0);
+  });
+
+  test("a failed health read shows the team as Disconnected, not their last health", async ({ page }) => {
+    await page.route("**/api/v1/organizations/*/agents/health?*", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) }),
+    );
+    await dashboardPage.goto();
+
+    await expect(dashboardPage.agentCard("Maya").getByText("Disconnected", { exact: true })).toBeVisible();
+  });
+
   test("shows creator and reveals the exact last-activity time on hover", async ({ page }) => {
     await dashboardPage.goto();
     const card = dashboardPage.agentCard("Maya");
