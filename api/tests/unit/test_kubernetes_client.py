@@ -573,3 +573,57 @@ def test_configured_client_uses_the_default_timeout_api_client():
             with then("every API group shares the timeout-defaulting ApiClient"):
                 for api in (core, apps, batch):
                     assert_that(isinstance(api.api_client, k8s_client_module._DefaultTimeoutApiClient), equal_to(True))
+
+
+def _labelled_pod(app: str, *, created: datetime, ready: bool, deleting: bool = False):
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            labels={"app": app},
+            creation_timestamp=created,
+            deletion_timestamp=created if deleting else None,
+        ),
+        status=SimpleNamespace(
+            phase="Running",
+            conditions=[SimpleNamespace(type="Ready", status="True" if ready else "False")],
+            container_statuses=[],
+        ),
+    )
+
+
+class _SelectorCoreApi(_FakeCoreApi):
+    """Answers set-based ``app in (...)`` selectors and records each one."""
+
+    def __init__(self, pods):
+        super().__init__(pods=pods)
+        self.selectors: list[str] = []
+
+    def list_namespaced_pod(self, namespace, label_selector="", **kwargs):
+        self.selectors.append(label_selector)
+        names = label_selector.removeprefix("app in (").removesuffix(")").split(",")
+        return SimpleNamespace(items=[p for p in self._pods if p.metadata.labels["app"] in names])
+
+
+def test_pods_readiness_reads_many_deployments_in_chunks():
+    t0 = datetime(2026, 11, 22, tzinfo=UTC)
+    names = [f"agent-{i:03d}" for i in range(60)]
+    pods = [_labelled_pod(name, created=t0, ready=True) for name in names[:59]]
+    # agent-000 is being replaced: the newer, not-yet-ready pod is the one that counts,
+    # and a pod on its way out is ignored.
+    pods += [
+        _labelled_pod("agent-000", created=t0 + timedelta(minutes=1), ready=False),
+        _labelled_pod("agent-000", created=t0 + timedelta(minutes=2), ready=True, deleting=True),
+    ]
+    core = _SelectorCoreApi(pods)
+    k8s = _make_client(core_api=core)
+
+    with when("I ask for the readiness of 60 Deployments, one without a pod"):
+        readiness = k8s.get_pods_readiness(names, "agent-farm")
+
+        with then("the cluster is read once per 50 names"):
+            assert_that(len(core.selectors), equal_to(2))
+            assert_that(all(s.startswith("app in (") for s in core.selectors), equal_to(True))
+        with then("every name gets an answer from its newest live pod"):
+            assert_that(len(readiness), equal_to(60))
+            assert_that(readiness["agent-001"], equal_to(("ready", None)))
+            assert_that(readiness["agent-000"], equal_to(("initializing", None)))
+            assert_that(readiness["agent-059"], equal_to((None, None)))

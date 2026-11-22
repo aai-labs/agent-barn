@@ -16,6 +16,7 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentCreate,
     AgentFilter,
+    AgentHealthItemRead,
     AgentHealthRead,
     AgentLlmBudgetListItem,
     AgentLlmBudgetRead,
@@ -114,6 +115,21 @@ def list_agent_llm_budgets(
     """Every Agent's spend limit and where it comes from. Declared before the
     `/{agent_id}` routes so the path is never read as an Agent id."""
     return service.list_llm_budgets(organization_id, context)
+
+
+@agents_router.get("/health", response_model=list[AgentHealthItemRead])
+def get_agents_health(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    agent_ids: Annotated[list[UUID], Query(min_length=1, max_length=100)],
+):
+    """The health of the Agents a list page shows, in one request instead of one per Agent.
+
+    Pass each Agent as its own ``agent_ids`` parameter, at most 100 (a page of the Team or
+    Usage list). Agents the viewer may not read activity for, and Agents that are not
+    running, are left out.
+    """
+    return service.agents_health(agent_ids, context)
 
 
 @agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])

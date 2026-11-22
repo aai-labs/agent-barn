@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -329,6 +329,17 @@ class AgentRepository:
                 *agent_scope_predicates(authorization_scope),
             )
             return session.exec(query).first()
+
+    def list_active_in_scope(self, agent_ids: Collection[UUID], authorization_scope: AuthorizationScope) -> list[Agent]:
+        """The active Agents among ``agent_ids`` that the scope reaches; the rest are left out."""
+        if not agent_ids:
+            return []
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(
+                col(Agent.id).in_(list(agent_ids)),
+                *agent_scope_predicates(authorization_scope),
+            )
+            return list(session.exec(query).all())
 
     def get_deleted_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         if not authorization_scope.has_organization_visibility:

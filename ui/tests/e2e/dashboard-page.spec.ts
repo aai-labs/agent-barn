@@ -68,21 +68,26 @@ test.describe("Dashboard Page", () => {
     await expect(page.getByText(/working now/)).toBeVisible();
   });
 
-  test("polls permitted running cards every 30 seconds and skips restricted or stopped cards", async ({ page }) => {
+  test("reads the team's health in one request every 30 seconds, skipping restricted or stopped cards", async ({ page }) => {
     await page.clock.install();
     await dataSupportPage.agents.interceptGetAgentsRequest({ body: agentListWithPollingStates });
-    const requests = await Promise.all(agentListWithPollingStates.items.map((agent) =>
+    const perCard = await Promise.all(agentListWithPollingStates.items.map((agent) =>
       dataSupportPage.agents.interceptGetAgentHealthRequest({ agentId: agent.id }),
     ));
+    const batches = dataSupportPage.agents.batchHealthRequests;
+    const [permitted] = agentListWithPollingStates.items;
     await dashboardPage.goto();
-    await expect.poll(() => requests[0].count).toBe(1);
+    await expect.poll(() => batches.length).toBe(1);
+    expect(batches[0]).toEqual([permitted.id]);
     await expect(dashboardPage.agentCard("Read-only metadata")).toBeVisible();
     await expect(dashboardPage.agentCard("Read-only metadata").getByText("Running", { exact: true })).toBeVisible();
     await page.clock.runFor(29_000);
-    expect(requests.map((request) => request.count)).toEqual([1, 0, 0]);
+    expect(batches).toHaveLength(1);
     await page.clock.runFor(1_000);
-    await expect.poll(() => requests[0].count).toBe(2);
-    expect(requests.map((request) => request.count)).toEqual([2, 0, 0]);
+    await expect.poll(() => batches.length).toBe(2);
+    expect(batches[1]).toEqual([permitted.id]);
+    // No card asks for its own health any more.
+    expect(perCard.map((request) => request.count)).toEqual([0, 0, 0]);
   });
 
   test("shows creator and reveals the exact last-activity time on hover", async ({ page }) => {

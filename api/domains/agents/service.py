@@ -6,6 +6,8 @@ import logging
 import secrets
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -82,6 +84,7 @@ from api.domains.agents.models import (
     AgentCreatorRead,
     AgentDefinition,
     AgentFilter,
+    AgentHealthItemRead,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
@@ -247,6 +250,13 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+# The health of a list of Agents asks each ready pod's healthz at once, on threads of its
+# own rather than the request pool. Past the deadline a pod that has not answered counts as
+# unreachable, so one stuck pod cannot hold the whole list (its call still ends on its own
+# timeout).
+_HEALTHZ_FETCHES = ThreadPoolExecutor(max_workers=16, thread_name_prefix="agent-healthz")
+_HEALTHZ_BATCH_DEADLINE_SECONDS = 8
 
 # Google-backed providers whose credential may omit its OAuth client, in which case the
 # server-owned client is filled in at agent start and before live validation.
@@ -4295,22 +4305,83 @@ class AgentService:
         503. A stopped Agent has no health and is not asked about.
         """
         if agent.status == AgentStatus.ERROR:
-            stored = _stored_provisioning_error(agent)
-            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+            return self._error_health(agent)
 
         name = f"agent-{pod_agent_id(agent)}"
-        ns = self.config.k8s_namespace
-
-        pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
+        pod_status, pod_reason = self.k8s.get_pod_readiness(name, self.config.k8s_namespace)
         self._observe_integration_readiness(agent, pod_status)
+        return self._health_from(agent, pod_status, pod_reason, lambda: self._fetch_healthz(name))
+
+    def agents_health(self, agent_ids: Collection[UUID], context: CurrentUserContext) -> list[AgentHealthItemRead]:
+        """``agent_health`` for a list of Agents, as the Team and Usage pages show them.
+
+        Only the Agents the viewer may read activity for, and only running or failed ones;
+        the rest are left out rather than refused. The pods' readiness comes from one cluster
+        read and their healthz from parallel calls, so the list costs one request, not one
+        per Agent. A pod that cannot be reached reads ``error``/``unreachable``, which the
+        single-Agent route answers with a 503.
+        """
+        scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        agents = [
+            agent
+            for agent in self.repository.list_active_in_scope(agent_ids, scope)
+            if agent.status in (AgentStatus.ERROR, AgentStatus.RUNNING)
+        ]
+        running = [agent for agent in agents if agent.status == AgentStatus.RUNNING]
+        pod_of = {agent.id: f"agent-{pod_agent_id(agent)}" for agent in running}
+        readiness = self.k8s.get_pods_readiness(set(pod_of.values()), self.config.k8s_namespace) if running else {}
+        for agent in running:
+            self._observe_integration_readiness(agent, readiness[pod_of[agent.id]][0])
+
+        ready_pods = {pod for pod, (pod_status, _) in readiness.items() if pod_status == "ready"}
+        futures = {pod: _HEALTHZ_FETCHES.submit(self._fetch_healthz, pod) for pod in ready_pods}
+        wait_for_futures(futures.values(), timeout=_HEALTHZ_BATCH_DEADLINE_SECONDS)
+        healthz = {pod: future.result() if future.done() else None for pod, future in futures.items()}
+
+        items = []
+        for agent in agents:
+            if agent.status == AgentStatus.ERROR:
+                health = self._error_health(agent)
+            else:
+                pod = pod_of[agent.id]
+                pod_status, pod_reason = readiness[pod]
+                health = self._health_from(agent, pod_status, pod_reason, lambda pod=pod: healthz.get(pod))
+            health = health or AgentHealthRead(status="error", reason="unreachable")
+            items.append(AgentHealthItemRead(agent_id=agent.id, status=health.status, reason=health.reason))
+        return items
+
+    @staticmethod
+    def _error_health(agent: Agent) -> AgentHealthRead:
+        stored = _stored_provisioning_error(agent)
+        return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+
+    def _fetch_healthz(self, pod_name: str) -> dict | None:
+        """The pod's own healthz report, or None when it cannot be reached."""
+        try:
+            return self.k8s.fetch_agent_healthz(pod_name, self.config.k8s_namespace)
+        except RuntimeError:
+            return None
+        except Exception:
+            # The port-forward fallback asks the cluster for the pod, which can time out.
+            logger.warning("Healthz unreachable for %s", pod_name, exc_info=True)
+            return None
+
+    def _health_from(
+        self,
+        agent: Agent,
+        pod_status: str | None,
+        pod_reason: str | None,
+        healthz: Callable[[], dict | None],
+    ) -> AgentHealthRead | None:
+        """A running Agent's health from its pod's readiness, asking the pod's healthz (and
+        for a Bot, whether its Parent serves it) only once the pod is ready."""
         if pod_status == "crashed":
             return AgentHealthRead(status="crashed", reason=friendly_pod_reason(pod_reason))
         if pod_status != "ready":
             return AgentHealthRead(status="initializing")
 
-        try:
-            data = self.k8s.fetch_agent_healthz(name, ns)
-        except RuntimeError:
+        data = healthz()
+        if data is None:
             return None
         if agent.parent_agent_id is not None:
             if "served_bots" not in data:

@@ -2565,6 +2565,132 @@ def test_get_agent_healthz_returns_409_when_agent_not_running():
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
+def _remember_agent(as_name: str):
+    def step(context):
+        setattr(context, as_name, context.agent)
+
+    return step
+
+
+def test_agents_health_reads_every_listed_agent_in_one_request():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="Ready", status=AgentStatus.RUNNING),
+            _remember_agent("ready"),
+            there_is_an_agent(name="Booting", status=AgentStatus.RUNNING),
+            _remember_agent("booting"),
+            there_is_an_agent(name="Asleep", status=AgentStatus.STOPPED),
+            _remember_agent("asleep"),
+        ]
+    ) as context:
+        k8s = context.injector.get(KubernetesClient)
+        ready_pod, booting_pod = f"agent-{context.ready.id}", f"agent-{context.booting.id}"
+
+        with (
+            when("I ask for the health of a page of Agents, one of them stopped and one unknown"),
+            patch.object(
+                k8s,
+                "get_pods_readiness",
+                return_value={ready_pod: ("ready", None), booting_pod: ("initializing", None)},
+            ) as readiness,
+            patch.object(k8s, "get_pod_readiness") as single_readiness,
+            patch.object(k8s, "fetch_agent_healthz", return_value={"status": "ok"}) as healthz,
+        ):
+            response = context.client.get(
+                f"{_BASE}/health",
+                params={
+                    "agent_ids": [str(a.id) for a in (context.ready, context.booting, context.asleep)] + [str(uuid7())]
+                },
+                headers=_auth(context),
+            )
+
+        with then("each running Agent gets its health, and the stopped and unknown ones are left out"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_id = {item["agent_id"]: item for item in response.json()}
+            assert_that(sorted(by_id), equal_to(sorted([str(context.ready.id), str(context.booting.id)])))
+            assert_that(by_id[str(context.ready.id)]["status"], equal_to("ok"))
+            assert_that(by_id[str(context.booting.id)]["status"], equal_to("initializing"))
+
+        with then("the pods' readiness comes from one cluster read, and only the ready pod is asked for its healthz"):
+            assert_that(readiness.call_count, equal_to(1))
+            assert_that(set(readiness.call_args.args[0]), equal_to({ready_pod, booting_pod}))
+            assert_that(single_readiness.call_count, equal_to(0))
+            assert_that([c.args[0] for c in healthz.call_args_list], equal_to([ready_pod]))
+
+
+def test_agents_health_reports_an_unreachable_pod_without_failing_the_rest():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="Reachable", status=AgentStatus.RUNNING),
+            _remember_agent("reachable"),
+            there_is_an_agent(name="Refused", status=AgentStatus.RUNNING),
+            _remember_agent("refused"),
+            there_is_an_agent(name="Timed out", status=AgentStatus.RUNNING),
+            _remember_agent("timed_out"),
+        ]
+    ) as context:
+        k8s = context.injector.get(KubernetesClient)
+        pods = {a: f"agent-{getattr(context, a).id}" for a in ("reachable", "refused", "timed_out")}
+
+        def healthz(pod, _namespace):
+            if pod == pods["refused"]:
+                raise RuntimeError("connection refused")
+            if pod == pods["timed_out"]:
+                raise TimeoutError("the cluster did not answer the port-forward lookup")
+            return {"status": "ok"}
+
+        with (
+            when("one pod refuses its healthz and another fails in an unexpected way"),
+            patch.object(k8s, "get_pods_readiness", return_value={pod: ("ready", None) for pod in pods.values()}),
+            patch.object(k8s, "fetch_agent_healthz", side_effect=healthz),
+        ):
+            response = context.client.get(
+                f"{_BASE}/health",
+                params={"agent_ids": [str(getattr(context, a).id) for a in pods]},
+                headers=_auth(context),
+            )
+
+        with then("those two read as unreachable and the healthy one still reads ok"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_id = {item["agent_id"]: (item["status"], item["reason"]) for item in response.json()}
+            assert_that(by_id[str(context.reachable.id)], equal_to(("ok", None)))
+            assert_that(by_id[str(context.refused.id)], equal_to(("error", "unreachable")))
+            assert_that(by_id[str(context.timed_out.id)], equal_to(("error", "unreachable")))
+
+
+def test_a_read_only_api_key_can_read_agents_health():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        context.access_token = context.client.post(
+            "/api/v1/auth/me/api-keys", headers=_auth(context), json={"name": "Read API", "access_mode": "READ_ONLY"}
+        ).json()["token"]
+        k8s = context.injector.get(KubernetesClient)
+        pod = f"agent-{context.agent.id}"
+
+        with (
+            when("I read a list of Agents' health with a read-only API key"),
+            patch.object(k8s, "get_pods_readiness", return_value={pod: ("ready", None)}),
+            patch.object(k8s, "fetch_agent_healthz", return_value={"status": "ok"}),
+        ):
+            response = context.client.get(
+                f"{_BASE}/health", params={"agent_ids": [str(context.agent.id)]}, headers=_auth(context)
+            )
+
+        with then("it is a read, so the key may make it"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()[0]["status"], equal_to("ok"))
+
+
+def test_agents_health_needs_at_least_one_agent():
+    with given(_GIVEN) as context:
+        with when("I ask for the health of no Agents"):
+            response = context.client.get(f"{_BASE}/health", headers=_auth(context))
+
+        with then("the request is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
 def test_create_hermes_agent_returns_201_stopped_without_a_bundled_platform():
     with given(_GIVEN) as context:
         client: TestClient = context.client

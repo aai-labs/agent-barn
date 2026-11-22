@@ -567,6 +567,12 @@ export class AgentDataSupport {
   }
   constructor(private page: Page) {}
 
+  // Per-Agent health mocks, which also answer the list pages' batch request.
+  private healthMocks = new Map<string, { status: number; body?: unknown }>();
+  private batchHealthRouted = false;
+  /** The Agent ids of each batch health request, in order. */
+  readonly batchHealthRequests: string[][] = [];
+
   async interceptWebChatApprovalPrompt({
     answer,
     prompt = mockWebChatApprovalPrompt,
@@ -905,6 +911,8 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     const requests = { count: 0 };
+    this.healthMocks.set(agentId, { status, body });
+    await this.routeBatchHealth();
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
@@ -918,6 +926,28 @@ export class AgentDataSupport {
       });
     });
     return requests;
+  }
+
+  /** The Team and Usage pages ask for every Agent's health at once; answer from the
+   *  per-Agent mocks, the way the API does (a failing pod reads error/unreachable). */
+  private async routeBatchHealth() {
+    if (this.batchHealthRouted) return;
+    this.batchHealthRouted = true;
+    await this.page.route("**/api/v1/organizations/*/agents/health?*", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const agentIds = new URL(route.request().url()).searchParams.getAll("agent_ids");
+      this.batchHealthRequests.push(agentIds);
+      const items = agentIds.flatMap((agentId) => {
+        const mock = this.healthMocks.get(agentId);
+        if (!mock) return [];
+        const health = mock.status === 200 ? (mock.body ?? { status: "ok" }) : { status: "error", reason: "unreachable" };
+        return [{ agent_id: agentId, ...(health as object) }];
+      });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(items) });
+    });
   }
 
   async interceptGetConversationChannelsRequest({

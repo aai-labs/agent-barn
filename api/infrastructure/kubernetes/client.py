@@ -7,7 +7,7 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import Generator
+from collections.abc import Collection, Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -349,7 +349,11 @@ class KubernetesClient:
 
     def _newest_pod(self, label_selector: str, namespace: str) -> client.V1Pod | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=label_selector)
-        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        return self._newest_of(pods.items)
+
+    @staticmethod
+    def _newest_of(pods: list[client.V1Pod]) -> client.V1Pod | None:
+        candidates = [p for p in pods if p.metadata.deletion_timestamp is None]
         if not candidates:
             return None
         return max(candidates, key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC))
@@ -422,7 +426,28 @@ class KubernetesClient:
 
     def get_pod_readiness(self, deployment_name: str, namespace: str) -> tuple[str | None, str | None]:
         """Returns (status, reason). status is one of: 'ready', 'initializing', 'crashed', None."""
-        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        return self._readiness_of(self._newest_pod(f"app={deployment_name}", namespace))
+
+    # Names per label selector, so a long list stays well inside the API server's URL limit.
+    _READINESS_BATCH = 50
+
+    def get_pods_readiness(
+        self, deployment_names: Collection[str], namespace: str
+    ) -> dict[str, tuple[str | None, str | None]]:
+        """``get_pod_readiness`` for many Deployments, with one cluster read per 50 names
+        rather than one per Deployment. Every name asked about gets an entry."""
+        names = sorted(set(deployment_names))
+        pods_by_app: dict[str, list[client.V1Pod]] = {name: [] for name in names}
+        for start in range(0, len(names), self._READINESS_BATCH):
+            chunk = names[start : start + self._READINESS_BATCH]
+            pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app in ({','.join(chunk)})")
+            for pod in pods.items:
+                app = (pod.metadata.labels or {}).get("app")
+                if app in pods_by_app:
+                    pods_by_app[app].append(pod)
+        return {name: self._readiness_of(self._newest_of(pods)) for name, pods in pods_by_app.items()}
+
+    def _readiness_of(self, pod: client.V1Pod | None) -> tuple[str | None, str | None]:
         if pod is None:
             return None, None
         if pod.status.phase == "Failed":
