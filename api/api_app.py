@@ -3,6 +3,7 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import anyio.to_thread
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_injector import Injected, attach_injector
@@ -10,7 +11,7 @@ from injector import Injector
 from prometheus_client import REGISTRY
 from sqlmodel import Session, select
 
-from api.core.config import get_config
+from api.core.config import Config, get_config
 from api.core.metrics import (
     CONTENT_TYPE_LATEST,
     PROBE_REGISTRY,
@@ -102,9 +103,18 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 logger = logging.getLogger(__name__)
 
 
+def apply_thread_limit(config: Config) -> None:
+    """Size the thread pool sync routes run on (see ``Config.api_thread_limit``).
+
+    AnyIO's limiter belongs to the running event loop, so this runs at startup.
+    """
+    anyio.to_thread.current_default_thread_limiter().total_tokens = config.api_thread_limit
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     config = get_config()
+    apply_thread_limit(config)
     if not config.is_email_delivery_enabled:
         log_email_delivery_disabled_warning(logger)
 
