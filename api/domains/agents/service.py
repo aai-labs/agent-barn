@@ -3366,7 +3366,7 @@ class AgentService:
         agent_id: UUID,
         context: CurrentUserContext,
         tail_lines: int = 0,
-    ) -> Iterator[str]:
+    ) -> Iterator[str | None]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
         refuse_on_bot(agent)
         if agent.status != AgentStatus.RUNNING:

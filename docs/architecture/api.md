@@ -20,6 +20,8 @@ routes.py → service.py → repository.py → PostgresRepositoryDelegate
 - Repositories own SQLModel/SQLAlchemy queries and persistence behavior.
 - Infrastructure adapters own PostgreSQL, Kubernetes, email, provider HTTP clients, LiteLLM, OpenRouter, Prometheus, crypto, and related external concerns. Shipped communication-platform behavior belongs in `domains/communications/plugins/`, above those clients.
 
+Sync routes and dependencies share one request thread pool (AnyIO's default limiter, 40 threads per process), so a call that blocks on an outside system holds a thread that every other sync request needs. Outside calls therefore carry timeouts: every Kubernetes API call made through `../../api/infrastructure/kubernetes/client.py` that does not set `_request_timeout` gets a default (connect 5s, read 15s). Long-lived streams do not draw on the shared pool: the Agent log stream reads on its own limiter (`../../api/domains/agents/log_stream.py`), and its follow read returns to the caller after 15s without a line, sending a keepalive comment, so a closed tab releases its thread on the next write instead of waiting for the pod to log again.
+
 Nearby domains are the implementation template. Costs and Ingest intentionally differ from CRUD-shaped domains, while Agents has additional route, builder, artifact, and runtime files.
 
 ## Tenancy and authorization
