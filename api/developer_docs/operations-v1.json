@@ -261,6 +261,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/health",
+    "get_agents_health_organizations__organization_id__agents_health_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/llm-budgets",
     "list_agent_llm_budgets_organizations__organization_id__agents_llm_budgets_get"
   ],

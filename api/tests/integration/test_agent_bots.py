@@ -673,6 +673,28 @@ def test_a_bots_health_comes_from_its_parents_pod():
         assert_that(_k8s(context).get_pod_readiness.call_args.args[0], equal_to(f"agent-{context.parent.id}"))
 
 
+def test_a_batch_asks_a_parents_pod_once_for_the_parent_and_its_bot():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        k8s = _k8s(context)
+        pod = f"agent-{context.parent.id}"
+        k8s.get_pods_readiness.return_value = {pod: ("ready", None)}
+        k8s.fetch_agent_healthz.return_value = {"status": "ok", "served_bots": [str(context.bot.id)]}
+
+        response = context.client.get(
+            f"{BASE}/health",
+            params={"agent_ids": [str(context.parent.id), str(context.bot.id)]},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            {item["agent_id"]: item["status"] for item in response.json()},
+            equal_to({str(context.parent.id): "ok", str(context.bot.id): "ok"}),
+        )
+        assert_that([c.args[0] for c in k8s.fetch_agent_healthz.call_args_list], equal_to([pod]))
+        assert_that(set(k8s.get_pods_readiness.call_args.args[0]), equal_to({pod}))
+
+
 def _firecrawl_configured(context):
     config = context.injector.get(AppConfig)
     config.agent_firecrawl_api_key = "fc-platform-fixture"
