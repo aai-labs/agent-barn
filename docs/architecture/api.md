@@ -100,6 +100,8 @@ owns request lifecycle and credential boundaries.
 
 ## Change impact
 
+The `ssh` domain owns encrypted Organization keys, per-Agent assignments, destination policy, and generation-bound machine credentials. Product routes use Organization/Agent authorization; `api.ssh_app` owns SSH-agent WSS framing, connection limits and close codes. The SSH domain’s `SshSigningService` creates a per-connection session that rechecks stored authority on every message, fences policy snapshots, and commits signing audit before returning a result. It has no execution or plaintext-key endpoint. See [Shared SSH access](../features/ssh-access.md).
+
 When adding or moving a product router, update `../../api/api_app.py`; telemetry routes belong to `../../api/ingest_app.py`, public provider-webhook adapters belong to the API, and the Web Chat/Email runtime communications protocol plus compatibility routes belong to `../../api/communications_app.py`. Agent-authenticated memory routes belong to `../../api/memory_app.py`; internal model/credential provisioning belongs to `../../api/memory_runtime_app.py` with a separate service key. When a schema changes, update the database model, API DTO where required, migration, integration tests, and corresponding UI Zod schema. When a workflow spans repositories, verify whether partial persistence is acceptable before relying on the default session-per-operation behavior. When a mutation produces a Domain Event, use a domain-specific transaction boundary and update the Domain Events feature guide if the envelope, delivery lifecycle, privacy rules, or excluded scope changes.
 
 ## Supported external API

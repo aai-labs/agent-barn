@@ -224,6 +224,13 @@ COMMUNICATIONS_PORT=
 # Agent pods in local k3d reach it through this distinct host-published port.
 GATEWAY_PORT=8004
 CREDENTIAL_GATEWAY_BASE_URL=http://host.docker.internal:8004/gateway/v1
+
+# Shared SSH signing is optional. Run make ssh-local-tls and the Compose ssh
+# profile first; see docs/guidelines/operations.md#ssh-signing-deployment.
+SSH_ENABLED=false
+SSH_SIGNER_URL=
+# Optional public PEM CA certificate for a private/local signing listener.
+SSH_CA_CERTIFICATE=
 # Optional. Local Prometheus for the Resource usage views. `make dev-monitoring`
 # generates PROMETHEUS_PASSWORD here; once it is set the API in Docker looks for
 # Prometheus on the host at PROMETHEUS_PORT (default 9090), which is where

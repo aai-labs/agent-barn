@@ -29,6 +29,7 @@ dependencies = [
     "markdown-it-py>=4.2.0",
     "pyyaml>=6.0.3",
     "httpx>=0.28.1",
+    "websockets==17.0",
     "dramatiq[redis,watch]>=2.2.0",
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
@@ -68,6 +69,7 @@ line-length = 120
 "domains/agents/scripts/agentbarn_memory.py" = "py312"
 "domains/agents/scripts/agentbarn_task.py" = "py312"
 "domains/agents/scripts/file-sync.py" = "py312"
+"domains/agents/scripts/ssh-agent-relay.py" = "py312"
 "domains/agents/scripts/agentbarn_artifacts.py" = "py312"
 
 [tool.ruff.lint]

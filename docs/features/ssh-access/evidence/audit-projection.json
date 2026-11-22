@@ -1,0 +1,18 @@
+{
+  "execution": "Real reconciliation published to the dedicated local Redis, then EventDeliveryProcessor ran SSH projection deliveries directly; no background worker scheduling claim",
+  "reconciliation": {
+    "scanned": 34,
+    "published": 34,
+    "failed": 0
+  },
+  "deliveries_completed": 26,
+  "security_audit_records": 26,
+  "actions": {
+    "ssh.assignments.changed": 2,
+    "ssh.key.changed": 3,
+    "ssh.key.created": 3,
+    "ssh.key.deleted": 2,
+    "ssh.signing.authorized": 8,
+    "ssh.signing.issued": 8
+  }
+}

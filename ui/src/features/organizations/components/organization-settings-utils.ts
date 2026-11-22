@@ -69,8 +69,8 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
   {
     key: "shared-credentials",
     label: "Shared Credentials",
-    description: "Organization-wide integration keys reusable across Agents.",
-    adminOnly: true,
+    description: "Organization-wide integration and SSH keys reusable across Agents.",
+    adminOnly: false,
   },
   {
     key: "sync",

@@ -1,0 +1,14 @@
+{
+  "environment": "real local UI and product API; disposable stopped Agent, no request interception",
+  "flow": [
+    "select shared key",
+    "confirm Apply while stopped",
+    "PUT returned 200",
+    "saved SSH shortcut persisted after reload"
+  ],
+  "mobile": {
+    "width": 390,
+    "no_horizontal_overflow": true
+  },
+  "page_errors": []
+}

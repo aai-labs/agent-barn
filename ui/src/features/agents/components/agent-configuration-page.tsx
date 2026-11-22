@@ -125,9 +125,9 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
         <div className="mb-8 flex flex-wrap items-start gap-4">
           <AgentAvatar agent={agent} size="lg" />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-52">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="m-0 text-[2rem] font-semibold tracking-[-0.025em]" style={{ color: "var(--ink)" }}>
+              <h1 className="m-0 text-[1.5rem] font-semibold tracking-[-0.025em] sm:text-[2rem]" style={{ color: "var(--ink)" }}>
                 Configuration
               </h1>
               <AgentMetaBadges agent={agent} variant="full" />

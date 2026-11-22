@@ -96,6 +96,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/ssh-credentials/{key_id}",
+    "delete_key_organizations__organization_id__ssh_credentials__key_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/sync-providers/{provider_key}/connection",
     "abandon_sync_provider_connection_organizations__organization_id__sync_providers__provider_key__connection_delete"
   ],
@@ -506,6 +511,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/ssh-credentials",
+    "assignments_organizations__organization_id__agents__agent_id__ssh_credentials_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/tasks",
     "list_agent_tasks_organizations__organization_id__agents__agent_id__tasks_get"
   ],
@@ -693,6 +703,16 @@
     "GET",
     "/organizations/{organization_id}/skills/{skill_id}/versions/{version}",
     "get_skill_version_organizations__organization_id__skills__skill_id__versions__version__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/ssh-credentials",
+    "list_keys_organizations__organization_id__ssh_credentials_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/ssh-credentials/{key_id}",
+    "get_key_organizations__organization_id__ssh_credentials__key_id__get"
   ],
   [
     "GET",
@@ -1451,6 +1471,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/ssh-credentials",
+    "create_key_organizations__organization_id__ssh_credentials_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/subscription",
     "start_subscription_organizations__organization_id__subscription_post"
   ],
@@ -1681,8 +1706,18 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/ssh-credentials",
+    "apply_organizations__organization_id__agents__agent_id__ssh_credentials_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/llm-budget",
     "set_organization_own_llm_budget_organizations__organization_id__llm_budget_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/ssh-credentials/{key_id}",
+    "update_key_organizations__organization_id__ssh_credentials__key_id__put"
   ],
   [
     "PUT",

@@ -222,6 +222,12 @@ releases:
         value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
+      - name: ssh.enabled
+        value: {{ env "SSH_ENABLED" | default "false" }}
+      - name: ssh.caCertificate
+        value: {{ env "SSH_CA_CERTIFICATE" | default "" | quote }}
+      - name: ssh.signerUrl
+        value: {{ env "SSH_SIGNER_URL" | default "" | quote }}
       - name: memory.defaultModel
         value: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
       - name: memory.enabled

@@ -208,6 +208,9 @@ from api.domains.shared_credentials.models import SharedCredential
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
+from api.domains.ssh.models import SshCredential
+from api.domains.ssh.repository import SshRepository
+from api.domains.ssh.runtime import materialize as materialize_ssh
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
@@ -434,6 +437,7 @@ class AgentService:
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
     custom_api: CustomApiRepository
+    ssh: SshRepository
     integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
@@ -2578,6 +2582,7 @@ class AgentService:
             logger.exception("Could not terminate failed runtime for agent %s", agent.id)
         self.integrations.set_state(agent.id, "failed")
         self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
+        self.ssh.revoke(agent.id)
         normalized = normalize_agent_provisioning_error(exc)
         agent.status = AgentStatus.ERROR
         agent.last_error = normalized.display_message
@@ -2619,6 +2624,7 @@ class AgentService:
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
         credential_overrides: Mapping[SecretProvider, Any] | None = None,
         removed_providers: Collection[SecretProvider] = (),
+        ssh_keys_override: list[SshCredential] | None = None,
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         ns = self.config.k8s_namespace
@@ -2651,6 +2657,7 @@ class AgentService:
             custom_api_overrides=custom_api_overrides,
             credential_overrides=credential_overrides,
             removed_providers=removed_providers,
+            ssh_keys_override=ssh_keys_override,
             bots=assembled_bots,
             deleted_bot_ids=[bot.id for bot in deleted_bots],
         )
@@ -2729,6 +2736,7 @@ class AgentService:
         custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
         credential_overrides: Mapping[SecretProvider, Any] | None = None,
         removed_providers: Collection[SecretProvider] = (),
+        ssh_keys_override: list[SshCredential] | None = None,
         bots: Sequence[tuple[Agent, _AssembledAgent]] = (),
         deleted_bot_ids: Sequence[UUID] = (),
     ) -> _AssembledAgent:
@@ -3038,6 +3046,15 @@ class AgentService:
             home_dir=aai_home,
             store_dir=aai_store_dir,
         )
+        ssh_keys = ssh_keys_override if ssh_keys_override is not None else self.ssh.runtime_keys(agent.id, org_id)
+        ssh_directory = "/run/agentbarn-ssh" + (f"/{agent.id}" if agent.parent_agent_id else "")
+        ssh_artifacts = materialize_ssh(
+            ssh_keys,
+            enabled=self.config.ssh_enabled,
+            url=self.config.ssh_signer_url,
+            ca_certificate=self.config.ssh_ca_certificate,
+            socket_directory=ssh_directory,
+        )
         gateway_tokens = []
         runtime = None
         if not preflight:
@@ -3060,6 +3077,20 @@ class AgentService:
                 home_dir=aai_home,
                 store_dir=aai_store_dir,
             )
+        if runtime is not None:
+            if ssh_keys:
+                ssh_value = self.ssh.issue(agent.id, org_id, runtime.generation, ssh_keys)
+                ssh_artifacts = materialize_ssh(
+                    ssh_keys,
+                    enabled=self.config.ssh_enabled,
+                    url=self.config.ssh_signer_url,
+                    token=ssh_value,
+                    ca_certificate=self.config.ssh_ca_certificate,
+                    socket_directory=ssh_directory,
+                )
+            else:
+                self.ssh.revoke(agent.id)
+        secret.string_data.update(ssh_artifacts.env)
         secret.string_data.update(custom_artifacts.env)
         secret.string_data.update(artifacts.env)
         aai_config_toml = artifacts.files.get("aai-cli-config.toml") or (
@@ -3198,6 +3229,12 @@ class AgentService:
         )
 
         tool_env_names = frozenset(artifacts.env) | frozenset(custom_artifacts.env)
+        if ssh_keys:
+            tool_env_names |= {"SSH_AUTH_SOCK", "AGENTBARN_SSH_DIRECTORY"}
+            if hermes_cfg is not None:
+                hermes_cfg.setdefault("terminal", {}).setdefault("env_passthrough", []).extend(
+                    ["SSH_AUTH_SOCK", "AGENTBARN_SSH_DIRECTORY"]
+                )
         hermes_pod_with_bots = agent.agent_type == AgentType.HERMES and (
             agent.parent_agent_id is not None or bool(self.repository.find_live_bots(agent.id))
         )
@@ -3291,7 +3328,14 @@ class AgentService:
                 bots_manifest=bots_manifest,
             )
 
-        config_map.data["AGENTS.md"] += custom_artifacts.policy_md
+        config_map.data.update(ssh_artifacts.files)
+        config_map.data["AGENTS.md"] += custom_artifacts.policy_md + ssh_artifacts.policy_md
+        from api.domains.agents.builders.ssh import attach_ssh_volume
+
+        if ssh_keys or any("SSH_AUTH_SOCK" in bot.tool_env_names for _, bot in bots):
+            attach_ssh_volume(
+                deployment, "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw"
+            )
 
         return _AssembledAgent(
             previous_status=previous_status,
@@ -3554,6 +3598,7 @@ class AgentService:
         # The pod is gone, so its gateway tokens must stop resolving even if a copy of
         # the Secret was taken while it ran.
         self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
+        self.ssh.revoke(agent.id)
         if agent.parent_agent_id is None:
             self._stop_bots(agent)
 

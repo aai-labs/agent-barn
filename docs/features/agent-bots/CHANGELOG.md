@@ -79,6 +79,25 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 
 ## Changes
 
+### 2026-11-22 — Shared SSH access — disabled startup compatibility
+
+- SSH startup discovers actual Parent/Bot signing credentials with system Python
+  before invoking the optional relay environment. Empty and unkeyed Bot manifests
+  no longer break Parents pinned to older images, including deleted-Bot cleanup.
+- Real container regressions execute both startup guards without the SSH interpreter
+  or third-party discovery dependencies. Keyed Parent/Bot runtime contracts also
+  verify discovery before native SSH, Git and file-transfer use. See
+  [SSH execution evidence](../ssh-access/EVIDENCE.md).
+
+### 2026-11-21 — Shared SSH access — PR #376
+
+- Corrected SSH Apply & Restart to act on the Parent Agent, require its lifecycle
+  permission, and respect its managed-update and restore guards. No Bot pod is created.
+- Bots receive their own generation-scoped signing sockets inside the shared pod,
+  including when only a Bot has SSH credentials. The UI explains the shared restart.
+- Verification and remaining deployment limits are recorded in
+  [SSH execution evidence](../ssh-access/EVIDENCE.md).
+
 ### 2026-11-19 — AF-445 — A Bot's scheduled run can end its own schedule
 
 - Fixed: in local k3d, a Bot asked in Web Chat for "every minute, 3 quotes, then delete the schedule" could not delete it. Each run's `automations list` returned no jobs, so the run said the schedule was removed and set its Task done; the Tasks plugin put it back in progress, and the job kept running. `agentbarn-bot-env` pinned the job's unrouted delivery to the Bot's account, while OpenClaw recorded the job's owner account from the Web Chat turn, which has none (`default`). OpenClaw runs a job under its delivery account and lets a run list, read or remove its own job only when that matches the owner account. The Parent Agent was unaffected: both are `default`, and its run removed its job and finished its Task.

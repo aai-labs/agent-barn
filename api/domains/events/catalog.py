@@ -1003,6 +1003,31 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
     subject_display: str
 
 
+SSH_EVENTS = (
+    "ssh.key.created",
+    "ssh.key.changed",
+    "ssh.key.deleted",
+    "ssh.assignments.changed",
+    "ssh.signing.authorized",
+    "ssh.signing.issued",
+    "ssh.signing.refused",
+)
+
+
+class SshEventPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    organization_id: UUID
+    agent_id: UUID | None = None
+    ssh_key_id: UUID | None = None
+    fingerprint: str | None = None
+    revision: int | None = None
+    outcome: str | None = None
+    actor_display: str | None = None
+    subject_display: str | None = None
+    request_id: UUID | None = None
+    host_fingerprint: str | None = None
+
+
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     registry.register(
@@ -1436,6 +1461,16 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=payload_model,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for _ssh_event in SSH_EVENTS:
+        registry.register(
+            DomainEventDefinition(
+                event_name=_ssh_event,
+                schema_version=1,
+                payload_model=SshEventPayload,
                 handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.ORGANIZATION,
             )
