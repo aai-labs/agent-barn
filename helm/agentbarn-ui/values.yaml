@@ -31,10 +31,15 @@ ingress:
   clusterIssuer: letsencrypt-http01
   tlsSecretName: agentbarn-ui-tls
 
+# CPU is what the UI runs short of: every dashboard page load prefetches its links, 40+
+# requests at once, and a quarter core left the pod throttled in every period while it
+# served them, so a click's own request queued behind them. A full core lets it burst
+# through a page load. Memory use sits well under the limit; the namespace quota binds on
+# memory, so it stays as it is.
 resources:
   requests:
     memory: 128Mi
     cpu: 50m
   limits:
     memory: 256Mi
-    cpu: 250m
+    cpu: 1000m
