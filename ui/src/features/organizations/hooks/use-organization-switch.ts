@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
@@ -35,8 +36,16 @@ export function organizationSwitchTarget(pathname: string, orgId: string): strin
   return parts.join("/");
 }
 
+const PLATFORM_HOME = "/dashboard/platform";
+
 /**
  * Moving between Organizations and Platform View, for every switcher that offers it.
+ *
+ * A switcher is a menu, not a link, so Next.js never prefetches its targets on its own and
+ * a switch would wait on the server before anything changed on screen. Call
+ * `prefetchSwitchTargets` when the switcher shows (and again when it opens) so the new
+ * page's loading state appears the moment a target is picked. `isSwitching` covers a pick
+ * that lands before that prefetch finishes.
  */
 export function useOrganizationSwitch() {
   const { organizations, selectedOrganization } = useOrganizationContext();
@@ -52,16 +61,24 @@ export function useOrganizationSwitch() {
       (membership) => membership.role === "OWNER" && membership.organization.isTrial,
     );
 
-  const selectOrganization = (org: Organization) => {
-    if (!isPlatformView && org.id === selectedOrganization?.id) return;
+  const [isSwitching, startTransition] = useTransition();
+  const currentOrgId = isPlatformView ? null : (selectedOrganization?.id ?? null);
+  const inPlatform = pathname.startsWith(PLATFORM_HOME);
 
-    router.push(organizationSwitchTarget(pathname, org.id));
+  const prefetchSwitchTargets = useCallback(() => {
+    for (const org of organizations) {
+      if (org.id !== currentOrgId) router.prefetch(organizationSwitchTarget(pathname, org.id));
+    }
+    if (user.isPlatformAdmin && !inPlatform) router.prefetch(PLATFORM_HOME);
+  }, [organizations, currentOrgId, pathname, inPlatform, user.isPlatformAdmin, router]);
+
+  const selectOrganization = (org: Organization) => {
+    if (org.id === currentOrgId) return;
+    startTransition(() => router.push(organizationSwitchTarget(pathname, org.id)));
   };
 
   const selectPlatform = () => {
-    if (!pathname.startsWith("/dashboard/platform")) {
-      router.push("/dashboard/platform");
-    }
+    if (!inPlatform) startTransition(() => router.push(PLATFORM_HOME));
   };
 
   return {
@@ -72,5 +89,7 @@ export function useOrganizationSwitch() {
     canCreateOrganization: !onTrial,
     selectOrganization,
     selectPlatform,
+    prefetchSwitchTargets,
+    isSwitching,
   };
 }
