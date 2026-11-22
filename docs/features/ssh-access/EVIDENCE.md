@@ -344,3 +344,62 @@ and native runtime contracts above prove the actual restart and SSH behavior.
 
 The browser test also writes and attaches this ordered flow to its Playwright
 results on every run.
+
+## 2026-11-22 — Whole-PR review fixes
+
+Tested implementation: `d82a5ee11fc402c4cc7c094e81f125f3d0065a35`, based on
+`64386412`. The following documentation commit records results only.
+
+- Both startup scripts now ask the relay's standard-library-only `--needed`
+  discovery whether actual Parent/Bot signing credentials exist before invoking
+  `/opt/agentbarn-ssh`. Empty and unkeyed Bot manifests, including cleanup-only
+  manifests, do not require that optional environment.
+- `SshSigningService` and its per-connection session own token authorization,
+  policy-snapshot fencing, OpenSSH signing and durable pre/result audit. The WSS
+  adapter retains transport framing, connection limits, metrics and close codes.
+- Python security scenarios now separate domain setup, meaningful actions and
+  PyHamcrest outcome assertions. Protocol refusal cases are independent, real
+  transport setup is reusable, and runtime fixtures own resource cleanup.
+  Browser selectors and interactions belong to `SshPage`; specs retain assertions
+  and the successful Bot selection/confirmation/save screenshots.
+
+### Startup regression: red and green
+
+Before changing the startup guard, four real-container cases failed at the intended
+assertion: both runtimes, each with an empty or unkeyed Bot manifest, exited **127**
+with `/opt/agentbarn-ssh/bin/python: not found` instead of reaching the gateway
+marker. The fixed tests execute the same startup blocks with the SSH environment
+masked, no signing tokens, and a blocked third-party WebSocket import. All four
+reach the marker with exit **0**. These emulate older image capabilities; they do
+not claim full gateway startup on a downloaded historical image.
+
+The six normal-tool contracts separately verify standard-library discovery for
+keyed Parents, Bot-only keys and shared keys before configuring the actual relay.
+They retain real TLS, PostgreSQL, OpenSSH, native terminal/exec, Git, scp/sftp,
+socket ownership/mode, revocation and owning-Agent audit checks.
+
+### Commands and results
+
+```sh
+PYTEST_XDIST_AUTO_NUM_WORKERS=2 REDIS_URL=redis://127.0.0.1:1/0 \
+  PYTEST_ADDOPTS='-k "ssh or test_hermes_builders" --tb=short --show-capture=no -q' \
+  make test-api
+# 168 passed
+
+HERMES_TEST_IMAGE=agentbarn-hermes-base:ssh-review \
+  OPENCLAW_TEST_IMAGE=agentbarn-openclaw-base:ssh-review \
+  REDIS_URL=redis://127.0.0.1:1/0 \
+  PYTEST_ADDOPTS='--tb=short --show-capture=no -q' make test-ssh-runtime
+# 10 passed: six normal-tool contracts and four startup regressions
+
+cd ui
+pnpm exec playwright test tests/e2e/ssh.spec.ts tests/e2e/integration-setup.spec.ts
+# 14 passed, including the successful Bot shared-restart flow
+```
+
+`make check-api check-migrations check-ssh`, `make check-ui lint-ui`, both startup
+shell syntax checks and `git diff --check` passed. The existing built images ran
+the current mounted scripts/plugins; no image-content, schema or release-version
+change was needed. Browser APIs remain mocked; Kubernetes execution, production
+network policy and paid model turns remain outside these checks. This is selected
+regression coverage, not a complete API-suite run.
