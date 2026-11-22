@@ -5,6 +5,8 @@ import type { QueryObserverResult } from "@tanstack/react-query";
 
 import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
 import { AppErrorState } from "@/components/app-error-state";
+import { ApiError } from "@/shared/api/error/errors";
+import { isServerUnavailable } from "@/shared/api/error/server-unavailable";
 import { ApiResult } from "@/shared/api/types";
 
 import type { CurrentUserContext } from "../schemas";
@@ -20,6 +22,21 @@ type UserContextType = {
 const CurrentUserContextState = createContext<UserContextType | undefined>(
   undefined,
 );
+
+// Not "your session is valid": during an outage the session was only kept, because no
+// server answered to say otherwise.
+const unreachableCopy = {
+  title: "Can't reach Agent Barn",
+  description:
+    "The server isn't responding right now. You're still signed in. Try again in a moment.",
+  retryLabel: "Try again",
+};
+
+const accountErrorCopy = {
+  title: "We couldn't load your account",
+  description: "Your account details are unavailable right now.",
+  retryLabel: "Retry account",
+};
 
 export function UserContextProvider({ children }: { children: ReactNode }) {
   const expireSession = useAuthStore((state) => state.expireSession);
@@ -40,15 +57,19 @@ export function UserContextProvider({ children }: { children: ReactNode }) {
   }
 
   if (isError || !userContext) {
+    const copy =
+      error instanceof ApiError && isServerUnavailable(error.status)
+        ? unreachableCopy
+        : accountErrorCopy;
     return (
       <AppErrorState
         error={error}
-        title="We couldn't load your account"
-        description="Your session is valid, but we couldn't load the account context."
+        title={copy.title}
+        description={copy.description}
+        retryLabel={copy.retryLabel}
         onRetry={() => {
           void refetch();
         }}
-        retryLabel="Retry account"
         className="min-h-svh"
       />
     );

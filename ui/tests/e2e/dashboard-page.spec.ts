@@ -254,7 +254,7 @@ test.describe("Dashboard Page", () => {
     await expect(page.getByText("Agents service unavailable")).toBeVisible();
   });
 
-  test("shows an account error state when user context fails", async ({
+  test("shows the server as unreachable when user context answers 500", async ({
     page,
   }) => {
     await dataSupportPage.users.interceptGetUserContextRequest({
@@ -264,9 +264,7 @@ test.describe("Dashboard Page", () => {
 
     await dashboardPage.goto();
 
-    await expect(
-      page.getByText("We couldn't load your account"),
-    ).toBeVisible();
+    await expect(page.getByText("Can't reach Agent Barn")).toBeVisible();
     await expect(
       page.getByText("Account service unavailable"),
     ).toBeVisible();
