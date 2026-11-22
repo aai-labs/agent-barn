@@ -9,6 +9,8 @@ import { canAgent } from "@/features/agents/utils";
 import { useAgentCost } from "@/features/costs/hooks/use-agent-cost";
 import { formatCallSpend, formatSpend } from "@/features/costs/format";
 
+import { useInView } from "@/hooks/use-in-view";
+
 import { useAgentResourceUsage } from "../hooks/use-agent-resource-usage";
 import type { AgentOverviewItem } from "../schemas";
 import type { OverviewPeriod } from "../utils";
@@ -30,8 +32,10 @@ interface AgentOverviewDetailsProps {
  * caller may see.
  */
 export function AgentOverviewDetails({ item, health, period, agentHref }: AgentOverviewDetailsProps) {
+  // An open row scrolled out of sight stops refreshing its usage until it is back.
+  const [ref, inView] = useInView<HTMLDivElement>();
   return (
-    <div className="grid gap-4 p-4" style={PANEL_GRID_STYLE} data-testid="agent-overview-details">
+    <div ref={ref} className="grid gap-4 p-4" style={PANEL_GRID_STYLE} data-testid="agent-overview-details">
       <Panel title="Status" href={agentHref} linkLabel="Open agent" testId="agent-overview-status">
         <StatusPanel item={item} health={health} />
       </Panel>
@@ -53,7 +57,7 @@ export function AgentOverviewDetails({ item, health, period, agentHref }: AgentO
         linkLabel="See resource usage"
         testId="agent-overview-usage"
       >
-        <UsagePanel item={item} />
+        <UsagePanel item={item} poll={inView} />
       </Panel>
     </div>
   );
@@ -104,12 +108,12 @@ function CostPanel({ item, period }: { item: AgentOverviewItem; period: Overview
   );
 }
 
-function UsagePanel({ item }: { item: AgentOverviewItem }) {
+function UsagePanel({ item, poll }: { item: AgentOverviewItem; poll: boolean }) {
   const canRead = canAgent(item, "activity.read");
   const stopped = item.status === "STOPPED";
   // Only asked for what can be answered: a stopped Agent has no container, and a reader
   // without activity.read would be refused.
-  const { usage, isLoadingUsage, error } = useAgentResourceUsage(item.id, "24h", canRead && !stopped);
+  const { usage, isLoadingUsage, error } = useAgentResourceUsage(item.id, "24h", canRead && !stopped, { poll });
 
   return <UsageFacts canRead={canRead} stopped={stopped} isLoading={isLoadingUsage} failed={!!error} usage={usage} />;
 }

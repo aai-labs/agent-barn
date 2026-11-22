@@ -1,5 +1,7 @@
 "use client";
 
+import { useInView } from "@/hooks/use-in-view";
+
 import { Muted, PANEL_GRID_STYLE, Panel, PanelSkeleton, StatusFacts, UsageFacts } from "./agent-detail-panels";
 import { usePlatformAgentDetails } from "../hooks/use-platform-agent-details";
 
@@ -11,11 +13,13 @@ import { usePlatformAgentDetails } from "../hooks/use-platform-agent-details";
  * Organization's agent pages are not theirs to open. Mounted only while the row is open.
  */
 export function PlatformAgentDetails({ agentId }: { agentId: string }) {
-  const { details, isLoadingDetails, error } = usePlatformAgentDetails(agentId);
+  // An open row scrolled out of sight stops refreshing until it is back.
+  const [ref, inView] = useInView<HTMLDivElement>();
+  const { details, isLoadingDetails, error } = usePlatformAgentDetails(agentId, { poll: inView });
   const failed = !!error || (!isLoadingDetails && !details);
 
   return (
-    <div className="grid gap-4 p-4" style={PANEL_GRID_STYLE} data-testid="platform-agent-details">
+    <div ref={ref} className="grid gap-4 p-4" style={PANEL_GRID_STYLE} data-testid="platform-agent-details">
       <Panel title="Status" testId="platform-agent-status">
         {isLoadingDetails ? (
           <PanelSkeleton />

@@ -24,6 +24,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.tests.core.overlap import OverlapProbe
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -758,6 +759,36 @@ def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
             assert_that(usage["memory_working_set_bytes"], equal_to(1 * _GiB))
             assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
             assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_an_opened_rows_health_restarts_and_usage_are_read_together():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-par-a@example.com", "owner-det-par-b@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-parallel@example.com"),
+        ]
+    ) as context:
+        k8s: Any = context.injector.get(KubernetesClient)
+        prometheus = _prometheus(context)
+        everything = OverlapProbe()
+        everything.slow(k8s.get_pod_readiness, k8s.get_runtime_diagnostics, prometheus.query, prometheus.query_range)
+
+        with when("the cluster and Prometheus are each slow to answer"):
+            response = _details(context, context.cy.id)
+
+        with then("the row still has every fact"):
+            body = response.json()
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(body["health_status"], equal_to("ok"))
+            assert_that(body["restart_count"], equal_to(3))
+            assert_that(body["resource_usage"]["availability"], equal_to("available"))
+
+        with then("its health, restarts and usage reads overlap rather than wait on each other"):
+            # health's pod read, the restarts read, and usage's three Prometheus reads
+            assert_that(everything.peak, equal_to(5))
 
 
 def test_an_opened_row_carries_the_agents_request_beside_its_limit():

@@ -290,6 +290,26 @@ test.describe("Agents overview", () => {
   });
 
   test.describe("opening a row", () => {
+    test("stops refreshing an open row's usage while it is scrolled out of sight, and catches up when back", async ({ page }) => {
+      // Short enough that the open row, near the top of the page, sits past the 200px margin.
+      await page.setViewportSize({ width: 1440, height: 100 });
+      await page.clock.install();
+      const usageReads = await dataSupportPage.resourceUsage.interceptAgentResourceUsage(MOCK_AGENT_ID);
+      await overview.goto();
+      await overview.toggleFor("Maya").click();
+      await expect(overview.details()).toBeAttached();
+      await expect.poll(() => usageReads.length).toBe(1);
+
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const belowTheFold = await overview.details().evaluate((el) => el.getBoundingClientRect().top - window.innerHeight);
+      expect(belowTheFold).toBeGreaterThan(200);
+      await page.clock.runFor(130_000);
+      expect(usageReads).toHaveLength(1);
+
+      await overview.details().scrollIntoViewIfNeeded();
+      await expect.poll(() => usageReads.length).toBe(2);
+    });
+
     test("shows status, cost and resource usage, each linking to its own tab", async ({ page }) => {
       await overview.goto();
       const toggle = overview.toggleFor("Maya");
