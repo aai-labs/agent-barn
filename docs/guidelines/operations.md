@@ -626,6 +626,18 @@ Organizations on Credit buy more through Stripe Checkout (see `../features/credi
 - Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
 - A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
 
+## Anomaly checks
+
+The `anomaly-checks` CronJob (`anomalyChecks` chart values, `11-59/15 * * * *`) compares
+each Agent of an Organization that turned [anomaly detection](../features/anomaly-detection.md)
+on with its own last 14 days. It runs five minutes after each cost sync starts, so the LLM
+figures it reads are as fresh as they get; it reads them only up to the last completed sync.
+It needs only the API's Secret (the database), no cluster access. An Agent whose check
+fails is logged and the rest are still checked; the Job succeeds and the next run retries
+that Agent. Only a run that cannot check at all (no database) fails the Job. Locally, `./run.sh` runs it as Compose's
+`anomaly-checks` service every 15 minutes; `make run-anomaly-checks` runs one pass from the
+host.
+
 ## Tier subscriptions and the Tier sweep
 
 Paid Tiers are kept by subscriptions ([Tiers](../features/tiers.md#subscriptions)). Stripe
@@ -942,7 +954,7 @@ journal to preserve dispatch deduplication across restarts. Failed/expired attem
 block for inspection rather than replaying possible external effects. Parked runs
 keep file pins until cancellation; see the [file workflow contract](../features/agent-workflows.md#file-workflow-inputs-and-results).
 The Platform Admin authoring setting controls definition changes only. Before
-running saved workflows, apply the migration. The owning Agent must be running,
+running saved workflows, apply the migration. The Agent chosen for a run must be running,
 and Agents started before this release must be restarted once so their trigger
 server can accept workflow steps. Each step runs as a session in that Agent, under
 its tools, Integrations, approval mode and spend limits. No runtime image pinning,
@@ -963,7 +975,7 @@ value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
 Workflow limits and text retention are hard coded in
 `api/domains/workflows/config.py`; they are not environment or Helm options.
 Workflow admission has no active-run concurrency cap. Runs execute as sessions
-in the owning Agent and share its resources. Waiting for an unreachable Agent consumes
+in the Agent chosen for each run and share its resources. Waiting for an unreachable Agent consumes
 the attempt deadline. Non-successful Agent dispatch responses are logged with
 the run identity and HTTP status. A 404 on the workflow step route indicates an
 older trigger server; pause and start that Agent to load the current configuration.
@@ -988,12 +1000,19 @@ attachments to this execution model. The [artifact contract](../features/agent-a
 and [Garage operations guide](garage.md) own storage configuration, migrations
 and rollback.
 
+Migration `e4b439a1c7d2` follows `3f9f88255e3b` and moves workflows from their
+Agent to the Organization, recording the Agent on each run instead. It needs no
+Agent update or restart. Its downgrade is lossy and deletes workflows and runs
+that the earlier one-Agent model cannot hold; take a backup first. The
+[feature specification](../features/agent-workflows.md#organization-ownership-migration-af-439)
+owns the column changes and the exact downgrade behavior.
+
 ## Workflow authoring (WF01)
 
 After migrating and verifying WF01, Platform Administrators can enable authoring
 at **Platform Settings → Workflows** and save the choice. It takes effect on
 subsequent API requests without a redeploy and allows manual definition creation,
-version saving and archive across all Organizations. Definition/version reads
+version saving, default-Agent changes and archive across all Organizations. Definition/version reads
 remain available when disabled. Authoring defaults to `false` until a Platform
 Admin saves a choice. The persisted choice survives restarts, with no environment
 or Helm override. Disable authoring through Platform Settings to stop new

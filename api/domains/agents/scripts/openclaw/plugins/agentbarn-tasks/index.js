@@ -18,9 +18,13 @@
 // user's request.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { join as joinPath, resolve as resolvePath } from "node:path";
 
 const TOOL = "agentbarn_task";
+const MAIN_AGENT = "main";
+const SECRET_ROOT = process.env.BOT_SECRET_ROOT || "/run/agentbarn/bots";
+const AGENT_NAME = /^[A-Za-z0-9-]+$/;
+const IDENTITY_NAMES = ["AGENT_ID", "INGEST_URL", "INGEST_API_KEY", "ARTIFACT_URL", "ARTIFACT_API_KEY", "ARTIFACT_MAX_BYTES"];
 const STATUSES = ["open", "in_progress", "done", "failed"];
 // A Task the Agent left in_progress with keep: work that continues in a later turn. Only a run
 // that failed moves it (to open); otherwise it stays in_progress.
@@ -133,8 +137,8 @@ const PARAMETERS = {
 
 // runId -> what the run did: tool call ids, files written and attached, reminders sent
 const runs = new Map();
-// The Task lines shown each turn, and when they were read (null: read again)
-let taskListCache = { at: null, lines: [] };
+const taskListCache = new Map();
+const identities = new Map();
 // sessionKey -> its current runId; tool_result_persist is not told which run a result belongs to.
 const currentRun = new Map();
 // sessionKey -> the reminder its next turn starts with
@@ -153,8 +157,8 @@ function remember(map, key, value) {
   while (map.size > SESSIONS_KEPT) map.delete(map.keys().next().value);
 }
 
-const forgetTaskList = () => {
-  taskListCache = { at: null, lines: [] };
+const forgetTaskList = (agent) => {
+  taskListCache.delete(agent);
 };
 
 // A long word that reads like a key: mixed case with digits, or a long hex string (not a UUID).
@@ -172,17 +176,50 @@ const sideRun = (sessionKey) =>
   (sessionKey.endsWith(":boot") || sessionKey.startsWith("subagent:") || sessionKey.includes(":subagent:"));
 
 const command = () => process.env.AGENTBARN_TASK_COMMAND || "/usr/local/bin/agentbarn-task";
-const workspace = () => `${process.env.HOME}/.openclaw/workspace`;
+
+function agentOf(ctx) {
+  if (ctx?.agentId) return ctx.agentId;
+  const scoped = /^agent:([^:]+):/.exec(ctx?.sessionKey ?? "");
+  return scoped ? scoped[1] : MAIN_AGENT;
+}
+
+const workspace = (agent) =>
+  `${process.env.HOME}/.openclaw/${agent === MAIN_AGENT ? "workspace" : `workspace-${agent}`}`;
+
+function identity(agent) {
+  if (agent === MAIN_AGENT) return {};
+  if (identities.has(agent)) return identities.get(agent);
+  if (!AGENT_NAME.test(agent)) return null;
+  const values = {};
+  for (const name of IDENTITY_NAMES) {
+    try {
+      values[name] = fs.readFileSync(joinPath(SECRET_ROOT, agent, name), "utf8");
+    } catch {
+      values[name] = "";
+    }
+  }
+  if (values.AGENT_ID !== agent || !values.INGEST_URL || !values.INGEST_API_KEY) return null;
+  values.ARTIFACT_UPLOAD_ROOTS = workspace(agent);
+  identities.set(agent, values);
+  return values;
+}
+
+const maxBytes = (agent) => Number((identity(agent) ?? {}).ARTIFACT_MAX_BYTES ?? process.env.ARTIFACT_MAX_BYTES) || Infinity;
 
 const UNAVAILABLE = "Agent Barn Tasks are unavailable right now, so the change was not confirmed.";
 
-function run(argv, stdin = "", timeoutMs = COMMAND_TIMEOUT_MS) {
+function run(agent, argv, stdin = "", timeoutMs = COMMAND_TIMEOUT_MS) {
   return new Promise((resolve) => {
+    const own = identity(agent);
+    if (own === null) {
+      resolve({ ok: false, output: UNAVAILABLE });
+      return;
+    }
     let stdout = "";
     let stderr = "";
     let child;
     try {
-      child = spawn(command(), argv, { cwd: workspace() });
+      child = spawn(command(), argv, { cwd: workspace(agent), env: { ...process.env, ...own } });
     } catch {
       resolve({ ok: false, output: UNAVAILABLE });
       return;
@@ -256,12 +293,12 @@ function argvFor(params) {
 
 const textResult = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }], details: value });
 
-async function executeTool(_toolCallId, params) {
+async function executeTool(agent, _toolCallId, params) {
   const built = argvFor(params && typeof params === "object" ? params : {});
   if (typeof built === "string") return textResult({ error: built });
   const [argv, stdin] = built;
-  const { ok, output } = await run(argv, stdin);
-  if (!["list", "show"].includes(argv[0])) forgetTaskList();
+  const { ok, output } = await run(agent, argv, stdin);
+  if (!["list", "show"].includes(argv[0])) forgetTaskList(agent);
   if (!ok) return textResult({ error: output });
   try {
     return textResult(JSON.parse(output));
@@ -349,18 +386,18 @@ function track(event, ctx) {
   if (ctx.sessionKey) remember(currentRun, ctx.sessionKey, runId);
   let state = runs.get(runId);
   if (!state) {
-    state = newState(ctx.sessionKey ?? "");
+    state = newState(ctx);
     remember(runs, runId, state);
   }
   return state;
 }
 
 // What the plugin knows about one run.
-const newState = (sessionKey) => ({
+const newState = (ctx) => ({
   work: new Set(), wroteFiles: false, written: new Set(), recorded: false, taskIds: new Set(),
   // taskId -> the last status the Agent set this run
   statuses: new Map(),
-  attached: new Set(), reminded: false, revised: false, sessionKey,
+  attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "", agent: agentOf(ctx),
   // The Task the Agent touched last, and the titles it gave the Tasks it created.
   lastTask: null, titles: new Map(),
   // Schedules the Agent created this run, and the ids of those it removed.
@@ -390,7 +427,7 @@ async function held(state, reply, trigger, closing) {
     closing,
     trigger: String(trigger ?? "").slice(0, 60),
   };
-  const answer = await run(["turn-end"], JSON.stringify(told), TURN_END_TIMEOUT_MS);
+  const answer = await run(state.agent, ["turn-end"], JSON.stringify(told), TURN_END_TIMEOUT_MS);
   try {
     const holds = answer.ok ? JSON.parse(answer.output).holds : null;
     return holds && typeof holds === "object" ? holds : {};
@@ -401,7 +438,7 @@ async function held(state, reply, trigger, closing) {
 
 const linksPath = () => `${process.env.HOME}/.openclaw/agentbarn-task-schedules.json`;
 
-// Job id -> {task_id, runs}: the Tasks that follow a schedule. Kept beside OpenClaw's own state.
+// Job id -> {task_id, agent, runs}: the Tasks that follow a schedule, and whose they are. Kept beside OpenClaw's own state.
 function readLinks() {
   try {
     const links = JSON.parse(fs.readFileSync(linksPath(), "utf8"));
@@ -428,8 +465,9 @@ async function endLink(jobId, setDone = true) {
   delete links[jobId];
   saveLinks(links);
   if (!setDone || Object.values(links).some((other) => other?.task_id === link.task_id)) return;
-  await run(["status", link.task_id, "done"]);
-  forgetTaskList();
+  const agent = link.agent ?? MAIN_AGENT;
+  await run(agent, ["status", link.task_id, "done"]);
+  forgetTaskList(agent);
 }
 
 function recurrenceOf(schedule) {
@@ -477,7 +515,7 @@ async function linkSchedules(sessionKey, state) {
         status: agentStatus === KEPT ? "in_progress" : (agentStatus ?? ""),
       },
     };
-    const answer = await run(["schedule-intent"], JSON.stringify(asked), INTENT_TIMEOUT_MS);
+    const answer = await run(state.agent, ["schedule-intent"], JSON.stringify(asked), INTENT_TIMEOUT_MS);
     let intent = null;
     try {
       intent = answer.ok ? (JSON.parse(answer.output).intent ?? null) : null;
@@ -488,16 +526,16 @@ async function linkSchedules(sessionKey, state) {
     if (intent !== "runs") {
       // Setting up the schedule was the whole job, so the Task for it is finished.
       if (taskId && (agentStatus === KEPT || agentStatus === "in_progress")) {
-        await run(["status", taskId, "done"]);
+        await run(state.agent, ["status", taskId, "done"]);
         state.statuses.set(taskId, "done");
-        forgetTaskList();
+        forgetTaskList(state.agent);
       }
       continue;
     }
     if (!taskId) {
       const words = request.split(/\s+/).filter(Boolean).join(" ");
       const title = (schedule.name || words || "Scheduled work").slice(0, AUTOMATIC_TITLE_CHARS);
-      const created = await run(["create", `--title=${title}`, "--status=in_progress", "--origin=automatic"]);
+      const created = await run(state.agent, ["create", `--title=${title}`, "--status=in_progress", "--origin=automatic"]);
       try {
         taskId = created.ok ? JSON.parse(created.output).id : null;
       } catch {
@@ -508,13 +546,13 @@ async function linkSchedules(sessionKey, state) {
       state.taskIds.add(taskId);
       state.lastTask = taskId;
     } else if (agentStatus !== KEPT && agentStatus !== "in_progress") {
-      await run(["status", taskId, "in_progress"]);
+      await run(state.agent, ["status", taskId, "in_progress"]);
     }
     state.statuses.set(taskId, KEPT);
     const links = readLinks();
-    links[schedule.jobId] = { task_id: taskId };
+    links[schedule.jobId] = { task_id: taskId, agent: state.agent };
     saveLinks(links);
-    forgetTaskList();
+    forgetTaskList(state.agent);
   }
 }
 
@@ -542,9 +580,10 @@ async function recordScheduledRun(jobId, state, event) {
   const link = links[jobId];
   if (typeof link?.task_id !== "string") return false;
   const taskId = link.task_id;
+  const agent = link.agent ?? MAIN_AGENT;
   const number = (Number.isInteger(link.runs) ? link.runs : 0) + 1;
   const reply = redacted(lastReply(event.messages)).split(/\s+/).filter(Boolean).join(" ");
-  await run(["note", taskId], reply ? `Run ${number}: ${reply.slice(0, RUN_NOTE_CHARS)}` : `Run ${number}.`);
+  await run(agent, ["note", taskId], reply ? `Run ${number}: ${reply.slice(0, RUN_NOTE_CHARS)}` : `Run ${number}.`);
   if (state) {
     state.taskIds = new Set([taskId]);
     await attachAutomatically(state);
@@ -557,9 +596,9 @@ async function recordScheduledRun(jobId, state, event) {
     saveLinks(links);
     const set = state?.statuses.get(taskId);
     // The schedule is still live, so the Task is not finished whatever this run set.
-    if (set && ![KEPT, "in_progress", "failed"].includes(set)) await run(["status", taskId, "in_progress"]);
+    if (set && ![KEPT, "in_progress", "failed"].includes(set)) await run(agent, ["status", taskId, "in_progress"]);
   }
-  forgetTaskList();
+  forgetTaskList(agent);
   return true;
 }
 
@@ -593,7 +632,7 @@ async function attachAutomatically(state) {
   const unattached = unattachedFiles(state);
   if (state.taskIds.size !== 1) return unattached.map(([name]) => name);
   const [taskId] = state.taskIds;
-  const limit = Number(process.env.ARTIFACT_MAX_BYTES) || Infinity;
+  const limit = maxBytes(state.agent);
   const names = unattached.map(([name]) => name);
   const notAttached = [];
   for (const [name, path] of unattached) {
@@ -610,7 +649,7 @@ async function attachAutomatically(state) {
     // A newer copy replaces the Task's file of the same name, unless this run wrote two files of
     // that name in different folders: then both are kept.
     const replace = names.filter((other) => other === name).length === 1 ? ["--replace"] : [];
-    const { ok } = await run(["attach", taskId, path, ...replace]);
+    const { ok } = await run(state.agent, ["attach", taskId, path, ...replace]);
     if (!ok) notAttached.push(name);
   }
   return notAttached;
@@ -626,9 +665,9 @@ async function settleInProgress(state, status, reply = "", trigger = "") {
   const holds = status === "done" ? await held(state, reply, trigger, inProgress) : {};
   for (const taskId of inProgress) {
     if (holds[taskId] === "in_progress") continue;
-    await run(["status", taskId, holds[taskId] === "open" ? "open" : status]);
+    await run(state.agent, ["status", taskId, holds[taskId] === "open" ? "open" : status]);
   }
-  forgetTaskList();
+  forgetTaskList(state.agent);
 }
 
 // Record a Task for work the Agent left unrecorded. Returns the files it could not attach.
@@ -638,8 +677,8 @@ async function recordAutomatically(sessionKey, state) {
   if (title.length > AUTOMATIC_TITLE_CHARS) title = `${title.slice(0, AUTOMATIC_TITLE_CHARS - 1).trimEnd()}…`;
   const argv = ["create", `--title=${title}`, "--status=done", "--origin=automatic"];
   if (request) argv.push(`--description=${request.slice(0, AUTOMATIC_DESCRIPTION_CHARS)}`);
-  const { ok, output } = await run(argv);
-  forgetTaskList();
+  const { ok, output } = await run(state.agent, argv);
+  forgetTaskList(state.agent);
   let taskId;
   try {
     taskId = ok ? JSON.parse(output).id : undefined;
@@ -686,11 +725,13 @@ function taskLines(output) {
   return lines;
 }
 
-async function openTaskLines() {
-  if (taskListCache.at !== null && Date.now() - taskListCache.at < OPEN_TASKS_TTL_MS) return taskListCache.lines;
-  const { ok, output } = await run(["list", `--page-size=${LIST_PAGE_SIZE}`], "", LIST_TIMEOUT_MS);
-  taskListCache = { at: Date.now(), lines: ok ? taskLines(output) : [] };
-  return taskListCache.lines;
+async function openTaskLines(agent) {
+  const cached = taskListCache.get(agent);
+  if (cached && Date.now() - cached.at < OPEN_TASKS_TTL_MS) return cached.lines;
+  const { ok, output } = await run(agent, ["list", `--page-size=${LIST_PAGE_SIZE}`], "", LIST_TIMEOUT_MS);
+  const lines = ok ? taskLines(output) : [];
+  remember(taskListCache, agent, { at: Date.now(), lines });
+  return lines;
 }
 
 export default {
@@ -701,7 +742,7 @@ export default {
     const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
     if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
 
-    api.registerTool({
+    api.registerTool((ctx) => ({
       name: TOOL,
       label: "Agent Barn Task",
       description:
@@ -712,8 +753,8 @@ export default {
         "in progress. Attach any other file that is part of the result yourself. Set `failed` (with a body saying " +
         "why), `open` (waiting on the user) or `done` yourself.",
       parameters: PARAMETERS,
-      execute: executeTool,
-    });
+      execute: (toolCallId, params) => executeTool(agentOf(ctx), toolCallId, params),
+    }), { name: TOOL });
 
     api.on("after_tool_call", (event, ctx) => {
       if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
@@ -739,12 +780,12 @@ export default {
         if (event.toolCallId) state.work.add(event.toolCallId);
         if (FILE_TOOLS.has(event.toolName) && !failed(event)) {
           state.wroteFiles = true;
-          for (const path of writtenPaths(event)) state.written.add(resolvePath(workspace(), path));
+          for (const path of writtenPaths(event)) state.written.add(resolvePath(workspace(state.agent), path));
         }
         const published = failed(event) ? [] : publishedPaths(event.params);
         if (published.length) {
           state.wroteFiles = true;
-          for (const path of published) state.written.add(resolvePath(workspace(), path));
+          for (const path of published) state.written.add(resolvePath(workspace(state.agent), path));
         }
       }
     });
@@ -831,7 +872,7 @@ export default {
         }
         if (!smallTalk(event.prompt)) parts.push(REQUEST_LINE);
       }
-      const lines = await openTaskLines();
+      const lines = await openTaskLines(agentOf(ctx));
       if (lines.length) {
         parts.push(
           `Your open and latest finished Tasks:\n${lines.join("\n")}\nKeep using one of these only when the ` +

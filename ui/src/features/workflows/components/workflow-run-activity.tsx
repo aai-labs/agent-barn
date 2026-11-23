@@ -26,7 +26,8 @@ export function AttemptStatus({
 }: {
   run: WorkflowRun;
   agentName: string;
-  agentHref: string;
+  /** Absent once the Agent was deleted. */
+  agentHref?: string;
 }) {
   const attempt = run.attempt;
   const live = Boolean(attempt);
@@ -61,9 +62,13 @@ export function AttemptStatus({
         >
           <strong>{agentName} hasn’t accepted this step yet.</strong> If this
           persists, restart the Agent from{" "}
-          <Link href={agentHref} className="underline">
-            its page
-          </Link>
+          {agentHref ? (
+            <Link href={agentHref} className="underline">
+              its page
+            </Link>
+          ) : (
+            "its page"
+          )}
           , then start a new run.
         </p>
       )}
@@ -81,10 +86,19 @@ type Tone = "ok" | "warn" | "err" | "muted";
 /** How an event reads at a glance: green progress, amber waiting on a person, red trouble. */
 function eventTone(kind: string, detail: string): Tone {
   if (kind === "APPROVAL_DECIDED") return detail.startsWith("Command declined") ? "err" : "ok";
-  if (["STEP_COMPLETED", "APPROVAL_RELEASED"].includes(kind)) return "ok";
-  if (["APPROVAL_REQUESTED", "APPROVAL_PARKED", "NEEDS_ATTENTION", "CANCEL_REQUESTED"].includes(kind))
+  if (["STEP_COMPLETED", "APPROVAL_RELEASED", "APPROVAL_STEP_APPROVED"].includes(kind)) return "ok";
+  if (
+    [
+      "APPROVAL_REQUESTED",
+      "APPROVAL_PARKED",
+      "NEEDS_ATTENTION",
+      "CANCEL_REQUESTED",
+      "APPROVAL_STEP_WAITING",
+      "CHANGES_REQUESTED",
+    ].includes(kind)
+  )
     return "warn";
-  if (["ATTEMPT_FAILED", "FENCED"].includes(kind)) return "err";
+  if (["ATTEMPT_FAILED", "FENCED", "APPROVAL_STEP_REJECTED"].includes(kind)) return "err";
   return "muted";
 }
 
@@ -117,14 +131,8 @@ function EventText({ kind, detail }: { kind: string; detail: string }) {
 }
 
 /** Newest-first run history keeps failed attempts visible after they end. */
-export function WorkflowRunActivity({
-  agentId,
-  run,
-}: {
-  agentId: string;
-  run: WorkflowRun;
-}) {
-  const history = useWorkflowRunHistory(agentId, run.id, run.revision);
+export function WorkflowRunActivity({ run }: { run: WorkflowRun }) {
+  const history = useWorkflowRunHistory(run.id, run.revision);
   if (history.error)
     return (
       <div className="border-t border-[var(--line)] px-6 py-4">

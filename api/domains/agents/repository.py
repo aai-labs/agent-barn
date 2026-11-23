@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
@@ -110,21 +111,51 @@ def agent_scope_predicates(authorization_scope: AuthorizationScope, *, include_d
     if authorization_scope.membership_id is not None:
         if authorization_scope.permission is None:
             raise ValueError("Explicit Agent visibility requires a Permission")
-        direct_access = exists().where(
-            col(AgentAccess.agent_id) == col(Agent.id),
-            col(AgentAccess.organization_id) == authorization_scope.organization_id,
-            col(AgentAccess.membership_id) == authorization_scope.membership_id,
-            col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
-            col(AgentAccessRolePermission.permission_id) == PERMISSION_ID_BY_KEY[authorization_scope.permission],
-        )
-        if authorization_scope.include_general_access:
-            general_access = exists().where(
-                col(AgentAccessRolePermission.role_id) == col(Agent.general_access_role_id),
-                col(AgentAccessRolePermission.permission_id) == PERMISSION_ID_BY_KEY[authorization_scope.permission],
+        permission_id = PERMISSION_ID_BY_KEY[authorization_scope.permission]
+        read_permission_id = PERMISSION_ID_BY_KEY[PermissionKey.AGENT_READ]
+        parent = aliased(Agent)
+        parent_reads = [
+            exists().where(
+                col(AgentAccess.agent_id) == col(Agent.parent_agent_id),
+                col(AgentAccess.organization_id) == authorization_scope.organization_id,
+                col(AgentAccess.membership_id) == authorization_scope.membership_id,
+                col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+                col(AgentAccessRolePermission.permission_id) == read_permission_id,
             )
-            predicates.append(or_(direct_access, general_access))
-        else:
-            predicates.append(direct_access)
+        ]
+        if authorization_scope.include_general_access:
+            parent_reads.append(
+                exists().where(
+                    col(parent.id) == col(Agent.parent_agent_id),
+                    col(AgentAccessRolePermission.role_id) == col(parent.general_access_role_id),
+                    col(AgentAccessRolePermission.permission_id) == read_permission_id,
+                )
+            )
+        predicates.append(or_(col(Agent.parent_agent_id).is_(None), *parent_reads))
+        grants = [
+            exists().where(
+                col(AgentAccess.agent_id).in_([col(Agent.id), col(Agent.parent_agent_id)]),
+                col(AgentAccess.organization_id) == authorization_scope.organization_id,
+                col(AgentAccess.membership_id) == authorization_scope.membership_id,
+                col(AgentAccessRolePermission.role_id) == col(AgentAccess.access_role_id),
+                col(AgentAccessRolePermission.permission_id) == permission_id,
+            )
+        ]
+        if authorization_scope.include_general_access:
+            grants.append(
+                exists().where(
+                    col(AgentAccessRolePermission.role_id) == col(Agent.general_access_role_id),
+                    col(AgentAccessRolePermission.permission_id) == permission_id,
+                )
+            )
+            grants.append(
+                exists().where(
+                    col(parent.id) == col(Agent.parent_agent_id),
+                    col(AgentAccessRolePermission.role_id) == col(parent.general_access_role_id),
+                    col(AgentAccessRolePermission.permission_id) == permission_id,
+                )
+            )
+        predicates.append(or_(*grants))
     return tuple(predicates)
 
 
@@ -299,6 +330,17 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def list_active_in_scope(self, agent_ids: Collection[UUID], authorization_scope: AuthorizationScope) -> list[Agent]:
+        """The active Agents among ``agent_ids`` that the scope reaches; the rest are left out."""
+        if not agent_ids:
+            return []
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(
+                col(Agent.id).in_(list(agent_ids)),
+                *agent_scope_predicates(authorization_scope),
+            )
+            return list(session.exec(query).all())
+
     def get_deleted_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         if not authorization_scope.has_organization_visibility:
             return None
@@ -318,12 +360,16 @@ class AgentRepository:
             )
 
     def native_connection_suspended_since(self, agent_id: UUID, since: datetime) -> bool:
-        """Whether one of the Agent's native Connections was suspended at or after `since`."""
+        """Whether one of the Agent's or its Bots' native Connections was suspended at or after `since`."""
         with Session(self.delegate.engine) as session:
             return (
                 session.exec(
                     select(CommunicationConnection.id).where(
-                        col(CommunicationConnection.agent_id) == agent_id,
+                        col(CommunicationConnection.agent_id).in_(
+                            select(Agent.id).where(
+                                or_(col(Agent.id) == agent_id, col(Agent.parent_agent_id) == agent_id)
+                            )
+                        ),
                         col(CommunicationConnection.platform_key).in_(NATIVE_PLATFORM_KEYS),
                         col(CommunicationConnection.suspended_at) >= since,
                     )
@@ -358,6 +404,17 @@ class AgentRepository:
                 )
                 or 0
             )
+
+    def find_live_ids_by_org(self, org_id: UUID) -> list[UUID]:
+        """Ids of an Organization's non-deleted Agents, oldest first. Unscoped: for
+        background work only."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(Agent.id))
+                .where(col(Agent.organization_id) == org_id, col(Agent.deleted_at).is_(None))
+                .order_by(col(Agent.created_at))
+            )
+            return list(session.exec(query).all())
 
     def count_active_by_org(self, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
@@ -608,7 +665,13 @@ class AgentRepository:
         very Agents the ranking is meant to find.
         """
         with Session(self.delegate.engine) as session:
-            visibility = agent_scope_predicates(authorization_scope)
+            if agent_filter.parent_agent_id is not None:
+                parent_filter = (col(Agent.parent_agent_id) == agent_filter.parent_agent_id,)
+            elif agent_filter.include_bots:
+                parent_filter = ()
+            else:
+                parent_filter = (col(Agent.parent_agent_id).is_(None),)
+            visibility = (*agent_scope_predicates(authorization_scope), *parent_filter)
             query = select(Agent).where(*visibility)
             count_query = select(func.count()).select_from(Agent).where(*visibility)
 
@@ -618,7 +681,7 @@ class AgentRepository:
                 count_query = count_query.where(status_filter)
 
             total = session.scalar(count_query) or 0
-            query = query.order_by(col(Agent.created_at).asc())
+            query = query.order_by(col(Agent.bot_slot).asc().nulls_first(), col(Agent.created_at).asc())
             if pagination is not None:
                 query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
@@ -716,9 +779,30 @@ class AgentRepository:
                         col(Agent.general_access_role_id).is_not(None),
                     )
                 ).all()
+            parents = dict(
+                session.exec(
+                    select(Agent.id, Agent.parent_agent_id).where(
+                        col(Agent.id).in_(agent_ids),
+                        col(Agent.parent_agent_id).is_not(None),
+                    )
+                ).all()
+            )
         permissions: dict[UUID, set[PermissionKey]] = {}
         for agent_id, key in [*direct_rows, *general_rows]:
             permissions.setdefault(agent_id, set()).add(PermissionKey(key))
+        if parents:
+            inherited = self.find_agent_permissions(
+                membership_id,
+                organization_id,
+                list(set(parents.values())),
+                include_general_access=include_general_access,
+            )
+            for bot_id, parent_id in parents.items():
+                parent_permissions = inherited.get(parent_id, set())
+                if PermissionKey.AGENT_READ in parent_permissions:
+                    permissions.setdefault(bot_id, set()).update(parent_permissions)
+                else:
+                    permissions.pop(bot_id, None)
         return permissions
 
     def replace_access_settings(
@@ -1075,7 +1159,9 @@ class AgentRepository:
         their own writes have committed, or a losing request could still observe
         stale state once it acquires the lock.
         """
-        with self._try_advisory_lock(f"agent-lifecycle:{agent_id}") as acquired:
+        with Session(self.delegate.engine) as session:
+            parent_id = session.scalar(select(Agent.parent_agent_id).where(col(Agent.id) == agent_id))
+        with self._try_advisory_lock(f"agent-lifecycle:{parent_id or agent_id}") as acquired:
             yield acquired
 
     @contextmanager
@@ -1828,12 +1914,31 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
+    def find_live_bots(self, parent_id: UUID) -> list[Agent]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(Agent)
+                    .where(col(Agent.parent_agent_id) == parent_id, col(Agent.deleted_at).is_(None))
+                    .order_by(col(Agent.bot_slot).asc())
+                ).all()
+            )
+
+    def find_deleted_bots(self, parent_id: UUID) -> list[Agent]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(Agent).where(col(Agent.parent_agent_id) == parent_id, col(Agent.deleted_at).is_not(None))
+                ).all()
+            )
+
     def find_all_running(self) -> list[Agent]:
         """Live Agents currently eligible for an operator lifecycle cutover."""
         with Session(self.delegate.engine) as session:
             query = (
                 select(Agent)
                 .where(col(Agent.deleted_at).is_(None))
+                .where(col(Agent.parent_agent_id).is_(None))
                 .where(col(Agent.status) == AgentStatus.RUNNING)
                 .order_by(col(Agent.organization_id), col(Agent.created_at))
             )
@@ -1855,6 +1960,7 @@ class AgentRepository:
             )
             .join(Organization, col(Organization.id) == col(Agent.organization_id))
             .where(col(Agent.deleted_at).is_(None))
+            .where(col(Agent.parent_agent_id).is_(None))
         )
         with self.delegate.engine.connect() as connection:
             return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]

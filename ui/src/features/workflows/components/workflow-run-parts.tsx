@@ -1,13 +1,14 @@
 import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
-import { Hourglass, Pause } from "lucide-react";
+import { Hourglass, Pause, UserCheck } from "lucide-react";
 import type { WorkflowApproval, WorkflowRun } from "../run-schemas";
 import { runStateLabel } from "../run-schemas";
 
-type Tone = "ok" | "warn" | "err" | "muted";
+type Tone = "accent" | "ok" | "warn" | "err" | "muted";
 
-const toneStyle: Record<Tone, CSSProperties> = {
+export const toneStyle: Record<Tone, CSSProperties> = {
+  accent: { background: "var(--accent-soft)", color: "var(--accent-ink)" },
   ok: { background: "var(--ok-soft)", color: "var(--ok)" },
   warn: { background: "var(--warn-soft)", color: "var(--warn)" },
   err: { background: "var(--err-soft)", color: "var(--err)" },
@@ -17,7 +18,7 @@ const toneStyle: Record<Tone, CSSProperties> = {
 export const runTone = (state: WorkflowRun["state"]): Tone =>
   ({
     QUEUED: "muted",
-    RUNNING: "ok",
+    RUNNING: "accent",
     PAUSED: "warn",
     BLOCKED: "warn",
     AWAITING_APPROVAL: "warn",
@@ -25,6 +26,7 @@ export const runTone = (state: WorkflowRun["state"]): Tone =>
     CANCELLED: "muted",
     SUCCEEDED: "ok",
     FAILED: "err",
+    REJECTED: "err",
   })[state] as Tone;
 
 export function StatusBadge({
@@ -84,6 +86,7 @@ export function RunPageHeader({
   agent,
   detail,
   agentHref,
+  agentArchived = false,
   actions,
 }: {
   eyebrow: string;
@@ -91,7 +94,9 @@ export function RunPageHeader({
   badge: ReactNode;
   agent: { id: string; name: string };
   detail?: string;
+  /** Absent for a deleted Agent, which has no page to open. */
   agentHref?: string;
+  agentArchived?: boolean;
   actions?: ReactNode;
 }) {
   return (
@@ -104,6 +109,11 @@ export function RunPageHeader({
           <AgentAvatar agent={agent} size="xs" />
           <span>
             {agent.name}
+            {agentArchived && (
+              <span className="ml-2 rounded-full bg-[var(--bg-soft)] px-2 py-0.5 text-xs font-medium">
+                Archived
+              </span>
+            )}
             {detail ? ` · ${detail}` : ""}
           </span>
         </div>
@@ -170,6 +180,8 @@ const stepLabel = {
   COMPLETED: "Completed",
   RUNNING: "In progress",
   PENDING: "Not started",
+  WAITING: "Waiting for approval",
+  REJECTED: "Rejected",
 } as const;
 
 /** Vertical timeline of the pinned version's steps, as in the run design. */
@@ -200,6 +212,8 @@ export function StepRail({
         {steps.map((step, index) => {
           const interrupted = stopped && step.state === "RUNNING";
           const waiting = pending?.stepIndex === index;
+          const approvalStep = step.type === "approval";
+          const reviewing = step.state === "WAITING";
           const decided = approvals.filter(
             (item) =>
               item.stepIndex === index &&
@@ -208,8 +222,10 @@ export function StepRail({
           const approved = decided.filter((item) => item.state !== "DECLINED").length;
           const declined = decided.length - approved;
           const circle: CSSProperties =
-            waiting
+            waiting || reviewing
               ? { background: "var(--warn)", color: "#fff", boxShadow: "0 0 0 4px var(--warn-soft)" }
+              : step.state === "REJECTED"
+              ? { background: "var(--err)", color: "#fff" }
               : step.state === "COMPLETED"
               ? { background: "var(--ok)", color: "#fff" }
               : step.state === "RUNNING"
@@ -246,6 +262,8 @@ export function StepRail({
                     ) : (
                       <Pause size={14} />
                     )
+                  ) : approvalStep ? (
+                    <UserCheck size={14} />
                   ) : (
                     index + 1
                   )}
@@ -255,6 +273,9 @@ export function StepRail({
                 <p className="text-sm font-semibold">{step.name}</p>
                 <p className="mt-1 text-xs text-[var(--ink-3)]">
                   <span className="sr-only">Step {index + 1}: </span>
+                  {approvalStep ? (
+                    <span className="sr-only">Approval step · </span>
+                  ) : null}
                   {waiting && pending?.state === "PARKED"
                     ? "Session paused"
                     : interrupted
@@ -262,6 +283,9 @@ export function StepRail({
                     : step.state === "RUNNING" && attempt
                       ? `${stepLabel[step.state]} · attempt ${attempt.number}`
                       : stepLabel[step.state]}
+                  {!approvalStep && step.round && step.round > 1
+                    ? ` · round ${step.round}`
+                    : ""}
                 </p>
                 {(waiting || decided.length > 0) && (
                   <p className="mt-1.5 flex flex-wrap gap-1">

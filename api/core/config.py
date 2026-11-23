@@ -155,7 +155,9 @@ class Config(BaseSettings):
     # Where the API relays runtime-owned Teams activities. Local Docker/k3d
     # cannot resolve cluster DNS, so compose overrides this with a port-forward.
     teams_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:3978/api/messages"
-    agent_trigger_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:8082/agent-triggers/v1/invocations"
+    agent_trigger_url: str = (
+        "http://agent-{agent_id}.{namespace}.svc.cluster.local:{port}/agent-triggers/v1/invocations"
+    )
     skip_slack_token_validation: bool = False
     skip_telegram_token_validation: bool = False
     skip_discord_token_validation: bool = False
@@ -205,6 +207,13 @@ class Config(BaseSettings):
     prometheus_username: str = "monitoring"
     prometheus_password: str = ""
     prometheus_timeout_seconds: float = Field(default=5, gt=0, le=30)
+
+    # Threads the product API runs sync routes and dependencies on (AnyIO's default is
+    # 40). A request waiting on the cluster, a pod or Prometheus holds one while it waits,
+    # so too few lets a burst of slow calls queue every other request behind them. Database
+    # sessions are opened per repository call, not per request, so a waiting thread holds
+    # no connection and this can exceed the connection pool.
+    api_thread_limit: int = Field(default=100, ge=1, le=400)
 
     redis_url: str = "redis://localhost:6379/0"
 

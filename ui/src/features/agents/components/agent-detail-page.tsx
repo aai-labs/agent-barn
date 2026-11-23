@@ -7,10 +7,12 @@ import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
+import { usePodAgent } from "../hooks/use-pod-agent";
 import { ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentResourceUsageTab } from "@/features/resource-usage/components/agent-resource-usage-tab";
+import { AgentAnomaliesTab } from "@/features/anomalies/components/agent-anomalies-tab";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
@@ -23,8 +25,9 @@ import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
-import { WorkflowsPage } from "@/features/workflows/components/workflows-page";
+import { AgentWorkflowRuns } from "@/features/workflows/components/agent-workflow-runs";
 import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
 import { AgentTasksTab } from "@/features/tasks/components/agent-tasks-tab";
@@ -47,10 +50,12 @@ interface AgentDetailPageProps {
 }
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
-  const { agent, isLoading, error, refetch } = useAgent(agentId);
+  const { agent: loadedAgent, isLoading, error, refetch } = useAgent(agentId);
+  const { agent, pod } = usePodAgent(loadedAgent);
   const canReadActivity = canAgent(agent, "activity.read");
   const { role } = useActiveOrgRole();
-  const workflowCapabilities = useWorkflowCapabilities(agentId, canAgent(agent, "agent.read"));
+  const workflowCapabilities = useWorkflowCapabilities(canAgent(agent, "agent.read"));
+  const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
   const tabs = visibleAgentPageTabs(agent, role, {
     workflowAuthoring: workflowCapabilities.data?.authoring === true,
   });
@@ -77,13 +82,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "range",
     parseAsString.withOptions({ history: "replace" }),
   );
-  const [workflow, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
-
   const [workflowRun, setWorkflowRun] = useQueryState("workflowRun", parseAsString.withOptions({ history: "replace" }));
-  const [, setWorkflowView] = useQueryState("workflowView", parseAsString.withOptions({ history: "replace", scroll: false }));
-  const [, setWorkflowsTab] = useQueryState("workflowsTab", parseAsString.withOptions({ history: "replace", scroll: false }));
-  const [, setAgentRunPage] = useQueryState("agentRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
-  const [startingRun, setStartingRun] = useState(false);
+  const [, setWorkflowRunPage] = useQueryState("workflowRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
 
   function selectTab(next: AgentPageTab) {
     void setTab(next);
@@ -91,20 +91,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     if (next !== "conversations") void setChannel(null);
     // likewise the time range, which only the resource usage tab reads
     if (next !== "resource-usage") void setUsageRange(null);
-    // and the open workflow, which only the workflows tab reads
+    // and the open run, which only the workflows tab reads
     if (next !== "workflows") {
-      void setWorkflow(null);
       void setWorkflowRun(null);
-      void setWorkflowView(null);
-      void setWorkflowsTab(null);
-      void setAgentRunPage(null);
+      void setWorkflowRunPage(null);
     }
   }
 
   // Overview is always visible, and a section the viewer cannot open falls back to it.
   const resolvedTab = tabs.includes(tab) ? tab : DEFAULT_AGENT_TAB;
 
-  const workflowFocus = resolvedTab === "workflows" && (Boolean(workflow) || Boolean(workflowRun) || startingRun);
+  const workflowFocus = resolvedTab === "workflows" && Boolean(workflowRun);
 
   const isRunning = agent?.status === "RUNNING";
   const isAgentWorking = isRunning && health?.status === "ok";
@@ -176,7 +173,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   and two copies of the lifecycle and Share dialogs must not coexist. */}
               {!isDesktop && (
                 <div className="flex flex-wrap gap-2">
-                  {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
+                  {canManageLifecycle && pod && <AgentLifecycleMenu agent={pod} />}
                   {canManageAccess && (
                     <button className="af-btn" onClick={() => setShareOpen(true)}>
                       <ShareIcon /> Share
@@ -218,7 +215,16 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
             {resolvedTab === "files" && <AgentFiles key={`${orgId}:${agent.id}`} agentId={agent.id} canManageFiles={agent.allowedActions.includes("agent.update")} />}
             {resolvedTab === "workflows" && orgId && (
-              <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded onStartingChange={setStartingRun} />
+              <AgentWorkflowRuns
+                key={`${orgId}:${agent.id}`}
+                agentId={agent.id}
+                organizationId={orgId}
+                canRun={
+                  canAgent(agent, "agent.update") &&
+                  agent.status === "RUNNING" &&
+                  tierAllowsWorkflows
+                }
+              />
             )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
             {resolvedTab === "tasks" && <AgentTasksTab agent={agent} />}
@@ -233,6 +239,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 }}
               />
             )}
+            {resolvedTab === "unusual-activity" && <AgentAnomaliesTab key={agent.id} agent={agent} />}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
             </div>
           </>
@@ -246,6 +253,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           organizationId={agent.organizationId}
           open={shareOpen}
           onOpenChange={setShareOpen}
+          parent={agent.parentAgentId ? pod : undefined}
+          isBot={agent.parentAgentId !== null}
         />
       )}
     </div>

@@ -220,6 +220,16 @@ def test_cannot_read_agent_health_from_another_org():
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
+def test_cannot_read_agent_health_from_another_org_in_a_batch():
+    with given(_member_a_with_org_b_agent()) as context:
+        agent_id = context.agent.id
+        response = context.client.get(
+            f"{_agents(ORG_A)}/health", params={"agent_ids": [str(agent_id)]}, headers=_headers(context)
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json(), equal_to([]))
+
+
 def test_cannot_read_agent_template_from_another_org():
     with given(_member_a_with_org_b_agent()) as context:
         agent_id = context.agent.id

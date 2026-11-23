@@ -18,6 +18,7 @@ import {
   Receipt,
   Send,
   Settings2,
+  ShieldAlert,
   Sparkles,
   SquareTerminal,
   Users,
@@ -47,7 +48,7 @@ export type NavItem = {
   onIntent?: () => void;
 };
 
-export type NavGroup = { key: string; label?: string; items: NavItem[] };
+export type NavGroup = { key: string; label?: string; hint?: string; items: NavItem[] };
 
 /** The Platform's tint, for its rail. */
 export const PLATFORM_RAIL_BACKGROUND = "#1e1a4d";
@@ -210,6 +211,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   activity: Activity,
   costs: Wallet,
   "resource-usage": Cpu,
+  "unusual-activity": ShieldAlert,
   about: LayoutDashboard,
 };
 
@@ -217,7 +219,7 @@ export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
   { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "tasks", "file-sync"] },
-  { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
+  { key: "health", label: "Health", tabs: ["activity", "costs", "unusual-activity", "resource-usage"] },
 ];
 
 export const AGENT_CONFIGURATION_GROUPS: {

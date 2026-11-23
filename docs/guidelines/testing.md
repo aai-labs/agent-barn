@@ -136,6 +136,34 @@ The Hermes path filter explicitly includes `hermes_slack_access_driver.py`.
 Changes to that fixture alone select the Hermes image workflow and run the
 real-adapter admission, thread-context, and group-DM button contracts.
 
+`hermes_bots_driver.py` is in the same filter. It proves, on the real image, the multiplex
+behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
+scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.
+
+`hermes_listen_in_driver.py` is in the filter too. Beside the guard's own contract, it
+checks listen-in per profile: a Bot's own room list beats the process-wide
+`*_FREE_RESPONSE_*` variables, a Bot's guard reads its own rooms, owns only messages on
+its own adapter, keys them in its own profile and posts through its own app, and the
+startup check empties a Bot's own rooms rather than removing them.
+
+`../../api/runtime_tests/test_openclaw_bots.py` is the OpenClaw equivalent of `hermes_bots_driver.py` and runs with
+the other OpenClaw runtime contracts (`OPENCLAW_TEST_IMAGE=<image> make test-api-runtime
+RUNTIME=openclaw`), offline. It renders a Parent Agent's gateway config with two Bots
+through the builders and proves the pinned image accepts it: the config validates, each
+Bot is its own agent with its own workspace, model provider and Telegram account, and
+every Bot key reference resolves, with a missing key unresolved for that Bot only. It
+also runs the real `init-openclaw.js` and `bot-setup.py` through a first Bot, a Bot whose
+Secret is missing, and the last Bot's removal. It must pass on every OpenClaw upgrade.
+`../../api/tests/unit/test_openclaw_bot_setup.py` covers the same scripts on temp
+directories; its two tests that start Bot helpers skip on Windows. The image contract also
+loads the `agentbarn-bot-env` plugin through the pinned loader and hook runner beside a
+second plugin that rewrites `exec`, and proves each agent gets its own values, an
+unknown agent's command is refused, and a message is pinned to the agent's own account
+and refused on another platform or account. `../../api/tests/unit/test_openclaw_bot_env_plugin.py`
+covers the plugin's rules under Node. The contract also proves that a Bot's own listen-in rooms, with per-agent room events and
+the guard's per-Bot Slack rooms, keep the config valid. Its check scripts install every Agent Barn
+plugin the config loads, including `agentbarn-tasks` and `agentbarn-listen-in`.
+
 `../../.github/workflows/ci.yml` runs once per pull request, on the
 `pull_request` event, against the merge result. It does not listen to `push`:
 doing so ran every commit on a PR branch twice. A branch without a pull request
@@ -257,6 +285,8 @@ The Hermes auxiliary credentials contract in `../../api/runtime_tests/test_herme
 Apollo contracts run the patched aai-cli in both images against an offline loopback server. They check direct API-key profiles, isolated bearer profiles, typed and passthrough API paths, the separate health path, persistent-store cleanup when switching modes, and credential exclusion. Run the corresponding `test_*_apollo.py` contracts through `make test-api-runtime`; rebuild both images after changing `aai-apollo-routing.patch`.
 
 SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
+
+Stop-during-boot contracts (`../../api/runtime_tests/test_{hermes,openclaw}_stop_during_boot.py`) boot each image with the generated Deployment command, hold `start.sh` in setup on an unreachable memory gateway, and require `docker stop` to end the container on SIGTERM instead of waiting out the grace period. A builder unit test only shows the command; this proves the image's init forwards the signal.
 
 File sync contracts (`../../api/runtime_tests/test_{hermes,openclaw}_file_sync.py`) run each image's real `start.sh` from the generated ConfigMap with external networking disabled. A loopback ingest stub (`runtime_tests/fixtures/file_sync_ingest_stub.py`) logs every request, and a probe replaces the runtime command. They check:
 - the helper runs on the image's own `python3`;

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import os
+import re
 import tempfile
 import time
-from collections.abc import Generator
+from collections.abc import Collection, Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -17,10 +19,41 @@ from kubernetes import config as k8s_config
 from kubernetes.client.exceptions import ApiException
 from kubernetes.stream import portforward as k8s_portforward
 from kubernetes.stream import stream as k8s_stream
+from urllib3.exceptions import ReadTimeoutError
 
 from api.core.config import Config
 
 _SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+# (connect, read) seconds for every cluster call that does not set its own. The read
+# timeout bounds each wait for the next bytes, not the whole response. Without it a
+# call waits forever on a stalled API server and holds its request thread meanwhile.
+_DEFAULT_REQUEST_TIMEOUT = (5, 15)
+
+# How long a followed log may stay silent before stream_pod_logs hands control back.
+LOG_STREAM_IDLE_SECONDS = 15
+# Extra seconds read back when a followed log resumes, to cover clock skew between the
+# API pod and the node that stamps the lines; the overlap is dropped by timestamp.
+_LOG_RESUME_MARGIN_SECONDS = 5
+_LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z ")
+
+
+def _log_line_stamp(line: str) -> tuple[str, str] | None:
+    """A sortable key for the RFC 3339 timestamp the kubelet puts on a log line.
+
+    The fraction is trimmed of trailing zeros, so it is padded before comparing.
+    """
+    match = _LOG_TIMESTAMP.match(line)
+    if match is None:
+        return None
+    return match.group(1), (match.group(2) or "").ljust(9, "0")
+
+
+class _DefaultTimeoutApiClient(client.ApiClient):
+    """An ApiClient whose calls time out unless the call sets ``_request_timeout``."""
+
+    def call_api(self, *args, _request_timeout=None, **kwargs):
+        return super().call_api(*args, _request_timeout=_request_timeout or _DEFAULT_REQUEST_TIMEOUT, **kwargs)
 
 
 @inject
@@ -59,9 +92,10 @@ class KubernetesClient:
                         "~/.kube/config, and K8S_KUBECONFIG_PATH is unset). Agent lifecycle "
                         "features need a real cluster; set K8S_KUBECONFIG_PATH to point at one."
                     ) from e
-        self._apps_v1_client = client.AppsV1Api()
-        self._core_v1_client = client.CoreV1Api()
-        self._batch_v1_client = client.BatchV1Api()
+        api_client = _DefaultTimeoutApiClient()
+        self._apps_v1_client = client.AppsV1Api(api_client=api_client)
+        self._core_v1_client = client.CoreV1Api(api_client=api_client)
+        self._batch_v1_client = client.BatchV1Api(api_client=api_client)
         if self.config.k8s_kubeconfig_path:
             stream_api_client = k8s_config.new_client_from_config(config_file=self._kubeconfig_path)
         else:
@@ -315,7 +349,11 @@ class KubernetesClient:
 
     def _newest_pod(self, label_selector: str, namespace: str) -> client.V1Pod | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=label_selector)
-        candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]
+        return self._newest_of(pods.items)
+
+    @staticmethod
+    def _newest_of(pods: list[client.V1Pod]) -> client.V1Pod | None:
+        candidates = [p for p in pods if p.metadata.deletion_timestamp is None]
         if not candidates:
             return None
         return max(candidates, key=lambda p: p.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC))
@@ -388,7 +426,28 @@ class KubernetesClient:
 
     def get_pod_readiness(self, deployment_name: str, namespace: str) -> tuple[str | None, str | None]:
         """Returns (status, reason). status is one of: 'ready', 'initializing', 'crashed', None."""
-        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        return self._readiness_of(self._newest_pod(f"app={deployment_name}", namespace))
+
+    # Names per label selector, so a long list stays well inside the API server's URL limit.
+    _READINESS_BATCH = 50
+
+    def get_pods_readiness(
+        self, deployment_names: Collection[str], namespace: str
+    ) -> dict[str, tuple[str | None, str | None]]:
+        """``get_pod_readiness`` for many Deployments, with one cluster read per 50 names
+        rather than one per Deployment. Every name asked about gets an entry."""
+        names = sorted(set(deployment_names))
+        pods_by_app: dict[str, list[client.V1Pod]] = {name: [] for name in names}
+        for start in range(0, len(names), self._READINESS_BATCH):
+            chunk = names[start : start + self._READINESS_BATCH]
+            pods = self._core_v1.list_namespaced_pod(namespace, label_selector=f"app in ({','.join(chunk)})")
+            for pod in pods.items:
+                app = (pod.metadata.labels or {}).get("app")
+                if app in pods_by_app:
+                    pods_by_app[app].append(pod)
+        return {name: self._readiness_of(self._newest_of(pods)) for name, pods in pods_by_app.items()}
+
+    def _readiness_of(self, pod: client.V1Pod | None) -> tuple[str | None, str | None]:
         if pod is None:
             return None, None
         if pod.status.phase == "Failed":
@@ -571,25 +630,51 @@ class KubernetesClient:
         namespace: str,
         tail_lines: int = 0,
         container: str = "agent",
-    ) -> Generator[str]:
+    ) -> Generator[str | None]:
+        """Follows the pod's log, yielding each line as it arrives.
+
+        After ``LOG_STREAM_IDLE_SECONDS`` without a line it yields ``None`` rather than
+        keep waiting, so the caller, and the thread it reads on, regains control even
+        from a silent pod: a stream whose client has gone can then be dropped. Reading
+        on resumes from the last line seen, without repeating or skipping any.
+        """
         pod_name = self.get_pod_name_for_deployment(deployment_name, namespace)
         if pod_name is None:
             return
-        resp = self._core_v1.read_namespaced_pod_log(
-            pod_name,
-            namespace,
-            container=container,
-            tail_lines=tail_lines,
-            follow=True,
-            timestamps=True,
-            _preload_content=False,
-        )
-        try:
-            for raw_line in resp:
-                yield raw_line.decode("utf-8", errors="replace").rstrip("\n")
-        finally:
-            resp.close()
-            resp.release_conn()
+        last_stamp: tuple[str, str] | None = None
+        while True:
+            if last_stamp is None:
+                window = {"tail_lines": tail_lines}
+            else:
+                last_at = datetime.strptime(last_stamp[0], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=UTC)
+                behind = (datetime.now(UTC) - last_at).total_seconds()
+                window = {"since_seconds": max(1, math.ceil(behind)) + _LOG_RESUME_MARGIN_SECONDS}
+            resp = self._core_v1.read_namespaced_pod_log(
+                pod_name,
+                namespace,
+                container=container,
+                follow=True,
+                timestamps=True,
+                _preload_content=False,
+                _request_timeout=(_DEFAULT_REQUEST_TIMEOUT[0], LOG_STREAM_IDLE_SECONDS),
+                **window,
+            )
+            try:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                    stamp = _log_line_stamp(line)
+                    if stamp is not None:
+                        if last_stamp is not None and stamp <= last_stamp:
+                            continue
+                        last_stamp = stamp
+                    yield line
+                return
+            except ReadTimeoutError:
+                pass
+            finally:
+                resp.close()
+                resp.release_conn()
+            yield None
 
     def exec_command(self, pod_name: str, namespace: str, command: list[str]) -> str:
         ws = k8s_stream(

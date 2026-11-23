@@ -19,7 +19,9 @@ import type { OrganizationMember } from "@/features/organizations/schemas";
 import { useAgentShareRoles } from "../hooks/use-agent-share-roles";
 import { useAgentShareSettings } from "../hooks/use-agent-share-settings";
 import { defaultRoleId } from "../permissions";
-import { isShareDraftDirty } from "../utils";
+import type { Agent } from "../schemas";
+import { canAgent, isShareDraftDirty } from "../utils";
+import { BotTrustNotice } from "./bot-trust-notice";
 import { ShareAddMember } from "./share-add-member";
 import { ShareMemberRow } from "./share-member-row";
 import { ShareRoleHelp } from "./share-role-help";
@@ -31,6 +33,8 @@ interface ShareDialogProps {
   organizationId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  parent?: Agent;
+  isBot?: boolean;
 }
 
 type DraftRow = {
@@ -49,6 +53,8 @@ export function ShareDialog({
   organizationId,
   open,
   onOpenChange,
+  parent,
+  isBot = false,
 }: ShareDialogProps) {
   const {
     roles,
@@ -63,6 +69,15 @@ export function ShareDialog({
     refetch: refetchSettings,
     save,
   } = useAgentShareSettings(agentId, open);
+
+  const { settings: parentSettings } = useAgentShareSettings(
+    parent?.id,
+    open && canAgent(parent, "agent.access.manage"),
+  );
+  const parentRestricted = parent && parentSettings && !parentSettings.generalAccess.role ? parent : null;
+  const parentReachable = parentRestricted && parentSettings
+    ? { name: parentRestricted.name, userIds: new Set(parentSettings.assignments.map((a) => a.userId)) }
+    : null;
 
   const isLoading = rolesLoading || settingsLoading;
   const loadError = rolesError || settingsError;
@@ -176,6 +191,8 @@ export function ShareDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {isBot && <BotTrustNotice />}
+
         {!isLoading && !loadError && roles.length > 0 && <ShareRoleHelp roles={roles} />}
 
         {isLoading ? (
@@ -208,6 +225,7 @@ export function ShareDialog({
                 disabled={save.isPending}
                 isOpen={open}
                 assignedUserIds={rows.map((r) => r.userId)}
+                parentReachable={parentReachable}
               />
 
               <section>
@@ -261,13 +279,18 @@ export function ShareDialog({
                       }
                     >
                       <option value="restricted">Restricted</option>
-                      <option value="all">All Organization Members</option>
+                      <option value="all" disabled={!!parentRestricted}>All Organization Members</option>
                     </select>
                     <p className="mt-1 text-[12px]" style={{ color: "var(--ink-4)" }}>
                       {draftGeneral.all
                         ? "Applies automatically to current and future accepted Members."
                         : "Only people granted direct access can open this Agent."}
                     </p>
+                    {parentRestricted && (
+                      <p className="mt-1 text-[12px]" style={{ color: "var(--ink-4)" }}>
+                        Give {parentRestricted.name} General access first.
+                      </p>
+                    )}
                   </div>
                   {draftGeneral.all && draftGeneral.roleId && (
                     <ShareRoleSelect

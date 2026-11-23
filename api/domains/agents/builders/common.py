@@ -1,11 +1,15 @@
 import re
+from collections.abc import Sequence
 from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.agents.models import BOT_TRIGGER_BASE_PORT
 from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOOK_PORT
 
 _NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
+BOT_SECRET_ROOT = "/run/agentbarn/bots"
+BOT_CONFIG_ROOT = "/app/bots"
 
 _MIB = 1024**2
 _GIB = 1024**3
@@ -58,6 +62,37 @@ def _name_slug_label(name: str, fallback_id: UUID) -> str:
     edges); falls back to the given id so the label is never empty."""
     slug = _NON_LABEL_CHARS.sub("-", name.lower()).strip("-")[:63].strip("-")
     return slug or str(fallback_id)
+
+
+def bot_mounts(bot_ids: Sequence[UUID]) -> list[client.V1VolumeMount]:
+    mounts = []
+    for bot_id in bot_ids:
+        mounts.append(
+            client.V1VolumeMount(name=f"bot-{bot_id}-secret", mount_path=f"{BOT_SECRET_ROOT}/{bot_id}", read_only=True)
+        )
+        mounts.append(
+            client.V1VolumeMount(name=f"bot-{bot_id}-config", mount_path=f"{BOT_CONFIG_ROOT}/{bot_id}", read_only=True)
+        )
+    return mounts
+
+
+def bot_volumes(bot_ids: Sequence[UUID]) -> list[client.V1Volume]:
+    volumes = []
+    for bot_id in bot_ids:
+        resource = _resource_name(bot_id)
+        volumes.append(
+            client.V1Volume(
+                name=f"bot-{bot_id}-secret",
+                secret=client.V1SecretVolumeSource(secret_name=resource, optional=True, default_mode=0o444),
+            )
+        )
+        volumes.append(
+            client.V1Volume(
+                name=f"bot-{bot_id}-config",
+                config_map=client.V1ConfigMapVolumeSource(name=resource, optional=True),
+            )
+        )
+    return volumes
 
 
 def _setting_ids(settings: dict, key: str) -> list[str]:
@@ -120,6 +155,7 @@ def build_service(
     org_name: str = "",
     agent_name: str = "",
     runtime: str = "",
+    bot_slots: Sequence[int] = (),
 ) -> client.V1Service:
     ports = [
         client.V1ServicePort(port=80, target_port=8080, name="gateway"),
@@ -133,6 +169,9 @@ def build_service(
         ports.append(
             client.V1ServicePort(port=RUNTIME_WEBHOOK_PORT, target_port=RUNTIME_WEBHOOK_PORT, name="tg-webhook")
         )
+    for slot in bot_slots:
+        port = BOT_TRIGGER_BASE_PORT + slot
+        ports.append(client.V1ServicePort(port=port, target_port=port, name=f"trg-{slot}"))
     return client.V1Service(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

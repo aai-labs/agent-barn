@@ -17,6 +17,7 @@ export type AgentPageTab =
   | "activity"
   | "costs"
   | "resource-usage"
+  | "unusual-activity"
   | "about";
 
 export const AGENT_PAGE_TABS: AgentPageTab[] = [
@@ -33,6 +34,7 @@ export const AGENT_PAGE_TABS: AgentPageTab[] = [
   "activity",
   "costs",
   "resource-usage",
+  "unusual-activity",
   "about",
 ];
 
@@ -50,8 +52,11 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   activity: "Activity",
   costs: "Costs",
   "resource-usage": "Resource usage",
+  "unusual-activity": "Unusual activity",
   about: "Overview",
 };
+
+export const AGENT_POD_TABS: AgentPageTab[] = ["logs", "file-sync", "resource-usage"];
 
 /** Where an Agent opens: its Overview, listed first in the navigation panel. */
 export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
@@ -61,9 +66,9 @@ export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
  * panel, so both gate on the same Permissions.
  */
 export function visibleAgentPageTabs(
-  agent: Pick<Agent, "allowedActions"> | null | undefined,
+  agent: Pick<Agent, "allowedActions" | "parentAgentId"> | null | undefined,
   role: OrganizationRole | undefined,
-  /** Whether the platform offers workflow authoring to this Agent (its workflow capabilities). */
+  /** Whether this installation offers workflows (the Organization's workflow capabilities). */
   { workflowAuthoring = false }: { workflowAuthoring?: boolean } = {},
 ): AgentPageTab[] {
   const canReadActivity = canAgent(agent, "activity.read");
@@ -71,13 +76,13 @@ export function visibleAgentPageTabs(
   // A run reads this Agent's activity and writes an Organization Skill, so it needs both
   // activity.read and the Owner/Admin Organization Role that holds skill.manage.
   const canExtractPlaybooks = canReadActivity && (role === "OWNER" || role === "ADMIN");
-  return [
+  const tabs: AgentPageTab[] = [
     // Memory content is conversation content, so it follows activity.read.
     ...(canReadActivity
       ? (["chat", "conversations", "tool-calls", "logs", "memory"] as AgentPageTab[])
       : []),
-    // Workflows are part of the Agent itself, readable with agent.read, and only where the
-    // platform offers authoring.
+    // The Agent's workflow runs are readable with agent.read, and only where the platform
+    // offers workflows. Workflows themselves belong to the Organization.
     ...(workflowAuthoring && canAgent(agent, "agent.read") ? (["workflows"] as AgentPageTab[]) : []),
     ...(canAgent(agent, "agent.read") ? (["files"] as AgentPageTab[]) : []),
     ...(canExtractPlaybooks ? (["playbooks"] as AgentPageTab[]) : []),
@@ -95,6 +100,10 @@ export function visibleAgentPageTabs(
     // How the container is doing, so it follows Activity's gate rather than Costs':
     // the same activity.read that guards runtime diagnostics and health.
     ...(canReadActivity ? (["resource-usage"] as AgentPageTab[]) : []),
+    // Oversight of the Organization's Agents, held by Owners and Admins through the
+    // Organization Permissions anomaly.read and anomaly.manage, never by an Agent role.
+    ...(role === "OWNER" || role === "ADMIN" ? (["unusual-activity"] as AgentPageTab[]) : []),
     "about",
   ];
+  return agent?.parentAgentId ? tabs.filter((tab) => !AGENT_POD_TABS.includes(tab)) : tabs;
 }

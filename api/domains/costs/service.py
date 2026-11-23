@@ -23,6 +23,7 @@ from api.domains.costs.models import (
     CostRecordSource,
     CostSeriesPoint,
     CostSummaryRead,
+    HourlyLlmUsage,
     MonthlyCostRead,
     MonthlyWindow,
     TokenSeriesPoint,
@@ -172,6 +173,16 @@ class CostService:
     # Authorized through the effective Agent Access Role rather than the
     # Organization-wide `cost.read`, so an Agent Viewer can read the Agent they were
     # given. Every read pins the filter to that Agent and its Organization.
+
+    def hourly_llm_usage(self, agent_id: UUID, since: datetime, until: datetime) -> list[HourlyLlmUsage]:
+        """An Agent's own LLM calls and tokens per UTC hour, for the scheduled anomaly
+        check. Background work: no caller and no authorization scope, and no router
+        reaches it."""
+        return self.repository.hourly_llm_usage(agent_id, since, until)
+
+    def last_sync_completed_at(self) -> datetime | None:
+        """When the spend-log sync last finished; cost rows before it are complete."""
+        return self.repository.last_sync_completed_at()
 
     def spend_for_agents(
         self,

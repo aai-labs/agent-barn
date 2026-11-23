@@ -13,17 +13,28 @@ const limited = (empty: string, max: number) =>
  * Input limits apply while authoring. Saved snapshots are read back as stored,
  * so a limit mismatch can never hide a definition the API accepted.
  */
+export const STEP_DECISIONS = ["approve", "request_changes", "reject"] as const;
+const stepDecision = z.enum(STEP_DECISIONS);
+export type StepDecision = z.infer<typeof stepDecision>;
+
 function draftSchema(authoring: boolean) {
   const text = authoring ? limited("Enter a description", 4000) : z.string();
   const name = authoring ? limited("Enter a name", 200) : z.string();
   const step = z.object({
     id: authoring ? z.guid() : z.string(),
-    name,
+    // Agent steps are stored without a type; an Approval step waits for a person.
+    type: z.enum(["agent", "approval"]).default("agent"),
+    // What the person at an Approval step may decide; Approve is always among them.
+    allowedDecisions: z.array(stepDecision).nullable().optional(),
+    // Prompt first: the name derives from it (stepNameFromGoal), so a blank prompt
+    // reports "Enter a description" rather than its derived name.
     goal: text,
+    name,
     // Drafts opened before this field was removed can still contain an empty value.
     completionCriteria: z.string().nullable().transform((value) =>
       value?.trim() ? value : undefined,
     ).optional(),
+    // Only on versions saved before a step's output became part of its goal.
     artifactDescription: text.nullable().default(null),
     requiredCapabilities: z
       .array(z.enum(["reasoning", "business_action", "native_command"]))
@@ -32,13 +43,14 @@ function draftSchema(authoring: boolean) {
       .default(["reasoning"]),
   });
   const input = z.object({
-    // Label first: a blank label reports "Enter a name" rather than its derived key.
+    // Description first: the label derives from it and the key from the label, so a
+    // blank description reports "Enter a description" rather than either.
+    description: text,
     label: name,
     // Derived from the label by inputKeyFromLabel; kept for saved snapshots.
     key: authoring
-      ? z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/, "Edit the input label")
+      ? z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/, "Edit the input description")
       : z.string(),
-    description: text,
     type: z.enum(["text", "number", "boolean", "file"]).default("text"),
     required: z.boolean().default(true),
   });
@@ -62,6 +74,19 @@ export const WorkflowDraftSchema = draftSchema(true).superRefine((draft, ctx) =>
       path: ["steps"],
       message: "Each step needs a unique id",
     });
+  // Request changes reruns the step before an Approval step, so that step must be an Agent step.
+  draft.steps.forEach((step, index) => {
+    if (step.type !== "approval") return;
+    const before = draft.steps[index - 1];
+    if (!before || before.type === "approval")
+      ctx.addIssue({
+        code: "custom",
+        path: ["steps", index, "goal"],
+        message: before
+          ? "An approval step can't follow another approval step; put an agent step between them"
+          : "An approval step can't come first; it reviews the agent step before it",
+      });
+  });
   const firstWithKey = new Map<string, number>();
   draft.inputs.forEach(({ key }, index) => {
     const first = firstWithKey.get(key);
@@ -69,8 +94,8 @@ export const WorkflowDraftSchema = draftSchema(true).superRefine((draft, ctx) =>
     else if (key)
       ctx.addIssue({
         code: "custom",
-        path: ["inputs", index, "label"],
-        message: `Matches input ${first + 1} once case, accents and punctuation are ignored; use a distinct label`,
+        path: ["inputs", index, "description"],
+        message: `Matches input ${first + 1} once case, accents and punctuation are ignored; start it differently`,
       });
   });
 });
@@ -84,7 +109,16 @@ export const WorkflowVersionSchema = z.object({
 });
 export const WorkflowSchema = z.object({
   id: z.uuid(),
-  agentId: z.uuid(),
+  /** The Member who created it; absent once that Membership is removed. */
+  createdBy: z
+    .object({
+      membershipId: z.uuid(),
+      userId: z.uuid().nullable(),
+      name: z.string().nullable(),
+    })
+    .nullable(),
+  /** Preselected when a run starts; null when unset or not readable by the viewer. */
+  defaultAgentId: z.uuid().nullable(),
   revision: z.number().int().positive(),
   archivedAt: z.string().nullable(),
   version: WorkflowVersionSchema,
@@ -92,6 +126,10 @@ export const WorkflowSchema = z.object({
   executionAvailable: z.boolean(),
 });
 export const WorkflowSummarySchema = WorkflowSchema.extend({
+  /** The default Agent's name, when the viewer can read that Agent. */
+  defaultAgentName: z.string().nullable().optional(),
+  /** Runs of this workflow the viewer can read. */
+  runCount: z.number().int().nonnegative().default(0),
   version: z.object({
     id: z.uuid(),
     number: z.number().int().positive(),

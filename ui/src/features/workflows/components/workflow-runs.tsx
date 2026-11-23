@@ -1,10 +1,13 @@
 "use client";
 
-import { WorkflowFiles } from "./workflow-files";
+import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
+import { FILES_GONE, WorkflowFiles } from "./workflow-files";
 import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, Clock3, FileCheck2, Files, LayoutDashboard } from "lucide-react";
 import { AppErrorState } from "@/components/app-error-state";
+import { useAgent } from "@/features/agents/hooks/use-agent";
+import { canAgent } from "@/features/agents/utils";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import {
   useWorkflowRun,
@@ -21,28 +24,32 @@ import {
   RunViewConnector,
   StepRail,
 } from "./workflow-run-parts";
-import { pendingApproval } from "../run-schemas";
+import { pendingApproval, runTitle, waitingStepApproval } from "../run-schemas";
 import { StepApprovals, WorkflowApproval } from "./workflow-approval";
+import {
+  EarlierRounds,
+  StepApprovalPanel,
+  StepApprovalRounds,
+} from "./workflow-step-approval";
 
+/**
+ * One run, wherever it is opened. The Agent that ran it comes from the run itself; a
+ * deleted Agent is named without a link and its run is read-only.
+ */
 export function WorkflowRunDetail({
-  agentId,
-  agent,
-  agentHref,
-  canManageFiles,
+  organizationId,
   runId,
-  canRunAgain,
   onOpenRun,
 }: {
-  agentId: string;
-  agent: { id: string; name: string };
-  agentHref: string;
-  canManageFiles: boolean;
+  organizationId: string;
   runId: string;
-  /** Whether this actor may start runs of the workflow; the server decides per run. */
-  canRunAgain: boolean;
   onOpenRun: (id: string) => void;
 }) {
-  const run = useWorkflowRun(agentId, runId);
+  const run = useWorkflowRun(runId);
+  // The viewer's own authority on the run's Agent decides whether they manage its files.
+  const { agent: runner } = useAgent(
+    run.data && !run.data.agentArchived ? run.data.agentId : "",
+  );
   if (run.error)
     return (
       <AppErrorState
@@ -55,12 +62,15 @@ export function WorkflowRunDetail({
   return (
     <RunContents
       key={runId}
-      agentId={agentId}
-      agent={agent}
-      agentHref={agentHref}
-      canManageFiles={canManageFiles}
+      agentId={run.data.agentId}
+      agent={{ id: run.data.agentId, name: run.data.agentName }}
+      agentHref={
+        run.data.agentArchived
+          ? undefined
+          : `/dashboard/${organizationId}/agents/${run.data.agentId}`
+      }
+      canManageFiles={canAgent(runner, "agent.update")}
       run={run.data}
-      canRunAgain={canRunAgain}
       onOpenRun={onOpenRun}
     />
   );
@@ -70,12 +80,16 @@ function RunSummary({
   run,
   agentName,
   agentHref,
+  onOpenStep,
 }: {
   run: WorkflowRun;
   agentName: string;
-  agentHref: string;
+  agentHref?: string;
+  onOpenStep: (stepId: string) => void;
 }) {
   const current = run.steps.find((step) => step.state === "RUNNING");
+  const waiting = waitingStepApproval(run);
+  const waitingStep = waiting ? run.steps[waiting.stepIndex] : undefined;
   const note = (text: string) => (
     <p className="rounded-xl bg-[var(--bg-soft)] px-5 py-4 text-sm">{text}</p>
   );
@@ -121,6 +135,22 @@ function RunSummary({
           {note(
             "No further work is admitted. Completed step summaries are retained.",
           )}
+        </div>
+      </RunCard>
+    );
+  if (run.state === "REJECTED")
+    return (
+      <RunCard embedded label="Run summary" title="Run rejected">
+        <div className="space-y-4">
+          {run.settledAt && (
+            <p className="text-sm text-[var(--ink-3)]">
+              Rejected · {new Date(run.settledAt).toLocaleString()}
+            </p>
+          )}
+          {note(run.reason ?? "Rejected at an approval step.")}
+          <p className="text-sm text-[var(--ink-3)]">
+            No further steps ran. Completed results are retained.
+          </p>
         </div>
       </RunCard>
     );
@@ -171,6 +201,23 @@ function RunSummary({
             <p className="mt-1 text-sm">{current.name}</p>
           </div>
         )}
+        {waiting && waitingStep && (
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl px-5 py-4"
+            style={{ background: "var(--warn-soft)" }}
+          >
+            <p className="text-sm">
+              Step {waiting.stepIndex + 1} waits for a decision on step {waiting.stepIndex}.
+            </p>
+            <button
+              type="button"
+              className="af-btn"
+              onClick={() => onOpenStep(waitingStep.id)}
+            >
+              Open approval step
+            </button>
+          </div>
+        )}
         <AttemptStatus run={run} agentName={agentName} agentHref={agentHref} />
       </div>
     </RunCard>
@@ -180,12 +227,43 @@ function RunSummary({
 function StepDetail({
   run,
   step,
+  agentId,
+  agentName,
 }: {
   run: WorkflowRun;
   step: WorkflowRun["steps"][number];
+  agentId: string;
+  agentName: string;
 }) {
   const index = run.steps.findIndex((item) => item.id === step.id);
-  const stopped = ["CANCELLED", "FAILED", "BLOCKED", "PAUSED", "AWAITING_APPROVAL"].includes(
+  if (waitingStepApproval(run)?.stepIndex === index)
+    return <StepApprovalPanel agentId={agentId} agentName={agentName} run={run} />;
+  if (step.type === "approval")
+    return (
+      <RunCard embedded label="Step detail">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-[var(--ink-3)]">
+          Step {index + 1} of {run.steps.length} · Approval step
+        </p>
+        <h4 className="mb-3 text-lg font-semibold">{step.name}</h4>
+        {step.instructions && (
+          <div className="mb-5">
+            <p className="mb-1.5 text-sm font-semibold">What to check</p>
+            <p className="whitespace-pre-wrap text-sm">{step.instructions}</p>
+          </div>
+        )}
+        <StepApprovalRounds run={run} stepIndex={index} />
+        <p className="text-sm text-[var(--ink-3)]">
+          {step.state === "WAITING"
+            ? "Waiting for someone who can edit this agent to decide."
+            : step.state === "COMPLETED"
+              ? "Approved; the run continued."
+              : step.state === "REJECTED"
+                ? "Rejected; the run ended here."
+                : "The run has not reached this step."}
+        </p>
+      </RunCard>
+    );
+  const stopped = ["CANCELLED", "FAILED", "BLOCKED", "PAUSED", "AWAITING_APPROVAL", "REJECTED"].includes(
     run.state,
   );
   if (step.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state))
@@ -217,6 +295,11 @@ function StepDetail({
         </p>
       )}
       <StepApprovals run={run} stepIndex={index} />
+      {step.round && step.round > 1 && (
+        <p className="mb-4 text-sm text-[var(--ink-3)]">
+          Round {step.round}: revised after changes were requested.
+        </p>
+      )}
       {step.summary ? (
         <WorkflowMarkdown text={step.summary} />
       ) : (
@@ -230,6 +313,7 @@ function StepDetail({
                 : "This step has not started yet."}
         </p>
       )}
+      <EarlierRounds agentId={agentId} agentArchived={run.agentArchived} step={step} />
     </RunCard>
   );
 }
@@ -240,33 +324,47 @@ function RunContents({
   agentHref,
   canManageFiles,
   run,
-  canRunAgain,
   onOpenRun,
 }: {
   agentId: string;
   agent: { id: string; name: string };
-  agentHref: string;
+  /** Absent once the Agent was deleted. */
+  agentHref?: string;
   canManageFiles: boolean;
   run: WorkflowRun;
-  canRunAgain: boolean;
   onOpenRun: (id: string) => void;
 }) {
-  const [selectedView, setSelectedView] = useState("summary");
+  // A run waiting at an Approval step opens on that step, where the decision is made.
+  const waiting = waitingStepApproval(run);
+  const waitingStepId = waiting ? run.steps[waiting.stepIndex]?.id : undefined;
+  const [selectedView, setSelectedView] = useState(waitingStepId ?? "summary");
+  // A round that opens while the viewer is on the overview takes them to it the same way;
+  // once it is decided, the viewer returns to the overview to follow the run.
+  const [seen, setSeen] = useState({ roundId: waiting?.id, stepId: waitingStepId });
+  if (waiting?.id !== seen.roundId) {
+    setSeen({ roundId: waiting?.id, stepId: waitingStepId });
+    if (waitingStepId && selectedView === "summary") setSelectedView(waitingStepId);
+    else if (!waitingStepId && selectedView === seen.stepId) setSelectedView("summary");
+  }
   const showArtifacts = selectedView === "artifacts";
-  const actions = useWorkflowRunActions(agentId);
+  const actions = useWorkflowRunActions();
+  // The API refuses a re-run the Tier leaves out, so the button is not offered.
+  const tierAllowsWorkflows = useTierEntitlements().hasFeature("workflows");
   const [confirm, setConfirm] = useState(false);
   const [confirmRerun, setConfirmRerun] = useState(false);
   const [rerunRequestId] = useState(() => crypto.randomUUID());
   const selectedStep = run.steps.find((step) => step.id === selectedView);
+  const deciding = !!selectedStep && selectedStep.id === waitingStepId;
   const started = new Date(run.createdAt).toLocaleString();
   return (
     <section aria-label="Run detail">
       <RunPageHeader
         eyebrow={`${run.name} · v${run.versionNumber} · run ${run.id.slice(0, 8)}`}
-        title={run.name}
+        title={runTitle(run)}
         badge={<RunStatusBadge state={run.state} approval={pendingApproval(run)} />}
         agent={agent}
         agentHref={agentHref}
+        agentArchived={run.agentArchived}
         detail={`Started ${started}`}
         actions={
           <>
@@ -275,7 +373,7 @@ function RunContents({
                 Cancel run
               </button>
             )}
-            {canRunAgain && run.allowedActions.includes("rerun") && (
+            {run.allowedActions.includes("rerun") && tierAllowsWorkflows && (
               <button
                 className="af-btn af-btn-primary"
                 onClick={() => setConfirmRerun(true)}
@@ -313,7 +411,7 @@ function RunContents({
       )}
       {pendingApproval(run) && (
         <div className="mb-6">
-          <WorkflowApproval agentId={agentId} agentName={agent.name} run={run} />
+          <WorkflowApproval agentName={agent.name} run={run} />
         </div>
       )}
       <div className="grid gap-x-8 gap-y-4 md:grid-cols-[minmax(200px,260px)_minmax(0,1fr)]">
@@ -395,7 +493,7 @@ function RunContents({
         <section
           id="workflow-run-panel"
           aria-label="Selected run view"
-          className="min-w-0 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]"
+          className={`min-w-0 overflow-hidden rounded-2xl bg-[var(--bg-elev)] ${deciding ? "border-[1.5px] border-[var(--warn)] shadow-sm" : "border border-[var(--line)]"}`}
         >
           {showArtifacts ? (
             <div className="px-6 py-5">
@@ -404,6 +502,9 @@ function RunContents({
                 Files published during this run, including work from unfinished
                 steps. Step and final outputs are labeled below.
               </p>
+              {run.agentArchived ? (
+                <p className="mt-3 text-sm text-[var(--ink-3)]">{FILES_GONE}</p>
+              ) : (
               <AgentFiles
                 canManageFiles={canManageFiles}
                 key={run.id}
@@ -426,19 +527,32 @@ function RunContents({
                   run.state,
                 )}
               />
+              )}
             </div>
           ) : (
             <>
               <div className="min-w-0">
                 {selectedStep ? (
-                  <StepDetail run={run} step={selectedStep} />
+                  <StepDetail
+                    run={run}
+                    step={selectedStep}
+                    agentId={agentId}
+                    agentName={agent.name}
+                  />
                 ) : (
-                  <RunSummary run={run} agentName={agent.name} agentHref={agentHref} />
+                  <RunSummary
+                    run={run}
+                    agentName={agent.name}
+                    agentHref={agentHref}
+                    onOpenStep={setSelectedView}
+                  />
                 )}
               </div>
               {!(selectedStep?.state === "PENDING" && ["QUEUED", "RUNNING"].includes(run.state)) && <>
-              <WorkflowFiles
+              {/* The approval panel already lists the files of the step it decides on. */}
+              {!deciding && <WorkflowFiles
                 agentId={agentId}
+                unavailable={run.agentArchived}
                 title={selectedStep ? "Step input files" : "Run input files"}
                 files={Array.from(
                   new Map(
@@ -455,10 +569,11 @@ function RunContents({
                     ].map((file) => [file.artifactId, file]),
                   ).values(),
                 )}
-              />
+              />}
               {selectedStep ? (
-                <WorkflowFiles
+                selectedStep.type !== "approval" && <WorkflowFiles
                   agentId={agentId}
+                  unavailable={run.agentArchived}
                   title="Step outputs"
                   description={selectedStep.outputDescription}
                   files={selectedStep.artifacts ?? []}
@@ -467,6 +582,7 @@ function RunContents({
                 run.state === "SUCCEEDED" && (
                   <WorkflowFiles
                     agentId={agentId}
+                    unavailable={run.agentArchived}
                     title="Final outputs"
                     description={run.finalOutputDescription}
                     files={run.finalArtifacts ?? []}
@@ -474,7 +590,7 @@ function RunContents({
                 )
               )}
               <WorkflowRunTiming run={run} />
-              <WorkflowRunActivity agentId={agentId} run={run} />
+              <WorkflowRunActivity run={run} />
               </>}
             </>
           )}
