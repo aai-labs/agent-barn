@@ -395,6 +395,51 @@
   to   { transform: translateX(0); opacity: 1; }
 }
 
+/* Navigation link waiting on the server (LinkPendingHint). Hidden for the first 100ms
+   so a prefetched click never shows it; the link must be position: relative. */
+.af-link-pending {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.af-link-pending::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: currentColor;
+  transform: translateX(-100%);
+}
+.af-link-pending[data-pending="true"] {
+  animation: af-link-pending-in .15s ease-out .1s forwards;
+}
+.af-link-pending[data-pending="true"]::after {
+  animation: af-link-pending-slide 1s cubic-bezier(.4,0,.2,1) .1s infinite;
+}
+@keyframes af-link-pending-in {
+  to { opacity: 1; }
+}
+@keyframes af-link-pending-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .af-link-pending[data-pending="true"]::after {
+    animation: none;
+    width: 100%;
+    transform: none;
+    opacity: .6;
+  }
+}
+
 /* Animated status dot */
 .af-dot-pulse {
   animation: af-pulse 2s infinite;
@@ -417,3 +462,24 @@
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+/* Full-page loading screen: the pixel barn builds itself, holds, and dissolves */
+.af-barn-ghost {
+  fill: var(--ink-5);
+  opacity: .28;
+}
+.af-barn-cell {
+  fill: #f45a17;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.af-barn-build[data-busy="true"] .af-barn-cell {
+  animation: af-barn-build 3.2s cubic-bezier(.2,.7,.2,1) var(--af-barn-delay) infinite both;
+}
+@keyframes af-barn-build {
+  0%       { opacity: 0; transform: translateY(-70%) scale(.6); }
+  10%, 70% { opacity: 1; transform: none; }
+  82%, 100% { opacity: 0; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .af-barn-build[data-busy="true"] .af-barn-cell { animation: none; }
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -13,11 +13,16 @@ import { useOrganizationContext } from "@/features/organizations/providers/organ
 import { TierHoldsNotice } from "@/features/tiers/components/tier-holds-notice";
 import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import { useAgents } from "@/features/agents/hooks/use-agents";
+import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
+import { useAgentsHealth } from "@/features/agents/hooks/use-agents-health";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { EmptyTeam } from "@/features/agents/components/empty-team";
 import { HireDialog, type HireChoice } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
-import { isQuiet } from "@/features/agents/utils";
+import type { Agent } from "@/features/agents/schemas";
+import { canAgent, isQuiet } from "@/features/agents/utils";
+
+const TEAM_HEALTH_REFETCH_MS = 30_000;
 
 function LoadingCard() {
   return (
@@ -53,6 +58,22 @@ export default function DashboardPage() {
   // The none tier allows no agents: the organization subscribes before it hires.
   const needsTier = tier?.activation === "none";
   const { agents, total, isLoading, error, refetch } = useAgents();
+  const { agents: agentsWithBots } = useAllAgents({ includeBots: true });
+  // One request for the whole team's health; each card reads its own answer from the cache.
+  useAgentsHealth(
+    agents.filter((agent) => agent.status === "RUNNING" && canAgent(agent, "activity.read")).map((agent) => agent.id),
+    TEAM_HEALTH_REFETCH_MS,
+  );
+  const botsByParent = useMemo(() => {
+    const grouped = new Map<string, Agent[]>();
+    for (const bot of agentsWithBots) {
+      if (!bot.parentAgentId) continue;
+      const siblings = grouped.get(bot.parentAgentId) ?? [];
+      siblings.push(bot);
+      grouped.set(bot.parentAgentId, siblings);
+    }
+    return grouped;
+  }, [agentsWithBots]);
 
   const hour = new Date().getHours();
   const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -114,7 +135,7 @@ export default function DashboardPage() {
             {isLoading
               ? Array.from({ length: 3 }).map((_, i) => <LoadingCard key={i} />)
               : displayedAgents.map((agent) => (
-                  <AgentCard key={agent.id} agent={agent} href={`/dashboard/${orgId}/agents/${agent.id}`} />
+                  <AgentCard key={agent.id} agent={agent} bots={botsByParent.get(agent.id) ?? []} href={`/dashboard/${orgId}/agents/${agent.id}`} />
                 ))}
             {!isLoading && agents.length === 0 && needsTier && <EmptyTeam subscribeHref={`/dashboard/${orgId}/billing`} />}
             {!isLoading && agents.length === 0 && !needsTier && <EmptyTeam onReady={selectedOrganization?.isTrial || premadeOnly ? () => { setHireChoice("ready"); setHireOpen(true); } : undefined} onCustom={premadeOnly ? undefined : () => { setHireChoice("custom"); setHireOpen(true); }} />}

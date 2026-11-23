@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -15,6 +15,7 @@ import { useOrganizationSwitch } from "@/features/organizations/hooks/use-organi
 import { useRailModel } from "../hooks/use-rail-model";
 import { PLATFORM_RAIL_BACKGROUND, RAIL_BACKGROUND, type NavItem } from "../nav-model";
 import { PanelLink } from "./context-panel";
+import { LinkPendingHint } from "./link-pending-hint";
 
 const PRIMARY_COUNT = 3;
 
@@ -79,10 +80,11 @@ function BarLink({ item, idle }: { item: NavItem; idle: string }) {
     <Link
       href={item.href}
       aria-current={item.active ? "page" : undefined}
-      className={`flex min-h-[60px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[10.5px] font-medium ${item.active ? "text-white" : idle}`}
+      className={`relative flex min-h-[60px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[10.5px] font-medium ${item.active ? "text-white" : idle}`}
     >
       <Icon size={20} aria-hidden />
       <span className="max-w-full truncate">{item.label}</span>
+      <LinkPendingHint />
     </Link>
   );
 }
@@ -99,8 +101,18 @@ function MoreSheetBody({
   const router = useRouter();
   const { user } = useCurrentUser();
   const { logout, isLoggingOut } = useLogout();
-  const { organizations, selectedOrganization, isPlatformView, selectOrganization, canCreateOrganization } =
-    useOrganizationSwitch();
+  const {
+    organizations,
+    selectedOrganization,
+    isPlatformView,
+    selectOrganization,
+    canCreateOrganization,
+    prefetchSwitchTargets,
+  } = useOrganizationSwitch();
+  // The sheet is open whenever this renders: get the other Organizations ready to switch to.
+  useEffect(() => {
+    prefetchSwitchTargets();
+  }, [prefetchSwitchTargets]);
 
   return (
     <div className="flex flex-col gap-4 [&_a]:min-h-11">

@@ -68,21 +68,54 @@ test.describe("Dashboard Page", () => {
     await expect(page.getByText(/working now/)).toBeVisible();
   });
 
-  test("polls permitted running cards every 30 seconds and skips restricted or stopped cards", async ({ page }) => {
+  test("reads the team's health in one request every 30 seconds, skipping restricted or stopped cards", async ({ page }) => {
     await page.clock.install();
     await dataSupportPage.agents.interceptGetAgentsRequest({ body: agentListWithPollingStates });
-    const requests = await Promise.all(agentListWithPollingStates.items.map((agent) =>
+    const perCard = await Promise.all(agentListWithPollingStates.items.map((agent) =>
       dataSupportPage.agents.interceptGetAgentHealthRequest({ agentId: agent.id }),
     ));
+    const batches = dataSupportPage.agents.batchHealthRequests;
+    const [permitted] = agentListWithPollingStates.items;
     await dashboardPage.goto();
-    await expect.poll(() => requests[0].count).toBe(1);
+    await expect.poll(() => batches.length).toBe(1);
+    expect(batches[0]).toEqual([permitted.id]);
     await expect(dashboardPage.agentCard("Read-only metadata")).toBeVisible();
     await expect(dashboardPage.agentCard("Read-only metadata").getByText("Running", { exact: true })).toBeVisible();
     await page.clock.runFor(29_000);
-    expect(requests.map((request) => request.count)).toEqual([1, 0, 0]);
+    expect(batches).toHaveLength(1);
     await page.clock.runFor(1_000);
-    await expect.poll(() => requests[0].count).toBe(2);
-    expect(requests.map((request) => request.count)).toEqual([2, 0, 0]);
+    await expect.poll(() => batches.length).toBe(2);
+    expect(batches[1]).toEqual([permitted.id]);
+    // No card asks for its own health any more.
+    expect(perCard.map((request) => request.count)).toEqual([0, 0, 0]);
+  });
+
+  test("an unreachable pod reads Disconnected, and opening the Agent shows no raw reason", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentHealthRequest({
+      status: 503,
+      body: { detail: { status: "error", reason: "unreachable" } },
+    });
+    await dataSupportPage.agents.interceptGetAgentRequest();
+    await dataSupportPage.agents.interceptGetAgentTemplateRequest();
+    await dataSupportPage.agents.interceptGetConversationChannelsRequest();
+    await dataSupportPage.agents.interceptGetModelsRequest();
+    await dashboardPage.goto();
+    await expect(dashboardPage.agentCard("Maya").getByText("Disconnected", { exact: true })).toBeVisible();
+
+    // Client-side, so the Agent page starts from the Team page's cached health.
+    await dashboardPage.agentCard("Maya").click();
+    await page.waitForURL(new RegExp(`/agents/${MOCK_AGENT_ID}`));
+    await expect(page.getByRole("heading", { name: "Maya" }).first()).toBeVisible();
+    await expect(page.getByTestId("agent-health-banner")).toHaveCount(0);
+  });
+
+  test("a failed health read shows the team as Disconnected, not their last health", async ({ page }) => {
+    await page.route("**/api/v1/organizations/*/agents/health?*", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }) }),
+    );
+    await dashboardPage.goto();
+
+    await expect(dashboardPage.agentCard("Maya").getByText("Disconnected", { exact: true })).toBeVisible();
   });
 
   test("shows creator and reveals the exact last-activity time on hover", async ({ page }) => {
@@ -221,7 +254,7 @@ test.describe("Dashboard Page", () => {
     await expect(page.getByText("Agents service unavailable")).toBeVisible();
   });
 
-  test("shows an account error state when user context fails", async ({
+  test("shows the server as unreachable when user context answers 500", async ({
     page,
   }) => {
     await dataSupportPage.users.interceptGetUserContextRequest({
@@ -231,9 +264,7 @@ test.describe("Dashboard Page", () => {
 
     await dashboardPage.goto();
 
-    await expect(
-      page.getByText("We couldn't load your account"),
-    ).toBeVisible();
+    await expect(page.getByText("Can't reach Agent Barn")).toBeVisible();
     await expect(
       page.getByText("Account service unavailable"),
     ).toBeVisible();

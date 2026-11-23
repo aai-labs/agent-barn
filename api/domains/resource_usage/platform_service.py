@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -43,6 +44,11 @@ _LIMIT_WINDOW_SECONDS = 300
 _THROTTLE_WINDOW_SECONDS = 3600
 
 _HAS_CONTAINER = {AgentStatus.RUNNING, AgentStatus.ERROR}
+
+# An opened row's restarts and usage are read here while its health is read on the request
+# thread, so a slow cluster or Prometheus delays the row by the slowest read, not by all of
+# them in turn. Health stays on the request thread: it also records what it observed.
+_ROW_READS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="platform-agent-row")
 
 
 def _plus(total: float | None, value: float | None) -> float | None:
@@ -355,9 +361,13 @@ class PlatformResourceUsageService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
         has_container = agent.status != AgentStatus.STOPPED
-        health = self._health_or_none(agent) if has_container else None
-        diagnostics = self.agent_service.runtime_restarts(agent) if has_container else None
-        usage = self.resource_usage_service.usage_for(agent, ResourceUsageRange.ONE_DAY) if has_container else None
+        health = diagnostics = usage = None
+        if has_container:
+            restarts_read = _ROW_READS.submit(self.agent_service.runtime_restarts, agent)
+            usage_read = _ROW_READS.submit(self.resource_usage_service.usage_for, agent, ResourceUsageRange.ONE_DAY)
+            health = self._health_or_none(agent)
+            diagnostics = restarts_read.result()
+            usage = usage_read.result()
         organization_id = agent.organization_id
         return PlatformAgentDetailsRead(
             agent_id=agent.id,

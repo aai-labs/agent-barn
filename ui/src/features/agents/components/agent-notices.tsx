@@ -45,7 +45,7 @@ export function AgentNotices({
     <>
       <PendingModelBanner agent={agent} canRestart={canManageLifecycle} />
 
-      {canManageLifecycle && (
+      {canManageLifecycle && !agent.parentAgentId && (
         <>
           {/* The path bar offers the update on desktop. */}
           <AgentUpdateBanner agent={agent} className="lg:hidden" />

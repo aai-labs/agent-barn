@@ -422,3 +422,10 @@ def test_empty_flush_is_noop():
 
         with then("no HTTP request is made"):
             mock_urlopen.assert_not_called()
+
+
+def test_identity_falls_back_to_the_environment_for_a_shallow_install():
+    mod = load_hermes_plugin()
+    mod.__file__ = "/plugin/__init__.py"
+
+    assert_that(mod._identity(), is_(os.environ))

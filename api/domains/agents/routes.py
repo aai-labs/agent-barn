@@ -8,6 +8,7 @@ from fastapi_injector import Injected
 from api.domains.agent_sizes.models import AgentSizeChoice
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
+from api.domains.agents.log_stream import log_stream_events
 from api.domains.agents.models import (
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
@@ -15,6 +16,7 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentCreate,
     AgentFilter,
+    AgentHealthItemRead,
     AgentHealthRead,
     AgentLlmBudgetListItem,
     AgentLlmBudgetRead,
@@ -31,6 +33,7 @@ from api.domains.agents.models import (
     AgentTemplateOverrideVersionRead,
     AgentTemplateSelection,
     AgentUpdate,
+    BotCreate,
     IntegrationIsolationUpdate,
     SecretProvider,
     get_agent_filter,
@@ -114,6 +117,21 @@ def list_agent_llm_budgets(
     return service.list_llm_budgets(organization_id, context)
 
 
+@agents_router.get("/health", response_model=list[AgentHealthItemRead])
+def get_agents_health(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+    agent_ids: Annotated[list[UUID], Query(min_length=1, max_length=100)],
+):
+    """The health of the Agents a list page shows, in one request instead of one per Agent.
+
+    Pass each Agent as its own ``agent_ids`` parameter, at most 100 (a page of the Team or
+    Usage list). Agents the viewer may not read activity for, and Agents that are not
+    running, are left out.
+    """
+    return service.agents_health(agent_ids, context)
+
+
 @agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])
 def list_agent_share_roles(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -149,13 +167,8 @@ def stream_agent_logs(
     tail_lines: Annotated[int, Query(ge=0, le=1000)] = 0,
 ):
     lines = service.stream_agent_logs(agent_id, context, tail_lines=tail_lines)
-
-    def event_generator():
-        for line in lines:
-            yield f"data: {line}\n\n"
-
     return StreamingResponse(
-        event_generator(),
+        log_stream_events(lines),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -192,6 +205,29 @@ def get_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.get_agent(agent_id, context)
+
+
+@agents_router.post("/{agent_id}/bots", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
+def create_agent_bot(
+    agent_id: UUID,
+    data: BotCreate,
+    background_tasks: BackgroundTasks,
+    storage: Annotated[ArtifactBucketProvisioner, Injected(ArtifactBucketProvisioner)],
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    bot = service.create_bot(agent_id, data, context)
+    background_tasks.add_task(storage.process_agent, bot.id, bot.organization_id)
+    return bot
+
+
+@agents_router.get("/{agent_id}/bots", response_model=list[AgentRead])
+def list_agent_bots(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.list_bots(agent_id, context)
 
 
 @agents_router.get("/{agent_id}/llm-budget", response_model=AgentLlmBudgetRead)
