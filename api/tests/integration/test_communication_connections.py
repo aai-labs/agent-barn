@@ -1895,3 +1895,37 @@ def test_journal_pruning_deletes_at_most_one_batch_and_preserves_recent_entries(
         assert operations.prune_journal(retention_days=30, batch_size=2) == 2
         assert operations.prune_journal(retention_days=30, batch_size=2) == 1
         assert operations.prune_journal(retention_days=30, batch_size=2) == 0
+
+
+def _custom_slack_payload() -> dict:
+    return {**_slack_payload(), "settings": {"api_url": "https://chat.example.com/slack/api"}}
+
+
+def test_custom_slack_server_is_accepted_only_on_a_hermes_agent() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        client: TestClient = context.client
+        hermes_id = context.agent.id
+
+        with when("I add a Custom Slack server to a Hermes Agent, a Bot, and an OpenClaw Agent"):
+            hermes = client.post(_base(context), json=_custom_slack_payload(), headers=_auth(context))
+            there_is_an_agent(name="Bot", agent_type=AgentType.HERMES, parent_agent_id=hermes_id, bot_slot=1)(context)
+            bot = client.post(_base(context), json=_custom_slack_payload(), headers=_auth(context))
+            there_is_an_agent(name="OpenClaw Agent", agent_type=AgentType.OPENCLAW)(context)
+            openclaw = client.post(_base(context), json=_custom_slack_payload(), headers=_auth(context))
+            own_tokens = {"bot_token": "xoxb-openclaw-own", "app_token": "xapp-openclaw-own"}
+            openclaw_slack = client.post(
+                _base(context), json={**_slack_payload(), "credentials": own_tokens}, headers=_auth(context)
+            )
+            moved_to_custom = client.patch(
+                f"{_base(context)}/{openclaw_slack.json()['id']}",
+                json={"settings": _custom_slack_payload()["settings"], "revision": openclaw_slack.json()["revision"]},
+                headers=_auth(context),
+            )
+
+        with then("only the Hermes Agent keeps it, stored normalized; plain Slack still works everywhere"):
+            assert_that(hermes.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(hermes.json()["settings"]["api_url"], equal_to("https://chat.example.com/slack/api/"))
+            for refused in (bot, openclaw, moved_to_custom):
+                assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+                assert_that(refused.json()["detail"], contains_string("Custom Slack server"))
+            assert_that(openclaw_slack.status_code, equal_to(status.HTTP_201_CREATED))

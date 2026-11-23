@@ -136,6 +136,11 @@ The Hermes path filter explicitly includes `hermes_slack_access_driver.py`.
 Changes to that fixture alone select the Hermes image workflow and run the
 real-adapter admission, thread-context, and group-DM button contracts.
 
+`hermes_slack_compat_driver.py` is in the same filter. It proves that the
+`agentbarn-slack-compat` plugin sends the Connection's Slack SDK, Socket Mode and
+standalone-send calls to the Slack-compatible server, leaves other Slack apps on
+Slack, and trusts only that server's host for file downloads with its own token.
+
 `hermes_bots_driver.py` is in the same filter. It proves, on the real image, the multiplex
 behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
 scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.

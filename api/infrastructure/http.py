@@ -24,6 +24,14 @@ def retry_after_seconds(raw: str | None, max_seconds: int | None = RATE_LIMIT_MA
     return max(1, seconds)
 
 
+def _send(method: str, url: str, *, extensions: dict | None, **kwargs) -> httpx.Response:
+    if not extensions:
+        return httpx.request(method, url, **kwargs)
+    # httpx.request() takes no extensions; a client request does.
+    with httpx.Client() as client:
+        return client.request(method, url, extensions=extensions, **kwargs)
+
+
 def resilient_request(
     method: str,
     url: str,
@@ -35,21 +43,25 @@ def resilient_request(
     max_retries: int = MAX_RETRIES,
     label: str = "HTTP",
     retry_server_errors: bool = False,
+    extensions: dict | None = None,
 ) -> httpx.Response:
     """Perform an HTTP request with retry logic for transient failures.
 
     Retries on transport errors, 429 (honoring Retry-After), and optionally
     5xx server errors. Returns the httpx.Response for the caller to interpret.
+    ``extensions`` carries httpx request extensions, such as the SNI name of a
+    request pinned to a checked address.
     """
     for attempt in range(max_retries + 1):
         try:
-            resp = httpx.request(
+            resp = _send(
                 method,
                 url,
                 headers=headers,
                 params=params,
                 content=content,
                 timeout=timeout,
+                extensions=extensions,
             )
         except httpx.TransportError as exc:
             if attempt == max_retries:
