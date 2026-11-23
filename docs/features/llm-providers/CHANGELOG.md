@@ -9,11 +9,26 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 1, the OpenRouter key in Platform Admin settings ([feature doc](../llm-providers.md)). A Platform Administrator can read the OpenRouter key status and replace the key; saving it registers the `agentbarn:openrouter` LiteLLM route at `order: 1`. The credit balance, cost repair and the credits metric use the saved key. LiteLLM persists database routes with their provider keys encrypted under `LITELLM_SALT_KEY`; its config-file OpenRouter route is at `order: 2`, so a healthy route with a lower order is used instead.
 - In transition: until a Platform Administrator saves a key, LiteLLM serves `OPENROUTER_API_KEY` through its config-file route and the API falls back to it. Each environment moves its key by hand; see the operations guide's OpenRouter key section. Keys saved for other providers are not synced to LiteLLM until slice 3, so Agents can't use them yet.
 - Delivered: slice 2, connections to other providers ([feature doc](../llm-providers.md)). In Platform Admin settings and through the API, a Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita, and any number of Azure and Custom connections. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter deleted. Each key is checked with its provider before it is stored, and every addition, replacement and deletion is audited. OpenRouter's key is read from the connection list and replaced through `PUT .../openrouter/key`; the OpenRouter-only routes are gone.
-- Delivered: slice 3, PRs 1 to 7. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices; nothing adds models yet. `LiteLLMClient.get_model_prices()` reads that list; nothing calls it yet. Under the connection's lock, replacing a key rewrites the LiteLLM route of each of the connection's models before the key is stored, and deleting a connection removes its routes before its models and key. The `platform.llm_provider.models_changed` event is registered; nothing records it yet.
-- Next: slice 3, PRs 8 and 9, each provider's model list; then models and prices per connection through the API.
+- Delivered: slice 3, PRs 1 to 8. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices; nothing adds models yet. `LiteLLMClient.get_model_prices()` reads that list, and `LlmProviderCatalogue.list_models()` reads OpenAI's, xAI's, DeepSeek's, Novita's and a Custom server's model lists; nothing calls them yet. Under the connection's lock, replacing a key rewrites the LiteLLM route of each of the connection's models before the key is stored, and deleting a connection removes its routes before its models and key. The `platform.llm_provider.models_changed` event is registered; nothing records it yet.
+- Next: slice 3, PR 9, Anthropic's, Gemini's and Fireworks' paged model lists; then models and prices per connection through the API.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-23 — AF-447 — slice 3, PR 8
+
+- Delivered: `LlmProviderCatalogue.list_models()` in the new `api/infrastructure/llm_provider_catalogue/` reads a provider's model list with the connection's key, each with a Bearer key and the ids under each entry's `id`:
+  - OpenAI: `GET https://api.openai.com/v1/models`, list in `data` (https://developers.openai.com/api/reference/resources/models/methods/list);
+  - xAI: `GET https://api.x.ai/v1/language-models`, list in `models`, "all chat and image understanding models" (https://docs.x.ai/developers/rest-api-reference/inference/models);
+  - DeepSeek: `GET https://api.deepseek.com/models`, list in `data` (https://api-docs.deepseek.com/api/list-models);
+  - Novita: `GET https://api.novita.ai/openai/v1/models`, list in `data` (https://docs.novita.ai/api-reference/model-apis-llm-list-models);
+  - Custom: `GET {base_url}/models`, list in `data`, as slice 2's key check asks.
+  None of those pages mentions paging.
+- Delivered: the host is resolved in a worker pool and given 5 seconds, then the request is pinned to the checked public address (`public_http`), with no redirects and a 10-second timeout. The body is read up to 2 MiB once decoded, so a small compressed body can't decode into more, and the list up to 1,000 entries; both caps are ours. Ids a model row can't hold (more than 200 characters, or outside `[A-Za-z0-9._:/-]`) and entries without a string id are left out; the rest come back sorted, each once.
+- Delivered: `401` and `403`, and xAI's `400`, raise `ProviderListRefused`; no answer, a non-public address, a redirect or another status `ProviderListUnreachable`; a body that is not a model list or is over a cap `ProviderListUnreadable`. Each message is fixed and none carries the key.
+- Changed: checked on 2026-11-23 by sending an obviously fake key to `https://api.x.ai/v1/language-models`: it answered `400` `invalid-argument` ("Incorrect API key provided"), as `/v1/models` did in slice 2, and `401` with no key. xAI's docs say `401` (https://docs.x.ai/developers/debugging).
+- Changed: Novita's list endpoint is now in its API reference, so the plan's known limit for it no longer holds; PR 17's feature doc leaves it out.
+- Follow-up: PR 9 adds the paged lists; PR 11 uses the catalogue and describes it in [`llm-providers.md`](../llm-providers.md).
 
 ### 2026-11-20 — AF-447 — slice 3, PR 7
 
