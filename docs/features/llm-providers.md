@@ -122,6 +122,18 @@ Each LLM Provider Model of a connection other than OpenRouter gets a route of it
 | Azure | `azure/<deployment>` | `api_base` the stored resource endpoint and `api_version` `v1`, so LiteLLM calls `{api_base}/openai/v1/` |
 | Custom | `openai/<id>` | `api_base` the stored base URL, unchanged |
 
+### How LiteLLM serves and bills these routes
+
+`api/tests/integration/test_provider_model_routes_litellm_contract.py` checks this against LiteLLM v1.108.6:
+
+- A route serves with its connection's key, and `x-litellm-response-cost` uses the route's four prices, not the ones LiteLLM's list has for the model. A cache price of 0 stays 0, also after a save sets it; LiteLLM fills in only the cache prices a route leaves unset (`router.py:9541-9567`).
+- A save that changes nothing writes no route, so the routes `/model/info` lists compare equal to the ones the API builds.
+- A replaced key serves the next request.
+- A name with no route, whether never ticked, unknown or removed, is refused with `400` and never reaches the provider.
+- Two connections can save the same model, and `<slug>/<model_id>` reaches only that connection's route. A request for the raw LiteLLM model string, such as `openai/gpt-4o`, is matched against each route's `model` (`router.py:13641-13645`) and served by one of the routes that have it, with that route's key and price. The API gives Agent keys and their teams no model list (`LiteLLMClient.generate_key` and `_create_team`), so an Agent can reach a connection's model this way without its `<slug>/` name.
+- Routes leave LiteLLM's price list as it was, so `model-catalogue` still shows LiteLLM's own price for a model a route prices differently.
+- LiteLLM copies onto a route, from its own list, the rates the route doesn't set: the priority and flex tier rates, the 1-hour cache-write rate, and the cache rates for prompts over 200k tokens (`router.py:9541-9567,9594-9617,10834-10849`). A response served at the priority tier is billed at LiteLLM's priority rates instead of the stored prices; the test checks this. A prompt over 200k tokens has its cached tokens billed at LiteLLM's rate for that size (`litellm_core_utils/llm_cost_calc/utils.py:657-799`). In v1.108.6's bundled list, 279 chat models have a priority input rate, 213 a 1-hour cache-write rate and 78 a cache-read rate above 200k tokens.
+
 ## The API's own OpenRouter calls
 
 `OpenRouterKeyLookup.api_key()` returns the saved key, else `OPENROUTER_API_KEY`, else empty. The platform credit balance, cost repair (`CostSynchronizer`) and the `agentbarn_openrouter_credits_remaining` metric resolve it each time they run, so a new key reaches them without a restart; the metric polls again at once when the key changes and reports `scrape_ok` 0 when the key cannot be read. The model catalogue is fetched without a key. See [Costs](costs.md).

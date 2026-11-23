@@ -15,7 +15,7 @@ from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.helpers.litellm_model_store import (
     MASTER_KEY,
-    openrouter_stub_is_running,
+    chat_stub_is_running,
     pinned_litellm_runs_the_repository_config,
     restart_litellm,
 )
@@ -45,7 +45,7 @@ def the_api_routes_through_the_pinned_litellm(monkeypatch):
         client = LiteLLMClient(context.injector.get(KubernetesClient), config)
         monkeypatch.setattr(client, "_master_key", lambda: MASTER_KEY)
         monkeypatch.setattr(context.injector.get(PlatformLlmProviderService), "litellm", client)
-        monkeypatch.setattr(llm_provider_service, "OPENROUTER_ROUTE_API_BASE", context.openrouter_stub.url)
+        monkeypatch.setattr(llm_provider_service, "OPENROUTER_ROUTE_API_BASE", context.chat_stub.url)
         context.injector.get(OpenRouterClient).check_key = Mock(return_value=True)
 
     return step
@@ -65,7 +65,7 @@ def _key_openrouter_received(context) -> str:
         timeout=30,
     )
     assert_that(response.status_code, equal_to(200), response.text)
-    return context.openrouter_stub.keys[-1]
+    return context.chat_stub.keys[-1]
 
 
 def test_the_saved_openrouter_key_outranks_the_environment_key_and_survives_a_litellm_restart(monkeypatch):
@@ -80,7 +80,7 @@ def test_the_saved_openrouter_key_outranks_the_environment_key_and_survives_a_li
             database_repo_is_ready(),
             database_is_clean(),
             platform_admin,
-            openrouter_stub_is_running(),
+            chat_stub_is_running(),
             pinned_litellm_runs_the_repository_config(openrouter_api_key=ENV_KEY),
             the_api_routes_through_the_pinned_litellm(monkeypatch),
         ]
