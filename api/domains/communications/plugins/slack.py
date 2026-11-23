@@ -77,8 +77,11 @@ class SlackSettings(NativeHomeDeliverySettings, PlatformSettings):
         ),
     )
 
+    # Not stored when empty: a release without this setting rejects unknown keys, so a
+    # plain Slack Connection saved now must stay readable after a rollback.
     api_url: str | None = Field(
         default=None,
+        exclude_if=lambda value: value is None,
         title="Custom Slack server",
         description=(
             "Leave empty for Slack. For a self-hosted chat that implements Slack's bot API with Socket Mode, enter "

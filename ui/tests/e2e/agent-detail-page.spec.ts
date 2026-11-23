@@ -1299,7 +1299,24 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.credentialInput("App-level token").fill("xapp-custom");
     const connect = agentDetailPage.connectPlatformButton("Custom Slack");
     await expect(connect).toBeDisabled();
+
+    // Without the address, a directory preview would carry these tokens to slack.com.
+    await page.getByText("same as Slack ›").click();
+    const browse = agentDetailPage.browseDirectoryButton("Allowed channels");
+    await expect(browse).toBeDisabled();
+    await expect(page.getByText("Add the server address and both tokens above to browse.").first()).toBeVisible();
+
     await page.getByLabel(/Server address/).fill("https://chat.example.com/slack/api/");
+    const preview = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/connection-directory-preview"),
+    );
+    await browse.click();
+    expect((await preview).postDataJSON()).toMatchObject({
+      platform_key: "slack",
+      settings: { api_url: "https://chat.example.com/slack/api/" },
+    });
+    await agentDetailPage.directoryPickerOption(/#ops/).click();
+    await agentDetailPage.directoryPickerConfirmButton().click();
 
     const create = agentDetailPage.waitForConnectionMutation("POST");
     await connect.click();
@@ -1307,7 +1324,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       platform_key: "slack",
       display_name: "Custom Slack",
       enabled: true,
-      settings: { api_url: "https://chat.example.com/slack/api/" },
+      settings: { api_url: "https://chat.example.com/slack/api/", channel_ids: ["C1"] },
       credentials: { bot_token: "xoxb-custom", app_token: "xapp-custom" },
     });
   });

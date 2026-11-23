@@ -669,7 +669,9 @@ def test_slack_custom_server_is_optional_and_normalized(raw: str | None, stored:
         agent_id=uuid4(),
     )
 
-    assert validated.settings["api_url"] == stored
+    assert validated.settings.get("api_url") == stored
+    # An empty server is not stored, so a release without the setting can still read the row.
+    assert ("api_url" in validated.settings) == (stored is not None)
 
 
 @pytest.mark.parametrize(
