@@ -360,7 +360,10 @@ class AnomalyCheckService:
 
         if not learning and enough:
             self._flag_first_uses(organization_id, agent_id, recent_uses, counts, also_seen=old_uses)
-        self.repository.mark_seen(organization_id, agent_id, [*recent_uses, *old_uses])
+        # A subject can be both recent and old (a backfill alongside a new use); the
+        # ledger takes it once, spanning both.
+        seen, _ = _summarise([*recent, *old])
+        self.repository.mark_seen(organization_id, agent_id, seen)
         self.repository.save_state(
             organization_id,
             agent_id,

@@ -31,7 +31,7 @@ from api.domains.anomalies.models import (
     SeenKind,
 )
 from api.domains.anomalies.repository import Actor, AnomalySettingsRepository
-from api.domains.anomalies.service import AnomalyCheckService
+from api.domains.anomalies.service import AnomalyCheckService, CheckSummary
 from api.domains.business_value.classifier import BusinessActionStatus
 from api.domains.business_value.models import BusinessAction
 from api.domains.costs.models import CostRecord, CostSyncState
@@ -169,8 +169,8 @@ def usual_activity(days: tuple[int, ...] = HISTORY_DAYS, *, per_hour: int = 10):
     return step
 
 
-def _check(context, now: datetime = NOW) -> None:
-    context.injector.get(AnomalyCheckService).run_checks(now)
+def _check(context, now: datetime = NOW) -> CheckSummary:
+    return context.injector.get(AnomalyCheckService).run_checks(now)
 
 
 def _anomalies(context, signal: AnomalySignal | None = None) -> list[AgentAnomaly]:
@@ -438,11 +438,11 @@ def test_the_first_check_learns_what_the_agent_already_uses_without_flagging_it(
         assert_that(_anomalies(context), empty())
 
 
-def _learned_then(context, rows: list) -> None:
+def _learned_then(context, rows: list) -> CheckSummary:
     """A first check learns the Agent's history; `rows` arrive before the next one."""
     _check(context)
     _save(context, *rows)
-    _check(context, LATER)
+    return _check(context, LATER)
 
 
 def test_first_use_of_a_destination_is_recorded_by_host():
@@ -663,7 +663,7 @@ def test_activity_stored_long_after_it_happened_is_learned_not_flagged():
 def test_a_use_backfilled_alongside_a_recent_one_is_not_new():
     with given([*_ENABLED, usual_activity()]) as context:
         stored = NOW + timedelta(minutes=1)
-        _learned_then(
+        summary = _learned_then(
             context,
             [
                 _stored_late(
@@ -674,7 +674,9 @@ def test_a_use_backfilled_alongside_a_recent_one_is_not_new():
             ],
         )
 
+        assert_that(summary.failures, equal_to(0))
         assert_that(_anomalies(context, AnomalySignal.NEW_DESTINATION), empty())
+        assert_that(_ledger_subjects(context, SeenKind.DESTINATION), equal_to(["both.example", KNOWN_HOST]))
 
 
 def test_a_new_use_stored_a_little_late_is_still_flagged():
