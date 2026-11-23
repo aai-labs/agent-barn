@@ -1,11 +1,80 @@
 "use client";
 
+import { useId, type ReactNode } from "react";
+
 import { formatDate } from "@/shared/date";
 
-import { MASKED_KEY_PREFIX, OPENROUTER_MASKED_KEY_PREFIX, PROVIDER_TYPE_LABELS } from "../constants";
-import type { LlmProviderConnection } from "../schemas";
+import {
+  BASE_URL_PROVIDER_TYPES,
+  MASKED_KEY_PREFIX,
+  OPENROUTER_MASKED_KEY_PREFIX,
+  PROVIDER_INITIALS,
+  PROVIDER_SUBTITLES,
+  PROVIDER_TYPE_LABELS,
+} from "../constants";
+import type { LlmProviderConnection, ProviderType } from "../schemas";
+import { providerTitle } from "../utils";
 
 const MUTED = { color: "var(--ink-3)" };
+const DASHED = { borderStyle: "dashed" } as const;
+
+export function ProviderInitials({ providerType }: { providerType: ProviderType }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-semibold"
+      style={{ background: "var(--bg-soft)", color: "var(--ink-2)" }}
+    >
+      {PROVIDER_INITIALS[providerType]}
+    </div>
+  );
+}
+
+function CardShell({
+  providerType,
+  title,
+  subtitle,
+  dashed,
+  children,
+}: {
+  providerType: ProviderType;
+  title: string;
+  subtitle: string;
+  dashed?: boolean;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+
+  return (
+    <section className="af-card flex h-full flex-col p-5" style={dashed ? DASHED : undefined} aria-labelledby={headingId}>
+      <div className="flex items-start gap-3">
+        <ProviderInitials providerType={providerType} />
+        <div className="min-w-0">
+          <h3 id={headingId} className="m-0 text-sm font-medium break-words">
+            {title}
+          </h3>
+          <p className="mb-0 mt-1 text-sm break-all" style={MUTED}>
+            {subtitle}
+          </p>
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ConnectionStatus({ connected }: { connected: boolean }) {
+  return (
+    <p className="mb-0 mt-4 flex items-center gap-2 text-sm">
+      <span
+        aria-hidden="true"
+        className="inline-block h-2 w-2 shrink-0 rounded-full"
+        style={{ background: connected ? "var(--ok)" : "var(--ink-4)" }}
+      />
+      {connected ? "Connected" : "Not connected"}
+    </p>
+  );
+}
 
 export function ProviderCard({
   connection,
@@ -18,55 +87,71 @@ export function ProviderCard({
   onModels?: () => void;
   onDelete?: () => void;
 }) {
-  const headingId = `llm-provider-${connection.slug}-heading`;
   const isOpenRouter = connection.providerType === "openrouter";
-  const changed = connection.hasApiKey && connection.updatedAt ? formatDate(connection.updatedAt) : null;
+  const saved = connection.hasApiKey && connection.updatedAt ? formatDate(connection.updatedAt) : null;
+  const subtitle = BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
+    ? `${PROVIDER_TYPE_LABELS[connection.providerType]} · ${connection.baseUrl}`
+    : PROVIDER_SUBTITLES[connection.providerType];
 
   return (
-    <section className="af-card p-5" aria-labelledby={headingId}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h3 id={headingId} className="m-0 text-sm font-medium">
-            {connection.name}
-          </h3>
-          {connection.baseUrl && (
-            <p className="mb-0 mt-1 text-sm break-all" style={MUTED}>
-              {PROVIDER_TYPE_LABELS[connection.providerType]} · {connection.baseUrl}
-            </p>
-          )}
-          {connection.hasApiKey ? (
-            <p className="mb-0 mt-2 text-sm">
-              {isOpenRouter ? OPENROUTER_MASKED_KEY_PREFIX : MASKED_KEY_PREFIX}
-              {connection.apiKeyLast4}
-            </p>
-          ) : (
-            <p className="mb-0 mt-2 text-sm" style={MUTED}>
-              No key saved.
-              {isOpenRouter && " Agents cannot call OpenRouter models until a key is saved."}
-            </p>
-          )}
-          {changed && (
-            <p className="mb-0 mt-1 text-sm" style={MUTED}>
-              {connection.updatedBy ? `Changed by ${connection.updatedBy} on ${changed}` : `Changed on ${changed}`}
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 gap-2">
-          {onModels && (
-            <button type="button" className="af-btn" onClick={onModels}>
-              Models
-            </button>
-          )}
-          <button type="button" className="af-btn" onClick={onReplaceKey}>
-            {connection.hasApiKey ? "Replace key" : "Save a key"}
+    <CardShell providerType={connection.providerType} title={providerTitle(connection)} subtitle={subtitle}>
+      <ConnectionStatus connected={connection.hasApiKey} />
+      {connection.hasApiKey && (
+        <p className="mb-0 mt-1 text-sm">
+          {isOpenRouter ? OPENROUTER_MASKED_KEY_PREFIX : MASKED_KEY_PREFIX}
+          {connection.apiKeyLast4}
+        </p>
+      )}
+      {saved && (
+        <p className="mb-0 mt-1 text-sm" style={MUTED}>
+          Saved {saved}
+        </p>
+      )}
+      <div className="mt-auto flex flex-wrap gap-2 pt-4">
+        {onModels && (
+          <button type="button" className="af-btn" onClick={onModels}>
+            Models
           </button>
-          {onDelete && (
-            <button type="button" className="af-btn" onClick={onDelete}>
-              Delete
-            </button>
-          )}
-        </div>
+        )}
+        <button type="button" className="af-btn" onClick={onReplaceKey}>
+          {connection.hasApiKey ? "Replace key" : "Save a key"}
+        </button>
+        {onDelete && (
+          <button type="button" className="af-btn" onClick={onDelete}>
+            Delete
+          </button>
+        )}
       </div>
-    </section>
+    </CardShell>
+  );
+}
+
+export function AddProviderCard({
+  providerType,
+  actionLabel,
+  showStatus,
+  dashed,
+  onAdd,
+}: {
+  providerType: ProviderType;
+  actionLabel: string;
+  showStatus?: boolean;
+  dashed?: boolean;
+  onAdd: () => void;
+}) {
+  return (
+    <CardShell
+      providerType={providerType}
+      title={PROVIDER_TYPE_LABELS[providerType]}
+      subtitle={PROVIDER_SUBTITLES[providerType]}
+      dashed={dashed}
+    >
+      {showStatus && <ConnectionStatus connected={false} />}
+      <div className="mt-auto flex flex-wrap gap-2 pt-4">
+        <button type="button" className="af-btn" onClick={onAdd}>
+          {actionLabel}
+        </button>
+      </div>
+    </CardShell>
   );
 }

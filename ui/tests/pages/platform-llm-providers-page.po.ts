@@ -11,6 +11,10 @@ export class PlatformLlmProvidersPage {
     return this.page.getByRole("list", { name: "LLM providers" });
   }
 
+  providersHeading() {
+    return this.page.getByRole("heading", { name: /^Providers · \d+ of \d+ connected$/ });
+  }
+
   card() {
     return this.providerCard("OpenRouter");
   }
@@ -73,12 +77,12 @@ export class PlatformLlmProvidersPage {
     return this.page.getByRole("button", { name: "Add provider" });
   }
 
-  providerSelect() {
-    return this.dialog().getByRole("combobox", { name: "Provider" });
+  addKeyButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: /^(Add key|Add endpoint)$/ });
   }
 
-  providerOptions() {
-    return this.page.getByRole("option");
+  providerSelect() {
+    return this.dialog().getByRole("combobox", { name: "Provider" });
   }
 
   nameInput() {
@@ -97,14 +101,8 @@ export class PlatformLlmProvidersPage {
     return this.dialog().getByLabel("API key", { exact: true });
   }
 
-  async chooseProvider(label: string) {
-    await this.providerSelect().click();
-    await this.page.getByRole("option", { name: label, exact: true }).click();
-  }
-
-  async addProvider(input: { provider?: string; key: string; name?: string; slug?: string; baseUrl?: string }) {
-    await this.addProviderButton().click();
-    if (input.provider) await this.chooseProvider(input.provider);
+  async addProvider(input: { provider: string; key: string; name?: string; slug?: string; baseUrl?: string }) {
+    await this.addKeyButton(input.provider).click();
     if (input.name !== undefined) await this.nameInput().fill(input.name);
     if (input.slug !== undefined) await this.slugInput().fill(input.slug);
     if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);

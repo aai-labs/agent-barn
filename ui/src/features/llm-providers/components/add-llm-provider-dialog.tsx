@@ -11,50 +11,39 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { BASE_URL_HINTS, BASE_URL_PROVIDER_TYPES, PROVIDER_TYPE_LABELS } from "../constants";
 import type { NewLlmProviderConnection, ProviderType } from "../schemas";
 
-const NO_PROVIDER_MESSAGE = "Choose a provider.";
 const EMPTY_KEY_MESSAGE = "Paste the provider's API key.";
 const LABEL_CLASS = "text-[0.8rem] font-medium";
 const HINT_CLASS = "m-0 text-[0.75rem]";
 
 export function AddLlmProviderDialog({
-  available,
+  providerType,
   open,
   onOpenChange,
   onAdd,
   isAdding,
   addError,
 }: {
-  available: ProviderType[];
+  providerType: ProviderType;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdd: (connection: NewLlmProviderConnection) => Promise<unknown>;
   isAdding: boolean;
   addError: unknown;
 }) {
-  const [providerType, setProviderType] = useState<ProviderType | null>(null);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
-  const takesBaseUrl = providerType !== null && BASE_URL_PROVIDER_TYPES.includes(providerType);
+  const takesBaseUrl = BASE_URL_PROVIDER_TYPES.includes(providerType);
 
   async function add() {
     const trimmedKey = apiKey.trim();
-    if (providerType === null) return setProblem(NO_PROVIDER_MESSAGE);
     if (!trimmedKey) return setProblem(EMPTY_KEY_MESSAGE);
     setProblem(null);
     const connection: NewLlmProviderConnection = takesBaseUrl
@@ -69,7 +58,7 @@ export function AddLlmProviderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add an LLM provider</DialogTitle>
+          <DialogTitle>Add {PROVIDER_TYPE_LABELS[providerType]}</DialogTitle>
           <DialogDescription>
             The provider checks the key before it is saved. Afterwards only its last four characters are shown.
             Agents can&apos;t use providers other than OpenRouter yet.
@@ -82,31 +71,6 @@ export function AddLlmProviderDialog({
             void add();
           }}
         >
-          <div className="flex flex-col gap-1.5">
-            <span className={LABEL_CLASS} style={{ color: "var(--ink-2)" }}>
-              Provider
-            </span>
-            <Select
-              value={providerType ?? ""}
-              onValueChange={(value) => {
-                setProviderType(value as ProviderType);
-                setProblem(null);
-              }}
-            >
-              <SelectTrigger aria-label="Provider" className="w-full">
-                <SelectValue placeholder="Choose a provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {available.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {PROVIDER_TYPE_LABELS[type]}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </div>
           {takesBaseUrl && (
             <>
               <TextField id="llm-provider-name" label="Name" value={name} onChange={setName} maxLength={64} />

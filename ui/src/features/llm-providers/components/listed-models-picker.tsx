@@ -18,6 +18,7 @@ import {
   EMPTY_TYPED_PRICES,
   listedPrices,
   perTokenPrices,
+  providerTitle,
   samePrices,
   typedPricesOf,
   typedPricesValid,
@@ -178,7 +179,7 @@ export function ListedModelsPicker({
       {noLongerListed.length > 0 && (
         <section aria-label="Models no longer listed" className="text-[0.8rem]">
           <p className="m-0" style={MUTED}>
-            No longer listed by {connection.name}. Saving removes them.
+            No longer listed by {providerTitle(connection)}. Saving removes them.
           </p>
           <ul className="m-0 mt-1 pl-5">
             {noLongerListed.map((model) => (

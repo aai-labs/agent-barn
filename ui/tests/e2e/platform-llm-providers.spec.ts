@@ -21,6 +21,8 @@ import { PlatformLlmProvidersPage } from "../pages/platform-llm-providers-page.p
 
 const NEW_KEY = "sk-or-v1-replacement-key-c3d4";
 const PROVIDER_KEY = "sk-proj-new-provider-key-g7h8";
+const KNOWN_PROVIDER_TITLES = ["Google", "Anthropic", "OpenAI", "xAI", "DeepSeek", "Fireworks", "Novita"];
+const ADD_CARD_TITLES = ["Azure OpenAI", "Custom endpoint"];
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -40,7 +42,7 @@ test("Platform Admin replaces the OpenRouter key and sees only its last four cha
   await page.getByRole("complementary").getByRole("link", { name: "LLM providers", exact: true }).click();
 
   await expect(settings.card()).toContainText("sk-*******a1b2");
-  await expect(settings.card()).toContainText("Platform Person");
+  await expect(settings.card()).toContainText("Saved ");
   await expect(settings.card()).not.toContainText("OPENROUTER_API_KEY");
 
   await settings.openDialogButton().click();
@@ -76,7 +78,8 @@ test("OPENROUTER_API_KEY with no saved key puts OpenRouter under Set by this dep
   await expect(settings.deploymentCard()).not.toContainText("Fallback");
   await expect(settings.deploymentCard()).not.toContainText("Saved key");
   await expect(settings.deploymentKeyButton()).toHaveText("Save a key");
-  await expect(settings.providerCardNames()).toHaveText(["Anthropic"]);
+  await expect(settings.providerCardNames()).toHaveText([...KNOWN_PROVIDER_TITLES, ...ADD_CARD_TITLES]);
+  await expect(settings.providersHeading()).toHaveText("Providers · 1 of 8 connected");
   await expect(page.getByText("from this deployment's secrets")).toHaveCount(0);
 });
 
@@ -99,7 +102,7 @@ test("a key saved under Set by this deployment turns the environment key into th
   expect(mock.writes).toEqual([{ slug: "openrouter", body: { api_key: NEW_KEY } }]);
 });
 
-test("a deployment with no key at all says Agents cannot call OpenRouter", async ({ page }) => {
+test("a deployment with no key at all shows OpenRouter as not connected", async ({ page }) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept({
     connection: {
@@ -114,7 +117,10 @@ test("a deployment with no key at all says Agents cannot call OpenRouter", async
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.card()).toContainText("Agents cannot call OpenRouter models until a key is saved.");
+  await expect(settings.card()).toContainText("Not connected");
+  await expect(settings.openDialogButton()).toHaveText("Save a key");
+  await expect(settings.providersHeading()).toHaveText("Providers · 0 of 9 connected");
+  await expect(page.getByText("Agents cannot call OpenRouter models")).toHaveCount(0);
 });
 
 test("a saved key with OPENROUTER_API_KEY still set shows both keys, the environment one as the fallback", async ({
@@ -145,7 +151,7 @@ test("without OPENROUTER_API_KEY there is no deployment section and OpenRouter i
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", "Anthropic"]);
+  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", ...KNOWN_PROVIDER_TITLES, ...ADD_CARD_TITLES]);
   await expect(settings.deploymentSection()).toHaveCount(0);
   await expect(settings.card()).not.toContainText("OPENROUTER_API_KEY");
 });
@@ -209,32 +215,104 @@ test("a failed read can be retried", async ({ page }) => {
   await expect(settings.providerCard("Anthropic")).toContainText("*******c3d4");
 });
 
-test("Platform Admin sees every connection in its own card with only its last four characters", async ({ page }) => {
+test("Platform Admin sees a card per provider and per Azure or Custom connection, keys masked to their last four", async ({
+  page,
+}) => {
   await signIn(page);
-  await new PlatformLlmProviderDataSupport(page).intercept({ connections: [ANTHROPIC_CONNECTION, AZURE_CONNECTION] });
+  await new PlatformLlmProviderDataSupport(page).intercept({
+    connections: [ANTHROPIC_CONNECTION, AZURE_CONNECTION, CUSTOM_CONNECTION],
+  });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
+  await expect(settings.providerCardNames()).toHaveText([
+    "OpenRouter",
+    ...KNOWN_PROVIDER_TITLES,
+    "Azure Europe",
+    "Aardvark lab",
+    ...ADD_CARD_TITLES,
+  ]);
+  await expect(settings.providersHeading()).toHaveText("Providers · 3 of 9 connected");
+  await expect(settings.card()).toContainText("Models from many providers");
+  await expect(settings.card()).toContainText("Connected");
   await expect(settings.card()).toContainText("sk-*******a1b2");
-  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", "Anthropic", "Azure Europe"]);
+  await expect(settings.providerCard("Anthropic")).toContainText("Claude models");
+  await expect(settings.providerCard("Anthropic")).toContainText("Connected");
   await expect(settings.providerCard("Anthropic")).toContainText("*******c3d4");
   await expect(settings.providerCard("Anthropic")).not.toContainText("sk-");
-  await expect(settings.providerCard("Anthropic")).toContainText("Changed by Platform Person");
-  await expect(settings.providerCard("Azure Europe")).toContainText("Azure");
-  await expect(settings.providerCard("Azure Europe")).toContainText("https://contoso.openai.azure.com");
+  await expect(settings.providerCard("Anthropic")).toContainText("Saved ");
+  await expect(settings.providerCard("Anthropic")).not.toContainText("Changed by");
+  await expect(settings.providerCard("Google")).toContainText("Gemini models");
+  await expect(settings.providerCard("Google")).toContainText("Not connected");
+  await expect(settings.addKeyButton("Google")).toHaveText("Add key");
+  await expect(settings.providerCard("Azure Europe")).toContainText("Azure OpenAI · https://contoso.openai.azure.com");
   await expect(settings.providerCard("Azure Europe")).toContainText("*******e5f6");
+  await expect(settings.providerCard("Aardvark lab")).toContainText("Custom endpoint · https://lab.example.com/v1");
+  await expect(settings.providerCard("Azure OpenAI")).toContainText("Key and endpoint");
+  await expect(settings.addKeyButton("Azure OpenAI")).toHaveText("Add key");
+  await expect(settings.providerCard("Custom endpoint")).toContainText("OpenAI-compatible API");
+  await expect(settings.addKeyButton("Custom endpoint")).toHaveText("Add endpoint");
 });
 
-test("a platform with only OpenRouter lists OpenRouter, with Add provider outside every card", async ({ page }) => {
+test("a platform with only OpenRouter shows every provider as not connected, with no Add provider button", async ({
+  page,
+}) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept();
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.providerCardNames()).toHaveText(["OpenRouter"]);
-  await expect(settings.addProviderButton()).toBeVisible();
-  await expect(settings.providerList().getByRole("button", { name: "Add provider" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Other providers" })).toHaveCount(0);
+  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", ...KNOWN_PROVIDER_TITLES, ...ADD_CARD_TITLES]);
+  await expect(settings.providersHeading()).toHaveText("Providers · 1 of 9 connected");
+  for (const title of KNOWN_PROVIDER_TITLES) {
+    await expect(settings.providerCard(title)).toContainText("Not connected");
+    await expect(settings.addKeyButton(title)).toHaveText("Add key");
+  }
+  await expect(settings.addProviderButton()).toHaveCount(0);
+});
+
+test("the providers are three columns wide on a desktop and one on a phone", async ({ page }) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept();
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await expect(async () => {
+    const google = await settings.providerCard("Google").boundingBox();
+    const anthropic = await settings.providerCard("Anthropic").boundingBox();
+    expect(anthropic?.y).toBe(google?.y);
+    expect(anthropic?.x).toBeGreaterThan(google?.x ?? Infinity);
+  }).toPass();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(async () => {
+    const google = await settings.providerCard("Google").boundingBox();
+    const anthropic = await settings.providerCard("Anthropic").boundingBox();
+    expect(anthropic?.x).toBe(google?.x);
+    expect(anthropic?.y).toBeGreaterThan(google?.y ?? Infinity);
+  }).toPass();
+});
+
+test("Google is named by its title on the card, in the add and key dialogs and in toasts", async ({ page }) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept();
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.addKeyButton("Google").click();
+  await expect(settings.dialog().getByRole("heading", { name: "Add Google" })).toBeVisible();
+  await settings.apiKeyInput().fill(PROVIDER_KEY);
+  await settings.dialog().getByRole("button", { name: "Add provider" }).click();
+
+  await expect(settings.toast("Google added")).toBeVisible();
+  await expect(settings.providerCard("Google")).toContainText("Connected");
+  await expect(settings.providerCard("Google")).toContainText("*******g7h8");
+  await settings.replaceKeyButton("Google").click();
+  await expect(settings.dialog().getByRole("heading", { name: "Replace the Google key" })).toBeVisible();
+  await settings.keyInput("Google").fill(PROVIDER_KEY);
+  await settings.dialog().getByRole("button", { name: "Save key" }).click();
+  await expect(settings.toast("Google key saved")).toBeVisible();
+  await expect(page.getByText("Gemini", { exact: true })).toHaveCount(0);
 });
 
 test("Platform Admin adds a known provider and sees only its last four characters", async ({ page }) => {
@@ -243,19 +321,9 @@ test("Platform Admin adds a known provider and sees only its last four character
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.addProviderButton().click();
-  await settings.providerSelect().click();
-  await expect(settings.providerOptions()).toHaveText([
-    "OpenAI",
-    "Gemini",
-    "xAI",
-    "DeepSeek",
-    "Fireworks",
-    "Novita",
-    "Azure",
-    "Custom (OpenAI-compatible)",
-  ]);
-  await page.getByRole("option", { name: "OpenAI", exact: true }).click();
+  await settings.addKeyButton("OpenAI").click();
+  await expect(settings.dialog().getByRole("heading", { name: "Add OpenAI" })).toBeVisible();
+  await expect(settings.providerSelect()).toHaveCount(0);
   await expect(settings.slugInput()).toHaveCount(0);
   await expect(settings.baseUrlInput()).toHaveCount(0);
   await expect(settings.apiKeyInput()).toHaveAttribute("type", "password");
@@ -277,7 +345,7 @@ test("Platform Admin adds an Azure connection with its name, slug and base URL",
   await settings.goto();
 
   await settings.addProvider({
-    provider: "Azure",
+    provider: "Azure OpenAI",
     name: " Azure Europe ",
     slug: " azure-eu ",
     baseUrl: " https://contoso.openai.azure.com/ ",
@@ -313,7 +381,7 @@ test("a key the provider refuses keeps the add dialog open with the API's messag
   await expect(settings.dialog().getByRole("alert")).toHaveText("Anthropic did not accept this key. Nothing was saved.");
   await expect(settings.apiKeyInput()).toHaveValue(PROVIDER_KEY);
   await settings.cancelDialog();
-  await expect(settings.providerCard("Anthropic")).toHaveCount(0);
+  await expect(settings.providerCard("Anthropic")).toContainText("Not connected");
   expect(mock.adds).toHaveLength(1);
 });
 
@@ -327,7 +395,7 @@ test("a Custom slug the API refuses shows its message", async ({ page }) => {
   await settings.goto();
 
   await settings.addProvider({
-    provider: "Custom (OpenAI-compatible)",
+    provider: "Custom endpoint",
     name: "Lab",
     slug: "openai",
     baseUrl: "https://lab.example.com/v1",
@@ -339,16 +407,13 @@ test("a Custom slug the API refuses shows its message", async ({ page }) => {
   expect(mock.adds).toHaveLength(1);
 });
 
-test("a provider is not added without a choice or a key", async ({ page }) => {
+test("a provider is not added without a key", async ({ page }) => {
   await signIn(page);
   const mock = await new PlatformLlmProviderDataSupport(page).intercept();
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.addProvider({ key: PROVIDER_KEY });
-  await expect(settings.dialog().getByRole("alert")).toHaveText("Choose a provider.");
-
-  await settings.chooseProvider("OpenAI");
+  await settings.addKeyButton("OpenAI").click();
   await settings.apiKeyInput().fill("   ");
   await settings.dialog().getByRole("button", { name: "Add provider" }).click();
   await expect(settings.dialog().getByRole("alert")).toHaveText("Paste the provider's API key.");
@@ -438,13 +503,16 @@ test("Platform Admin deletes a connection only after confirming", async ({ page 
   await settings.confirmDelete();
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(settings.providerCard("Anthropic")).toHaveCount(0);
   await expect(settings.toast("Anthropic deleted")).toBeVisible();
-  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", "Azure Europe"]);
+  await expect(settings.providerCard("Anthropic")).toContainText("Not connected");
+  await expect(settings.addKeyButton("Anthropic")).toHaveText("Add key");
+  await expect(settings.providerCardNames()).toHaveText([
+    "OpenRouter",
+    ...KNOWN_PROVIDER_TITLES,
+    "Azure Europe",
+    ...ADD_CARD_TITLES,
+  ]);
   expect(mock.deletes).toEqual(["anthropic"]);
-  await settings.addProviderButton().click();
-  await settings.providerSelect().click();
-  await expect(page.getByRole("option", { name: "Anthropic", exact: true })).toBeVisible();
 });
 
 test("deleting an Azure connection warns that its slug can't be used again", async ({ page }) => {

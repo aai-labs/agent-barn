@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 
 import { useLlmProviderModels } from "../hooks/use-llm-provider-models";
 import type { LlmProviderConnection } from "../schemas";
-import { failureMessage } from "../utils";
+import { failureMessage, providerTitle } from "../utils";
 import { AzureDeploymentsEditor } from "./azure-deployments-editor";
 import { ListedModelsPicker } from "./listed-models-picker";
 
@@ -32,7 +32,7 @@ export function ProviderModelsDialog({
       <DialogContent className="max-h-[85vh] sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>
-            {connection.name} {isAzure ? "deployments" : "models"}
+            {providerTitle(connection)} {isAzure ? "deployments" : "models"}
           </DialogTitle>
           <DialogDescription>
             {isAzure

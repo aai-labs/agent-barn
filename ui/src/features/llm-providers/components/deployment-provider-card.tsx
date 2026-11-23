@@ -2,11 +2,11 @@
 
 import { formatDate } from "@/shared/date";
 
-import { OPENROUTER_MASKED_KEY_PREFIX } from "../constants";
+import { OPENROUTER_MASKED_KEY_PREFIX, PROVIDER_SUBTITLES } from "../constants";
 import type { LlmProviderConnection } from "../schemas";
+import { providerTitle } from "../utils";
+import { ProviderInitials } from "./provider-card";
 
-const INITIALS = "OR";
-const SUBTITLE = "Models from many providers";
 const ENVIRONMENT_VARIABLE = "OPENROUTER_API_KEY";
 const IN_USE = { label: "In use", color: "var(--ok)" };
 const FALLBACK = { label: "Fallback", color: "var(--warn)" };
@@ -26,17 +26,11 @@ export function DeploymentProviderCard({
   return (
     <section className="af-card p-5" aria-labelledby={headingId}>
       <div className="flex items-start gap-3">
-        <div
-          aria-hidden="true"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-semibold"
-          style={{ background: "var(--bg-soft)", color: "var(--ink-2)" }}
-        >
-          {INITIALS}
-        </div>
+        <ProviderInitials providerType={connection.providerType} />
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 id={headingId} className="m-0 text-sm font-medium">
-              {connection.name}
+              {providerTitle(connection)}
             </h3>
             <span
               className="rounded-md px-1.5 py-0.5 text-xs font-medium"
@@ -46,7 +40,7 @@ export function DeploymentProviderCard({
             </span>
           </div>
           <p className="mb-0 mt-1 text-sm" style={MUTED}>
-            {SUBTITLE}
+            {PROVIDER_SUBTITLES[connection.providerType]}
           </p>
         </div>
       </div>

@@ -4,19 +4,45 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   openrouter: "OpenRouter",
   anthropic: "Anthropic",
   openai: "OpenAI",
-  gemini: "Gemini",
+  gemini: "Google",
   xai: "xAI",
   deepseek: "DeepSeek",
   fireworks: "Fireworks",
   novita: "Novita",
-  azure: "Azure",
-  custom: "Custom (OpenAI-compatible)",
+  azure: "Azure OpenAI",
+  custom: "Custom endpoint",
+};
+
+export const PROVIDER_SUBTITLES: Record<ProviderType, string> = {
+  openrouter: "Models from many providers",
+  anthropic: "Claude models",
+  openai: "GPT and o-series",
+  gemini: "Gemini models",
+  xai: "Grok models",
+  deepseek: "DeepSeek models",
+  fireworks: "Hosted open models",
+  novita: "Hosted open models",
+  azure: "Key and endpoint",
+  custom: "OpenAI-compatible API",
+};
+
+export const PROVIDER_INITIALS: Record<ProviderType, string> = {
+  openrouter: "OR",
+  anthropic: "A",
+  openai: "OA",
+  gemini: "G",
+  xai: "x",
+  deepseek: "DS",
+  fireworks: "F",
+  novita: "N",
+  azure: "AZ",
+  custom: "C",
 };
 
 export const KNOWN_PROVIDER_TYPES: ProviderType[] = [
+  "gemini",
   "anthropic",
   "openai",
-  "gemini",
   "xai",
   "deepseek",
   "fireworks",
