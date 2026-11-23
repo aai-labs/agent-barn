@@ -1759,7 +1759,7 @@ export function AgentChannelSettings({
               >
                 <LockKeyhole size={13} /> Credentials are encrypted.
               </div>
-              <div className="flex gap-2">
+              <div className="flex min-w-0 flex-wrap justify-end gap-2">
                 <button
                   type="button"
                   className="af-btn af-btn-ghost"
