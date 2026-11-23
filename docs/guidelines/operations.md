@@ -630,6 +630,18 @@ Organizations on Credit buy more through Stripe Checkout (see `../features/credi
 - Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
 - A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
 
+## Anomaly checks
+
+The `anomaly-checks` CronJob (`anomalyChecks` chart values, `11-59/15 * * * *`) compares
+each Agent of an Organization that turned [anomaly detection](../features/anomaly-detection.md)
+on with its own last 14 days. It runs five minutes after each cost sync starts, so the LLM
+figures it reads are as fresh as they get; it reads them only up to the last completed sync.
+It needs only the API's Secret (the database), no cluster access. An Agent whose check
+fails is logged and the rest are still checked; the Job succeeds and the next run retries
+that Agent. Only a run that cannot check at all (no database) fails the Job. Locally, `./run.sh` runs it as Compose's
+`anomaly-checks` service every 15 minutes; `make run-anomaly-checks` runs one pass from the
+host.
+
 ## Tier subscriptions and the Tier sweep
 
 Paid Tiers are kept by subscriptions ([Tiers](../features/tiers.md#subscriptions)). Stripe

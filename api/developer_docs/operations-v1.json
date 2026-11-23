@@ -306,6 +306,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/anomalies",
+    "list_anomalies_organizations__organization_id__agents__agent_id__anomalies_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts",
     "list_artifacts_organizations__organization_id__agents__agent_id__artifacts_get"
   ],
@@ -451,6 +456,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/normal-behaviour",
+    "get_normal_behaviour_organizations__organization_id__agents__agent_id__normal_behaviour_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
     "list_agent_playbook_extractions_organizations__organization_id__agents__agent_id__playbook_extractions_get"
   ],
@@ -568,6 +578,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/webhooks/{webhook_id}/invocations",
     "list_webhook_invocations_organizations__organization_id__agents__agent_id__webhooks__webhook_id__invocations_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/anomaly-detection",
+    "get_anomaly_detection_organizations__organization_id__anomaly_detection_get"
   ],
   [
     "GET",
@@ -1666,6 +1681,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/anomaly-override",
+    "set_anomaly_override_organizations__organization_id__agents__agent_id__anomaly_override_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/content",
     "publish_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__content_put"
   ],
@@ -1693,6 +1713,11 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/share",
     "replace_agent_share_settings_organizations__organization_id__agents__agent_id__share_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/anomaly-detection",
+    "update_anomaly_detection_organizations__organization_id__anomaly_detection_put"
   ],
   [
     "PUT",

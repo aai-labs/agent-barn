@@ -232,6 +232,12 @@ costs:
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "6-59/15 * * * *"
 
+anomalyChecks:
+  enabled: true
+  # Every 15 minutes, five after each cost sync starts, so the LLM figures it reads
+  # are as fresh as they get. Only Organizations that turned detection on are read.
+  schedule: "11-59/15 * * * *"
+
 tierSweep:
   enabled: true
   # Every five minutes, on minutes ending in 4 and 9 so no minute starts more than three
