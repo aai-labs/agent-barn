@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -18,6 +19,8 @@ from api.domains.custom_api.models import CustomApiRequest
 from api.domains.custom_api.repository import CustomApiRepository
 from api.domains.custom_api.request import OAUTH2_CLIENT_CREDENTIALS, RequestRefused, TokenExchangeFailed, execute
 from api.infrastructure.crypto import decrypt_token
+
+logger = logging.getLogger(__name__)
 
 #: Seconds of remaining validity below which a cached token is replaced rather than attached,
 #: so a request never goes out with a token that expires in flight. A token that lives for
@@ -109,7 +112,16 @@ class CustomApiGateway:
             result = execute({"base_url": row.base_url, **credentials}, data.model_dump(), access_token=access_token)
         except RequestRefused, ValueError, KeyError, TypeError:
             raise HTTPException(400, "Custom API request refused; check the configured scope and request") from None
-        except Exception:
+        except Exception as exc:
+            # aai-cli shows the agent nothing from a gateway error status, so this line is the
+            # only record of why the upstream could not be reached. An OSError's text is the
+            # operating system's or TLS library's; other errors may quote the upstream's answer.
+            logger.warning(
+                "Custom API connection %s could not reach its upstream: %s%s",
+                row.id,
+                type(exc).__name__,
+                f" ({exc})" if isinstance(exc, OSError) else "",
+            )
             raise HTTPException(502, "Custom API upstream unavailable") from None
         if access_token is not None and result["status"] == 401:
             self.tokens.discard(row.id, access_token)
