@@ -1,0 +1,43 @@
+{{- if .Values.anomalyChecks.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-anomaly-checks
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anomaly-checks
+spec:
+  # Compares each Agent of an Organization that turned anomaly detection on with its
+  # own last 14 days (docs/features/anomaly-detection.md). Reads and writes the
+  # database only, so it needs no service account or kubeconfig.
+  schedule: {{ .Values.anomalyChecks.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: anomaly-checks
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: anomaly-checks
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m`, for the reason the cost sync job gives.
+              command:
+                - python
+                - -c
+                - "from api.domains.anomalies.checks import main; main()"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              resources:
+                {{- toYaml .Values.jobs.resources | nindent 16 }}
+{{- end }}

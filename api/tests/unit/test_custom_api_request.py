@@ -167,6 +167,24 @@ def test_request_uses_pinned_address_and_never_follows_redirect(monkeypatch):
     assert_that(sent, has_length(1))
 
 
+def test_a_dual_stack_host_is_reached_over_ipv4(monkeypatch):
+    """An IPv6 answer that sorts first must not be the only address tried: the gateway's pod may have no IPv6 route."""
+    pinned = []
+
+    class Upstream(EchoUpstream):
+        def __init__(self, host, address, port):
+            super().__init__()
+            pinned.append(address)
+
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: ["2a02:4780:42:b15::1", "92.113.16.49"])
+    monkeypatch.setattr(engine, "PinnedHTTPSConnection", Upstream)
+    engine.execute(
+        {"base_url": "https://blog.example.com/wp-json", "auth": {"type": "bearer", "token": "fixture"}},
+        {"url": "https://blog.example.com/wp-json/wp/v2/users/me"},
+    )
+    assert_that(pinned, equal_to(["92.113.16.49"]))
+
+
 def test_json_and_text_response_values_are_bounded_and_known_secrets_redacted(monkeypatch):
     from hamcrest import assert_that, equal_to
 
@@ -323,6 +341,13 @@ def test_token_exchange_posts_the_credentials_as_a_form_to_the_pinned_endpoint(m
     )
 
 
+def test_token_exchange_reaches_a_dual_stack_endpoint_over_ipv4(monkeypatch):
+    endpoint = _token_endpoint(monkeypatch)
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: ["2a02:4780:42:b15::1", "92.113.16.49"])
+    engine.fetch_access_token(_OAUTH2)
+    assert_that(endpoint.calls[0]["address"], equal_to("92.113.16.49"))
+
+
 @pytest.mark.parametrize(
     "status,payload,refused",
     [
@@ -386,3 +411,89 @@ def test_token_lifetime_is_defaulted_and_bounded(monkeypatch, expires_in, lifeti
         payload["expires_in"] = expires_in
     _token_endpoint(monkeypatch, payload=payload)
     assert_that(engine.fetch_access_token(_OAUTH2), equal_to(("minted-token", lifetime)))
+
+
+def test_an_unreachable_upstream_is_a_502_that_names_the_cause_in_the_log_without_the_credential(monkeypatch, caplog):
+    import logging
+    import types
+    from typing import cast
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+    from hamcrest import contains_string, is_not
+
+    from api.core.config import Config
+    from api.domains.custom_api.gateway import CustomApiGateway
+    from api.domains.custom_api.models import CustomApiRequest
+    from api.domains.custom_api.repository import CustomApiRepository
+    from api.infrastructure.crypto import encrypt_token
+    from api.tests.steps.agent import TEST_ENCRYPTION_KEY
+
+    def unreachable(*args, **kwargs):
+        raise OSError(101, "Network is unreachable")
+
+    config = {"auth": {"type": "bearer", "token": "fixture-upstream-token"}, "headers": []}
+    row = types.SimpleNamespace(
+        id=uuid4(),
+        base_url="https://blog.example.com/wp-json",
+        credentials_encrypted=encrypt_token(json.dumps(config), TEST_ENCRYPTION_KEY),
+    )
+    gateway = CustomApiGateway(
+        repository=cast(CustomApiRepository, types.SimpleNamespace(authorize_token=lambda token_hash: row)),
+        config=cast(Config, types.SimpleNamespace(agent_token_encryption_key=TEST_ENCRYPTION_KEY)),
+    )
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: ["92.113.16.49"])
+    monkeypatch.setattr(socket, "create_connection", unreachable)
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as refused:
+        gateway.request(
+            "Bearer fixture-gateway",
+            CustomApiRequest(method="GET", url="https://blog.example.com/wp-json/wp/v2/users/me"),
+        )
+    assert_that(refused.value.status_code, equal_to(502))
+    assert_that(caplog.text, contains_string(f"{row.id} could not reach its upstream: OSError"))
+    assert_that(caplog.text, contains_string("Network is unreachable"))
+    assert_that(caplog.text, is_not(contains_string("fixture-upstream-token")))
+
+
+def test_an_upstream_answer_quoted_by_a_protocol_error_stays_out_of_the_log(monkeypatch, caplog):
+    """Only an OSError's text is logged: a protocol error quotes whatever the upstream sent."""
+    import http.client
+    import logging
+    import types
+    from typing import cast
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+    from hamcrest import contains_string, is_not
+
+    from api.core.config import Config
+    from api.domains.custom_api.gateway import CustomApiGateway
+    from api.domains.custom_api.models import CustomApiRequest
+    from api.domains.custom_api.repository import CustomApiRepository
+    from api.infrastructure.crypto import encrypt_token
+    from api.tests.steps.agent import TEST_ENCRYPTION_KEY
+
+    class Garbled(EchoUpstream):
+        def getresponse(self):
+            raise http.client.BadStatusLine("upstream-echoed-marker")
+
+    config = {"auth": {"type": "bearer", "token": "fixture-upstream-token"}, "headers": []}
+    row = types.SimpleNamespace(
+        id=uuid4(),
+        base_url="https://blog.example.com/wp-json",
+        credentials_encrypted=encrypt_token(json.dumps(config), TEST_ENCRYPTION_KEY),
+    )
+    gateway = CustomApiGateway(
+        repository=cast(CustomApiRepository, types.SimpleNamespace(authorize_token=lambda token_hash: row)),
+        config=cast(Config, types.SimpleNamespace(agent_token_encryption_key=TEST_ENCRYPTION_KEY)),
+    )
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: ["92.113.16.49"])
+    monkeypatch.setattr(engine, "PinnedHTTPSConnection", Garbled)
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as refused:
+        gateway.request(
+            "Bearer fixture-gateway",
+            CustomApiRequest(method="GET", url="https://blog.example.com/wp-json/wp/v2/users/me"),
+        )
+    assert_that(refused.value.status_code, equal_to(502))
+    assert_that(caplog.text, contains_string("could not reach its upstream: BadStatusLine"))
+    assert_that(caplog.text, is_not(contains_string("upstream-echoed-marker")))

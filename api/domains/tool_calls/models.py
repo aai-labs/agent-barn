@@ -1,4 +1,5 @@
 import enum
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -96,3 +97,23 @@ def get_tool_call_filter(
         from_date=from_date,
         to_date=to_date,
     )
+
+
+@dataclass(frozen=True)
+class HourlyToolActivity:
+    """One UTC hour of an Agent's tool calls, by when they ran."""
+
+    hour: datetime
+    calls: int
+    errors: int
+
+
+@dataclass(frozen=True)
+class StoredToolCall:
+    """A tool call as anomaly detection reads it: when it was stored and ran, the tool,
+    and only the argument keys the reader asked for."""
+
+    stored_at: datetime
+    occurred_at: datetime
+    tool_name: str
+    arguments: dict[str, Any]

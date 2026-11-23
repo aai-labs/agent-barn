@@ -36,6 +36,7 @@ from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agen
 from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
+from api.domains.anomalies.routes import anomalies_router
 from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.artifacts.routing import router as agent_artifacts_router
 from api.domains.auth.routes import auth_router
@@ -177,6 +178,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(workflow_runs_router)
     app_v1.include_router(workflow_runtime_router)
     subapi.include_router(agent_settings_router)
+    subapi.include_router(anomalies_router)
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_llm_providers_router)
     subapi.include_router(platform_agent_sizes_router)

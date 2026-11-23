@@ -119,6 +119,27 @@ def classify(tool_call: ToolCall) -> list[ClassifiedAction]:
     ]
 
 
+def command_invocations(command: str, executables: frozenset[str]) -> list[list[str]]:
+    """The arguments of every invocation of one of `executables` in a shell command.
+
+    Reads the command with the same unwrapping and segmentation as `classify`, so a
+    runtime-wrapped command or one chained with `&&`, `|` or `;` is split the same
+    way. A command that cannot be tokenized yields nothing.
+    """
+    try:
+        segments = _segments(_unwrap(command))
+    except ValueError:
+        return []
+    invocations: list[list[str]] = []
+    for segment in segments:
+        for executable in sorted(executables):
+            arguments = _executable_arguments(segment.tokens, executable)
+            if arguments is not None:
+                invocations.append(arguments)
+                break
+    return invocations
+
+
 def _tokenize(command: str) -> list[str]:
     lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
     lexer.whitespace = " \t\r"
