@@ -162,12 +162,7 @@ class SlackPlatformPlugin(PlatformPlugin):
         "3. Paste the `xoxb-` bot token and `xapp-` app-level token into this Connection.\n\n"
         "## Grant channel access\n\n"
         "Invite the bot to every private channel or conversation it should handle. Allowlist values are Slack IDs; use "
-        "the channel and user suggestions after saving this Connection.\n\n"
-        "## Custom Slack server\n\n"
-        "For a self-hosted chat that implements Slack's bot API with Socket Mode, skip the Slack app steps: its "
-        "administrator creates the bot and issues the `xoxb-` and `xapp-` tokens. Enter its Slack API address in "
-        "**Custom Slack server**. Available for Hermes Agents only, and an Agent uses either Slack or one Custom Slack "
-        "server, not both."
+        "the channel and user suggestions after saving this Connection."
     )
     capabilities = frozenset(
         {

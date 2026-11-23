@@ -1276,6 +1276,82 @@ test.describe("Agent Detail Page — Channels tab", () => {
     });
   });
 
+  async function openAddConnection(agent: Record<string, unknown>) {
+    await dataSupportPage.agents.interceptGetAgentRequest({ body: { ...mockAgent, ...agent } });
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.configureButton().click();
+    await agentDetailPage.openConfigurationSection("Messaging");
+    await agentDetailPage.addConnectionButton().click();
+  }
+
+  test("connects a Custom Slack server as a Slack Connection on a Hermes Agent", async ({ page }) => {
+    await openAddConnection({ agent_type: "hermes" });
+    await agentDetailPage.selectPlatformButton("Custom Slack").click();
+
+    // Slack-app steps and the manifest belong to slack.com only.
+    await expect(page.getByRole("heading", { name: "Create a Slack app" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toHaveCount(0);
+    await expect(page.getByText(/Ask the chat's administrator/)).toBeVisible();
+    await expect(page.getByText("Starts with xoxb-. Issued by the chat's administrator.")).toBeVisible();
+    await expect(page.getByLabel("Custom Slack server", { exact: true })).toHaveCount(0);
+
+    await agentDetailPage.credentialInput("Bot token").fill("xoxb-custom");
+    await agentDetailPage.credentialInput("App-level token").fill("xapp-custom");
+    const connect = agentDetailPage.connectPlatformButton("Custom Slack");
+    await expect(connect).toBeDisabled();
+    await page.getByLabel(/Server address/).fill("https://chat.example.com/slack/api/");
+
+    const create = agentDetailPage.waitForConnectionMutation("POST");
+    await connect.click();
+    expect((await create).postDataJSON()).toEqual({
+      platform_key: "slack",
+      display_name: "Custom Slack",
+      enabled: true,
+      settings: { api_url: "https://chat.example.com/slack/api/" },
+      credentials: { bot_token: "xoxb-custom", app_token: "xapp-custom" },
+    });
+  });
+
+  test("keeps the plain Slack form free of a server address", async ({ page }) => {
+    await openAddConnection({ agent_type: "hermes" });
+    await agentDetailPage.selectPlatformButton("Slack").click();
+
+    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toBeVisible();
+    await expect(page.getByLabel(/Server address/)).toHaveCount(0);
+    await expect(page.getByLabel("Custom Slack server", { exact: true })).toHaveCount(0);
+  });
+
+  test("offers Custom Slack only to a Hermes Agent's own runtime", async () => {
+    await openAddConnection({ agent_type: "openclaw" });
+    await expect(agentDetailPage.selectPlatformButton("Slack")).toBeVisible();
+    await expect(agentDetailPage.selectPlatformButton("Custom Slack")).toHaveCount(0);
+
+    await openAddConnection({ agent_type: "hermes", parent_agent_id: "00000000-0000-4000-8000-0000000000b1" });
+    await expect(agentDetailPage.selectPlatformButton("Custom Slack")).toHaveCount(0);
+  });
+
+  test("labels and edits a saved Custom Slack Connection by its server", async ({ page }) => {
+    const settings = { ...savedSlackConnection.settings, api_url: "https://chat.example.com/slack/api/" };
+    await serveSavedSlackConnection(page, { display_name: "Chatty", settings });
+
+    await expect(page.getByText("chat.example.com", { exact: true })).toBeVisible();
+    await expect(page.getByText("Custom Slack", { exact: true })).toBeVisible();
+
+    await agentDetailPage.editConnectionButton("Chatty").click();
+    await expect(page.getByRole("button", { name: "Copy Slack manifest" })).toHaveCount(0);
+    const address = page.getByLabel(/Server address/);
+    await expect(address).toHaveValue("https://chat.example.com/slack/api/");
+
+    await address.fill("");
+    await expect(agentDetailPage.saveConnectionButton()).toBeDisabled();
+    await address.fill("https://chat.example.org/slack/api/");
+    const update = agentDetailPage.waitForConnectionMutation("PATCH");
+    await agentDetailPage.saveConnectionButton().click();
+    expect((await update).postDataJSON()).toMatchObject({
+      settings: { api_url: "https://chat.example.org/slack/api/" },
+    });
+  });
+
   test("puts credentials above the Connection name in the add form", async ({ page }) => {
     await agentDetailPage.addConnectionButton().click();
     await agentDetailPage.selectPlatformButton("Slack").click();

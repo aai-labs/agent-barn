@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Server,
   Trash2,
   X,
 } from "lucide-react";
@@ -145,11 +146,89 @@ function connectionStatus(connection: CommunicationConnection): {
 function ConnectionIcon({
   platformKey,
   size = 16,
+  custom = false,
 }: {
   platformKey: string;
   size?: number;
+  /** Marks a Custom Slack Connection with a small server badge. */
+  custom?: boolean;
 }) {
-  return platformIcon(platformKey, { size }) ?? <Plug size={size} />;
+  const icon = platformIcon(platformKey, { size }) ?? <Plug size={size} />;
+  if (!custom) return icon;
+  return (
+    <span className="relative inline-flex">
+      {icon}
+      <span
+        aria-hidden
+        className="absolute -bottom-1.5 -right-1.5 grid place-items-center rounded-full"
+        style={{ width: 14, height: 14, background: "var(--ink)", color: "var(--bg-elev)", border: "2px solid var(--bg-elev)" }}
+      >
+        <Server size={7} strokeWidth={2.5} />
+      </span>
+    </span>
+  );
+}
+
+/** Custom Slack is a Slack Connection whose `apiUrl` names a self-hosted, Slack-compatible
+ * server. It is a UI choice only: the API stores it as the one Slack Connection. */
+const CUSTOM_SLACK_NAME = "Custom Slack";
+const CUSTOM_SLACK_SETUP_HINT =
+  "1. Ask the chat's administrator for its **Slack API address** and the bot's `xoxb-` and `xapp-` tokens.\n" +
+  "2. Have them add the bot to every channel it should handle.";
+
+function isCustomSlack(connection: { platformKey: string; settings: Record<string, unknown> }): boolean {
+  return connection.platformKey === "slack" && Boolean(connection.settings.apiUrl);
+}
+
+function serverHost(url: unknown): string {
+  try {
+    return new URL(String(url)).host;
+  } catch {
+    return String(url ?? "");
+  }
+}
+
+/** The settings schema without the server address, which Custom Slack shows on its own. */
+function withoutServerAddress(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = schema.properties;
+  if (!properties || typeof properties !== "object" || !("apiUrl" in properties)) return schema;
+  const rest = { ...(properties as Record<string, unknown>) };
+  delete rest.apiUrl;
+  return { ...schema, properties: rest };
+}
+
+/** Slack's credential hints describe a slack.com app; a Custom Slack server's administrator issues both tokens. */
+function customSlackCredentials(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  if (!properties) return schema;
+  const issued = (prefix: string) => `Starts with ${prefix}. Issued by the chat's administrator.`;
+  return {
+    ...schema,
+    properties: {
+      ...properties,
+      ...(properties.botToken && { botToken: { ...properties.botToken, description: issued("xoxb-") } }),
+      ...(properties.appToken && { appToken: { ...properties.appToken, description: issued("xapp-") } }),
+    },
+  };
+}
+
+function ServerAddressInput({ value, onChange }: { value: unknown; onChange: (value: string) => void }) {
+  return (
+    <label className="flex flex-col gap-1.5 text-sm font-medium">
+      Server address *
+      <input
+        className="af-input"
+        type="url"
+        inputMode="url"
+        value={typeof value === "string" ? value : ""}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="https://chat.example.com/slack/api/"
+      />
+      <span className="text-xs font-normal" style={{ color: "var(--ink-4)" }}>
+        The chat&apos;s Slack API address. Must be a public https address.
+      </span>
+    </label>
+  );
 }
 
 function renderSetupInline(markdown: string): ReactNode[] {
@@ -225,10 +304,14 @@ function PlatformOption({
   platform,
   selected,
   onSelect,
+  custom = false,
+  description = "Connect a channel",
 }: {
   platform: { key: string; displayName: string };
   selected: boolean;
   onSelect: () => void;
+  custom?: boolean;
+  description?: string;
 }) {
   return (
     <button
@@ -249,7 +332,7 @@ function PlatformOption({
         className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg transition-colors"
         style={{ background: selected ? "var(--bg-elev)" : "var(--bg-soft)" }}
       >
-        <ConnectionIcon platformKey={platform.key} size={20} />
+        <ConnectionIcon platformKey={platform.key} size={20} custom={custom} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold">
@@ -259,7 +342,7 @@ function PlatformOption({
           className="mt-0.5 block text-xs"
           style={{ color: "var(--ink-3)" }}
         >
-          {selected ? "Selected" : "Connect a channel"}
+          {selected ? "Selected" : description}
         </span>
       </span>
       <span
@@ -640,6 +723,9 @@ export function AgentChannelSettings({
     useCommunicationConnectionActions();
   const [adding, setAdding] = useState(autoOpen && canEdit);
   const [platformKey, setPlatformKey] = useState("");
+  const [customSlack, setCustomSlack] = useState(false);
+  // Only a Hermes Agent's own runtime can point Slack at a Custom Slack server.
+  const offersCustomSlack = agent.agentType === "hermes" && !agent.parentAgentId;
   const [displayName, setDisplayName] = useState("");
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [credentials, setCredentials] = useState<Record<string, unknown>>({});
@@ -809,11 +895,12 @@ export function AgentChannelSettings({
     return {};
   }
 
-  function choosePlatform(key: string) {
+  function choosePlatform(key: string, custom = false) {
     const platform = platforms.data?.find((candidate) => candidate.key === key);
     setPlatformKey(key);
-    setDisplayName(platform?.displayName ?? key);
-    setSettings(schemaDefaults(platform?.settingsSchema ?? {}));
+    setCustomSlack(custom);
+    setDisplayName(custom ? CUSTOM_SLACK_NAME : (platform?.displayName ?? key));
+    setSettings(schemaDefaults(withoutServerAddress(platform?.settingsSchema ?? {})));
     setCredentials(schemaDefaults(platform?.credentialsSchema ?? {}));
     resetDirectoryPreviews();
     setFormError(null);
@@ -845,6 +932,7 @@ export function AgentChannelSettings({
       });
       setAdding(false);
       setPlatformKey("");
+      setCustomSlack(false);
       setDisplayName("");
       setSettings({});
       setCredentials({});
@@ -944,7 +1032,7 @@ export function AgentChannelSettings({
                     color: "var(--accent-ink)",
                   }}
                 >
-                  <ConnectionIcon platformKey={connection.platformKey} />
+                  <ConnectionIcon platformKey={connection.platformKey} custom={isCustomSlack(connection)} />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="font-medium" style={{ color: "var(--ink)" }}>
@@ -954,6 +1042,18 @@ export function AgentChannelSettings({
                     className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs"
                     style={{ color: "var(--ink-4)" }}
                   >
+                    {isCustomSlack(connection) && (
+                      <>
+                        <span
+                          className="rounded-full px-2 py-px text-[11px] font-medium"
+                          style={{ border: "1px solid var(--line)", background: "var(--bg-elev)", color: "var(--ink-3)" }}
+                        >
+                          {CUSTOM_SLACK_NAME}
+                        </span>
+                        <span>{serverHost(connection.settings.apiUrl)}</span>
+                        <span aria-hidden>·</span>
+                      </>
+                    )}
                     <span>
                       {connection.externalIdentity
                         ? `Connected as ${connection.externalIdentity}`
@@ -1251,9 +1351,15 @@ export function AgentChannelSettings({
                     {platform && (
                       <>
                         <PlatformSetupHint
-                          hint={platform.setupHint}
-                          manifest={setupManifest(platform.key)}
+                          hint={isCustomSlack(connection) ? CUSTOM_SLACK_SETUP_HINT : platform.setupHint}
+                          manifest={isCustomSlack(connection) ? null : setupManifest(platform.key)}
                         />
+                        {isCustomSlack(connection) && (
+                          <ServerAddressInput
+                            value={editSettings.apiUrl}
+                            onChange={(apiUrl) => setEditSettings({ ...editSettings, apiUrl })}
+                          />
+                        )}
                         <div className="flex flex-col gap-4">
                           {connection.platformKey === "discord" && (
                             <div className="flex flex-col gap-1.5 text-sm font-medium">
@@ -1302,7 +1408,7 @@ export function AgentChannelSettings({
                             </div>
                           )}
                           <SchemaFields
-                            schema={platform.settingsSchema}
+                            schema={withoutServerAddress(platform.settingsSchema)}
                             values={editSettings}
                             onChange={setEditSettings}
                             arrayBrowse={editBrowseSources(connection.platformKey)}
@@ -1328,7 +1434,7 @@ export function AgentChannelSettings({
                             </p>
                             <div className="flex w-full flex-col gap-3">
                               <SchemaFields
-                                schema={platform.credentialsSchema}
+                                schema={isCustomSlack(connection) ? customSlackCredentials(platform.credentialsSchema) : platform.credentialsSchema}
                                 values={editCredentials}
                                 onChange={setEditCredentials}
                                 secret
@@ -1362,6 +1468,8 @@ export function AgentChannelSettings({
                         className="af-btn af-btn-primary"
                         disabled={
                           !editDisplayName.trim() ||
+                          // Clearing the address would silently turn Custom Slack into Slack.
+                          (isCustomSlack(connection) && !String(editSettings.apiUrl ?? "").trim()) ||
                           updateConnection.isPending ||
                           (restartsAgent(connection.platformKey) && !canRestart)
                         }
@@ -1448,14 +1556,28 @@ export function AgentChannelSettings({
                 )}
                 {addablePlatforms && addablePlatforms.length > 0 && (
                   <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-                    {addablePlatforms.map((platform) => (
-                      <PlatformOption
-                        key={platform.key}
-                        platform={platform}
-                        selected={platformKey === platform.key}
-                        onSelect={() => choosePlatform(platform.key)}
-                      />
-                    ))}
+                    {addablePlatforms.flatMap((platform) => {
+                      const option = (
+                        <PlatformOption
+                          key={platform.key}
+                          platform={platform}
+                          selected={platformKey === platform.key && !customSlack}
+                          onSelect={() => choosePlatform(platform.key)}
+                        />
+                      );
+                      if (platform.key !== "slack" || !offersCustomSlack) return [option];
+                      return [
+                        option,
+                        <PlatformOption
+                          key="custom-slack"
+                          platform={{ key: "slack", displayName: CUSTOM_SLACK_NAME }}
+                          custom
+                          description="Self-hosted, Slack-compatible"
+                          selected={platformKey === "slack" && customSlack}
+                          onSelect={() => choosePlatform("slack", true)}
+                        />,
+                      ];
+                    })}
                   </div>
                 )}
               </div>
@@ -1505,6 +1627,7 @@ export function AgentChannelSettings({
                       <ConnectionIcon
                         platformKey={selectedPlatform.key}
                         size={19}
+                        custom={customSlack}
                       />
                     </span>
                     <div>
@@ -1512,23 +1635,30 @@ export function AgentChannelSettings({
                         className="text-sm font-semibold"
                         style={{ color: "var(--ink)" }}
                       >
-                        Configure {selectedPlatform.displayName}
+                        Configure {customSlack ? CUSTOM_SLACK_NAME : selectedPlatform.displayName}
                       </div>
                       <p
                         className="mb-0 mt-0.5 text-xs"
                         style={{ color: "var(--ink-3)" }}
                       >
-                        Add its credentials first, then name the connection
-                        and choose where it listens.
+                        {customSlack
+                          ? "Connect a self-hosted chat that speaks Slack's bot API, such as Chatty."
+                          : "Add its credentials first, then name the connection and choose where it listens."}
                       </p>
                     </div>
                   </div>
 
                   <div className="mt-5 flex flex-col gap-4">
                     <PlatformSetupHint
-                      hint={selectedPlatform.setupHint}
-                      manifest={setupManifest(selectedPlatform.key)}
+                      hint={customSlack ? CUSTOM_SLACK_SETUP_HINT : selectedPlatform.setupHint}
+                      manifest={customSlack ? null : setupManifest(selectedPlatform.key)}
                     />
+                    {customSlack && (
+                      <ServerAddressInput
+                        value={settings.apiUrl}
+                        onChange={(apiUrl) => { setSettings({ ...settings, apiUrl }); resetDirectoryPreviews(); }}
+                      />
+                    )}
                     {schemaProperties(selectedPlatform.credentialsSchema).length > 0 && (
                       <div className="rounded-xl p-4" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
                         <div className="flex items-start gap-2.5">
@@ -1542,7 +1672,7 @@ export function AgentChannelSettings({
                         </div>
                         <div className="mt-4 flex w-full flex-col gap-3">
                           <SchemaFields
-                            schema={selectedPlatform.credentialsSchema}
+                            schema={customSlack ? customSlackCredentials(selectedPlatform.credentialsSchema) : selectedPlatform.credentialsSchema}
                             values={credentials}
                             onChange={(next) => { setCredentials(next); resetDirectoryPreviews(); }}
                             secret
@@ -1622,12 +1752,29 @@ export function AgentChannelSettings({
                               </span>
                             </div>
                           )}
-                          <SchemaFields
-                            schema={selectedPlatform.settingsSchema}
-                            values={settings}
-                            onChange={setSettings}
-                            arrayBrowse={addBrowseSources(selectedPlatform)}
-                          />
+                          {customSlack ? (
+                            <details className="group rounded-xl" style={{ border: "1px dashed var(--line-strong)" }}>
+                              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs" style={{ color: "var(--ink-3)" }}>
+                                Default delivery target · Allowed channels · DMs · Thread mentions · Listen-in
+                                <span className="whitespace-nowrap">same as Slack ›</span>
+                              </summary>
+                              <div className="flex flex-col gap-4 px-3 pb-3">
+                                <SchemaFields
+                                  schema={withoutServerAddress(selectedPlatform.settingsSchema)}
+                                  values={settings}
+                                  onChange={setSettings}
+                                  arrayBrowse={addBrowseSources(selectedPlatform)}
+                                />
+                              </div>
+                            </details>
+                          ) : (
+                            <SchemaFields
+                              schema={withoutServerAddress(selectedPlatform.settingsSchema)}
+                              values={settings}
+                              onChange={setSettings}
+                              arrayBrowse={addBrowseSources(selectedPlatform)}
+                            />
+                          )}
                         </div>
                       </div>
                     )}
@@ -1674,6 +1821,7 @@ export function AgentChannelSettings({
                   disabled={
                     !platformKey ||
                     !displayName.trim() ||
+                    (customSlack && !String(settings.apiUrl ?? "").trim()) ||
                     createConnection.isPending ||
                     (restartsAgent(platformKey) && !canRestart)
                   }
@@ -1682,7 +1830,7 @@ export function AgentChannelSettings({
                   {createConnection.isPending
                     ? "Connecting…"
                     : selectedPlatform
-                      ? `Connect ${selectedPlatform.displayName}${restartsAgent(platformKey) ? " & Restart" : ""}`
+                      ? `Connect ${customSlack ? CUSTOM_SLACK_NAME : selectedPlatform.displayName}${restartsAgent(platformKey) ? " & Restart" : ""}`
                       : "Choose a platform"}
                 </button>
               </div>
