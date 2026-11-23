@@ -33,6 +33,8 @@ MAX_PRICE_KEY_LENGTH = 256
 PRICE_PRECISION = 24
 PRICE_SCALE = 18
 MAX_MODELS_PER_CONNECTION = 50
+MAX_AZURE_DEPLOYMENT_LENGTH = 64
+AZURE_DEPLOYMENT_PATTERN = "^[A-Za-z0-9._-]+$"
 
 # The connection the migration seeds. Kept here for tests that reset the table to it; the
 # migration carries its own copy, as migrations do.
@@ -253,12 +255,14 @@ class LlmProviderTypedPrices(PydanticBaseModel):
 
 class LlmProviderModelChoice(PydanticBaseModel):
     """A model to store: `"litellm"` takes LiteLLM's chat price, `"stored"` keeps its stored prices,
-    and typed prices are stored as `manual`."""
+    and typed prices are stored as `manual`. An Azure deployment priced from LiteLLM names the model
+    it runs, whose price it takes."""
 
     model_config = ConfigDict(extra="forbid")
 
     model_id: str
     price: str | LlmProviderTypedPrices
+    runs_model: str | None = None
 
 
 class LlmProviderModelsReplace(PydanticBaseModel):

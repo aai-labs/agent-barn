@@ -73,7 +73,11 @@ OTHER_ROUTE = {
 MODELS_NOT_STORED = "OpenRouter's models are not stored."
 CUSTOM_KEY = "custom-stored-key-m1n2"
 CUSTOM_BASE_URL = "https://lab.example.com/v1"
-AZURE_NOT_LISTED = "Azure deployments are added by name."
+AZURE_DEPLOYMENT_FORMAT = "A deployment name must be 1 to 64 letters, digits or . _ - characters. Nothing was saved."
+RUNS_MODEL_MISSING = "Say which model each deployment priced from LiteLLM runs. Nothing was saved."
+RUNS_MODEL_NOT_TAKEN = "Only an Azure deployment priced from LiteLLM takes the model it runs. Nothing was saved."
+EU_GPT4O_LISTED = ("0.00000275", "0.000011", "0.000001375", "0.00000275")
+GPT4O_LISTED = ("0.0000025", "0.00001", "0.00000125", "0.0000025")
 ANTHROPIC_HAS_NO_KEY = "Anthropic has no key."
 ANTHROPIC_REFUSED_STORED_KEY = "Anthropic did not accept the stored key. Replace the key, then try again."
 ANTHROPIC_LIST_UNREACHABLE = "Anthropic could not be reached to list its models."
@@ -1687,7 +1691,7 @@ def test_the_catalogue_of_a_missing_connection_is_not_found(deleted):
 
 @pytest.mark.parametrize(
     ("slug", "detail"),
-    [("openrouter", MODELS_NOT_STORED), ("azure-eu", AZURE_NOT_LISTED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
+    [("openrouter", MODELS_NOT_STORED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
 )
 def test_a_connection_whose_models_are_not_listed_is_refused_before_the_provider_is_asked(slug, detail):
     with given(_setup(admin, azure_connected, provider_lists([]), litellm_prices())) as context:
@@ -1713,8 +1717,8 @@ def _without_key(route: dict) -> dict:
     return {**route, "litellm_params": {k: v for k, v in route["litellm_params"].items() if k != "api_key"}}
 
 
-def anthropic_with_routes(context):
-    routes: dict[str, dict] = {}
+def _route_store(context) -> None:
+    routes: dict[str, dict] = dict(_other_routes())
     litellm = context.injector.get(LiteLLMClient)
     litellm.list_model_deployments.side_effect = lambda id_prefix: [
         _without_key(route) for route_id, route in routes.items() if route_id.startswith(id_prefix)
@@ -1722,8 +1726,16 @@ def anthropic_with_routes(context):
     litellm.upsert_model_deployment.side_effect = lambda **route: routes.update({route["model_info"]["id"]: route})
     litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
     context.routes = routes
+
+
+def anthropic_with_routes(context):
+    _route_store(context)
     anthropic_connected(context)
-    routes.update(_other_routes())
+
+
+def azure_with_routes(context):
+    _route_store(context)
+    azure_connected(context)
 
 
 def _claude_route(context, model_id: str, row_id: UUID, prices: tuple[str, str, str, str]) -> dict[str, dict]:
@@ -2207,7 +2219,7 @@ def test_saving_the_models_of_a_missing_connection_is_not_found(deleted):
 
 @pytest.mark.parametrize(
     ("slug", "detail"),
-    [("openrouter", MODELS_NOT_STORED), ("azure-eu", AZURE_NOT_LISTED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
+    [("openrouter", MODELS_NOT_STORED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
 )
 def test_a_connection_whose_models_are_not_listed_cannot_save_them(slug, detail):
     with given(_setup(admin, azure_connected, provider_lists([]), litellm_prices())) as context:
@@ -2335,3 +2347,246 @@ def test_a_custom_model_cannot_take_litellms_price():
 
         assert_that(response.status_code, equal_to(422))
         assert_that(response.json(), equal_to({"detail": NO_CHAT_PRICE}))
+
+
+def _azure_prices():
+    return litellm_prices(
+        _price("azure/eu/gpt-4o", "0.00000275", "0.000011", "0.000001375"),
+        _price("azure/global/gpt-5", "0.00000125", "0.00001", "0.000000125", "0.00000125"),
+        _price("azure/gpt-4o", "0.0000025", "0.00001", "0.00000125"),
+        _price("azure/text-embedding-3-small", "0.00000002", "0.00000002", mode="embedding"),
+        _price("claude-sonnet-4-5", *SONNET_LISTED),
+    )
+
+
+def _azure_route(context, deployment: str, row_id: UUID, prices: tuple[str, str, str, str]) -> dict[str, dict]:
+    route_id = f"agentbarn:model:{context.connection.id}:{row_id}"
+    return {
+        route_id: {
+            "model_name": f"azure-eu/{deployment}",
+            "litellm_params": {
+                "model": f"azure/{deployment}",
+                "api_base": AZURE_BASE_URL,
+                "api_version": "v1",
+                "api_key": AZURE_KEY,
+                "input_cost_per_token": float(prices[0]),
+                "output_cost_per_token": float(prices[1]),
+                "cache_read_input_token_cost": float(prices[2]),
+                "cache_creation_input_token_cost": float(prices[3]),
+            },
+            "model_info": {"id": route_id, "disable_background_health_check": True},
+        }
+    }
+
+
+def _stored_deployment(context, deployment: str, prices: tuple[str, str, str, str], **fields) -> LlmProviderModel:
+    model = _model(
+        context,
+        context.connection,
+        deployment,
+        input_cost_per_token=Decimal(prices[0]),
+        output_cost_per_token=Decimal(prices[1]),
+        cache_read_input_token_cost=Decimal(prices[2]),
+        cache_creation_input_token_cost=Decimal(prices[3]),
+        **fields,
+    )
+    context.routes.update(_azure_route(context, deployment, model.id, prices))
+    return model
+
+
+def test_an_azure_deployment_is_priced_from_the_model_it_runs():
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        response = _save(
+            context,
+            "azure-eu",
+            [
+                {"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "eu/gpt-4o"},
+                {"model_id": "lab.mini_2", "price": _typed("0.000001", "0.000002", "0", "0")},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "lab.mini_2",
+                        "input_cost_per_token": "0.000001000000000000",
+                        "output_cost_per_token": "0.000002000000000000",
+                        "cache_read_input_token_cost": "0.000000000000000000",
+                        "cache_creation_input_token_cost": "0.000000000000000000",
+                        "price_source": "manual",
+                        "litellm_price_key": None,
+                    },
+                    {
+                        "model_id": "prod-gpt4o",
+                        "input_cost_per_token": "0.000002750000000000",
+                        "output_cost_per_token": "0.000011000000000000",
+                        "cache_read_input_token_cost": "0.000001375000000000",
+                        "cache_creation_input_token_cost": "0.000002750000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "azure/eu/gpt-4o",
+                    },
+                ]
+            ),
+        )
+        connection_id = context.connection.id
+        assert_that(
+            context.routes,
+            equal_to(
+                {
+                    **_other_routes(),
+                    **_azure_route(
+                        context,
+                        "lab.mini_2",
+                        uuid5(connection_id, "lab.mini_2"),
+                        ("0.000001", "0.000002", "0", "0"),
+                    ),
+                    **_azure_route(context, "prod-gpt4o", uuid5(connection_id, "prod-gpt4o"), EU_GPT4O_LISTED),
+                }
+            ),
+        )
+        [event] = _models_changed_events(context)
+        assert_that(event.payload, has_entries(added_count=2, added_model_ids=["lab.mini_2", "prod-gpt4o"]))
+        context.list_models.assert_not_called()
+
+
+def test_switching_the_model_a_deployment_runs_reprices_it():
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        prod = _stored_deployment(
+            context,
+            "prod-gpt4o",
+            EU_GPT4O_LISTED,
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="azure/eu/gpt-4o",
+        )
+        _stored_deployment(context, "lab-mini", ("0.000001", "0.000002", "0", "0"))
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(
+            context,
+            "azure-eu",
+            [
+                {"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "gpt-4o"},
+                {"model_id": "lab-mini", "price": "stored"},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            _stored_prices(context)["prod-gpt4o"],
+            equal_to((*(Decimal(price) for price in GPT4O_LISTED), PriceSource.LITELLM, "azure/gpt-4o")),
+        )
+        assert_that(upsert.call_count, equal_to(1))
+        route_id = _route_id(context.connection, prod)
+        assert_that(
+            context.routes[route_id], equal_to(_azure_route(context, "prod-gpt4o", prod.id, GPT4O_LISTED)[route_id])
+        )
+        [event] = _models_changed_events(context)
+        assert_that(event.payload, has_entries(repriced_count=1, repriced_model_ids=["prod-gpt4o"]))
+
+
+@pytest.mark.parametrize(
+    ("model", "detail"),
+    [
+        ({"model_id": "prod gpt4o", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "prod:gpt4o", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "eu/prod", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "d" * 65, "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "prod-gpt4o", "price": "litellm"}, RUNS_MODEL_MISSING),
+        (
+            {"model_id": "prod-gpt4o", "price": _typed("0.000001", "0.000002", "0", "0"), "runs_model": "gpt-4o"},
+            RUNS_MODEL_NOT_TAKEN,
+        ),
+        ({"model_id": "lab-mini", "price": "stored", "runs_model": "gpt-4o"}, RUNS_MODEL_NOT_TAKEN),
+        ({"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "eu/gpt-9"}, NO_CHAT_PRICE),
+        ({"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "text-embedding-3-small"}, NO_CHAT_PRICE),
+        ({"model_id": "prod-gpt4o", "price": "litellm", "runs_model": ""}, NO_CHAT_PRICE),
+    ],
+)
+def test_an_azure_deployment_that_breaks_a_rule_is_refused(model, detail):
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        _stored_deployment(context, "lab-mini", ("0.000001", "0.000002", "0", "0"))
+        before, routes_before = _stored_prices(context), dict(context.routes)
+
+        response = _save(context, "azure-eu", [model])
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, before, routes_before)
+
+
+def test_only_an_azure_deployment_takes_the_model_it_runs():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        response = _save(
+            context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm", "runs_model": "x"}]
+        )
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": RUNS_MODEL_NOT_TAKEN}))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_the_azure_catalogue_lists_litellms_azure_chat_models():
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        _stored_deployment(
+            context,
+            "prod-gpt4o",
+            EU_GPT4O_LISTED,
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="azure/eu/gpt-4o",
+        )
+        _stored_deployment(
+            context,
+            "old-gpt4o",
+            ("0.000002", "0.000008", "0.000001", "0.000002"),
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="azure/gpt-4o",
+        )
+        _stored_deployment(context, "lab-mini", GPT4O_LISTED)
+
+        response = _catalogue(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "eu/gpt-4o",
+                        "stored": True,
+                        "litellm_price_key": "azure/eu/gpt-4o",
+                        "input_cost_per_token": "0.000002750000000000",
+                        "output_cost_per_token": "0.000011000000000000",
+                        "cache_read_input_token_cost": "0.000001375000000000",
+                        "cache_creation_input_token_cost": "0.000002750000000000",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "global/gpt-5",
+                        "stored": False,
+                        "litellm_price_key": "azure/global/gpt-5",
+                        "input_cost_per_token": "0.000001250000000000",
+                        "output_cost_per_token": "0.000010000000000000",
+                        "cache_read_input_token_cost": "0.000000125000000000",
+                        "cache_creation_input_token_cost": "0.000001250000000000",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "gpt-4o",
+                        "stored": True,
+                        "litellm_price_key": "azure/gpt-4o",
+                        "input_cost_per_token": "0.000002500000000000",
+                        "output_cost_per_token": "0.000010000000000000",
+                        "cache_read_input_token_cost": "0.000001250000000000",
+                        "cache_creation_input_token_cost": "0.000002500000000000",
+                        "prices_differ": True,
+                    },
+                ]
+            ),
+        )
+        context.list_models.assert_not_called()

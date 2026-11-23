@@ -17,8 +17,10 @@ from api.domains.llm_providers.litellm_deployments import (
     model_route_prefix,
 )
 from api.domains.llm_providers.models import (
+    AZURE_DEPLOYMENT_PATTERN,
     BASE_URL_PROVIDER_TYPES,
     KNOWN_PROVIDER_NAMES,
+    MAX_AZURE_DEPLOYMENT_LENGTH,
     MAX_BASE_URL_LENGTH,
     MAX_MODEL_ID_LENGTH,
     MAX_MODELS_PER_CONNECTION,
@@ -54,7 +56,13 @@ from api.domains.llm_providers.repository import (
 )
 from api.domains.platform_admin.service import PlatformAdminService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice, litellm_price_key
+from api.infrastructure.litellm.client import (
+    PRICE_KEY_PREFIXES,
+    LiteLLMClient,
+    LiteLLMError,
+    LiteLLMModelPrice,
+    litellm_price_key,
+)
 from api.infrastructure.llm_provider_catalogue.catalogue import (
     LlmProviderCatalogue,
     ProviderListRefused,
@@ -80,10 +88,15 @@ BASE_URL_NOT_TAKEN = "Only Azure and Custom connections take a base URL."
 NOT_FOUND = "That connection does not exist."
 OPENROUTER_FIXED = "OpenRouter can't be deleted."
 MODELS_NOT_STORED = "OpenRouter's models are not stored."
-AZURE_NOT_LISTED = "Azure deployments are added by name."
 PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
 TOO_MANY_MODELS = f"A connection can have at most {MAX_MODELS_PER_CONNECTION} models. Nothing was saved."
 MODEL_REPEATED = "A model can be listed only once. Nothing was saved."
+AZURE_DEPLOYMENT_FORMAT = (
+    f"A deployment name must be 1 to {MAX_AZURE_DEPLOYMENT_LENGTH} letters, digits or . _ - characters. "
+    "Nothing was saved."
+)
+RUNS_MODEL_MISSING = "Say which model each deployment priced from LiteLLM runs. Nothing was saved."
+RUNS_MODEL_NOT_TAKEN = "Only an Azure deployment priced from LiteLLM takes the model it runs. Nothing was saved."
 MODEL_ID_FORMAT = (
     f"A model id must be 1 to {MAX_MODEL_ID_LENGTH} letters, digits or . _ : / - characters. Nothing was saved."
 )
@@ -98,6 +111,7 @@ LITELLM_PRICE = "litellm"
 STORED_PRICE = "stored"
 PRICE_CHOICES = frozenset({LITELLM_PRICE, STORED_PRICE})
 ROUTE_KEY_PARAM = "api_key"
+AZURE_PRICE_KEY_PREFIX = f"{PRICE_KEY_PREFIXES[ProviderType.AZURE]}/"
 CHANGED_WHILE_CHECKING = "The connection changed while the key was checked. Nothing was saved."
 KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
@@ -167,6 +181,21 @@ def _litellm_prices(price: LiteLLMModelPrice) -> LlmProviderModelPrices:
     )
 
 
+def _priced_entry(
+    model_id: str, listed: LlmProviderModelPrices, stored: bool, prices_differ: bool
+) -> LlmProviderCatalogueEntryRead:
+    return LlmProviderCatalogueEntryRead(
+        model_id=model_id,
+        stored=stored,
+        litellm_price_key=listed.litellm_price_key,
+        input_cost_per_token=listed.input_cost_per_token,
+        output_cost_per_token=listed.output_cost_per_token,
+        cache_read_input_token_cost=listed.cache_read_input_token_cost,
+        cache_creation_input_token_cost=listed.cache_creation_input_token_cost,
+        prices_differ=prices_differ,
+    )
+
+
 def _catalogue_entry(
     provider_type: ProviderType,
     model_id: str,
@@ -177,16 +206,24 @@ def _catalogue_entry(
     if price is None:
         return LlmProviderCatalogueEntryRead(model_id=model_id, stored=stored is not None, prices_differ=False)
     listed = _litellm_prices(price)
-    return LlmProviderCatalogueEntryRead(
-        model_id=model_id,
-        stored=stored is not None,
-        litellm_price_key=listed.litellm_price_key,
-        input_cost_per_token=listed.input_cost_per_token,
-        output_cost_per_token=listed.output_cost_per_token,
-        cache_read_input_token_cost=listed.cache_read_input_token_cost,
-        cache_creation_input_token_cost=listed.cache_creation_input_token_cost,
-        prices_differ=stored is not None and listed.amounts() != LlmProviderModelPrices.of(stored).amounts(),
-    )
+    differs = stored is not None and listed.amounts() != LlmProviderModelPrices.of(stored).amounts()
+    return _priced_entry(model_id, listed, stored is not None, differs)
+
+
+def _azure_catalogue(
+    prices: dict[str, LiteLLMModelPrice], stored: list[LlmProviderModel]
+) -> list[LlmProviderCatalogueEntryRead]:
+    """LiteLLM's Azure chat models, each by the model a deployment runs, marked stored when a
+    deployment is priced from it, and differing when such a deployment stores other prices."""
+    entries = []
+    for key, price in sorted(prices.items()):
+        if not key.startswith(AZURE_PRICE_KEY_PREFIX) or price.mode != CHAT_MODE:
+            continue
+        listed = _litellm_prices(price)
+        deployments = [model for model in stored if model.litellm_price_key == key]
+        differs = any(LlmProviderModelPrices.of(model).amounts() != listed.amounts() for model in deployments)
+        entries.append(_priced_entry(key.removeprefix(AZURE_PRICE_KEY_PREFIX), listed, bool(deployments), differs))
+    return entries
 
 
 def _typed_price(value: str | None) -> Decimal:
@@ -219,18 +256,36 @@ def _checked_price(price: str | LlmProviderTypedPrices) -> str | LlmProviderMode
     return LlmProviderModelPrices(input_price, output_price, cache_read, cache_creation, PriceSource.MANUAL)
 
 
-def _checked_choices(data: LlmProviderModelsReplace) -> list[tuple[str, str | LlmProviderModelPrices]]:
-    """Each model id with its checked price, or a 422 naming the rule the body breaks."""
+def _checked_choices(
+    data: LlmProviderModelsReplace, provider_type: ProviderType
+) -> list[tuple[str, str | LlmProviderModelPrices, str | None]]:
+    """Each model id with its checked price and the model an Azure deployment runs, or a 422
+    naming the rule the body breaks."""
     if len(data.models) > MAX_MODELS_PER_CONNECTION:
         raise HTTPException(422, TOO_MANY_MODELS)
     model_ids = [choice.model_id for choice in data.models]
-    if any(
+    if provider_type == ProviderType.AZURE:
+        if any(
+            len(model_id) > MAX_AZURE_DEPLOYMENT_LENGTH or not re.fullmatch(AZURE_DEPLOYMENT_PATTERN, model_id)
+            for model_id in model_ids
+        ):
+            raise HTTPException(422, AZURE_DEPLOYMENT_FORMAT)
+    elif any(
         len(model_id) > MAX_MODEL_ID_LENGTH or not re.fullmatch(MODEL_ID_PATTERN, model_id) for model_id in model_ids
     ):
         raise HTTPException(422, MODEL_ID_FORMAT)
     if len(set(model_ids)) != len(model_ids):
         raise HTTPException(422, MODEL_REPEATED)
-    return [(choice.model_id, _checked_price(choice.price)) for choice in data.models]
+    checked = []
+    for choice in data.models:
+        price = _checked_price(choice.price)
+        priced_by_runs_model = provider_type == ProviderType.AZURE and price == LITELLM_PRICE
+        if priced_by_runs_model and choice.runs_model is None:
+            raise HTTPException(422, RUNS_MODEL_MISSING)
+        if not priced_by_runs_model and choice.runs_model is not None:
+            raise HTTPException(422, RUNS_MODEL_NOT_TAKEN)
+        checked.append((choice.model_id, price, choice.runs_model))
+    return checked
 
 
 def _route_matches(route: dict | None, deployment: LiteLLMDeployment) -> bool:
@@ -355,7 +410,9 @@ class PlatformLlmProviderService:
 
     def read_model_catalogue(self, slug: str, context: CurrentUserContext) -> list[LlmProviderCatalogueEntryRead]:
         self.authority.require_platform_admin(context.user)
-        connection, _, api_key = self._listed_connection(slug)
+        connection, _, api_key = self._model_connection(slug)
+        if connection.provider_type == ProviderType.AZURE:
+            return _azure_catalogue(self._model_prices(), self.repository.list_models(connection.id))
         model_ids = self._list_provider_models(connection, api_key)
         prices = self._model_prices()
         stored = {model.model_id: model for model in self.repository.list_models(connection.id)}
@@ -367,23 +424,25 @@ class PlatformLlmProviderService:
         self, slug: str, data: LlmProviderModelsReplace, context: CurrentUserContext
     ) -> list[LlmProviderModelRead]:
         self.authority.require_platform_admin(context.user)
-        connection, api_key_encrypted, api_key = self._listed_connection(slug)
-        choices = _checked_choices(data)
+        connection, api_key_encrypted, api_key = self._model_connection(slug)
+        choices = _checked_choices(data, connection.provider_type)
         stored_ids = {model.model_id for model in self.repository.list_models(connection.id)}
-        if any(price == STORED_PRICE and model_id not in stored_ids for model_id, price in choices):
+        if any(price == STORED_PRICE and model_id not in stored_ids for model_id, price, _ in choices):
             raise HTTPException(422, PRICES_NOT_STORED)
-        listed = set(self._list_provider_models(connection, api_key))
-        if any(model_id not in listed for model_id, _ in choices):
-            raise HTTPException(422, f"{connection.name} does not list one of these models. Nothing was saved.")
-        prices = self._model_prices() if any(price == LITELLM_PRICE for _, price in choices) else {}
+        if connection.provider_type != ProviderType.AZURE:
+            listed = set(self._list_provider_models(connection, api_key))
+            if any(model_id not in listed for model_id, _, _ in choices):
+                raise HTTPException(422, f"{connection.name} does not list one of these models. Nothing was saved.")
+        prices = self._model_prices() if any(price == LITELLM_PRICE for _, price, _ in choices) else {}
         wanted: list[tuple[str, LlmProviderModelPrices | None]] = []
-        for model_id, price in choices:
+        for model_id, price, runs_model in choices:
             if isinstance(price, LlmProviderModelPrices):
                 wanted.append((model_id, price))
             elif price == STORED_PRICE:
                 wanted.append((model_id, None))
             else:
-                chat_price = _chat_price(connection.provider_type, model_id, prices)
+                priced_as = model_id if runs_model is None else runs_model
+                chat_price = _chat_price(connection.provider_type, priced_as, prices)
                 if chat_price is None:
                     raise HTTPException(422, NO_CHAT_PRICE)
                 wanted.append((model_id, _litellm_prices(chat_price)))
@@ -432,17 +491,15 @@ class PlatformLlmProviderService:
         if not accepted:
             raise HTTPException(422, f"{name} did not accept this key. Nothing was saved.")
 
-    def _listed_connection(self, slug: str) -> tuple[LlmProviderConnection, str, str]:
-        """The live connection whose provider lists its models, with its stored ciphertext and key;
-        else a 404 or 409."""
+    def _model_connection(self, slug: str) -> tuple[LlmProviderConnection, str, str]:
+        """The live connection whose models are stored, with its stored ciphertext and key; else a
+        404 or 409."""
         found = self.repository.find_active(slug)
         if found is None:
             raise HTTPException(404, NOT_FOUND)
         connection = found[0]
         if connection.provider_type == ProviderType.OPENROUTER:
             raise HTTPException(409, MODELS_NOT_STORED)
-        if connection.provider_type == ProviderType.AZURE:
-            raise HTTPException(409, AZURE_NOT_LISTED)
         if connection.api_key_encrypted is None:
             raise HTTPException(409, f"{connection.name} has no key.")
         api_key = decrypt_token(connection.api_key_encrypted, self.config.agent_token_encryption_key)
