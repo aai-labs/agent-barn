@@ -15,6 +15,10 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-23 — AF-447 — slice 2, Anthropic key check fix
+
+- Fixed: `LlmProviderKeyChecker` now sends `anthropic-version: 2026-10-21` with an Anthropic key check, the version the catalogue sends (`ANTHROPIC_VERSION` in `api/infrastructure/llm_provider_catalogue/catalogue.py`). Anthropic's docs require the header on every request (https://platform.claude.com/docs/en/api/versioning). Found while checking those docs for PR 9; slice 2's live check sent only an obviously fake key, which Anthropic refused with `401`, so a valid key was never tried without the header. [`llm-providers.md`](../llm-providers.md) shows the header.
+
 ### 2026-11-23 — AF-447 — slice 3, PR 9
 
 - Delivered: `LlmProviderCatalogue.list_models()` reads the paged lists:

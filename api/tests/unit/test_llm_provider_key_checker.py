@@ -27,7 +27,12 @@ REAL_HTTPX_CLIENT = httpx.Client
 JSON = {"Content-Type": "application/json"}
 
 PROVIDER_REQUESTS = [
-    (ProviderType.ANTHROPIC, None, "https://api.anthropic.com/v1/models", {"x-api-key": CANDIDATE_KEY}),
+    (
+        ProviderType.ANTHROPIC,
+        None,
+        "https://api.anthropic.com/v1/models",
+        {"x-api-key": CANDIDATE_KEY, "anthropic-version": "2026-10-21"},
+    ),
     (ProviderType.OPENAI, None, "https://api.openai.com/v1/models", BEARER),
     (
         ProviderType.GEMINI,

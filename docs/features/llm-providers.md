@@ -46,7 +46,7 @@ Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_p
 
 | Provider | Request | Key header |
 | --- | --- | --- |
-| Anthropic | `GET https://api.anthropic.com/v1/models` | `x-api-key` |
+| Anthropic | `GET https://api.anthropic.com/v1/models` | `x-api-key`, with `anthropic-version: 2026-10-21` |
 | OpenAI | `GET https://api.openai.com/v1/models` | `Authorization: Bearer` |
 | Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models` | `x-goog-api-key` |
 | xAI | `GET https://api.x.ai/v1/models` | `Authorization: Bearer` |
