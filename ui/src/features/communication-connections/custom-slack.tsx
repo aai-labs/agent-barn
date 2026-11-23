@@ -85,7 +85,7 @@ export function connectionForm(
   return {
     custom,
     name: CUSTOM_SLACK_NAME,
-    description: "Connect a self-hosted chat that speaks Slack's bot API, such as Chatty.",
+    description: "Connect a self-hosted chat that speaks Slack's bot API.",
     setupHint: SETUP_HINT,
     manifest: null,
     credentialsSchema: issuedCredentials(platform.credentialsSchema),
