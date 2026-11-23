@@ -40,8 +40,8 @@ export function UnusualActivityPanel() {
 
   return (
     <SettingsSection title="Unusual activity checks" description={WHAT_IT_DOES}>
-      <div className="flex max-w-2xl flex-col gap-4">
-        <p className="m-0 text-[0.86rem]" style={{ color: "var(--ink-2)" }}>
+      <div className="flex flex-col gap-4">
+        <p className="m-0 max-w-2xl text-[0.86rem]" style={{ color: "var(--ink-2)" }}>
           {WHAT_IT_DOES} {BILLING}
         </p>
         {settings.canManage ? (
