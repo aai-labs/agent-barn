@@ -82,6 +82,21 @@ def test_calls_without_a_parseable_destination_yield_nothing(tool_name: str, arg
         # a URL that is not an argument to curl or wget is not a destination
         ("echo https://not-fetched.example.com", set()),
         ("git clone https://git.example.com/repo.git", set()),
+        # the request URL given to an option, not as an argument of its own
+        ("curl --url=https://inline.example.com", {"inline.example.com"}),
+        ("curl -- https://after-dashes.example.com", {"after-dashes.example.com"}),
+        # option values are not destinations, even when they look like URLs
+        ("curl --referer https://referrer.example https://actual.example", {"actual.example"}),
+        ("curl --referer=https://referrer.example https://actual.example", {"actual.example"}),
+        ("curl -e https://referrer.example https://actual.example", {"actual.example"}),
+        ("curl -sSLe https://referrer.example https://actual.example", {"actual.example"}),
+        ("curl -x http://proxy.example:3128 https://actual.example", {"actual.example"}),
+        ("curl -d https://posted.example https://actual.example", {"actual.example"}),
+        ("curl -H 'Origin: https://origin.example' https://actual.example", {"actual.example"}),
+        # curl's -O takes no value (it names the file after the URL); wget's does
+        ("curl -O https://remote-name.example/file.zip", {"remote-name.example"}),
+        ("wget -O https://named.example https://actual.example", {"actual.example"}),
+        ("wget --referer https://referrer.example https://actual.example", {"actual.example"}),
         # scheme-less hosts are not taken: option values like `-o out.json` look the same
         ("curl example.com", set()),
         # unbalanced quoting cannot be tokenized

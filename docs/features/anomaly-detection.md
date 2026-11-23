@@ -83,9 +83,12 @@ Destinations come from tool calls only; there is no egress proxy. The UI says th
 Fields were checked against the tool definitions at the versions the images pin (OpenClaw
 `2026.8.2`, Hermes `v2026.8.19`) and against recorded tool calls. Shell commands go through
 the Business Action classifier's parsing (`business_value.service.shell_invocations`), so
-runtime-wrapped and chained commands read the same way; only URLs with an `http` or
-`https` scheme count, since a bare `example.com` cannot be told apart from an option value
-like `-o out.json`.
+runtime-wrapped and chained commands read the same way. The request URLs are the
+fetcher's arguments and curl's `--url` value; the values of options that take one
+(`--referer`, `-x`, `-d`, wget's `-O`, …) are skipped even when they look like URLs, from a
+per-fetcher list in `anomalies/destinations.py`. Only URLs with an `http` or `https` scheme
+count, since a bare `example.com` cannot be told apart from an option value like
+`-o out.json`.
 
 Not seen: traffic from inside scripts and libraries, Hermes `browser_exec` and
 `execute_code` (their URLs sit inside code), and `web_search`, which carries only a query.
