@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 export class PlatformLlmProvidersPage {
   constructor(private page: Page) {}
@@ -142,7 +142,56 @@ export class PlatformLlmProvidersPage {
     return this.dialog().getByRole("region", { name: "Models no longer listed" });
   }
 
+  saveModelsButton() {
+    return this.dialog().getByRole("button", { name: "Save models" });
+  }
+
   async saveModels() {
-    await this.dialog().getByRole("button", { name: "Save models" }).click();
+    await this.saveModelsButton().click();
+  }
+
+  priceInput(modelId: string, column: "Input" | "Output" | "Cache read" | "Cache write") {
+    return this.dialog().getByLabel(`${modelId} ${column} price per 1M tokens`, { exact: true });
+  }
+
+  async typePrices(modelId: string, prices: [string, string, string, string]) {
+    const columns = ["Input", "Output", "Cache read", "Cache write"] as const;
+    for (const [index, column] of columns.entries()) await this.priceInput(modelId, column).fill(prices[index]);
+  }
+
+  useLiteLLMPriceButton(modelId: string) {
+    return this.dialog().getByRole("button", { name: `Use LiteLLM's price for ${modelId}`, exact: true });
+  }
+
+  runsModelPicker(deployment: string) {
+    return this.dialog().getByRole("combobox", { name: `Model ${deployment} runs`, exact: true });
+  }
+
+  deploymentCells(deployment: string) {
+    return this.dialog()
+      .getByRole("row")
+      .filter({ has: this.page.getByRole("combobox", { name: `Model ${deployment} runs`, exact: true }) })
+      .getByRole("cell");
+  }
+
+  newDeploymentName() {
+    return this.dialog().getByLabel("New deployment name", { exact: true }).last();
+  }
+
+  async addDeployment(name: string) {
+    await this.dialog().getByRole("button", { name: "Add deployment" }).click();
+    await this.newDeploymentName().fill(name);
+  }
+
+  async chooseRunsModel(deployment: string, search: string, option: string) {
+    await this.runsModelPicker(deployment).click();
+    const searchInput = this.page.getByPlaceholder("Search LiteLLM's Azure models…");
+    await searchInput.fill(search);
+    await this.page.getByRole("option", { name: option, exact: true }).click();
+    await expect(searchInput).toBeHidden();
+  }
+
+  removeDeploymentButton(deployment: string) {
+    return this.dialog().getByRole("button", { name: `Remove ${deployment}`, exact: true });
   }
 }

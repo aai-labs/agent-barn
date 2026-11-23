@@ -42,7 +42,9 @@ export type CatalogueEntryBody = {
   prices_differ: boolean;
 };
 
-export type ModelsSaveBody = { models: { model_id: string; price: string }[] };
+export type ModelsSaveBody = {
+  models: { model_id: string; price: string | ModelPricesBody; runs_model?: string }[];
+};
 
 const HAIKU_PRICES: ModelPricesBody = {
   input_cost_per_token: "0.000001000000000000",
@@ -54,14 +56,14 @@ const HAIKU_PRICES: ModelPricesBody = {
 const OPUS_LISTED_PRICES: ModelPricesBody = {
   input_cost_per_token: "0.000015000000000000",
   output_cost_per_token: "0.000075000000000000",
-  cache_read_input_token_cost: "0.000001500000000000",
+  cache_read_input_token_cost: "0.0000015",
   cache_creation_input_token_cost: "0.000018750000000000",
 };
 
 const OPUS_STORED_PRICES: ModelPricesBody = {
   input_cost_per_token: "0.000012000000000000",
   output_cost_per_token: "0.000060000000000000",
-  cache_read_input_token_cost: "0.000001200000000000",
+  cache_read_input_token_cost: "0.000001500000000000",
   cache_creation_input_token_cost: "0.000015000000000000",
 };
 
@@ -81,7 +83,7 @@ const NO_PRICES = {
 };
 
 export const ANTHROPIC_STORED_MODELS: ModelBody[] = [
-  { model_id: "claude-opus-4-1", ...OPUS_STORED_PRICES, price_source: "manual", litellm_price_key: null },
+  { model_id: "claude-opus-4-1", ...OPUS_STORED_PRICES, price_source: "litellm", litellm_price_key: "claude-opus-4-1" },
   { model_id: "claude-sonnet-4-5", ...SONNET_PRICES, price_source: "litellm", litellm_price_key: "claude-sonnet-4-5" },
 ];
 
@@ -136,6 +138,80 @@ export function pricedCatalogue(
   };
 }
 
+const AZURE_GPT4O_PRICES: ModelPricesBody = {
+  input_cost_per_token: "0.000002500000000000",
+  output_cost_per_token: "0.000010000000000000",
+  cache_read_input_token_cost: "0.000001250000000000",
+  cache_creation_input_token_cost: "0.000002500000000000",
+};
+
+const AZURE_GPT4O_OLD_PRICES: ModelPricesBody = {
+  input_cost_per_token: "0.000002000000000000",
+  output_cost_per_token: "0.000008000000000000",
+  cache_read_input_token_cost: "0.000001250000000000",
+  cache_creation_input_token_cost: "0.000002000000000000",
+};
+
+export const AZURE_CATALOGUE: CatalogueEntryBody[] = [
+  {
+    model_id: "eu/gpt-4o",
+    stored: false,
+    litellm_price_key: "azure/eu/gpt-4o",
+    input_cost_per_token: "0.000002750000000000",
+    output_cost_per_token: "0.000011000000000000",
+    cache_read_input_token_cost: "0.000001375000000000",
+    cache_creation_input_token_cost: "0.000002750000000000",
+    prices_differ: false,
+  },
+  {
+    model_id: "gpt-4o",
+    stored: true,
+    litellm_price_key: "azure/gpt-4o",
+    ...AZURE_GPT4O_PRICES,
+    prices_differ: true,
+  },
+  {
+    model_id: "gpt-4o-mini",
+    stored: false,
+    litellm_price_key: "azure/gpt-4o-mini",
+    input_cost_per_token: "0.000000150000000000",
+    output_cost_per_token: "0.000000600000000000",
+    cache_read_input_token_cost: "0.000000075000000000",
+    cache_creation_input_token_cost: "0.000000150000000000",
+    prices_differ: false,
+  },
+];
+
+export const AZURE_DEPLOYMENTS: ModelBody[] = [
+  {
+    model_id: "lab-router",
+    input_cost_per_token: "0.000001000000000000",
+    output_cost_per_token: "0.000002000000000000",
+    cache_read_input_token_cost: "0.000000000000000000",
+    cache_creation_input_token_cost: "0.000000000000000000",
+    price_source: "manual",
+    litellm_price_key: null,
+  },
+  { model_id: "prod-gpt4o", ...AZURE_GPT4O_OLD_PRICES, price_source: "litellm", litellm_price_key: "azure/gpt-4o" },
+];
+
+export const CUSTOM_CATALOGUE: CatalogueEntryBody[] = [
+  { model_id: "llama-3", stored: false, ...NO_PRICES, prices_differ: false },
+  { model_id: "mistral-7b", stored: true, ...NO_PRICES, prices_differ: false },
+];
+
+export const CUSTOM_MODELS: ModelBody[] = [
+  {
+    model_id: "mistral-7b",
+    input_cost_per_token: "0.000000200000000000",
+    output_cost_per_token: "0.000000400000000000",
+    cache_read_input_token_cost: "0.000000000000000000",
+    cache_creation_input_token_cost: "0.000000000000000000",
+    price_source: "manual",
+    litellm_price_key: null,
+  },
+];
+
 export const SAVED_KEY: OpenRouterConnectionBody = {
   has_api_key: true,
   api_key_last4: "a1b2",
@@ -163,6 +239,18 @@ export const AZURE_CONNECTION: LlmProviderConnectionBody = {
   base_url: "https://contoso.openai.azure.com",
   has_api_key: true,
   api_key_last4: "e5f6",
+  updated_at: "2026-11-16T09:30:00Z",
+  updated_by: "Platform Person",
+  env_key_configured: false,
+};
+
+export const CUSTOM_CONNECTION: LlmProviderConnectionBody = {
+  slug: "lab",
+  name: "Aardvark lab",
+  provider_type: "custom",
+  base_url: "https://lab.example.com/v1",
+  has_api_key: true,
+  api_key_last4: "m1n2",
   updated_at: "2026-11-16T09:30:00Z",
   updated_by: "Platform Person",
   env_key_configured: false,
@@ -334,10 +422,11 @@ export class PlatformLlmProviderDataSupport {
       saves.push({ slug: slugOf(route.request().url()), body });
       if (saveStatus >= 400) return route.fulfill(json(saveStatus, { detail: saveDetail }));
       models = body.models
-        .map(({ model_id, price }): ModelBody => {
+        .map(({ model_id, price, runs_model }): ModelBody => {
           const stored = models.find((model) => model.model_id === model_id);
           if (price === "stored" && stored) return stored;
-          const entry = catalogue.find((item) => item.model_id === model_id);
+          if (typeof price === "object") return { model_id, ...price, price_source: "manual", litellm_price_key: null };
+          const entry = catalogue.find((item) => item.model_id === (runs_model ?? model_id));
           return {
             model_id,
             input_cost_per_token: entry?.input_cost_per_token ?? "",

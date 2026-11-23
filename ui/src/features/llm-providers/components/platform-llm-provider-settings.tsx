@@ -122,7 +122,7 @@ export function PlatformLlmProviderSettings() {
               connection={connection}
               onReplaceKey={() => openKeyDialog(connection)}
               onModels={
-                connection.hasApiKey && KNOWN_PROVIDER_TYPES.includes(connection.providerType)
+                connection.hasApiKey && connection.providerType !== "openrouter"
                   ? () => openModels(connection)
                   : undefined
               }

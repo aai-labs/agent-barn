@@ -73,7 +73,15 @@ export type LlmProviderCatalogueEntry = z.infer<typeof LlmProviderCatalogueEntry
 
 export const LlmProviderCatalogueSchema = z.array(LlmProviderCatalogueEntrySchema);
 
+export type ModelPrices = Pick<
+  LlmProviderModel,
+  "inputCostPerToken" | "outputCostPerToken" | "cacheReadInputTokenCost" | "cacheCreationInputTokenCost"
+>;
+
+export type PriceField = keyof ModelPrices;
+
 export type ModelChoice = {
   modelId: string;
-  price: "litellm" | "stored";
+  price: "litellm" | "stored" | ModelPrices;
+  runsModel?: string;
 };
