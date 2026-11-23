@@ -17,7 +17,13 @@ from api.domains.llm_providers.models import (
     ProviderType,
 )
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice
+from api.infrastructure.llm_provider_catalogue.catalogue import (
+    LlmProviderCatalogue,
+    ProviderListRefused,
+    ProviderListUnreachable,
+    ProviderListUnreadable,
+)
 from api.infrastructure.llm_provider_keys.checker import (
     BaseUrlNotAnApi,
     BaseUrlNotPublic,
@@ -65,6 +71,21 @@ OTHER_ROUTE = {
     "model_info": {"id": OTHER_ROUTE_ID, "disable_background_health_check": True},
 }
 MODELS_NOT_STORED = "OpenRouter's models are not stored."
+CUSTOM_KEY = "custom-stored-key-m1n2"
+CUSTOM_BASE_URL = "https://lab.example.com/v1"
+AZURE_NOT_LISTED = "Azure deployments are added by name."
+ANTHROPIC_HAS_NO_KEY = "Anthropic has no key."
+ANTHROPIC_REFUSED_STORED_KEY = "Anthropic did not accept the stored key. Replace the key, then try again."
+ANTHROPIC_LIST_UNREACHABLE = "Anthropic could not be reached to list its models."
+ANTHROPIC_LIST_UNREADABLE = "Anthropic's model list could not be read."
+PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
+NO_PRICES = {
+    "litellm_price_key": None,
+    "input_cost_per_token": None,
+    "output_cost_per_token": None,
+    "cache_read_input_token_cost": None,
+    "cache_creation_input_token_cost": None,
+}
 KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 
@@ -1411,3 +1432,253 @@ def test_openrouter_has_no_stored_models():
 
         assert_that(response.status_code, equal_to(409))
         assert_that(response.json(), equal_to({"detail": MODELS_NOT_STORED}))
+
+
+def provider_lists(answer: list[str] | Exception):
+    def step(context):
+        listing = Mock(side_effect=answer) if isinstance(answer, Exception) else Mock(return_value=answer)
+        context.injector.get(LlmProviderCatalogue).list_models = listing
+        context.list_models = listing
+
+    return step
+
+
+def litellm_prices(*prices: LiteLLMModelPrice):
+    def step(context):
+        context.injector.get(LiteLLMClient).get_model_prices.return_value = {price.key: price for price in prices}
+
+    return step
+
+
+def _price(
+    key: str,
+    input_price: str,
+    output_price: str,
+    cache_read: str | None = None,
+    cache_creation: str | None = None,
+    mode: str | None = "chat",
+) -> LiteLLMModelPrice:
+    return LiteLLMModelPrice(
+        key=key,
+        mode=mode,
+        input_cost_per_token=Decimal(input_price),
+        output_cost_per_token=Decimal(output_price),
+        cache_read_input_token_cost=None if cache_read is None else Decimal(cache_read),
+        cache_creation_input_token_cost=None if cache_creation is None else Decimal(cache_creation),
+    )
+
+
+def _catalogue(context, slug: str, headers: dict | None = None):
+    return context.client.get(f"{BASE}/{slug}/model-catalogue", headers=headers or auth(context))
+
+
+def test_an_organization_owner_cannot_read_a_connections_model_catalogue():
+    with given(_setup(anthropic_connected, provider_lists([]), litellm_prices())) as context:
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+        context.list_models.assert_not_called()
+
+
+def test_reading_a_connections_model_catalogue_needs_a_signed_in_user():
+    with given(_setup(anthropic_connected, provider_lists([]), litellm_prices())) as context:
+        response = context.client.get(f"{BASE}/anthropic/model-catalogue")
+
+        assert_that(response.status_code, equal_to(401))
+        context.list_models.assert_not_called()
+
+
+def test_a_read_only_api_key_of_a_platform_admin_can_read_a_connections_model_catalogue():
+    with given(_setup(admin, anthropic_connected, provider_lists([]), litellm_prices())) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _catalogue(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), equal_to([]))
+
+
+def test_the_catalogue_lists_the_providers_models_with_litellms_chat_prices():
+    listed = ["claude-3-embed", "claude-haiku-4-5", "claude-opus-4-1", "claude-sonnet-4-5", "claude-unknown"]
+    prices = litellm_prices(
+        _price("claude-3-embed", "0.0000001", "0.0000001", mode="embedding"),
+        _price("claude-haiku-4-5", "0.000001", "0.000005", "0.0000001", "0.00000125"),
+        _price("claude-opus-4-1", "0.0000150000000000005", "0.000075"),
+        _price("claude-sonnet-4-5", "0.000003", "0.000015", "0.0000003", "0.00000375"),
+        _price("gpt-4o", "0.0000025", "0.00001"),
+    )
+    with given(_setup(admin, anthropic_connected, provider_lists(listed), prices)) as context:
+        _model(context, context.connection, "claude-3-embed")
+        _model(
+            context,
+            context.connection,
+            "claude-haiku-4-5",
+            input_cost_per_token=Decimal("0.000001"),
+            output_cost_per_token=Decimal("0.000005"),
+            cache_read_input_token_cost=Decimal("0.0000001"),
+            cache_creation_input_token_cost=Decimal("0.00000125"),
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="claude-haiku-4-5",
+        )
+        _model(
+            context,
+            context.connection,
+            "claude-opus-4-1",
+            input_cost_per_token=Decimal("0.000015000000000001"),
+            output_cost_per_token=Decimal("0.000075"),
+            cache_read_input_token_cost=Decimal("0.000015000000000001"),
+            cache_creation_input_token_cost=Decimal("0.000015000000000001"),
+        )
+        _model(context, context.connection, "claude-sonnet-4-5")
+        other = _connection(context, "openai", "OpenAI", ProviderType.OPENAI, **_with_key(NEW_KEY))
+        _model(context, other, "claude-unknown")
+
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {"model_id": "claude-3-embed", "stored": True, **NO_PRICES, "prices_differ": False},
+                    {
+                        "model_id": "claude-haiku-4-5",
+                        "stored": True,
+                        "litellm_price_key": "claude-haiku-4-5",
+                        "input_cost_per_token": "0.000001000000000000",
+                        "output_cost_per_token": "0.000005000000000000",
+                        "cache_read_input_token_cost": "0.000000100000000000",
+                        "cache_creation_input_token_cost": "0.000001250000000000",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "claude-opus-4-1",
+                        "stored": True,
+                        "litellm_price_key": "claude-opus-4-1",
+                        "input_cost_per_token": "0.000015000000000001",
+                        "output_cost_per_token": "0.000075000000000000",
+                        "cache_read_input_token_cost": "0.000015000000000001",
+                        "cache_creation_input_token_cost": "0.000015000000000001",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "claude-sonnet-4-5",
+                        "stored": True,
+                        "litellm_price_key": "claude-sonnet-4-5",
+                        "input_cost_per_token": "0.000003000000000000",
+                        "output_cost_per_token": "0.000015000000000000",
+                        "cache_read_input_token_cost": "0.000000300000000000",
+                        "cache_creation_input_token_cost": "0.000003750000000000",
+                        "prices_differ": True,
+                    },
+                    {"model_id": "claude-unknown", "stored": False, **NO_PRICES, "prices_differ": False},
+                ]
+            ),
+        )
+        context.list_models.assert_called_once_with(ProviderType.ANTHROPIC, ANTHROPIC_KEY)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    ],
+)
+def test_a_stored_model_differing_in_any_one_price_is_marked(field):
+    stored = {
+        "input_cost_per_token": Decimal("0.000003"),
+        "output_cost_per_token": Decimal("0.000015"),
+        "cache_read_input_token_cost": Decimal("0.0000003"),
+        "cache_creation_input_token_cost": Decimal("0.00000375"),
+    }
+    stored[field] += Decimal("0.000000000000000001")
+    prices = litellm_prices(_price("claude-sonnet-4-5", "0.000003", "0.000015", "0.0000003", "0.00000375"))
+    with given(_setup(admin, anthropic_connected, provider_lists(["claude-sonnet-4-5"]), prices)) as context:
+        _model(context, context.connection, "claude-sonnet-4-5", **stored)
+
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        [entry] = response.json()
+        assert_that(entry, has_entries(stored=True, prices_differ=True))
+
+
+def test_a_custom_connection_is_listed_at_its_base_url_without_prices():
+    prices = litellm_prices(_price("llama-3", "0.000001", "0.000002"), _price("openai/llama-3", "0.000001", "0.000002"))
+    with given(_setup(admin, provider_lists(["llama-3"]), prices)) as context:
+        _connection(
+            context,
+            "custom-lab",
+            "Aardvark lab",
+            ProviderType.CUSTOM,
+            base_url=CUSTOM_BASE_URL,
+            **_with_key(CUSTOM_KEY),
+        )
+
+        response = _catalogue(context, "custom-lab")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(), equal_to([{"model_id": "llama-3", "stored": False, **NO_PRICES, "prices_differ": False}])
+        )
+        context.list_models.assert_called_once_with(ProviderType.CUSTOM, CUSTOM_KEY, CUSTOM_BASE_URL)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code", "detail"),
+    [
+        (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
+        (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
+    ],
+)
+def test_a_provider_list_that_fails_gives_its_status(failure, status_code, detail):
+    with given(_setup(admin, anthropic_connected, provider_lists(failure), litellm_prices())) as context:
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(status_code))
+        assert_that(response.json(), equal_to({"detail": detail}))
+
+
+def test_a_price_list_litellm_cannot_give_is_unavailable():
+    with given(_setup(admin, anthropic_connected, provider_lists(["claude-sonnet-4-5"]))) as context:
+        context.injector.get(LiteLLMClient).get_model_prices.side_effect = LiteLLMError("proxy down")
+
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": PRICE_LIST_UNREADABLE}))
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_the_catalogue_of_a_missing_connection_is_not_found(deleted):
+    with given(_setup(admin, provider_lists([]), litellm_prices())) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _catalogue(context, "xai")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        context.list_models.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("slug", "detail"),
+    [("openrouter", MODELS_NOT_STORED), ("azure-eu", AZURE_NOT_LISTED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
+)
+def test_a_connection_whose_models_are_not_listed_is_refused_before_the_provider_is_asked(slug, detail):
+    with given(_setup(admin, azure_connected, provider_lists([]), litellm_prices())) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC)
+
+        response = _catalogue(context, slug)
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()

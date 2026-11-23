@@ -9,6 +9,7 @@ from fastapi_injector import Injected
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import require_platform_admin
 from api.domains.llm_providers.models import (
+    LlmProviderCatalogueEntryRead,
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
@@ -69,6 +70,15 @@ def list_models(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     return service.list_models(slug, context)
+
+
+@platform_llm_providers_router.get("/{slug}/model-catalogue", response_model=list[LlmProviderCatalogueEntryRead])
+def read_model_catalogue(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.read_model_catalogue(slug, context)
 
 
 @platform_llm_providers_router.delete("/{slug}", status_code=204)

@@ -1,6 +1,7 @@
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from urllib.parse import urlsplit
 
@@ -26,7 +27,9 @@ from api.domains.llm_providers.models import (
     OPENROUTER_ROUTE_MODEL,
     OPENROUTER_ROUTE_ORDER,
     OPENROUTER_SLUG,
+    PRICE_SCALE,
     SLUG_PATTERN,
+    LlmProviderCatalogueEntryRead,
     LlmProviderConnection,
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
@@ -42,8 +45,14 @@ from api.domains.llm_providers.repository import (
     LlmProviderRepository,
 )
 from api.domains.platform_admin.service import PlatformAdminService
-from api.infrastructure.crypto import encrypt_token
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice, litellm_price_key
+from api.infrastructure.llm_provider_catalogue.catalogue import (
+    LlmProviderCatalogue,
+    ProviderListRefused,
+    ProviderListUnreachable,
+    ProviderListUnreadable,
+)
 from api.infrastructure.llm_provider_keys.checker import (
     BaseUrlNotAnApi,
     BaseUrlNotPublic,
@@ -63,10 +72,14 @@ BASE_URL_NOT_TAKEN = "Only Azure and Custom connections take a base URL."
 NOT_FOUND = "That connection does not exist."
 OPENROUTER_FIXED = "OpenRouter can't be deleted."
 MODELS_NOT_STORED = "OpenRouter's models are not stored."
+AZURE_NOT_LISTED = "Azure deployments are added by name."
+PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
 CHANGED_WHILE_CHECKING = "The connection changed while the key was checked. Nothing was saved."
 KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 PROVIDER_TYPE_NAMES = frozenset(provider_type.value for provider_type in ProviderType)
+CHAT_MODE = "chat"
+PRICE_STEP = Decimal(1).scaleb(-PRICE_SCALE)
 
 
 def _own_connection_fields(data: LlmProviderConnectionCreate) -> tuple[str, str, str]:
@@ -99,6 +112,48 @@ def _checked_base_url(value: str) -> str:
     return base_url
 
 
+def _exact(price: Decimal) -> Decimal:
+    """The price as `NUMERIC(24,18)` stores it: Postgres rounds ties away from zero."""
+    return price.quantize(PRICE_STEP, ROUND_HALF_UP)
+
+
+def _catalogue_entry(
+    provider_type: ProviderType,
+    model_id: str,
+    prices: dict[str, LiteLLMModelPrice],
+    stored: LlmProviderModel | None,
+) -> LlmProviderCatalogueEntryRead:
+    """The model with LiteLLM's chat prices for it, a missing cache price taken as the input price."""
+    key = litellm_price_key(provider_type, model_id)
+    price = None if key is None else prices.get(key)
+    if price is None or price.mode != CHAT_MODE:
+        return LlmProviderCatalogueEntryRead(model_id=model_id, stored=stored is not None, prices_differ=False)
+    input_price = _exact(price.input_cost_per_token)
+    listed = (
+        input_price,
+        _exact(price.output_cost_per_token),
+        input_price if price.cache_read_input_token_cost is None else _exact(price.cache_read_input_token_cost),
+        input_price if price.cache_creation_input_token_cost is None else _exact(price.cache_creation_input_token_cost),
+    )
+    differs = stored is not None and listed != (
+        stored.input_cost_per_token,
+        stored.output_cost_per_token,
+        stored.cache_read_input_token_cost,
+        stored.cache_creation_input_token_cost,
+    )
+    output_price, cache_read, cache_creation = listed[1:]
+    return LlmProviderCatalogueEntryRead(
+        model_id=model_id,
+        stored=stored is not None,
+        litellm_price_key=price.key,
+        input_cost_per_token=input_price,
+        output_cost_per_token=output_price,
+        cache_read_input_token_cost=cache_read,
+        cache_creation_input_token_cost=cache_creation,
+        prices_differ=differs,
+    )
+
+
 @inject
 @singleton
 @dataclass
@@ -110,6 +165,7 @@ class PlatformLlmProviderService:
     litellm: LiteLLMClient
     dispatcher: EventDeliveryDispatcher
     key_checker: LlmProviderKeyChecker
+    catalogue: LlmProviderCatalogue
 
     def list_connections(self, context: CurrentUserContext) -> list[LlmProviderConnectionRead]:
         self.authority.require_platform_admin(context.user)
@@ -207,6 +263,29 @@ class PlatformLlmProviderService:
             for model in self.repository.list_models(connection.id)
         ]
 
+    def read_model_catalogue(self, slug: str, context: CurrentUserContext) -> list[LlmProviderCatalogueEntryRead]:
+        self.authority.require_platform_admin(context.user)
+        found = self.repository.find_active(slug)
+        if found is None:
+            raise HTTPException(404, NOT_FOUND)
+        connection = found[0]
+        if connection.provider_type == ProviderType.OPENROUTER:
+            raise HTTPException(409, MODELS_NOT_STORED)
+        if connection.provider_type == ProviderType.AZURE:
+            raise HTTPException(409, AZURE_NOT_LISTED)
+        if connection.api_key_encrypted is None:
+            raise HTTPException(409, f"{connection.name} has no key.")
+        api_key = decrypt_token(connection.api_key_encrypted, self.config.agent_token_encryption_key)
+        model_ids = self._list_provider_models(connection, api_key)
+        try:
+            prices = self.litellm.get_model_prices()
+        except LiteLLMError:
+            raise HTTPException(503, PRICE_LIST_UNREADABLE) from None
+        stored = {model.model_id: model for model in self.repository.list_models(connection.id)}
+        return [
+            _catalogue_entry(connection.provider_type, model_id, prices, stored.get(model_id)) for model_id in model_ids
+        ]
+
     def delete_connection(self, slug: str, context: CurrentUserContext) -> None:
         self.authority.require_platform_admin(context.user)
         if slug == OPENROUTER_SLUG:
@@ -231,6 +310,21 @@ class PlatformLlmProviderService:
             raise HTTPException(422, BASE_URL_NOT_AN_API) from None
         if not accepted:
             raise HTTPException(422, f"{name} did not accept this key. Nothing was saved.")
+
+    def _list_provider_models(self, connection: LlmProviderConnection, api_key: str) -> list[str]:
+        name = connection.name
+        try:
+            if connection.base_url is not None:
+                return self.catalogue.list_models(connection.provider_type, api_key, connection.base_url)
+            return self.catalogue.list_models(connection.provider_type, api_key)
+        except ProviderListRefused:
+            raise HTTPException(
+                409, f"{name} did not accept the stored key. Replace the key, then try again."
+            ) from None
+        except ProviderListUnreachable:
+            raise HTTPException(503, f"{name} could not be reached to list its models.") from None
+        except ProviderListUnreadable:
+            raise HTTPException(502, f"{name}'s model list could not be read.") from None
 
     def _check_openrouter_key(self, api_key: str) -> None:
         try:

@@ -192,6 +192,20 @@ class LlmProviderModelRead(PydanticBaseModel):
     litellm_price_key: str | None = None
 
 
+class LlmProviderCatalogueEntryRead(PydanticBaseModel):
+    """A model the provider lists, with LiteLLM's chat prices for it when it has them, all four
+    or none, and whether this connection stores it at other prices."""
+
+    model_id: str
+    stored: bool
+    litellm_price_key: str | None = None
+    input_cost_per_token: ExactPrice | None = None
+    output_cost_per_token: ExactPrice | None = None
+    cache_read_input_token_cost: ExactPrice | None = None
+    cache_creation_input_token_cost: ExactPrice | None = None
+    prices_differ: bool
+
+
 class LlmProviderConnectionCreate(PydanticBaseModel):
     """A known provider takes only its key. Azure and Custom take a slug, name and base URL too,
     whose rules the service checks so that a refusal can say which one was broken."""

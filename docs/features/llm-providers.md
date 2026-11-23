@@ -26,7 +26,7 @@ Agents never hold a provider key. They call LiteLLM with their own virtual keys,
 - A connection carries a model once; two connections may carry the same `model_id`. A `model_id` is 1 to 200 characters of `[A-Za-z0-9._:/-]`, so it can't hold `*`.
 - `price_source` is `litellm` for a price read from LiteLLM's price list, with the key it was read under in `litellm_price_key`, or `manual` for a typed price, with no key.
 - The database refuses an input or output price of zero or less, a negative cache price, a missing price, an unknown price source, a key that doesn't match the price source, a malformed `model_id` and a model of no connection.
-- Nothing adds models yet; deleting a connection deletes its models. Slice 3's later PRs add the API ([change log](llm-providers/CHANGELOG.md)).
+- The API lists a connection's stored models and the models its provider lists ([Listing a provider's models](#listing-a-providers-models)). Nothing adds models yet; deleting a connection deletes its models. Slice 3's later PRs add saving them ([change log](llm-providers/CHANGELOG.md)).
 
 ## Invariants
 
@@ -57,6 +57,25 @@ Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_p
 | Custom | `GET {base_url}/models` | `Authorization: Bearer` |
 
 `200` accepts the key. `401` or `403` refuses it, and for Gemini and xAI so does `400`. Any other answer, or none, means the provider could not be reached. For Azure and Custom, a base URL whose host is not a public address is refused before any request, and a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json` means the base URL does not answer like a model API. A Custom server whose `/models` does not check the key accepts any key. Why Fireworks, Gemini, Azure, Novita and xAI are checked this way is in the [change log](llm-providers/CHANGELOG.md) (slice 2, PR 2 and the review fixes).
+
+## Listing a provider's models
+
+`LlmProviderCatalogue` (`api/infrastructure/llm_provider_catalogue/`) reads a provider's model list with the connection's stored key. Like the key check, it resolves the host once, pins every request to that public address, and sends them with redirects off and a 10-second timeout.
+
+| Provider | Request | Key header | Ids |
+| --- | --- | --- | --- |
+| Anthropic | `GET https://api.anthropic.com/v1/models?limit=1000`, then `after_id` while `has_more` | `x-api-key`, with `anthropic-version: 2026-10-21` | `data[].id` |
+| OpenAI | `GET https://api.openai.com/v1/models` | `Authorization: Bearer` | `data[].id` |
+| Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000`, then `pageToken` | `x-goog-api-key` | `models[].name` without `models/`, only where `supportedGenerationMethods` has `generateContent` |
+| xAI | `GET https://api.x.ai/v1/language-models` | `Authorization: Bearer` | `models[].id` |
+| DeepSeek | `GET https://api.deepseek.com/models` | `Authorization: Bearer` | `data[].id` |
+| Fireworks | `GET https://api.fireworks.ai/v1/accounts/fireworks/models?filter=supports_serverless=true&pageSize=200`, then `pageToken` | `Authorization: Bearer` | the full `models[].name`, only where `conversationConfig` is set |
+| Novita | `GET https://api.novita.ai/openai/v1/models` | `Authorization: Bearer` | `data[].id` |
+| Custom | `GET {base_url}/models` | `Authorization: Bearer` | `data[].id` |
+
+OpenRouter's models are not stored, and Azure deployments are added by name, so neither is listed. A listing reads at most 5 pages, each up to 2 MiB decoded, and at most 1,000 entries in all. Ids a model row can't hold are left out, and the rest come back sorted, each once. `401` or `403` refuses the key, and for Gemini and xAI so does `400`; any other answer, or none, means the provider could not be reached; a body that is not a model list, or is over a cap, can't be read.
+
+`GET .../{slug}/model-catalogue` pairs each listed id with LiteLLM's built-in price list (`LiteLLMClient.get_model_prices()`), looking it up under `litellm_price_key()`: the bare id for OpenAI and Anthropic, and `gemini/`, `xai/`, `deepseek/`, `fireworks_ai/` or `novita/` before the id for the rest. Only an entry whose `mode` is `chat` gives prices; Custom models never have a key, so they get none. Each price is rounded to 18 decimal places, ties away from zero, as `NUMERIC(24,18)` stores it (https://www.postgresql.org/docs/current/datatype-numeric.html), and a cache price the list doesn't give is the input price. `prices_differ` marks a stored model that has those prices but stores any of the four differently, compared as decimals. A stored model the provider no longer lists is not in the answer; `GET .../{slug}/models` has it.
 
 ## LiteLLM routes
 
@@ -96,6 +115,7 @@ Every route is under `require_platform_admin`, which refuses writes from a read-
 | `POST /api/v1/platform/settings/llm-providers` | Adds a known provider, `{provider_type, api_key}`, or an Azure or Custom connection, `{provider_type, slug, name, base_url, api_key}`; the key is trimmed and at most 512 characters. Answers `201` with the connection. A provider already connected, OpenRouter, or an Azure or Custom slug used before is `409`; a slug, name or base URL that breaks its rule is `422` with a fixed message naming the rule. Both are refused before the key is checked. A refused key or base URL is `422` and no answer `503`, and nothing is stored |
 | `PUT /api/v1/platform/settings/llm-providers/{slug}/key` | Replaces a connection's key, `{api_key}`, trimmed and at most 512 characters, with an optional new `base_url` for Azure or Custom; answers with the connection. OpenRouter's key is checked by OpenRouter, any other by `LlmProviderKeyChecker`; either is routed in LiteLLM before it is stored. An unknown or deleted slug is `404`; a base URL for any other provider, or one that breaks its rule, is `422` before the key is checked. A refused key or base URL is `422`, no answer or a LiteLLM failure `503`, and a stored base URL that changed meanwhile `409`; nothing is stored |
 | `GET /api/v1/platform/settings/llm-providers/{slug}/models` | Lists the connection's stored models by `model_id`. Each has `model_id`, the four per-token prices `input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost` and `cache_creation_input_token_cost`, each a decimal string with 18 places such as `"0.000003000000000000"`, `price_source` (`litellm` or `manual`) and `litellm_price_key`. An unknown or deleted slug is `404`; OpenRouter, whose models are not stored, `409` |
+| `GET /api/v1/platform/settings/llm-providers/{slug}/model-catalogue` | Lists the models the provider lists for the stored key, by `model_id`. Each has `model_id`, `stored` (whether this connection stores it), `litellm_price_key` and the four per-token prices from LiteLLM's chat prices, all `null` when there are none, and `prices_differ`. An unknown or deleted slug is `404`; OpenRouter, Azure and a connection without a key `409`. The provider refusing the stored key is `409`, no answer `503` and an unreadable list `502`; LiteLLM's price list failing is `503`. Nothing is stored |
 | `DELETE /api/v1/platform/settings/llm-providers/{slug}` | Removes the connection's LiteLLM routes, then deletes its models and the connection and purges its key; answers `204`. OpenRouter is `409`, an unknown or already deleted slug `404`, and a LiteLLM failure `503` with nothing deleted |
 
 A saved key records `platform.llm_provider.changed`, Platform scope, projected to Security Audit. Its payload is the connection id and slug, whether a key was replaced, the provider type, the base URL before and after, and display names. An added provider records `platform.llm_provider.created` the same way, with the provider type, base URL and whether a deleted connection was brought back. A deleted connection records `platform.llm_provider.deleted`, with the provider type, base URL and whether a key was purged. See [domain events](domain-events.md).
