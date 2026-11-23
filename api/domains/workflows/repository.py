@@ -17,6 +17,7 @@ from api.domains.workflows.models import (
     Workflow,
     WorkflowDraft,
     WorkflowVersion,
+    snapshot_of,
 )
 from api.domains.workflows.run_models import WorkflowRun
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -230,7 +231,7 @@ class WorkflowRepository:
                 WorkflowVersion(
                     workflow_id=workflow.id,
                     number=1,
-                    snapshot=draft.model_dump(mode="json"),
+                    snapshot=snapshot_of(draft),
                     created_by_user_id=user_id,
                 )
             )
@@ -277,7 +278,7 @@ class WorkflowRepository:
                     WorkflowVersion(
                         workflow_id=workflow_id,
                         number=number + 1,
-                        snapshot=draft.model_dump(mode="json"),
+                        snapshot=snapshot_of(draft),
                         created_by_user_id=user_id,
                     )
                 )

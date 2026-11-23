@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -66,11 +67,14 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PERMISSION_ID_BY_KEY, PermissionKey
+from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.google.gmail_imap import MailSignInFailed
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
@@ -93,6 +97,7 @@ from api.tests.steps.agent import (
     skill_is_assigned_to_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
+    there_is_agent_access,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -108,6 +113,7 @@ from api.tests.steps.template import (
     there_is_a_template_skill,
     there_is_a_template_skill_group,
 )
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _BASE = "/api/v1/organizations/{organization_id}/agents"
 
@@ -2288,11 +2294,11 @@ def test_start_agent_deployment_runs_init_script():
         with when("I start the agent"):
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the Deployment command runs start.sh"):
+        with then("the Deployment command runs start.sh under tini"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             deployment = k8s.create_deployment.call_args.args[1]
             command = deployment.spec.template.spec.containers[0].command
-            assert_that(command, equal_to(["sh", "/app/config/start.sh"]))
+            assert_that(command, equal_to(["/usr/bin/tini", "--", "sh", "/app/config/start.sh"]))
 
 
 def test_start_agent_uses_default_model_when_empty():
@@ -2563,6 +2569,244 @@ def test_get_agent_healthz_returns_409_when_agent_not_running():
 
         with then("the API returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def _remember_agent(as_name: str):
+    def step(context):
+        setattr(context, as_name, context.agent)
+
+    return step
+
+
+def test_agents_health_reads_every_listed_agent_in_one_request():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="Ready", status=AgentStatus.RUNNING),
+            _remember_agent("ready"),
+            there_is_an_agent(name="Booting", status=AgentStatus.RUNNING),
+            _remember_agent("booting"),
+            there_is_an_agent(name="Asleep", status=AgentStatus.STOPPED),
+            _remember_agent("asleep"),
+        ]
+    ) as context:
+        k8s = context.injector.get(KubernetesClient)
+        ready_pod, booting_pod = f"agent-{context.ready.id}", f"agent-{context.booting.id}"
+
+        with (
+            when("I ask for the health of a page of Agents, one of them stopped and one unknown"),
+            patch.object(
+                k8s,
+                "get_pods_readiness",
+                return_value={ready_pod: ("ready", None), booting_pod: ("initializing", None)},
+            ) as readiness,
+            patch.object(k8s, "get_pod_readiness") as single_readiness,
+            patch.object(k8s, "fetch_agent_healthz", return_value={"status": "ok"}) as healthz,
+        ):
+            response = context.client.get(
+                f"{_BASE}/health",
+                params={
+                    "agent_ids": [str(a.id) for a in (context.ready, context.booting, context.asleep)] + [str(uuid7())]
+                },
+                headers=_auth(context),
+            )
+
+        with then("each running Agent gets its health, and the stopped and unknown ones are left out"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_id = {item["agent_id"]: item for item in response.json()}
+            assert_that(sorted(by_id), equal_to(sorted([str(context.ready.id), str(context.booting.id)])))
+            assert_that(by_id[str(context.ready.id)]["status"], equal_to("ok"))
+            assert_that(by_id[str(context.booting.id)]["status"], equal_to("initializing"))
+
+        with then("the pods' readiness comes from one cluster read, and only the ready pod is asked for its healthz"):
+            assert_that(readiness.call_count, equal_to(1))
+            assert_that(set(readiness.call_args.args[0]), equal_to({ready_pod, booting_pod}))
+            assert_that(single_readiness.call_count, equal_to(0))
+            assert_that([c.args[0] for c in healthz.call_args_list], equal_to([ready_pod]))
+
+
+def test_agents_health_reports_an_unreachable_pod_without_failing_the_rest():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="Reachable", status=AgentStatus.RUNNING),
+            _remember_agent("reachable"),
+            there_is_an_agent(name="Refused", status=AgentStatus.RUNNING),
+            _remember_agent("refused"),
+            there_is_an_agent(name="Timed out", status=AgentStatus.RUNNING),
+            _remember_agent("timed_out"),
+        ]
+    ) as context:
+        k8s = context.injector.get(KubernetesClient)
+        pods = {a: f"agent-{getattr(context, a).id}" for a in ("reachable", "refused", "timed_out")}
+
+        def healthz(pod, _namespace):
+            if pod == pods["refused"]:
+                raise RuntimeError("connection refused")
+            if pod == pods["timed_out"]:
+                raise TimeoutError("the cluster did not answer the port-forward lookup")
+            return {"status": "ok"}
+
+        with (
+            when("one pod refuses its healthz and another fails in an unexpected way"),
+            patch.object(k8s, "get_pods_readiness", return_value={pod: ("ready", None) for pod in pods.values()}),
+            patch.object(k8s, "fetch_agent_healthz", side_effect=healthz),
+        ):
+            response = context.client.get(
+                f"{_BASE}/health",
+                params={"agent_ids": [str(getattr(context, a).id) for a in pods]},
+                headers=_auth(context),
+            )
+
+        with then("those two read as error, with no reason to show, and the healthy one still reads ok"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            by_id = {item["agent_id"]: (item["status"], item["reason"]) for item in response.json()}
+            assert_that(by_id[str(context.reachable.id)], equal_to(("ok", None)))
+            assert_that(by_id[str(context.refused.id)], equal_to(("error", None)))
+            assert_that(by_id[str(context.timed_out.id)], equal_to(("error", None)))
+
+
+def test_a_read_only_api_key_can_read_agents_health():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        context.access_token = context.client.post(
+            "/api/v1/auth/me/api-keys", headers=_auth(context), json={"name": "Read API", "access_mode": "READ_ONLY"}
+        ).json()["token"]
+        k8s = context.injector.get(KubernetesClient)
+        pod = f"agent-{context.agent.id}"
+
+        with (
+            when("I read a list of Agents' health with a read-only API key"),
+            patch.object(k8s, "get_pods_readiness", return_value={pod: ("ready", None)}),
+            patch.object(k8s, "fetch_agent_healthz", return_value={"status": "ok"}),
+        ):
+            response = context.client.get(
+                f"{_BASE}/health", params={"agent_ids": [str(context.agent.id)]}, headers=_auth(context)
+            )
+
+        with then("it is a read, so the key may make it"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()[0]["status"], equal_to("ok"))
+
+
+def _signed_in_as_a_member():
+    """A plain Member: Owners and Admins hold implicit authority over every Agent, so access
+    can only be withheld from someone whose authority comes from Agent Access."""
+
+    def step(context):
+        member_id = uuid7()
+        there_is_a_user(
+            id=member_id,
+            email=f"member-health-{member_id}@example.com",
+            role=OrganizationRole.MEMBER,
+            organization_id=context.organization.id,
+        )(context)
+        there_is_an_access_token_for_user(member_id)(context)
+
+    return step
+
+
+def _a_role_with(context, permissions: set[PermissionKey]):
+    repository: AgentRepository = context.injector.get(AgentRepository)
+    role = AgentAccessRole(organization_id=context.organization.id, name=f"CUSTOM-{uuid7()}", is_system=False)
+    repository.delegate.save(role)
+    for permission in permissions:
+        repository.delegate.save(
+            AgentAccessRolePermission(role_id=role.id, permission_id=PERMISSION_ID_BY_KEY[permission])
+        )
+    return role.id
+
+
+def test_agents_health_answers_only_for_agents_whose_activity_the_member_may_read():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="Shared", status=AgentStatus.RUNNING),
+            _remember_agent("shared"),
+            there_is_an_agent(name="Seen, not read", status=AgentStatus.RUNNING),
+            _remember_agent("seen_only"),
+            there_is_an_agent(name="Private", status=AgentStatus.RUNNING),
+            _remember_agent("private"),
+            _signed_in_as_a_member(),
+        ]
+    ) as context:
+        there_is_agent_access(agent_id=context.shared.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+        there_is_agent_access(
+            agent_id=context.seen_only.id, access_role_id=_a_role_with(context, {PermissionKey.AGENT_READ})
+        )(context)
+        k8s = context.injector.get(KubernetesClient)
+        agents = (context.shared, context.seen_only, context.private)
+
+        with (
+            when("a Member asks about an Agent they view, one they only see, and one they have no access to"),
+            patch.object(
+                k8s, "get_pods_readiness", return_value={f"agent-{a.id}": ("ready", None) for a in agents}
+            ) as readiness,
+            patch.object(k8s, "fetch_agent_healthz", return_value={"status": "ok"}) as healthz,
+        ):
+            response = context.client.get(
+                f"{_BASE}/health", params={"agent_ids": [str(a.id) for a in agents]}, headers=_auth(context)
+            )
+
+        with then("only the Agent whose activity they may read is answered, and only its pod is asked"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([item["agent_id"] for item in response.json()], equal_to([str(context.shared.id)]))
+            assert_that(set(readiness.call_args.args[0]), equal_to({f"agent-{context.shared.id}"}))
+            assert_that([c.args[0] for c in healthz.call_args_list], equal_to([f"agent-{context.shared.id}"]))
+
+
+def test_agents_health_does_not_wait_past_its_deadline_for_a_stuck_pod():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="Quick", status=AgentStatus.RUNNING),
+            _remember_agent("quick"),
+            there_is_an_agent(name="Stuck", status=AgentStatus.RUNNING),
+            _remember_agent("stuck"),
+        ]
+    ) as context:
+        k8s = context.injector.get(KubernetesClient)
+        quick_pod, stuck_pod = f"agent-{context.quick.id}", f"agent-{context.stuck.id}"
+        release = threading.Event()
+
+        def healthz(pod, _namespace):
+            if pod == stuck_pod:
+                release.wait(timeout=10)  # answers only once the test is done with it
+            return {"status": "ok"}
+
+        try:
+            with (
+                when("one pod takes far longer than the batch's deadline to answer"),
+                patch("api.domains.agents.service._HEALTHZ_BATCH_DEADLINE_SECONDS", 0.5),
+                patch.object(
+                    k8s, "get_pods_readiness", return_value={quick_pod: ("ready", None), stuck_pod: ("ready", None)}
+                ),
+                patch.object(k8s, "fetch_agent_healthz", side_effect=healthz),
+            ):
+                started = time.monotonic()
+                response = context.client.get(
+                    f"{_BASE}/health",
+                    params={"agent_ids": [str(context.quick.id), str(context.stuck.id)]},
+                    headers=_auth(context),
+                )
+                elapsed = time.monotonic() - started
+        finally:
+            release.set()
+
+        with then("the list answers at the deadline, the stuck pod as error and the quick one as ok"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(elapsed < 5, equal_to(True))
+            by_id = {item["agent_id"]: (item["status"], item["reason"]) for item in response.json()}
+            assert_that(by_id[str(context.quick.id)], equal_to(("ok", None)))
+            assert_that(by_id[str(context.stuck.id)], equal_to(("error", None)))
+
+
+def test_agents_health_needs_at_least_one_agent():
+    with given(_GIVEN) as context:
+        with when("I ask for the health of no Agents"):
+            response = context.client.get(f"{_BASE}/health", headers=_auth(context))
+
+        with then("the request is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
 
 
 def test_create_hermes_agent_returns_201_stopped_without_a_bundled_platform():

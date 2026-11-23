@@ -27,6 +27,19 @@ export const WorkflowApprovalSchema = z.object({
 });
 export type WorkflowApproval = z.infer<typeof WorkflowApprovalSchema>;
 
+/** One round at an Approval step: waiting for a person, or what they decided. */
+export const WorkflowStepApprovalSchema = z.object({
+  id: z.uuid(),
+  stepIndex: z.number(),
+  round: z.number(),
+  state: z.enum(["WAITING", "APPROVED", "CHANGES_REQUESTED", "REJECTED", "LAPSED"]),
+  createdAt: z.string(),
+  decidedByUserId: z.uuid().nullable(),
+  decidedAt: z.string().nullable(),
+  note: z.string().nullable(),
+});
+export type WorkflowStepApproval = z.infer<typeof WorkflowStepApprovalSchema>;
+
 export const WorkflowRunSchema = z.object({
   id: z.uuid(),
   workflowId: z.uuid(),
@@ -55,6 +68,7 @@ export const WorkflowRunSchema = z.object({
     "CANCELLED",
     "SUCCEEDED",
     "FAILED",
+    "REJECTED",
   ]),
   revision: z.number(),
   nextStep: z.number(),
@@ -63,12 +77,34 @@ export const WorkflowRunSchema = z.object({
     z.object({
       id: z.uuid(),
       name: z.string(),
-      state: z.enum(["PENDING", "RUNNING", "COMPLETED"]),
+      /** An Approval step waits for a person instead of running in the Agent. */
+      type: z.enum(["agent", "approval"]).default("agent"),
+      state: z.enum(["PENDING", "RUNNING", "COMPLETED", "WAITING", "REJECTED"]),
       outputDescription: z.string().nullable().optional(),
       artifacts: z.array(WorkflowFileSchema).optional(),
       summary: z.string().nullable().optional(),
       startedAt: z.string().nullable().optional(),
       completedAt: z.string().nullable().optional(),
+      /** The current round; above 1 once a person requested changes. */
+      round: z.number().nullable().optional(),
+      /** What the person deciding at an Approval step should check. */
+      instructions: z.string().nullable().optional(),
+      /** What the person at an Approval step may decide. */
+      allowedDecisions: z
+        .array(z.enum(["approve", "request_changes", "reject"]))
+        .nullable()
+        .optional(),
+      /** Results sent back with Request changes, oldest first. */
+      earlierRounds: z
+        .array(
+          z.object({
+            round: z.number(),
+            summary: z.string().nullable(),
+            artifacts: z.array(WorkflowFileSchema),
+            completedAt: z.string(),
+          }),
+        )
+        .optional(),
     }),
   ),
   reason: z.string().nullable(),
@@ -77,7 +113,7 @@ export const WorkflowRunSchema = z.object({
   finalSummary: z.string().nullable().optional(),
   createdAt: z.string(),
   settledAt: z.string().nullable(),
-  allowedActions: z.array(z.enum(["cancel", "rerun", "decide"])),
+  allowedActions: z.array(z.enum(["cancel", "rerun", "decide", "decide_step"])),
   /** The run this one repeats, when it was started with Run again. */
   rerunOfRunId: z.uuid().nullable().optional(),
   attempt: z
@@ -94,6 +130,10 @@ export const WorkflowRunSchema = z.object({
   approval: WorkflowApprovalSchema.nullable().optional(),
   /** Every approval request of the run, oldest first (single-run read only). */
   approvals: z.array(WorkflowApprovalSchema).optional(),
+  /** The Approval step round awaiting a decision, when the run waits at one. */
+  stepApproval: WorkflowStepApprovalSchema.nullable().optional(),
+  /** Every Approval step round of the run, oldest first (single-run read only). */
+  stepApprovals: z.array(WorkflowStepApprovalSchema).optional(),
 });
 export const WorkflowRunHistorySchema = z.object({
   items: z.array(
@@ -125,10 +165,11 @@ export const runStateLabel = (state: WorkflowRun["state"]) =>
     CANCELLED: "Cancelled",
     SUCCEEDED: "Completed",
     FAILED: "Failed",
+    REJECTED: "Rejected",
   })[state];
 export type WorkflowRunList = z.infer<typeof WorkflowRunListSchema>;
 export const isRunTerminal = (state: string) =>
-  ["SUCCEEDED", "FAILED", "CANCELLED"].includes(state);
+  ["SUCCEEDED", "FAILED", "CANCELLED", "REJECTED"].includes(state);
 export const isRunProgressing = (state: string) =>
   ["QUEUED", "RUNNING", "CANCELLING"].includes(state);
 
@@ -141,3 +182,11 @@ export const pendingApproval = (run: WorkflowRun) =>
   run.approval && ["LIVE", "PARKED"].includes(run.approval.state)
     ? run.approval
     : null;
+
+/** The Approval step round awaiting a person's decision, if the run waits at one. */
+export const waitingStepApproval = (run: WorkflowRun) =>
+  run.stepApproval?.state === "WAITING" ? run.stepApproval : null;
+
+/** Whether this viewer can decide something on the run right now: a command or an Approval step. */
+export const waitsOnViewer = (run: WorkflowRun) =>
+  run.allowedActions.includes("decide") || run.allowedActions.includes("decide_step");

@@ -41,6 +41,7 @@ import {
   type NavItem,
 } from "../nav-model";
 import { useAwaitingApprovals } from "@/features/workflows/hooks/use-workflow-runs";
+import { waitsOnViewer } from "@/features/workflows/run-schemas";
 import { useCachedAgent, useCachedWorkflowAuthoring } from "./use-cached-agent";
 
 export type ContextPanelModel = {
@@ -136,10 +137,10 @@ export function useContextPanel(): ContextPanelModel | null {
             href: tab === DEFAULT_AGENT_TAB ? agentBase : `${agentBase}?tab=${tab}`,
             icon: AGENT_TAB_ICONS[tab],
             active: tab === activeTab,
-            // Only requests this viewer may decide are waiting on them.
+            // Only approvals this viewer may decide are waiting on them.
             badge:
               tab === "workflows"
-                ? awaiting.data?.items.filter((run) => run.allowedActions.includes("decide")).length || undefined
+                ? awaiting.data?.items.filter(waitsOnViewer).length || undefined
                 : undefined,
             // Conversations swaps the panel for its channel list; fetching the list as the
             // pointer arrives means the first visit shows it at once, as later ones do.

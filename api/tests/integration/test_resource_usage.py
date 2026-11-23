@@ -16,6 +16,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.tests.core.overlap import OverlapProbe
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -312,6 +313,22 @@ def test_queries_are_scoped_to_this_agent_and_organization():
             history = prometheus.query_range.call_args.args[0]
             assert_that(history, contains_string(f'org_id="{context.organization.id}"'))
             assert_that(history, contains_string(f'app="agent-{context.agent.id}"'))
+
+
+def test_the_three_prometheus_reads_are_made_together():
+    with given([*_GIVEN, prometheus_reports(_REPORTING)]) as context:
+        prometheus = context.injector.get(PrometheusClient)
+        probe = OverlapProbe()
+        probe.slow(prometheus.query, prometheus.query_range)
+        client: TestClient = context.client
+
+        with when("Prometheus is slow to answer each of the agent's reads"):
+            response = client.get(_url(context), headers=_auth(context))
+
+        with then("the figures now, the series and the pod's requests are asked at once, not in turn"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["availability"], equal_to("available"))
+            assert_that(probe.peak, equal_to(3))
 
 
 def test_a_stale_healthz_script_asks_for_a_restart():

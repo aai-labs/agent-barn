@@ -716,7 +716,7 @@ def build_hermes_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            command=["sh", "/app/config/start.sh"],
+                            command=["/usr/bin/tini", "--", "sh", "/app/config/start.sh"],
                             resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(

@@ -572,10 +572,24 @@ continues the step's session with that context, and the Agent may ask again.
 _Avoid_: grant, verdict, allowlist entry
 
 **Awaiting Approval**:
-The run state in which a step's session has been stopped with a Workflow Approval
-Request unanswered. Nothing runs while parked; a late Approval Decision continues
-the same session.
+The run state in which the run waits for a person: either a step's session has
+been stopped with a Workflow Approval Request unanswered, or the run reached an
+Approval Step. Nothing runs while it waits; a late Approval Decision continues the
+same session, and a Step Approval decides what happens next.
 _Avoid_: suspended, waiting session, resume
+
+**Approval Step**:
+A step of a Workflow that a person decides on instead of an Agent running it. It
+follows an Agent step, whose result the person approves, sends back with notes or
+rejects.
+_Avoid_: review step, gate, checkpoint
+
+**Step Approval**:
+One round at an Approval Step and the person's decision in it: approve, request
+changes (the step before runs again with their notes, then the next round opens)
+or reject (the run ends as Rejected). Distinct from an Approval Decision, which
+answers one command.
+_Avoid_: review, sign-off, Approval Decision
 
 **Agent Artifact**:
 An immutable published file owned by one Organization and Agent, with PostgreSQL

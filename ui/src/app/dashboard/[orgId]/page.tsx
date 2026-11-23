@@ -14,12 +14,15 @@ import { TierHoldsNotice } from "@/features/tiers/components/tier-holds-notice";
 import { useTierEntitlements } from "@/features/tiers/hooks/use-tier-entitlements";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { useAllAgents } from "@/features/agents/hooks/use-all-agents";
+import { useAgentsHealth } from "@/features/agents/hooks/use-agents-health";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { EmptyTeam } from "@/features/agents/components/empty-team";
 import { HireDialog, type HireChoice } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 import type { Agent } from "@/features/agents/schemas";
-import { isQuiet } from "@/features/agents/utils";
+import { canAgent, isQuiet } from "@/features/agents/utils";
+
+const TEAM_HEALTH_REFETCH_MS = 30_000;
 
 function LoadingCard() {
   return (
@@ -56,6 +59,11 @@ export default function DashboardPage() {
   const needsTier = tier?.activation === "none";
   const { agents, total, isLoading, error, refetch } = useAgents();
   const { agents: agentsWithBots } = useAllAgents({ includeBots: true });
+  // One request for the whole team's health; each card reads its own answer from the cache.
+  useAgentsHealth(
+    agents.filter((agent) => agent.status === "RUNNING" && canAgent(agent, "activity.read")).map((agent) => agent.id),
+    TEAM_HEALTH_REFETCH_MS,
+  );
   const botsByParent = useMemo(() => {
     const grouped = new Map<string, Agent[]>();
     for (const bot of agentsWithBots) {

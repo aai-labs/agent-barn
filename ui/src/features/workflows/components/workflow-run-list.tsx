@@ -22,6 +22,7 @@ import {
 } from "../hooks/use-workflow-runs";
 import {
   pendingApproval,
+  waitingStepApproval,
   runStateLabel,
   runTitle,
   type WorkflowRun,
@@ -45,11 +46,12 @@ const stateIcon: Record<WorkflowRun["state"], LucideIcon> = {
   CANCELLED: CircleSlash,
   SUCCEEDED: CheckCircle2,
   FAILED: XCircle,
+  REJECTED: XCircle,
 };
 
 /** A run's state as a fixed-width pill; a request awaiting a decision outranks it. */
 function RunStatePill({ run }: { run: WorkflowRun }) {
-  const waiting = pendingApproval(run) !== null;
+  const waiting = pendingApproval(run) !== null || waitingStepApproval(run) !== null;
   const Icon = waiting ? Hourglass : stateIcon[run.state];
   return (
     <span

@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -33,6 +34,12 @@ from api.domains.resource_usage.repository import ResourceUsageRepository
 from api.infrastructure.prometheus.client import PrometheusError
 
 logger = logging.getLogger(__name__)
+
+# An Agent's usage is three Prometheus reads (its figures now, its series, its pod's
+# requests) that do not depend on each other. Two run here while the caller makes the
+# third, so a read costs the slowest of them rather than all three added up. The pool is
+# this module's alone: a caller already on a pool of its own cannot wait on itself.
+_PROMETHEUS_READS = ThreadPoolExecutor(max_workers=16, thread_name_prefix="resource-usage-prometheus")
 
 # The overview shows what an Agent is doing now: a limit is looked up over the last
 # few minutes, and throttling is judged over the last hour.
@@ -136,6 +143,8 @@ class ResourceUsageService:
         if not self.repository.is_configured:
             return respond(ResourceUsageAvailability.NOT_CONFIGURED)
 
+        series_read = _PROMETHEUS_READS.submit(self.repository.series_fields, agent.organization_id, agent.id, window)
+        requests_read = _PROMETHEUS_READS.submit(agent_requests, self.repository, [agent.id], now)
         try:
             current = self.repository.current_fields(
                 agent.organization_id,
@@ -144,11 +153,12 @@ class ResourceUsageService:
                 window_seconds=usage_range.seconds,
                 throttle_window_seconds=usage_range.seconds,
             ).get(agent.id, {})
-            series = self.repository.series_fields(agent.organization_id, agent.id, window)
+            series = series_read.result()
         except PrometheusError:
             logger.warning("Resource usage is unavailable for agent %s", agent.id, exc_info=True)
             return respond(ResourceUsageAvailability.UNAVAILABLE)
-        current = {**current, **agent_requests(self.repository, [agent.id], now).get(agent.id, {})}
+        # Never raises: requests that cannot be read are left unknown.
+        current = {**current, **requests_read.result().get(agent.id, {})}
 
         memory = series.get("memory_working_set_bytes", {})
         cpu = series.get("cpu_cores", {})

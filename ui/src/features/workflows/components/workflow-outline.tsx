@@ -74,7 +74,7 @@ export function WorkflowOutline({
                   {step.name || "Untitled step"}
                 </span>
                 <span className="mt-1 hidden text-xs text-[var(--ink-3)] lg:block">
-                  Workflow step
+                  {step.type === "approval" ? "Approval step" : "Workflow step"}
                 </span>
               </span>
             </button>

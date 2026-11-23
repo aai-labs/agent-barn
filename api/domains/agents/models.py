@@ -1937,6 +1937,10 @@ class AgentHealthRead(PydanticBaseModel):
     reason: str | None = None
 
 
+class AgentHealthItemRead(AgentHealthRead):
+    agent_id: UUID
+
+
 def get_agent_filter(
     status: AgentStatus | None = Query(default=None),
     include_bots: bool = Query(default=False),

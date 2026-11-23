@@ -15,6 +15,7 @@ queued message has no Journal timeline of its own, because recording it as the
 latest inbound would attribute the running turn's stages to it.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -26,6 +27,14 @@ import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
+
+try:
+    # Hermes reads state.db as a plain file when it believes no connection to it is open, and
+    # closing that file cancels every POSIX lock this process holds on state.db. Opening ours
+    # through Hermes's registry keeps that read from running while our connection is open.
+    from hermes_cli.sqlite_safe_read import connect_tracked  # ty: ignore[unresolved-import]
+except ImportError:  # outside the Hermes runtime there is no registry to join
+    connect_tracked = None
 
 logger = logging.getLogger(__name__)
 
@@ -313,11 +322,20 @@ def poll_platform_health(status_path: Path, last: dict[str, str], profile: str |
             _emit(stage, platform, error_code=(payload.get("error_code") or "")[:100] or None)
 
 
+def _open_state_db(db_path: Path) -> sqlite3.Connection:
+    uri = f"file:{db_path}?mode=ro"
+    if connect_tracked is None:
+        return sqlite3.connect(uri, uri=True, timeout=1)
+    return connect_tracked(uri, uri=True, timeout=1)
+
+
 def poll_obligations(db_path: Path, watermark: list[float]) -> None:
     if not db_path.exists():
         return
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1) as conn:
+        # ``closing``: a sqlite3 ``with`` block only ends the transaction, and Hermes releases
+        # its registry entry on ``close()``.
+        with contextlib.closing(_open_state_db(db_path)) as conn:
             rows = conn.execute(
                 "SELECT obligation_id, session_key, platform, chat_id, thread_id, content, state, updated_at"
                 " FROM delivery_obligations"

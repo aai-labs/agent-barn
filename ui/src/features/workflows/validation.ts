@@ -47,9 +47,13 @@ function problem({ path, message }: ValidationIssue, draft: WorkflowDraft) {
           : "";
   if (scope === "steps" && typeof index === "number") {
     const step = draft.steps[index];
+    const fieldLabel =
+      step?.type === "approval" && field === "goal"
+        ? "What should the person deciding check?"
+        : fieldLabels[field];
     return {
       section: step?.id ?? "details",
-      label: `Step ${index + 1}${field ? ` · ${fieldLabels[field] ?? "Step details"}` : ""}`,
+      label: `Step ${index + 1}${field ? ` · ${fieldLabel ?? "Step details"}` : ""}`,
       message,
       field: step && field ? stepField(step.id, field) : undefined,
     };

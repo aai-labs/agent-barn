@@ -261,6 +261,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/health",
+    "get_agents_health_organizations__organization_id__agents_health_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/llm-budgets",
     "list_agent_llm_budgets_organizations__organization_id__agents_llm_budgets_get"
   ],
@@ -1543,6 +1548,11 @@
     "POST",
     "/organizations/{organization_id}/workflow-runs/{run_id}/re-run",
     "rerun_run_organizations__organization_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/step-approvals/{approval_id}/decision",
+    "decide_step_approval_organizations__organization_id__workflow_runs__run_id__step_approvals__approval_id__decision_post"
   ],
   [
     "POST",
