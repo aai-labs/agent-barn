@@ -39,7 +39,7 @@ export function useLlmProviderModels(slug: string) {
   return {
     storedModels: stored.data,
     catalogue: catalogue.data,
-    isLoadingModels: stored.isPending || catalogue.isPending,
+    isLoadingModels: !stored.isFetchedAfterMount || !catalogue.isFetchedAfterMount,
     modelsError: stored.error ?? catalogue.error,
     reloadModels: () => Promise.all([stored.refetch(), catalogue.refetch()]),
   };

@@ -451,6 +451,10 @@ export class PlatformLlmProviderDataSupport {
       recover: () => {
         catalogueStatus = 200;
       },
+      replace: (next: { catalogue: CatalogueEntryBody[]; models: ModelBody[] }) => {
+        catalogue = next.catalogue;
+        models = next.models;
+      },
     };
   }
 }

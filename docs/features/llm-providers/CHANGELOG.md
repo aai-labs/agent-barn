@@ -15,6 +15,12 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-23 — AF-447 — slice 3, review fixes
+
+- Fixed: reopening the Models dialog showed the models from the previous opening while its reads ran again, and both editors kept that first snapshot, so a model or Azure deployment another administrator saved in between was left unticked and saving removed it. `useLlmProviderModels` now reports loading until both reads made after the dialog mounts have answered (`isFetchedAfterMount`, true after a success or a failure: `@tanstack/query-core` 5.101.4 `src/queryObserver.ts:580-582`), so each editor starts from what the API holds now.
+- Unchanged: `test_llm_provider_connection_migration.py`, removed in PR 2, stays removed, as you chose, against `docs/guidelines/testing.md`'s migration-coverage rule.
+- Verification: `ui/tests/e2e/platform-llm-providers.spec.ts` reopens the dialog after the stored models change, for a known provider and for Azure, and checks the newly stored model is shown and kept on save; both failed before the fix. The whole spec passes in two runs of two workers, with `tsc --noEmit` and eslint.
+
 ### 2026-11-23 — AF-447 — slice 3, PR 16 follow-up
 
 - Delivered: "Select all priced" in the Models dialog of the known providers, as you asked. It ticks every model the filter shows that LiteLLM prices, in list order until 50 are ticked, and says how many the limit left unticked; models without a LiteLLM price and those already ticked are left alone, and the ticked models save as `"litellm"`. Custom doesn't show it, having no LiteLLM prices.

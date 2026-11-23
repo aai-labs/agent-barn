@@ -625,6 +625,28 @@ test("Select all priced stops at 50 models and says how many it left unticked", 
   await expect(settings.selectAllPricedButton()).toBeDisabled();
 });
 
+test("reopening Models ticks a model saved since it was last opened and keeps it on save", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, pricedCatalogue(2, 1));
+
+  await expect(settings.modelCheckbox("model-00")).toBeChecked();
+  await settings.cancelDialog();
+  mock.replace(pricedCatalogue(2, 2));
+  await settings.modelsButton("Anthropic").click();
+
+  await expect(settings.modelCheckbox("model-01")).toBeChecked();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "model-00", price: "stored" },
+        { model_id: "model-01", price: "stored" },
+      ],
+    },
+  ]);
+});
+
 test("a refused save keeps the dialog open with the API's message", async ({ page }) => {
   const { mock, settings } = await openAnthropicModels(page, {
     saveStatus: 422,
@@ -866,6 +888,45 @@ test("a removed Azure deployment is left out of the save", async ({ page }) => {
 
   await expect(settings.toast("Azure Europe models saved")).toBeVisible();
   expect(mock.saves.map((save) => save.body)).toEqual([{ models: [{ model_id: "prod-gpt4o", price: "stored" }] }]);
+});
+
+test("reopening Azure deployments shows a deployment saved since it was last opened and keeps it on save", async ({
+  page,
+}) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await expect(settings.runsModelPicker("prod-gpt4o")).toHaveText("gpt-4o");
+  await settings.cancelDialog();
+  mock.replace({
+    catalogue: AZURE_CATALOGUE.map((entry) => (entry.model_id === "gpt-4o-mini" ? { ...entry, stored: true } : entry)),
+    models: [
+      ...AZURE_DEPLOYMENTS,
+      {
+        model_id: "prod-mini",
+        input_cost_per_token: "0.000000150000000000",
+        output_cost_per_token: "0.000000600000000000",
+        cache_read_input_token_cost: "0.000000075000000000",
+        cache_creation_input_token_cost: "0.000000150000000000",
+        price_source: "litellm",
+        litellm_price_key: "azure/gpt-4o-mini",
+      },
+    ],
+  });
+  await settings.modelsButton("Azure Europe").click();
+
+  await expect(settings.runsModelPicker("prod-mini")).toHaveText("gpt-4o-mini");
+  await settings.saveModels();
+
+  await expect(settings.toast("Azure Europe models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "lab-router", price: "stored" },
+        { model_id: "prod-gpt4o", price: "stored" },
+        { model_id: "prod-mini", price: "stored" },
+      ],
+    },
+  ]);
 });
 
 test("an Azure deployment whose LiteLLM price changed shows the difference and takes it once accepted", async ({
