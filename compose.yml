@@ -322,6 +322,23 @@ services:
       - ./api:/app/api
       - ./.k3d:/app/.k3d:ro
 
+  anomaly-checks:
+    profiles: [k3d]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-c", "from api.domains.anomalies.checks import main; main()", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *unprivileged-env
+    volumes:
+      - ./api:/app/api
+
   tier-sweep:
     profiles: [k3d]
     build:
