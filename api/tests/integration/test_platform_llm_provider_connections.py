@@ -44,6 +44,7 @@ OPENROUTER_KEY = "sk-or-v1-stored-key-a1b2"
 ANTHROPIC_KEY = "sk-ant-stored-key-c3d4"
 AZURE_KEY = "azure-stored-key-e5f6"
 ENV_KEY = "sk-or-v1-environment-key-9z8y"
+ENV_KEY_LAST4 = "9z8y"
 ADMIN_NAME = "Platform Person"
 AZURE_BASE_URL = "https://contoso.openai.azure.com"
 NEW_KEY = "sk-new-provider-key-g7h8"
@@ -228,6 +229,7 @@ def test_a_fresh_platform_lists_openrouter_alone_without_a_key():
                         "updated_at": None,
                         "updated_by": None,
                         "env_key_configured": False,
+                        "env_key_last4": None,
                     }
                 ]
             ),
@@ -284,6 +286,46 @@ def test_only_openrouter_reports_the_environment_key():
             [(item["slug"], item["env_key_configured"]) for item in response.json()],
             equal_to([("openrouter", True), ("anthropic", False)]),
         )
+
+
+def test_only_openrouter_reports_the_environment_keys_last_four():
+    with given(_setup(admin, env_key(ENV_KEY))) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            [(item["slug"], item["env_key_last4"]) for item in response.json()],
+            equal_to([("openrouter", ENV_KEY_LAST4), ("anthropic", None)]),
+        )
+
+
+def test_the_environment_keys_last_four_are_null_without_the_variable():
+    with given(_setup(admin, env_key(""))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json()[0], has_entries(slug="openrouter", env_key_last4=None))
+
+
+def test_only_env_key_last4_carries_the_end_of_the_environment_key():
+    with given(_setup(admin, env_key(ENV_KEY))) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY, context.admin_id)
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert ENV_KEY not in response.text
+        carriers = [
+            (item["slug"], field)
+            for item in response.json()
+            for field, value in item.items()
+            if isinstance(value, str) and ENV_KEY_LAST4 in value
+        ]
+        assert_that(carriers, equal_to([("openrouter", "env_key_last4")]))
+        assert_that(response.text.count(ENV_KEY_LAST4), equal_to(1))
 
 
 def test_the_list_never_carries_a_key_or_its_ciphertext():

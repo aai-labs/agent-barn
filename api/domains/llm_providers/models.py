@@ -182,6 +182,7 @@ class LlmProviderConnectionRead(PydanticBaseModel):
     updated_at: datetime | None = None
     updated_by: str | None = None
     env_key_configured: bool
+    env_key_last4: str | None = None
 
 
 class LlmProviderModelRead(PydanticBaseModel):

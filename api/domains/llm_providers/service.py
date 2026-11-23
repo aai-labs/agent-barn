@@ -593,6 +593,7 @@ class PlatformLlmProviderService:
 
     def _to_read(self, connection: LlmProviderConnection, updated_by: str | None) -> LlmProviderConnectionRead:
         has_api_key = connection.api_key_encrypted is not None
+        env_key_configured = bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG
         return LlmProviderConnectionRead(
             slug=connection.slug,
             name=connection.name,
@@ -602,5 +603,6 @@ class PlatformLlmProviderService:
             api_key_last4=connection.api_key_last4,
             updated_at=connection.updated_at if has_api_key else None,
             updated_by=updated_by if has_api_key else None,
-            env_key_configured=bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG,
+            env_key_configured=env_key_configured,
+            env_key_last4=self.config.openrouter_api_key[-4:] if env_key_configured else None,
         )
