@@ -577,6 +577,54 @@ test("at 50 ticked models the rest can't be ticked", async ({ page }) => {
   await expect(settings.modelCheckbox("model-50")).toBeEnabled();
 });
 
+test("Select all priced ticks every model LiteLLM prices and saves them at LiteLLM's price", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await settings.selectAllPricedButton().click();
+
+  await expect(settings.modelCheckbox("claude-haiku-4-5")).toBeChecked();
+  await expect(settings.modelCheckbox("claude-unpriced-preview")).not.toBeChecked();
+  await expect(settings.tickedCount()).toHaveText("3 of 50 ticked");
+  await expect(settings.selectAllPricedButton()).toBeDisabled();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "claude-haiku-4-5", price: "litellm" },
+        { model_id: "claude-opus-4-1", price: "stored" },
+        { model_id: "claude-sonnet-4-5", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("Select all priced ticks only the models the filter shows", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page, pricedCatalogue(12, 0));
+
+  await settings.modelFilter().fill("model-1");
+  await settings.selectAllPricedButton().click();
+  await settings.modelFilter().fill("");
+
+  await expect(settings.tickedCount()).toHaveText("2 of 50 ticked");
+  await expect(settings.modelCheckbox("model-10")).toBeChecked();
+  await expect(settings.modelCheckbox("model-11")).toBeChecked();
+  await expect(settings.modelCheckbox("model-01")).not.toBeChecked();
+});
+
+test("Select all priced stops at 50 models and says how many it left unticked", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page, pricedCatalogue(60, 10));
+
+  await settings.selectAllPricedButton().click();
+
+  await expect(settings.tickedCount()).toHaveText("50 of 50 ticked");
+  await expect(settings.modelCheckbox("model-49")).toBeChecked();
+  await expect(settings.modelCheckbox("model-50")).not.toBeChecked();
+  await expect(settings.dialog()).toContainText("The 50-model limit left 10 priced models unticked.");
+  await expect(settings.selectAllPricedButton()).toBeDisabled();
+});
+
 test("a refused save keeps the dialog open with the API's message", async ({ page }) => {
   const { mock, settings } = await openAnthropicModels(page, {
     saveStatus: 422,
@@ -655,6 +703,7 @@ test("a Custom model takes typed prices, and Save waits until its input and outp
   await expect(settings.priceInput("mistral-7b", "Input")).toHaveValue("0.2");
   await expect(settings.priceInput("mistral-7b", "Output")).toHaveValue("0.4");
   await expect(settings.priceInput("mistral-7b", "Cache read")).toHaveValue("0");
+  await expect(settings.selectAllPricedButton()).toHaveCount(0);
   await settings.modelCheckbox("llama-3").click();
   await expect(settings.priceInput("llama-3", "Input")).toHaveValue("");
   await expect(settings.saveModelsButton()).toBeDisabled();

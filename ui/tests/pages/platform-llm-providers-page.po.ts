@@ -134,6 +134,10 @@ export class PlatformLlmProvidersPage {
     return this.dialog().getByLabel("Filter models", { exact: true });
   }
 
+  selectAllPricedButton() {
+    return this.dialog().getByRole("button", { name: "Select all priced", exact: true });
+  }
+
   tickedCount() {
     return this.dialog().getByText(/^\d+ of 50 ticked$/);
   }

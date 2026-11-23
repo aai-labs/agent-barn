@@ -57,6 +57,7 @@ export function ListedModelsPicker({
   const [accepted, setAccepted] = useState<Set<string>>(() => new Set());
   const [typed, setTyped] = useState<Map<string, ModelPrices>>(() => new Map());
   const [filter, setFilter] = useState("");
+  const [leftOut, setLeftOut] = useState(0);
 
   const storedById = new Map(storedModels.map((model) => [model.modelId, model]));
   const listedIds = new Set(catalogue.map((entry) => entry.modelId));
@@ -81,13 +82,21 @@ export function ListedModelsPicker({
   const visible = rows.filter((row) => row.entry.modelId.toLowerCase().includes(query));
   const full = ticked.size >= MAX_MODELS_PER_CONNECTION;
   const pricesMissing = rows.some((row) => row.typesPrices && !typedPricesValid(row.typed));
+  const tickable = visible.filter((row) => !row.isTicked && row.listed !== null).map((row) => row.entry.modelId);
 
   function toggle(modelId: string) {
+    setLeftOut(0);
     setTicked((current) => {
       const next = new Set(current);
       if (!next.delete(modelId)) next.add(modelId);
       return next;
     });
+  }
+
+  function selectAllPriced() {
+    const chosen = tickable.slice(0, MAX_MODELS_PER_CONNECTION - ticked.size);
+    setTicked((current) => new Set([...current, ...chosen]));
+    setLeftOut(tickable.length - chosen.length);
   }
 
   function choice(row: Row): ModelChoice {
@@ -116,10 +125,28 @@ export function ListedModelsPicker({
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
         />
-        <span className="text-[0.8rem]" style={MUTED}>
-          {ticked.size} of {MAX_MODELS_PER_CONNECTION} ticked
-        </span>
+        <div className="flex items-center gap-3">
+          {connection.providerType !== "custom" && (
+            <button
+              type="button"
+              className="af-btn af-btn-sm"
+              disabled={tickable.length === 0 || full}
+              onClick={selectAllPriced}
+            >
+              Select all priced
+            </button>
+          )}
+          <span className="text-[0.8rem]" style={MUTED}>
+            {ticked.size} of {MAX_MODELS_PER_CONNECTION} ticked
+          </span>
+        </div>
       </div>
+      {leftOut > 0 && (
+        <p className="m-0 text-[0.8rem]" style={MUTED}>
+          The {MAX_MODELS_PER_CONNECTION}-model limit left {leftOut} priced {leftOut === 1 ? "model" : "models"}{" "}
+          unticked.
+        </p>
+      )}
       <div className="max-h-[45vh] overflow-y-auto">
         <table className="w-full border-collapse text-left text-[0.8rem]">
           <thead>

@@ -15,6 +15,11 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-23 — AF-447 — slice 3, PR 16 follow-up
+
+- Delivered: "Select all priced" in the Models dialog of the known providers, as you asked. It ticks every model the filter shows that LiteLLM prices, in list order until 50 are ticked, and says how many the limit left unticked; models without a LiteLLM price and those already ticked are left alone, and the ticked models save as `"litellm"`. Custom doesn't show it, having no LiteLLM prices.
+- Verification: `ui/tests/e2e/platform-llm-providers.spec.ts` covers ticking only priced models and the saved body, the filter, the 50 limit and its note, and the button's absence on Custom; the whole spec passes, with `tsc --noEmit` and eslint.
+
 ### 2026-11-23 — AF-447 — slice 3, PR 16
 
 - Delivered: "Models" on Azure and Custom cards too, every card but OpenRouter's while a key is saved. Custom models, and known-provider models LiteLLM has no price for, can be ticked with four prices typed per 1M tokens, shifted to per-token text; Save stays disabled until input and output are above 0 and cache 0 or more, with at most 12 digits and 12 decimal places. A stored model with typed prices shows them for editing and is sent as `"stored"` unless they change.
