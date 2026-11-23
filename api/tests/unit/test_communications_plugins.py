@@ -649,3 +649,45 @@ def test_web_delivery_hands_the_runtime_the_message_exactly_as_stored(plugin_cla
 
     assert plugin_class.runtime_prompt is GatewayDeliveryPlugin.runtime_prompt
     assert GatewayDeliveryPlugin.runtime_prompt(plugin_class.__new__(plugin_class), envelope) == envelope.text
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored"),
+    [
+        (None, None),
+        ("", None),
+        ("  ", None),
+        ("https://chat.example.com/slack/api", "https://chat.example.com/slack/api/"),
+        (" https://chat.example.com/slack/api/ ", "https://chat.example.com/slack/api/"),
+    ],
+)
+def test_slack_custom_server_is_optional_and_normalized(raw: str | None, stored: str | None) -> None:
+    validated = SlackPlatformPlugin(ValidationConfig()).validate_configuration(
+        {"api_url": raw},
+        {"bot_token": "xoxb-one", "app_token": "xapp-one"},
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+    )
+
+    assert validated.settings["api_url"] == stored
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://chat.example.com/slack/api/",
+        "https://user:pass@chat.example.com/slack/api/",
+        "https://chat.example.com/slack/api/?x=1",
+        "https://slack.com/api/",
+        "https://acme.slack.com/api/",
+        "chat.example.com/slack/api/",
+    ],
+)
+def test_slack_custom_server_must_be_a_plain_https_url_other_than_slack(url: str) -> None:
+    with pytest.raises(ValueError):
+        SlackPlatformPlugin(ValidationConfig()).validate_configuration(
+            {"api_url": url},
+            {"bot_token": "xoxb-one", "app_token": "xapp-one"},
+            organization_id=uuid4(),
+            agent_id=uuid4(),
+        )

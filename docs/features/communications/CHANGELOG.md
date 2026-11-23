@@ -15,6 +15,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-11-23 — Custom Slack server for Hermes Slack Connections — PR pending
+
+- Added: Slack Connections have an optional **Custom Slack server** setting, the Slack API address of a self-hosted chat that implements Slack's bot API with Socket Mode, such as a client's Slawk-based chat. Empty means Slack itself. It must be a plain `https` URL that is not on `slack.com`, and it is stored with a trailing slash. The setup checks, directory suggestions and default-target resolution call that server, pinned to its checked public addresses, and the directory cache is kept per server.
+- Added: on Hermes, the setting enables the `agentbarn-slack-compat` runtime plugin. It sends Slack API calls that carry this Connection's bot or app token to the server, so the Web API, Socket Mode handshake and standalone scheduled sends reach it, and it trusts that host for file downloads with this Connection's bot token only. Hermes keeps treating the Connection as Slack, so threads, scheduled delivery, approvals and the Slack access plugin behave as they do on Slack.
+- Limits: Hermes Agents only. OpenClaw Agents and Bots are refused, because the plugin is configured for the whole Hermes process. An Agent uses Slack or one Custom Slack server, as it has at most one Slack Connection. Agents pick up the setting when they restart; no image rebuild or migration is needed.
+
 ### 2026-11-18 — AF-458 — Hermes observer keeps the gateway's lock on state.db — PR pending
 
 - Fixed: the Hermes `agentbarn-observer` plugin polled `state.db` through a SQLite connection Hermes could not see. When a turn or cron run opened Hermes's session store during a poll, Hermes read the file header as a plain file, and closing it cancelled the gateway's POSIX lock on `state.db` until the pod restarted. The next process to open and close `state.db`, such as the Agent querying its own history with `sqlite3`, then deleted the WAL under the running gateway, which lost committed writes and corrupted the database. The observer now opens `state.db` through Hermes's connection registry and closes it after each poll. Running Hermes Agents show an update until they restart, and the restart also restores a lock that was already lost. The runtime configuration digest changes.

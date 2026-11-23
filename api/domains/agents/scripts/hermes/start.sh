@@ -48,6 +48,10 @@ cp /app/config/agentbarn-listen-in-init.py /opt/data/plugins/agentbarn-listen-in
 mkdir -p /opt/data/plugins/agentbarn-slack-access
 cp /app/config/slack-access-plugin.yaml /opt/data/plugins/agentbarn-slack-access/plugin.yaml
 cp /app/config/slack-access-init.py /opt/data/plugins/agentbarn-slack-access/__init__.py
+# Enabled only for a Slack Connection with a Custom Slack server.
+mkdir -p /opt/data/plugins/agentbarn-slack-compat
+cp /app/config/slack-compat-plugin.yaml /opt/data/plugins/agentbarn-slack-compat/plugin.yaml
+cp /app/config/slack-compat-init.py /opt/data/plugins/agentbarn-slack-compat/__init__.py
 python3 /app/config/listen-in-check.py /opt/data/config.yaml
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do

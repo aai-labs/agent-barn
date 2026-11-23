@@ -1,7 +1,8 @@
 import re
 from typing import Protocol
+from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from api.domains.communications.models import (
     ConversationLocation,
@@ -76,6 +77,32 @@ class SlackSettings(NativeHomeDeliverySettings, PlatformSettings):
         ),
     )
 
+    api_url: str | None = Field(
+        default=None,
+        title="Custom Slack server",
+        description=(
+            "Leave empty for Slack. For a self-hosted chat that implements Slack's bot API with Socket Mode, enter "
+            "its Slack API address, for example https://chat.example.com/slack/api/. Its administrator issues the "
+            "bot and app-level tokens. Hermes Agents only; not available for Bots."
+        ),
+    )
+
+    @field_validator("api_url", mode="before")
+    @classmethod
+    def normalize_api_url(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if not isinstance(value, str):
+            return value
+        url = value.strip()
+        parts = urlsplit(url)
+        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query:
+            raise ValueError("Custom Slack server must be an https URL without credentials or a query")
+        host = parts.hostname.lower().rstrip(".")
+        if host == "slack.com" or host.endswith(".slack.com"):
+            raise ValueError("Leave Custom Slack server empty to use Slack itself")
+        return url.rstrip("/") + "/"
+
     @model_validator(mode="after")
     def require_allowed_listen_in_channels(self) -> SlackSettings:
         if self.group_policy == "allowlist" and (outside := set(self.listen_in_channel_ids) - set(self.channel_ids)):
@@ -135,7 +162,12 @@ class SlackPlatformPlugin(PlatformPlugin):
         "3. Paste the `xoxb-` bot token and `xapp-` app-level token into this Connection.\n\n"
         "## Grant channel access\n\n"
         "Invite the bot to every private channel or conversation it should handle. Allowlist values are Slack IDs; use "
-        "the channel and user suggestions after saving this Connection."
+        "the channel and user suggestions after saving this Connection.\n\n"
+        "## Custom Slack server\n\n"
+        "For a self-hosted chat that implements Slack's bot API with Socket Mode, skip the Slack app steps: its "
+        "administrator creates the bot and issues the `xoxb-` and `xapp-` tokens. Enter its Slack API address in "
+        "**Custom Slack server**. Available for Hermes Agents only, and an Agent uses either Slack or one Custom Slack "
+        "server, not both."
     )
     capabilities = frozenset(
         {
@@ -158,8 +190,9 @@ class SlackPlatformPlugin(PlatformPlugin):
         credentials: PlatformCredentials,
         request: OutboundTargetRequest,
     ) -> ResolvedOutboundTarget:
+        assert isinstance(settings, SlackSettings)
         assert isinstance(credentials, SlackCredentials)
-        client = SlackClient(credentials.bot_token)
+        client = SlackClient(credentials.bot_token, api_url=settings.api_url)
         recipient = request.recipient
         if request.thread_id and not re.fullmatch(r"[0-9]+\.[0-9]{6}", request.thread_id):
             raise ValueError("Slack thread must be a message timestamp")
@@ -216,10 +249,11 @@ class SlackPlatformPlugin(PlatformPlugin):
             raise PermissionError("Outbound channel is not allowed by this Connection")
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
+        assert isinstance(settings, SlackSettings)
         assert isinstance(credentials, SlackCredentials)
         if self._skip_validation:
             return "validation-skipped"
-        client = SlackClient(credentials.bot_token, credentials.app_token)
+        client = SlackClient(credentials.bot_token, credentials.app_token, api_url=settings.api_url)
         bot_ok, bot_reason = client.validate_bot_token()
         if not bot_ok:
             raise ValueError(bot_reason)
@@ -244,9 +278,10 @@ class SlackPlatformPlugin(PlatformPlugin):
         search: str | None = None,
         guild_id: str | None = None,
     ) -> list[dict[str, str | None]]:
-        del settings, guild_id
+        del guild_id
+        assert isinstance(settings, SlackSettings)
         assert isinstance(credentials, SlackCredentials)
-        client = SlackClient(credentials.bot_token)
+        client = SlackClient(credentials.bot_token, api_url=settings.api_url)
         if kind == "channels":
             return [
                 {
