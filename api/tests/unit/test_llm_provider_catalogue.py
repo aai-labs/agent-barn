@@ -3,7 +3,7 @@ import json
 import socket
 import threading
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -31,19 +31,36 @@ PROVIDER_LISTS = [
     (ProviderType.NOVITA, None, "https://api.novita.ai/openai/v1/models", "data"),
     (ProviderType.CUSTOM, CUSTOM_BASE_URL, "https://models.example.com/v1/models", "data"),
 ]
-PROVIDERS = [(provider_type, base_url) for provider_type, base_url, _, _ in PROVIDER_LISTS]
+ANTHROPIC_URL = "https://api.anthropic.com/v1/models?limit=1000"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+FIREWORKS_URL = "https://api.fireworks.ai/v1/accounts/fireworks/models?filter=supports_serverless%3Dtrue&pageSize=200"
+PAGED_LISTS = [
+    (ProviderType.ANTHROPIC, ANTHROPIC_URL, {"x-api-key": API_KEY, "anthropic-version": "2026-10-21"}),
+    (ProviderType.GEMINI, GEMINI_URL, {"x-goog-api-key": API_KEY}),
+    (ProviderType.FIREWORKS, FIREWORKS_URL, {"Authorization": f"Bearer {API_KEY}"}),
+]
+GEMINI_METHODS = {"supportedGenerationMethods": ["generateContent"]}
+FIREWORKS_CHAT = {"conversationConfig": {"style": "llama"}}
+PROVIDERS = [(provider_type, base_url) for provider_type, base_url, _, _ in PROVIDER_LISTS] + [
+    (provider_type, None) for provider_type, _, _ in PAGED_LISTS
+]
 
 
 def _listing(*ids: object, key: str = "data") -> bytes:
     return json.dumps({"object": "list", key: [{"id": model_id, "object": "model"} for model_id in ids]}).encode()
 
 
+def _page(key: str, entries: list[dict], **cursor: object) -> bytes:
+    return json.dumps({key: entries, **cursor}).encode()
+
+
 class _Provider:
-    def __init__(self, status_code=200, body=b"", headers=None, failure=None):
+    def __init__(self, status_code=200, body=b"", headers=None, failure=None, pages=None):
         self.status_code = status_code
         self.body = body
         self.headers = headers or {"Content-Type": "application/json"}
         self.failure = failure
+        self.pages = pages
         self.requests: list[httpx.Request] = []
         self.client_settings: list[dict] = []
 
@@ -51,7 +68,8 @@ class _Provider:
         self.requests.append(request)
         if self.failure is not None:
             raise self.failure
-        return httpx.Response(self.status_code, headers=self.headers, content=self.body)
+        body = self.pages[len(self.requests) - 1] if self.pages is not None else self.body
+        return httpx.Response(self.status_code, headers=self.headers, content=body)
 
     def client(self, **settings) -> httpx.Client:
         self.client_settings.append(settings)
@@ -184,9 +202,16 @@ def test_a_key_the_provider_refuses_is_refused(provider_type, base_url, status_c
         _list(provider_type, base_url)
 
 
-def test_xai_refuses_an_invalid_key_with_400():
+@pytest.mark.parametrize("provider_type", [ProviderType.XAI, ProviderType.GEMINI])
+def test_xai_and_gemini_refuse_an_invalid_key_with_400(provider_type):
     with _answering(_Provider(400)), pytest.raises(ProviderListRefused):
-        _list(ProviderType.XAI)
+        _list(provider_type)
+
+
+@pytest.mark.parametrize("status_code", [400, 404, 500])
+def test_any_other_anthropic_answer_is_unreachable(status_code):
+    with _answering(_Provider(status_code)), pytest.raises(ProviderListUnreachable):
+        _list(ProviderType.ANTHROPIC)
 
 
 @pytest.mark.parametrize("status_code", [400, 404, 429, 500, 503])
@@ -273,10 +298,9 @@ def test_a_dns_lookup_that_hangs_is_unreachable_without_waiting_for_it():
 @pytest.mark.parametrize(
     ("provider_type", "base_url"),
     [
-        (ProviderType.ANTHROPIC, None),
-        (ProviderType.GEMINI, None),
-        (ProviderType.FIREWORKS, None),
         (ProviderType.AZURE, "https://contoso.openai.azure.com"),
+        (ProviderType.AZURE, None),
+        (ProviderType.ANTHROPIC, CUSTOM_BASE_URL),
         (ProviderType.OPENROUTER, None),
         (ProviderType.CUSTOM, None),
         (ProviderType.OPENAI, CUSTOM_BASE_URL),
@@ -289,3 +313,151 @@ def test_a_list_the_catalogue_does_not_read_is_a_programming_error(provider_type
         _list(provider_type, base_url)
 
     assert_that(provider.requests, equal_to([]))
+
+
+@pytest.mark.parametrize(("provider_type", "url", "auth_headers"), PAGED_LISTS)
+def test_each_paged_provider_is_asked_for_its_largest_page_with_its_key(provider_type, url, auth_headers):
+    provider = _Provider(body=b'{"data": [], "models": [], "has_more": false}')
+
+    with _answering(provider):
+        _list(provider_type)
+
+    [request] = provider.requests
+    assert_that(request.url.host, equal_to(PUBLIC_ADDRESS))
+    assert_that(_requested_url(request), equal_to(url))
+    for name, value in auth_headers.items():
+        assert_that(request.headers[name], equal_to(value))
+    if "Authorization" not in auth_headers:
+        assert_that(request.headers.get("Authorization"), none())
+
+
+def test_anthropic_lists_every_model_it_returns():
+    body = _page("data", [{"id": "claude-sonnet-4-5"}, {"id": "claude-opus-5-5"}], has_more=False)
+
+    with _answering(_Provider(body=body)):
+        assert_that(_list(ProviderType.ANTHROPIC), equal_to(["claude-opus-5-5", "claude-sonnet-4-5"]))
+
+
+def test_gemini_lists_only_models_that_generate_content_without_their_prefix():
+    body = _page(
+        "models",
+        [
+            {"name": "models/gemini-2.5-pro", "supportedGenerationMethods": ["generateContent", "countTokens"]},
+            {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+            {"name": "models/no-methods"},
+            {"name": "tunedModels/my-model", "supportedGenerationMethods": ["generateContent"]},
+            {"supportedGenerationMethods": ["generateContent"]},
+        ],
+    )
+
+    with _answering(_Provider(body=body)):
+        assert_that(_list(ProviderType.GEMINI), equal_to(["gemini-2.5-pro"]))
+
+
+def test_fireworks_lists_only_models_with_a_chat_template_by_their_full_name():
+    body = _page(
+        "models",
+        [
+            {"name": "accounts/fireworks/models/llama-v3p1-8b-instruct", "conversationConfig": {"style": "llama"}},
+            {"name": "accounts/fireworks/models/nomic-embed-text-v1p5", "kind": "EMBEDDING_MODEL"},
+            {"name": "accounts/fireworks/models/broken", "conversationConfig": "chat"},
+        ],
+    )
+
+    with _answering(_Provider(body=body)):
+        assert_that(_list(ProviderType.FIREWORKS), equal_to(["accounts/fireworks/models/llama-v3p1-8b-instruct"]))
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "first", "second", "next_url", "models"),
+    [
+        (
+            ProviderType.ANTHROPIC,
+            _page("data", [{"id": "claude-b"}], has_more=True, last_id="claude-b"),
+            _page("data", [{"id": "claude-a"}], has_more=False, last_id="claude-a"),
+            f"{ANTHROPIC_URL}&after_id=claude-b",
+            ["claude-a", "claude-b"],
+        ),
+        (
+            ProviderType.GEMINI,
+            _page("models", [{"name": "models/gemini-b", **GEMINI_METHODS}], nextPageToken="page/2=="),
+            _page("models", [{"name": "models/gemini-a", **GEMINI_METHODS}]),
+            f"{GEMINI_URL}&pageToken=page%2F2%3D%3D",
+            ["gemini-a", "gemini-b"],
+        ),
+        (
+            ProviderType.FIREWORKS,
+            _page("models", [{"name": "accounts/fireworks/models/b", **FIREWORKS_CHAT}], nextPageToken="tok-2"),
+            _page("models", [{"name": "accounts/fireworks/models/a", **FIREWORKS_CHAT}], nextPageToken=""),
+            f"{FIREWORKS_URL}&pageToken=tok-2",
+            ["accounts/fireworks/models/a", "accounts/fireworks/models/b"],
+        ),
+    ],
+)
+def test_the_next_page_is_asked_with_the_cursor_until_the_last(provider_type, first, second, next_url, models):
+    provider = _Provider(pages=[first, second])
+
+    with _answering(provider):
+        listed = _list(provider_type)
+
+    assert_that(listed, equal_to(models))
+    assert_that([_requested_url(request) for request in provider.requests][1:], equal_to([next_url]))
+
+
+def test_a_listing_is_resolved_once_for_all_its_pages():
+    rows = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_ADDRESS, 443))]
+    resolve = Mock(return_value=rows)
+    pages = [_page("data", [{"id": f"claude-{index}"}], has_more=True, last_id=f"claude-{index}") for index in range(2)]
+    provider = _Provider(pages=[*pages, _page("data", [], has_more=False)])
+
+    with patch(RESOLVE, resolve), patch(HTTPX_CLIENT, provider.client):
+        _list(ProviderType.ANTHROPIC)
+
+    assert_that(len(provider.requests), equal_to(3))
+    assert_that(resolve.call_count, equal_to(1))
+
+
+def test_more_than_five_pages_is_unreadable():
+    pages = [_page("models", [], nextPageToken=f"tok-{index}") for index in range(6)]
+    provider = _Provider(pages=pages)
+
+    with _answering(provider), pytest.raises(ProviderListUnreadable):
+        _list(ProviderType.FIREWORKS)
+
+    assert_that(len(provider.requests), equal_to(5))
+
+
+def test_five_pages_are_read():
+    pages = [_page("models", [], nextPageToken=f"tok-{index}") for index in range(4)] + [_page("models", [])]
+
+    with _answering(_Provider(pages=pages)):
+        assert_that(_list(ProviderType.FIREWORKS), equal_to([]))
+
+
+def test_more_than_1000_entries_across_pages_is_unreadable():
+    first = _page("models", [{"name": f"models/m-{index}"} for index in range(600)], nextPageToken="tok-2")
+    second = _page("models", [{"name": f"models/n-{index}"} for index in range(401)])
+
+    with _answering(_Provider(pages=[first, second])), pytest.raises(ProviderListUnreadable):
+        _list(ProviderType.GEMINI)
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "body"),
+    [
+        (ProviderType.ANTHROPIC, _page("data", [], has_more=True)),
+        (ProviderType.ANTHROPIC, _page("data", [], has_more=True, last_id=None)),
+        (ProviderType.GEMINI, _page("models", [], nextPageToken=42)),
+        (ProviderType.FIREWORKS, _page("data", [{"name": "accounts/fireworks/models/a", **FIREWORKS_CHAT}])),
+    ],
+)
+def test_a_page_without_a_usable_cursor_or_list_is_unreadable(provider_type, body):
+    with _answering(_Provider(body=body)), pytest.raises(ProviderListUnreadable):
+        _list(provider_type)
+
+
+def test_a_failure_on_a_later_page_fails_the_listing():
+    first = _page("data", [{"id": "claude-a"}], has_more=True, last_id="claude-a")
+
+    with _answering(_Provider(pages=[first, b"not json"])), pytest.raises(ProviderListUnreadable):
+        _list(ProviderType.ANTHROPIC)

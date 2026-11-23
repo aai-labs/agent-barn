@@ -1,8 +1,10 @@
 import json
 import re
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as LookupTimeout
 from dataclasses import dataclass
+from typing import TypeIs
 
 import httpx
 from injector import singleton
@@ -15,26 +17,14 @@ DNS_TIMEOUT_SECONDS = 5
 DNS_WORKERS = 4
 MAX_LIST_BYTES = 2 * 1024 * 1024
 MAX_LIST_ENTRIES = 1000
+MAX_LIST_PAGES = 5
+ANTHROPIC_VERSION = "2026-10-21"
+GEMINI_MODEL_PREFIX = "models/"
+GEMINI_CHAT_METHOD = "generateContent"
 REFUSED_MESSAGE = "The provider did not accept the stored key"
 UNREACHABLE_MESSAGE = "The provider could not be reached to list its models"
 UNREADABLE_MESSAGE = "The provider's model list could not be read"
 REFUSED_STATUSES = frozenset({httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
-
-
-@dataclass(frozen=True)
-class _Endpoint:
-    url: str
-    list_key: str = "data"
-
-
-_ENDPOINTS = {
-    ProviderType.OPENAI: _Endpoint("https://api.openai.com/v1/models"),
-    ProviderType.XAI: _Endpoint("https://api.x.ai/v1/language-models", "models"),
-    ProviderType.DEEPSEEK: _Endpoint("https://api.deepseek.com/models"),
-    ProviderType.NOVITA: _Endpoint("https://api.novita.ai/openai/v1/models"),
-    ProviderType.CUSTOM: _Endpoint("/models"),
-}
-_EXTRA_REFUSED_STATUSES = {ProviderType.XAI: frozenset({httpx.codes.BAD_REQUEST})}
 
 
 class ProviderListError(Exception):
@@ -56,7 +46,94 @@ class ProviderListUnreadable(ProviderListError):
         super().__init__(UNREADABLE_MESSAGE)
 
 
-def _storable(model_id: object) -> bool:
+def _entry_id(entry: dict) -> object:
+    return entry.get("id")
+
+
+def _gemini_id(entry: dict) -> object:
+    name = entry.get("name")
+    methods = entry.get("supportedGenerationMethods")
+    if not isinstance(name, str) or not name.startswith(GEMINI_MODEL_PREFIX) or not isinstance(methods, list):
+        return None
+    return name.removeprefix(GEMINI_MODEL_PREFIX) if GEMINI_CHAT_METHOD in methods else None
+
+
+def _fireworks_id(entry: dict) -> object:
+    return entry.get("name") if isinstance(entry.get("conversationConfig"), dict) else None
+
+
+def _single_page(_: dict) -> tuple[str, str] | None:
+    return None
+
+
+def _anthropic_next_page(document: dict) -> tuple[str, str] | None:
+    if document.get("has_more") is not True:
+        return None
+    last_id = document.get("last_id")
+    if not isinstance(last_id, str) or not last_id:
+        raise ProviderListUnreadable
+    return ("after_id", last_id)
+
+
+def _next_page_token(document: dict) -> tuple[str, str] | None:
+    token = document.get("nextPageToken")
+    if token is None or token == "":
+        return None
+    if not isinstance(token, str):
+        raise ProviderListUnreadable
+    return ("pageToken", token)
+
+
+@dataclass(frozen=True)
+class _Endpoint:
+    url: str
+    list_key: str = "data"
+    key_header: str = "Authorization"
+    key_prefix: str = "Bearer "
+    headers: tuple[tuple[str, str], ...] = ()
+    params: tuple[tuple[str, str], ...] = ()
+    model_id: Callable[[dict], object] = _entry_id
+    next_page: Callable[[dict], tuple[str, str] | None] = _single_page
+
+
+_ENDPOINTS = {
+    ProviderType.OPENAI: _Endpoint("https://api.openai.com/v1/models"),
+    ProviderType.XAI: _Endpoint("https://api.x.ai/v1/language-models", "models"),
+    ProviderType.DEEPSEEK: _Endpoint("https://api.deepseek.com/models"),
+    ProviderType.NOVITA: _Endpoint("https://api.novita.ai/openai/v1/models"),
+    ProviderType.CUSTOM: _Endpoint("/models"),
+    ProviderType.ANTHROPIC: _Endpoint(
+        "https://api.anthropic.com/v1/models",
+        key_header="x-api-key",
+        key_prefix="",
+        headers=(("anthropic-version", ANTHROPIC_VERSION),),
+        params=(("limit", "1000"),),
+        next_page=_anthropic_next_page,
+    ),
+    ProviderType.GEMINI: _Endpoint(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        "models",
+        key_header="x-goog-api-key",
+        key_prefix="",
+        params=(("pageSize", "1000"),),
+        model_id=_gemini_id,
+        next_page=_next_page_token,
+    ),
+    ProviderType.FIREWORKS: _Endpoint(
+        "https://api.fireworks.ai/v1/accounts/fireworks/models",
+        "models",
+        params=(("filter", "supports_serverless=true"), ("pageSize", "200")),
+        model_id=_fireworks_id,
+        next_page=_next_page_token,
+    ),
+}
+_EXTRA_REFUSED_STATUSES = {
+    ProviderType.GEMINI: frozenset({httpx.codes.BAD_REQUEST}),
+    ProviderType.XAI: frozenset({httpx.codes.BAD_REQUEST}),
+}
+
+
+def _storable(model_id: object) -> TypeIs[str]:
     return (
         isinstance(model_id, str)
         and len(model_id) <= MAX_MODEL_ID_LENGTH
@@ -64,15 +141,14 @@ def _storable(model_id: object) -> bool:
     )
 
 
-def _model_ids(body: bytes, list_key: str) -> list[str]:
+def _document(body: bytes) -> dict:
     try:
         document = json.loads(body)
     except ValueError:
         raise ProviderListUnreadable from None
-    entries = document.get(list_key) if isinstance(document, dict) else None
-    if not isinstance(entries, list) or len(entries) > MAX_LIST_ENTRIES:
+    if not isinstance(document, dict):
         raise ProviderListUnreadable
-    return sorted({entry["id"] for entry in entries if isinstance(entry, dict) and _storable(entry.get("id"))})
+    return document
 
 
 def _read_capped(response: httpx.Response) -> bytes:
@@ -94,7 +170,7 @@ class LlmProviderCatalogue:
 
         Raises ``ProviderListRefused`` when the provider refuses the key, ``ProviderListUnreachable``
         when it gives no list, and ``ProviderListUnreadable`` when its answer is not a model list or
-        is over the size or entry cap.
+        is over the size, entry or page cap.
         """
         endpoint = _ENDPOINTS.get(provider_type)
         if endpoint is None:
@@ -104,22 +180,52 @@ class LlmProviderCatalogue:
 
         url = f"{base_url.rstrip('/')}{endpoint.url}" if base_url is not None else endpoint.url
         pinned = self._pin(url)
-        headers = {**pinned.headers, "Authorization": f"Bearer {api_key}"}
+        headers = {
+            **pinned.headers,
+            **dict(endpoint.headers),
+            endpoint.key_header: f"{endpoint.key_prefix}{api_key}",
+        }
+        refused = REFUSED_STATUSES | _EXTRA_REFUSED_STATUSES.get(provider_type, frozenset())
+        model_ids: set[str] = set()
+        entry_count = 0
+        cursor: tuple[str, str] | None = None
         try:
-            with (
-                httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client,
-                client.stream("GET", pinned.url, headers=headers, extensions=pinned.extensions) as response,
-            ):
-                status_code = response.status_code
-                body = _read_capped(response) if status_code == httpx.codes.OK else b""
+            with httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client:
+                for _ in range(MAX_LIST_PAGES):
+                    params = endpoint.params if cursor is None else (*endpoint.params, cursor)
+                    document = self._page(client, pinned, headers, params, refused)
+                    entries = document.get(endpoint.list_key)
+                    if not isinstance(entries, list):
+                        raise ProviderListUnreadable
+                    entry_count += len(entries)
+                    if entry_count > MAX_LIST_ENTRIES:
+                        raise ProviderListUnreadable
+                    model_ids |= {
+                        model_id
+                        for entry in entries
+                        if isinstance(entry, dict) and _storable(model_id := endpoint.model_id(entry))
+                    }
+                    cursor = endpoint.next_page(document)
+                    if cursor is None:
+                        return sorted(model_ids)
         except httpx.HTTPError:
             raise ProviderListUnreachable from None
+        raise ProviderListUnreadable
 
-        if status_code == httpx.codes.OK:
-            return _model_ids(body, endpoint.list_key)
-        if status_code in REFUSED_STATUSES | _EXTRA_REFUSED_STATUSES.get(provider_type, frozenset()):
-            raise ProviderListRefused
-        raise ProviderListUnreachable
+    @staticmethod
+    def _page(
+        client: httpx.Client,
+        pinned: PinnedRequest,
+        headers: dict[str, str],
+        params: tuple[tuple[str, str], ...],
+        refused: frozenset[int],
+    ) -> dict:
+        with client.stream("GET", pinned.url, params=params, headers=headers, extensions=pinned.extensions) as response:
+            if response.status_code == httpx.codes.OK:
+                return _document(_read_capped(response))
+            if response.status_code in refused:
+                raise ProviderListRefused
+            raise ProviderListUnreachable
 
     def _pin(self, url: str) -> PinnedRequest:
         lookup = self._lookups.submit(pin_to_public_address, url)
