@@ -632,8 +632,9 @@ The `anomaly-checks` CronJob (`anomalyChecks` chart values, `11-59/15 * * * *`) 
 each Agent of an Organization that turned [anomaly detection](../features/anomaly-detection.md)
 on with its own last 14 days. It runs five minutes after each cost sync starts, so the LLM
 figures it reads are as fresh as they get; it reads them only up to the last completed sync.
-It needs only the API's Secret (the database), no cluster access. A run where some Agents
-failed checks the rest and exits non-zero. Locally, `./run.sh` runs it as Compose's
+It needs only the API's Secret (the database), no cluster access. An Agent whose check
+fails is logged and the rest are still checked; the Job succeeds and the next run retries
+that Agent. Only a run that cannot check at all (no database) fails the Job. Locally, `./run.sh` runs it as Compose's
 `anomaly-checks` service every 15 minutes; `make run-anomaly-checks` runs one pass from the
 host.
 
