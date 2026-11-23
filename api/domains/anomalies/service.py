@@ -15,6 +15,7 @@ from api.domains.anomalies.detection import (
     BASELINE_DAYS,
     RateSignal,
     Sensitivity,
+    Verdict,
     error_rate,
     evaluate_cap,
     evaluate_rate,
@@ -98,6 +99,27 @@ class CheckSummary:
     organizations: int
     agents: int
     failures: int
+
+
+@dataclass(frozen=True)
+class FirstUse:
+    signal: AnomalySignal
+    subject: str
+    at: datetime
+    uses: int
+
+
+@dataclass(frozen=True)
+class FirstUseFindings:
+    """What a check found new, what it saw, and how far it read."""
+
+    first_uses: list[FirstUse]
+    seen: list[SeenUse]
+    tool_calls_read_through: datetime
+    business_actions_read_through: datetime
+
+
+RateFinding = tuple[AnomalySignal, Verdict | None, datetime]
 
 
 @dataclass
@@ -187,17 +209,47 @@ class AnomalyCheckService:
         self._check_agent(organization_id, agent_id, *self.windows(now))
 
     def _check_agent(self, organization_id: UUID, agent_id: UUID, until: datetime, cost_until: datetime | None) -> None:
+        """Work out everything first, then record it in one transaction, and only if
+        detection has not been turned off (or off and on again) meanwhile."""
+        version = self.repository.detection_version(organization_id)
+        if version is None:
+            return
+        rates, enough = self._rate_findings(agent_id, until, cost_until)
+        found = self._first_use_findings(agent_id, until, enough)
+        with self.repository.check_writes(organization_id, agent_id, version) as writes:
+            if writes is None:
+                logger.info("Detection changed while agent %s was checked; nothing was recorded", agent_id)
+                return
+            for signal, verdict, at in rates:
+                if verdict is not None and verdict.flagged:
+                    writes.open_or_update(signal, verdict, at)
+                else:
+                    writes.end_ongoing(signal, at)
+            for use in found.first_uses:
+                writes.record_first_use(use.signal, use.subject, use.at, use.uses)
+            writes.mark_seen(found.seen)
+            writes.save_state(
+                tool_calls_read_through=found.tool_calls_read_through,
+                business_actions_read_through=found.business_actions_read_through,
+            )
+
+    def _rate_findings(
+        self, agent_id: UUID, until: datetime, cost_until: datetime | None
+    ) -> tuple[list[RateFinding], bool]:
+        """A verdict per rate and cap (None ends what is ongoing), and whether the Agent
+        has enough history to be judged."""
         override = self.settings_repository.get_override(agent_id)
         sensitivity = Sensitivity(override.sensitivity) if override is not None else Sensitivity.NORMAL
         history = self.history(agent_id, until, cost_until)
         enough = has_enough_history(history.active_days)
+        findings: list[RateFinding] = []
 
         def rate(signal: RateSignal, observed: float | None, values: list[float], at: datetime) -> None:
             baseline = rate_baseline(values)
             verdict = None
             if observed is not None and enough and baseline is not None:
                 verdict = evaluate_rate(signal, observed, baseline, sensitivity)
-            self._record(organization_id, agent_id, AnomalySignal(signal.value), verdict, at)
+            findings.append((AnomalySignal(signal.value), verdict, at))
 
         rate(RateSignal.TOOL_CALLS_PER_HOUR, history.observed_tool_calls, history.tool_calls, until)
         rate(
@@ -217,44 +269,12 @@ class AnomalyCheckService:
                 history.llm_error_rates,
                 cost_until,
             )
-            self._check_caps(organization_id, agent_id, override, history, cost_until)
+            findings += _cap_findings(override, history, cost_until)
         elif cost_until is not None:
             # The cost sync has stopped: nothing shows an LLM deviation still going, so
             # it ends where the synced figures do instead of staying open on them.
-            for signal in LLM_SIGNALS:
-                self.repository.end_ongoing(agent_id, signal, cost_until)
-        self._check_first_use(organization_id, agent_id, until, enough)
-
-    def _record(self, organization_id: UUID, agent_id: UUID, signal: AnomalySignal, verdict, at: datetime) -> None:
-        if verdict is not None and verdict.flagged:
-            self.repository.open_or_update(organization_id, agent_id, signal, verdict, at)
-        else:
-            self.repository.end_ongoing(agent_id, signal, at)
-
-    def _check_caps(
-        self,
-        organization_id: UUID,
-        agent_id: UUID,
-        override: AgentAnomalyOverride | None,
-        history: AgentHistory,
-        at: datetime,
-    ) -> None:
-        caps = (
-            (
-                AnomalySignal.LLM_TOKENS_CAP,
-                override.max_llm_tokens_per_hour if override else None,
-                history.observed_llm_tokens,
-            ),
-            (
-                AnomalySignal.LLM_CALLS_CAP,
-                override.max_llm_calls_per_hour if override else None,
-                # Failed calls still reach the provider, so the cap counts them.
-                history.observed_llm_attempts,
-            ),
-        )
-        for signal, cap, observed in caps:
-            verdict = evaluate_cap(observed, cap) if cap is not None and observed is not None else None
-            self._record(organization_id, agent_id, signal, verdict, at)
+            findings += [(signal, None, cost_until) for signal in LLM_SIGNALS]
+        return findings, enough
 
     def history(self, agent_id: UUID, until: datetime, cost_until: datetime | None) -> AgentHistory:
         """Hourly figures over the baseline window, in whole hours, ending at the start
@@ -316,8 +336,8 @@ class AnomalyCheckService:
             observed_llm_failures=sum(row.failures for row in observed_llm) if observed_llm is not None else None,
         )
 
-    def _check_first_use(self, organization_id: UUID, agent_id: UUID, until: datetime, enough: bool) -> None:
-        """Flag what the Agent used for the first time in its baseline window.
+    def _first_use_findings(self, agent_id: UUID, until: datetime, enough: bool) -> FirstUseFindings:
+        """What the Agent used for the first time in its baseline window.
 
         An Agent read for the first time (no state) only learns what it already uses,
         from its baseline window, and flags nothing: everything would look new.
@@ -357,36 +377,34 @@ class AnomalyCheckService:
             )
         recent_uses, counts = _summarise(recent)
         old_uses, _ = _summarise(old)
-
-        if not learning and enough:
-            self._flag_first_uses(organization_id, agent_id, recent_uses, counts, also_seen=old_uses)
         # A subject can be both recent and old (a backfill alongside a new use); the
         # ledger takes it once, spanning both.
         seen, _ = _summarise([*recent, *old])
-        self.repository.mark_seen(organization_id, agent_id, seen)
-        self.repository.save_state(
-            organization_id,
-            agent_id,
+        return FirstUseFindings(
+            first_uses=self._first_uses(agent_id, recent_uses, counts, also_seen=old_uses)
+            if not learning and enough
+            else [],
+            seen=seen,
             tool_calls_read_through=max(until, tool_calls_after or until),
             business_actions_read_through=max(until, actions_after or until),
         )
 
-    def _flag_first_uses(
+    def _first_uses(
         self,
-        organization_id: UUID,
         agent_id: UUID,
         uses: list[SeenUse],
         counts: dict[tuple[SeenKind, str], int],
         *,
         also_seen: list[SeenUse],
-    ) -> None:
-        """Record `uses` not seen in the baseline window before them, counting the
-        ledger and `also_seen` (older uses read in the same check, not yet recorded)."""
+    ) -> list[FirstUse]:
+        """The `uses` not seen in the baseline window before them, counting the ledger
+        and `also_seen` (older uses read in the same check, not yet recorded)."""
         by_kind: dict[SeenKind, list[SeenUse]] = defaultdict(list)
         for use in uses:
             by_kind[use.kind].append(use)
         older: dict[tuple[SeenKind, str], datetime] = {(use.kind, use.subject): use.last_at for use in also_seen}
         new_integrations: set[str] = set()
+        first_uses: list[FirstUse] = []
         for kind in (SeenKind.TOOL, SeenKind.DESTINATION, SeenKind.INTEGRATION, SeenKind.INTEGRATION_ACTION):
             kind_uses = by_kind.get(kind, [])
             last_seen = self.repository.last_seen(agent_id, kind, [use.subject for use in kind_uses])
@@ -402,14 +420,30 @@ class AnomalyCheckService:
                 # A brand-new integration is one Anomaly, not one more per action on it.
                 if kind is SeenKind.INTEGRATION_ACTION and use.subject.split(" ", 1)[0] in new_integrations:
                     continue
-                self.repository.record_first_use(
-                    organization_id,
-                    agent_id,
-                    NEW_SIGNAL_BY_KIND[kind],
-                    use.subject,
-                    use.first_at,
-                    counts[(use.kind, use.subject)],
+                first_uses.append(
+                    FirstUse(NEW_SIGNAL_BY_KIND[kind], use.subject, use.first_at, counts[(use.kind, use.subject)])
                 )
+        return first_uses
+
+
+def _cap_findings(override: AgentAnomalyOverride | None, history: AgentHistory, at: datetime) -> list[RateFinding]:
+    caps = (
+        (
+            AnomalySignal.LLM_TOKENS_CAP,
+            override.max_llm_tokens_per_hour if override else None,
+            history.observed_llm_tokens,
+        ),
+        (
+            AnomalySignal.LLM_CALLS_CAP,
+            override.max_llm_calls_per_hour if override else None,
+            # Failed calls still reach the provider, so the cap counts them.
+            history.observed_llm_attempts,
+        ),
+    )
+    return [
+        (signal, evaluate_cap(observed, cap) if cap is not None and observed is not None else None, at)
+        for signal, cap, observed in caps
+    ]
 
 
 def _summarise(

@@ -1,4 +1,5 @@
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -227,39 +228,42 @@ class AnomalyRepository:
             )
             return list(session.exec(query).all())
 
+    def detection_version(self, organization_id: UUID) -> datetime | None:
+        """When the Organization's detection setting last changed, while it is on;
+        None while it is off. A check records what it found only if this has not
+        changed since it started (`check_writes`)."""
+        with Session(self.delegate.engine) as session:
+            settings = session.exec(
+                select(OrganizationAnomalySettings).where(
+                    col(OrganizationAnomalySettings.organization_id) == organization_id
+                )
+            ).first()
+        return settings.updated_at if settings is not None and settings.enabled else None
+
+    @contextmanager
+    def check_writes(self, organization_id: UUID, agent_id: UUID, version: datetime) -> Iterator[CheckWrites | None]:
+        """One transaction for everything a check of one Agent records, or None when
+        detection was turned off (or off and on again) since the check started.
+
+        The Organization's settings row stays share-locked until the transaction ends.
+        Turning detection off locks it for update, so the two never interleave: a check
+        cannot reopen what turning off ended, or bring back the progress it forgot.
+        """
+        with Session(self.delegate.engine) as session:
+            settings = session.exec(
+                select(OrganizationAnomalySettings)
+                .where(col(OrganizationAnomalySettings.organization_id) == organization_id)
+                .with_for_update(read=True)
+            ).first()
+            if settings is None or not settings.enabled or settings.updated_at != version:
+                yield None
+                return
+            yield CheckWrites(session, organization_id, agent_id)
+            session.commit()
+
     def get_state(self, agent_id: UUID) -> AgentAnomalyState | None:
         with Session(self.delegate.engine) as session:
             return session.exec(select(AgentAnomalyState).where(col(AgentAnomalyState.agent_id) == agent_id)).first()
-
-    def save_state(
-        self,
-        organization_id: UUID,
-        agent_id: UUID,
-        *,
-        tool_calls_read_through: datetime,
-        business_actions_read_through: datetime,
-    ) -> None:
-        now = datetime.now(UTC)
-        statement = pg_insert(AgentAnomalyState).values(
-            id=uuid4(),
-            created_at=now,
-            updated_at=now,
-            organization_id=organization_id,
-            agent_id=agent_id,
-            tool_calls_read_through=tool_calls_read_through,
-            business_actions_read_through=business_actions_read_through,
-        )
-        statement = statement.on_conflict_do_update(
-            constraint="uq_agent_anomaly_state_agent_id",
-            set_={
-                "tool_calls_read_through": statement.excluded.tool_calls_read_through,
-                "business_actions_read_through": statement.excluded.business_actions_read_through,
-                "updated_at": now,
-            },
-        )
-        with Session(self.delegate.engine) as session:
-            session.exec(statement)  # type: ignore[call-overload]
-            session.commit()
 
     def last_seen(self, agent_id: UUID, kind: SeenKind, subjects: Collection[str]) -> dict[str, datetime]:
         if not subjects:
@@ -271,40 +275,6 @@ class AnomalyRepository:
                 col(AgentActivitySeen.subject).in_(list(subjects)),
             )
             return dict(session.exec(query).all())  # type: ignore[arg-type]
-
-    def mark_seen(self, organization_id: UUID, agent_id: UUID, uses: list[SeenUse]) -> None:
-        """Record uses, keeping the earliest first use and the latest last use."""
-        if not uses:
-            return
-        now = datetime.now(UTC)
-        statement = pg_insert(AgentActivitySeen).values(
-            [
-                {
-                    "id": uuid4(),
-                    "created_at": now,
-                    "updated_at": now,
-                    "organization_id": organization_id,
-                    "agent_id": agent_id,
-                    "kind": use.kind.value,
-                    "subject": use.subject,
-                    "first_seen_at": use.first_at,
-                    "last_seen_at": use.last_at,
-                }
-                for use in uses
-            ]
-        )
-        table = SQLModel.metadata.tables[AgentActivitySeen.__tablename__]
-        statement = statement.on_conflict_do_update(
-            constraint="uq_agent_activity_seen_agent_kind_subject",
-            set_={
-                "first_seen_at": sa.func.least(table.c.first_seen_at, statement.excluded.first_seen_at),
-                "last_seen_at": sa.func.greatest(table.c.last_seen_at, statement.excluded.last_seen_at),
-                "updated_at": now,
-            },
-        )
-        with Session(self.delegate.engine) as session:
-            session.exec(statement)  # type: ignore[call-overload]
-            session.commit()
 
     def list_anomalies(self, agent_id: UUID, pagination: Pagination) -> tuple[list[AgentAnomaly], int]:
         """One Agent's Anomalies, most recently started first. The caller has already
@@ -331,55 +301,6 @@ class AnomalyRepository:
             )
             return list(session.exec(query).all())
 
-    def open_or_update(
-        self, organization_id: UUID, agent_id: UUID, signal: AnomalySignal, verdict: Verdict, at: datetime
-    ) -> None:
-        """Start an Anomaly for `signal`, or bring the ongoing one up to date.
-
-        The observed value keeps the highest seen, so the record shows how far the
-        deviation went; the usual value and threshold follow the latest check.
-        """
-        with Session(self.delegate.engine) as session:
-            ongoing = session.exec(
-                select(AgentAnomaly)
-                .where(
-                    col(AgentAnomaly.agent_id) == agent_id,
-                    col(AgentAnomaly.signal) == signal.value,
-                    col(AgentAnomaly.subject).is_(None),
-                    col(AgentAnomaly.ended_at).is_(None),
-                )
-                .with_for_update()
-            ).first()
-            if ongoing is None:
-                ongoing = AgentAnomaly(
-                    organization_id=organization_id,
-                    agent_id=agent_id,
-                    signal=signal.value,
-                    observed_value=verdict.observed,
-                    started_at=at,
-                    last_observed_at=at,
-                )
-            ongoing.observed_value = max(ongoing.observed_value, verdict.observed)
-            ongoing.usual_value = verdict.usual
-            ongoing.threshold = verdict.threshold
-            ongoing.last_observed_at = at
-            ongoing.updated_at = datetime.now(UTC)
-            session.add(ongoing)
-            session.commit()
-
-    def end_ongoing(self, agent_id: UUID, signal: AnomalySignal, at: datetime) -> None:
-        with Session(self.delegate.engine) as session:
-            session.exec(
-                sa.update(AgentAnomaly)  # type: ignore[call-overload]
-                .where(
-                    col(AgentAnomaly.agent_id) == agent_id,
-                    col(AgentAnomaly.signal) == signal.value,
-                    col(AgentAnomaly.ended_at).is_(None),
-                )
-                .values(ended_at=at, updated_at=datetime.now(UTC))
-            )
-            session.commit()
-
     def end_ongoing_except(self, organization_id: UUID, agent_ids: Collection[UUID], at: datetime) -> None:
         """End the ongoing Anomalies of an Organization's Agents other than `agent_ids`
         (the ones still checked), such as Agents deleted since the last check."""
@@ -395,21 +316,127 @@ class AnomalyRepository:
             )
             session.commit()
 
-    def record_first_use(
-        self, organization_id: UUID, agent_id: UUID, signal: AnomalySignal, subject: str, at: datetime, uses: int
-    ) -> None:
-        """A first use is a moment, not a stretch of time: it starts and ends at once."""
-        with Session(self.delegate.engine) as session:
-            session.add(
-                AgentAnomaly(
-                    organization_id=organization_id,
-                    agent_id=agent_id,
-                    signal=signal.value,
-                    subject=subject,
-                    observed_value=uses,
-                    started_at=at,
-                    last_observed_at=at,
-                    ended_at=at,
-                )
+
+@dataclass
+class CheckWrites:
+    """What one check of one Agent records. Nothing is committed until the check has
+    recorded everything (`AnomalyRepository.check_writes`), so a check that fails part
+    way leaves no trace and its retry records each Anomaly once."""
+
+    session: Session
+    organization_id: UUID
+    agent_id: UUID
+
+    def open_or_update(self, signal: AnomalySignal, verdict: Verdict, at: datetime) -> None:
+        """Start an Anomaly for `signal`, or bring the ongoing one up to date.
+
+        The observed value keeps the highest seen, so the record shows how far the
+        deviation went; the usual value and threshold follow the latest check.
+        """
+        ongoing = self.session.exec(
+            select(AgentAnomaly)
+            .where(
+                col(AgentAnomaly.agent_id) == self.agent_id,
+                col(AgentAnomaly.signal) == signal.value,
+                col(AgentAnomaly.subject).is_(None),
+                col(AgentAnomaly.ended_at).is_(None),
             )
-            session.commit()
+            .with_for_update()
+        ).first()
+        if ongoing is None:
+            ongoing = AgentAnomaly(
+                organization_id=self.organization_id,
+                agent_id=self.agent_id,
+                signal=signal.value,
+                observed_value=verdict.observed,
+                started_at=at,
+                last_observed_at=at,
+            )
+        ongoing.observed_value = max(ongoing.observed_value, verdict.observed)
+        ongoing.usual_value = verdict.usual
+        ongoing.threshold = verdict.threshold
+        ongoing.last_observed_at = at
+        ongoing.updated_at = datetime.now(UTC)
+        self.session.add(ongoing)
+        self.session.flush()
+
+    def end_ongoing(self, signal: AnomalySignal, at: datetime) -> None:
+        self.session.exec(
+            sa.update(AgentAnomaly)  # type: ignore[call-overload]
+            .where(
+                col(AgentAnomaly.agent_id) == self.agent_id,
+                col(AgentAnomaly.signal) == signal.value,
+                col(AgentAnomaly.ended_at).is_(None),
+            )
+            .values(ended_at=at, updated_at=datetime.now(UTC))
+        )
+
+    def record_first_use(self, signal: AnomalySignal, subject: str, at: datetime, uses: int) -> None:
+        """A first use is a moment, not a stretch of time: it starts and ends at once."""
+        self.session.add(
+            AgentAnomaly(
+                organization_id=self.organization_id,
+                agent_id=self.agent_id,
+                signal=signal.value,
+                subject=subject,
+                observed_value=uses,
+                started_at=at,
+                last_observed_at=at,
+                ended_at=at,
+            )
+        )
+        self.session.flush()
+
+    def mark_seen(self, uses: list[SeenUse]) -> None:
+        """Record uses (one per kind and subject), keeping the earliest first use and
+        the latest last use."""
+        if not uses:
+            return
+        now = datetime.now(UTC)
+        statement = pg_insert(AgentActivitySeen).values(
+            [
+                {
+                    "id": uuid4(),
+                    "created_at": now,
+                    "updated_at": now,
+                    "organization_id": self.organization_id,
+                    "agent_id": self.agent_id,
+                    "kind": use.kind.value,
+                    "subject": use.subject,
+                    "first_seen_at": use.first_at,
+                    "last_seen_at": use.last_at,
+                }
+                for use in uses
+            ]
+        )
+        table = SQLModel.metadata.tables[AgentActivitySeen.__tablename__]
+        statement = statement.on_conflict_do_update(
+            constraint="uq_agent_activity_seen_agent_kind_subject",
+            set_={
+                "first_seen_at": sa.func.least(table.c.first_seen_at, statement.excluded.first_seen_at),
+                "last_seen_at": sa.func.greatest(table.c.last_seen_at, statement.excluded.last_seen_at),
+                "updated_at": now,
+            },
+        )
+        self.session.exec(statement)  # type: ignore[call-overload]
+
+    def save_state(self, *, tool_calls_read_through: datetime, business_actions_read_through: datetime) -> None:
+        now = datetime.now(UTC)
+        statement = pg_insert(AgentAnomalyState).values(
+            id=uuid4(),
+            created_at=now,
+            updated_at=now,
+            organization_id=self.organization_id,
+            agent_id=self.agent_id,
+            tool_calls_read_through=tool_calls_read_through,
+            business_actions_read_through=business_actions_read_through,
+        )
+        statement = statement.on_conflict_do_update(
+            constraint="uq_agent_anomaly_state_agent_id",
+            set_={
+                "tool_calls_read_through": statement.excluded.tool_calls_read_through,
+                "business_actions_read_through": statement.excluded.business_actions_read_through,
+                "updated_at": now,
+            },
+        )
+        self.session.exec(statement)  # type: ignore[call-overload]

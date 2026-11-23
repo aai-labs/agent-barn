@@ -13,9 +13,12 @@ The contract under test:
 - LLM figures stop where the cost sync has got to.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from unittest.mock import patch
 from uuid import uuid4
 
 from hamcrest import assert_that, contains_exactly, empty, equal_to, has_length, has_properties, not_none
@@ -26,11 +29,12 @@ from api.domains.anomalies.models import (
     AgentActivitySeen,
     AgentAnomaly,
     AgentAnomalyOverride,
+    AgentAnomalyState,
     AnomalySignal,
     OrganizationAnomalySettings,
     SeenKind,
 )
-from api.domains.anomalies.repository import Actor, AnomalySettingsRepository
+from api.domains.anomalies.repository import Actor, AnomalySettingsRepository, CheckWrites
 from api.domains.anomalies.service import AnomalyCheckService, CheckSummary
 from api.domains.business_value.classifier import BusinessActionStatus
 from api.domains.business_value.models import BusinessAction
@@ -738,3 +742,87 @@ def test_llm_anomalies_end_when_the_cost_sync_has_stopped():
                 _anomalies(context, AnomalySignal.LLM_TOKENS_PER_HOUR),
                 contains_exactly(has_properties(ended_at=NOW)),
             )
+
+
+@contextmanager
+def _failing_once(owner: type, name: str) -> Iterator[None]:
+    original = getattr(owner, name)
+    calls = 0
+
+    def fail_first(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("the write failed")
+        return original(*args, **kwargs)
+
+    with patch.object(owner, name, fail_first):
+        yield
+
+
+def test_a_check_retried_after_a_failed_write_records_a_first_use_once():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _check(context)
+        _save(context, _tool_call(context.agent, NOW + timedelta(minutes=1), arguments={"url": "https://new.example"}))
+
+        with when("the check fails part-way through saving what it found, and runs again"):
+            with _failing_once(CheckWrites, "mark_seen"):
+                failed = _check(context, LATER)
+            retried = _check(context, LATER)
+
+        with then("the first use is recorded once"):
+            assert_that((failed.failures, retried.failures), equal_to((1, 0)))
+            assert_that(
+                _anomalies(context, AnomalySignal.NEW_DESTINATION),
+                contains_exactly(has_properties(subject="new.example")),
+            )
+
+
+@contextmanager
+def _detection_toggled_while_history_is_read(context, *, back_on: bool = False) -> Iterator[None]:
+    original = AnomalyCheckService.history
+
+    def history(self, *args, **kwargs):
+        read = original(self, *args, **kwargs)
+        _set_enabled(context, False)
+        if back_on:
+            _set_enabled(context, True)
+        return read
+
+    with patch.object(AnomalyCheckService, "history", history):
+        yield
+
+
+def _state(context) -> AgentAnomalyState | None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        return session.exec(
+            select(AgentAnomalyState).where(col(AgentAnomalyState.agent_id) == context.agent.id)
+        ).first()
+
+
+def test_a_check_running_while_detection_is_turned_off_records_nothing():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _check(context)
+        _save(context, *[_tool_call(context.agent, at) for at in _spread(_in_last_hour(LATER), 200, minutes=30)])
+
+        with _detection_toggled_while_history_is_read(context):
+            _check(context, LATER)
+
+        assert_that(_anomalies(context), empty())
+        assert_that(_state(context), equal_to(None))
+
+
+def test_a_check_running_while_detection_is_turned_off_and_on_again_leaves_the_gap_to_be_learned():
+    with given([*_ENABLED, usual_activity()]) as context:
+        _check(context)
+        _save(context, _tool_call(context.agent, NOW + timedelta(minutes=1), arguments={"url": "https://gap.example"}))
+
+        with when("detection goes off and on again while a check reads the Agent's history"):
+            with _detection_toggled_while_history_is_read(context, back_on=True):
+                _check(context, LATER)
+
+        with then("that check records nothing, and the next one learns the gap"):
+            assert_that(_state(context), equal_to(None))
+            _check(context, LATER + timedelta(minutes=15))
+            assert_that(_anomalies(context, AnomalySignal.NEW_DESTINATION), empty())
+            assert_that(_state(context), not_none())
