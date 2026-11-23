@@ -76,7 +76,7 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
   );
 }
 
-export function connectionSubtitle(connection: LlmProviderConnection): string {
+function connectionSubtitle(connection: LlmProviderConnection): string {
   return BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
     ? `${PROVIDER_TYPE_LABELS[connection.providerType]} · ${connection.baseUrl}`
     : PROVIDER_SUBTITLES[connection.providerType];
@@ -85,11 +85,11 @@ export function connectionSubtitle(connection: LlmProviderConnection): string {
 export function ProviderCard({
   connection,
   onReplaceKey,
-  onManage,
+  manage,
 }: {
   connection: LlmProviderConnection;
   onReplaceKey?: () => void;
-  onManage?: () => void;
+  manage?: ReactNode;
 }) {
   const isOpenRouter = connection.providerType === "openrouter";
   const saved = connection.hasApiKey && connection.updatedAt ? formatDate(connection.updatedAt) : null;
@@ -113,11 +113,7 @@ export function ProviderCard({
         </p>
       )}
       <div className="mt-auto flex flex-wrap gap-2 pt-4">
-        {onManage && (
-          <button type="button" className="af-btn" onClick={onManage}>
-            Manage
-          </button>
-        )}
+        {manage}
         {onReplaceKey && (
           <button type="button" className="af-btn" onClick={onReplaceKey}>
             {connection.hasApiKey ? "Replace key" : "Save a key"}

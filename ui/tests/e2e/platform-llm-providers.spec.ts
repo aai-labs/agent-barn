@@ -553,7 +553,7 @@ test("OpenRouter has no Manage, only its key button", async ({ page }) => {
   await expect(settings.cardButtons("OpenRouter")).toHaveText(["Replace key"]);
 });
 
-test("Manage on a connected card lists Models, Replace key and Delete, and the card has no other button", async ({
+test("Manage on a connected card opens a menu of Models, Replace key and Delete, and the card has no other button", async ({
   page,
 }) => {
   await signIn(page);
@@ -562,14 +562,17 @@ test("Manage on a connected card lists Models, Replace key and Delete, and the c
   await settings.goto();
 
   await expect(settings.cardButtons("Anthropic")).toHaveText(["Manage"]);
+  await expect(settings.manageButton("Anthropic")).toHaveAttribute("aria-haspopup", "menu");
   await settings.manageButton("Anthropic").click();
 
-  await expect(settings.manageDialog().getByRole("heading", { name: "Manage Anthropic" })).toBeVisible();
-  await expect(settings.manageDialog()).toContainText("Claude models");
+  await expect(settings.dialog()).toHaveCount(0);
   await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
+  await expect(settings.manageAction("Delete")).toHaveAttribute("data-variant", "destructive");
 });
 
-test("each Manage action closes Manage and opens its own dialog", async ({ page }) => {
+test("each Manage action closes the menu and opens its own dialog, and Manage still opens afterwards", async ({
+  page,
+}) => {
   await signIn(page);
   const data = new PlatformLlmProviderDataSupport(page);
   await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
@@ -592,6 +595,11 @@ test("each Manage action closes Manage and opens its own dialog", async ({ page 
   await settings.openDelete("Anthropic");
   await expect(settings.dialog()).toHaveCount(1);
   await expect(settings.dialog().getByRole("heading", { name: "Delete Anthropic?" })).toBeVisible();
+  await settings.cancelDialog();
+  await expect(settings.dialog()).toHaveCount(0);
+
+  await settings.manageButton("Anthropic").click();
+  await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
 });
 
 type ModelsOptions = Parameters<PlatformLlmProviderDataSupport["interceptModels"]>[0];
@@ -881,7 +889,7 @@ test("Manage on every connection but OpenRouter offers Models", async ({ page })
     await settings.manageButton(name).click();
     await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
     await page.keyboard.press("Escape");
-    await expect(settings.manageDialog()).toHaveCount(0);
+    await expect(settings.manageMenu()).toHaveCount(0);
   }
   await expect(settings.manageButton("OpenRouter")).toHaveCount(0);
 });

@@ -73,18 +73,22 @@ export class PlatformLlmProvidersPage {
     return this.providerCard(name).getByRole("button", { name: "Manage", exact: true });
   }
 
-  manageDialog() {
-    return this.page.getByRole("dialog", { name: /^Manage / });
+  manageMenu() {
+    return this.page.getByRole("menu");
   }
 
   manageActions() {
-    return this.manageDialog().getByRole("button", { name: /^(Models|Replace key|Save a key|Delete)$/ });
+    return this.manageMenu().getByRole("menuitem");
+  }
+
+  manageAction(action: "Models" | "Replace key" | "Save a key" | "Delete") {
+    return this.manageMenu().getByRole("menuitem", { name: action, exact: true });
   }
 
   async manage(name: string, action: "Models" | "Replace key" | "Delete") {
     await this.manageButton(name).click();
-    await this.manageDialog().getByRole("button", { name: action, exact: true }).click();
-    await expect(this.manageDialog()).toHaveCount(0);
+    await this.manageAction(action).click();
+    await expect(this.manageMenu()).toHaveCount(0);
   }
 
   async openReplaceKey(name: string) {
