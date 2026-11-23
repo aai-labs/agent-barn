@@ -25,6 +25,7 @@ export const LlmProviderConnectionSchema = z.object({
   updatedAt: z.string().nullable(),
   updatedBy: z.string().nullable(),
   envKeyConfigured: z.boolean(),
+  envKeyLast4: z.string().nullable(),
 });
 
 export type LlmProviderConnection = z.infer<typeof LlmProviderConnectionSchema>;

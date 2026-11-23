@@ -15,6 +15,18 @@ export class PlatformLlmProvidersPage {
     return this.providerCard("OpenRouter");
   }
 
+  deploymentSection() {
+    return this.page.getByRole("region", { name: "Set by this deployment", exact: true });
+  }
+
+  deploymentCard() {
+    return this.deploymentSection().getByRole("region", { name: "OpenRouter", exact: true });
+  }
+
+  deploymentKeyButton() {
+    return this.deploymentCard().getByRole("button", { name: /^(Replace key|Save a key)$/ });
+  }
+
   toast(text: string) {
     return this.page.locator("[data-sonner-toast]").filter({ hasText: text });
   }

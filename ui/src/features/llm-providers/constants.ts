@@ -32,6 +32,8 @@ export const BASE_URL_HINTS: Partial<Record<ProviderType, string>> = {
 
 export const MASKED_KEY_PREFIX = "*******";
 
+export const OPENROUTER_MASKED_KEY_PREFIX = "sk-*******";
+
 export const MAX_MODELS_PER_CONNECTION = 50;
 
 export const AZURE_DEPLOYMENT_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;

@@ -12,9 +12,10 @@ import {
   CUSTOM_CONNECTION,
   CUSTOM_MODELS,
   DROPPED_MODEL,
+  ENVIRONMENT_KEY_ONLY,
   PlatformLlmProviderDataSupport,
   pricedCatalogue,
-  SAVED_KEY,
+  SAVED_AND_ENVIRONMENT_KEYS,
 } from "../pages/data-support/platform-llm-provider-data-support.po";
 import { PlatformLlmProvidersPage } from "../pages/platform-llm-providers-page.po";
 
@@ -56,23 +57,59 @@ test("Platform Admin replaces the OpenRouter key and sees only its last four cha
   await page.screenshot({ path: test.info().outputPath("platform-llm-providers.png"), fullPage: true });
 });
 
-test("the environment key is named while it is the one Agents use", async ({ page }) => {
+test("OPENROUTER_API_KEY with no saved key puts OpenRouter under Set by this deployment, in use", async ({
+  page,
+}) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept({
-    connection: { has_api_key: false, api_key_last4: null, updated_at: null, updated_by: null, env_key_configured: true },
+    connection: ENVIRONMENT_KEY_ONLY,
+    connections: [ANTHROPIC_CONNECTION],
   });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.card()).toContainText("No key saved");
-  await expect(settings.card()).toContainText("Agents use OPENROUTER_API_KEY from this deployment's secrets");
-  await expect(settings.openDialogButton()).toHaveText("Save a key");
+  await expect(settings.deploymentCard()).toContainText("Environment");
+  await expect(settings.deploymentCard()).toContainText("Models from many providers");
+  await expect(settings.deploymentCard()).toContainText("OPENROUTER_API_KEY");
+  await expect(settings.deploymentCard()).toContainText("sk-*******9z8y");
+  await expect(settings.deploymentCard()).toContainText("In use");
+  await expect(settings.deploymentCard()).not.toContainText("Fallback");
+  await expect(settings.deploymentCard()).not.toContainText("Saved key");
+  await expect(settings.deploymentKeyButton()).toHaveText("Save a key");
+  await expect(settings.providerCardNames()).toHaveText(["Anthropic"]);
+  await expect(page.getByText("from this deployment's secrets")).toHaveCount(0);
+});
+
+test("a key saved under Set by this deployment turns the environment key into the fallback", async ({ page }) => {
+  await signIn(page);
+  const mock = await new PlatformLlmProviderDataSupport(page).intercept({ connection: ENVIRONMENT_KEY_ONLY });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.deploymentKeyButton().click();
+  await settings.keyInput().fill(NEW_KEY);
+  await settings.dialog().getByRole("button", { name: "Save key" }).click();
+
+  await expect(settings.dialog()).toHaveCount(0);
+  await expect(settings.toast("OpenRouter key saved")).toBeVisible();
+  await expect(settings.deploymentCard()).toContainText("Fallback");
+  await expect(settings.deploymentCard()).toContainText("sk-*******c3d4");
+  await expect(settings.deploymentCard()).toContainText("sk-*******9z8y");
+  await expect(settings.deploymentKeyButton()).toHaveText("Replace key");
+  expect(mock.writes).toEqual([{ slug: "openrouter", body: { api_key: NEW_KEY } }]);
 });
 
 test("a deployment with no key at all says Agents cannot call OpenRouter", async ({ page }) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept({
-    connection: { has_api_key: false, api_key_last4: null, updated_at: null, updated_by: null, env_key_configured: false },
+    connection: {
+      has_api_key: false,
+      api_key_last4: null,
+      updated_at: null,
+      updated_by: null,
+      env_key_configured: false,
+      env_key_last4: null,
+    },
   });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
@@ -80,13 +117,37 @@ test("a deployment with no key at all says Agents cannot call OpenRouter", async
   await expect(settings.card()).toContainText("Agents cannot call OpenRouter models until a key is saved.");
 });
 
-test("a saved key warns while the deployment still sets OPENROUTER_API_KEY", async ({ page }) => {
+test("a saved key with OPENROUTER_API_KEY still set shows both keys, the environment one as the fallback", async ({
+  page,
+}) => {
   await signIn(page);
-  await new PlatformLlmProviderDataSupport(page).intercept({ connection: { ...SAVED_KEY, env_key_configured: true } });
+  await new PlatformLlmProviderDataSupport(page).intercept({ connection: SAVED_AND_ENVIRONMENT_KEYS });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.card().getByRole("note")).toContainText("OPENROUTER_API_KEY is still set");
+  await expect(settings.deploymentCard()).toContainText("OPENROUTER_API_KEY");
+  await expect(settings.deploymentCard()).toContainText("sk-*******9z8y");
+  await expect(settings.deploymentCard()).toContainText("Saved key");
+  await expect(settings.deploymentCard()).toContainText("sk-*******a1b2");
+  await expect(settings.deploymentCard()).toContainText("Changed by Platform Person");
+  await expect(settings.deploymentCard()).toContainText("Fallback");
+  await expect(settings.deploymentCard()).not.toContainText("In use");
+  await expect(settings.deploymentKeyButton()).toHaveText("Replace key");
+  await expect(settings.card()).toHaveCount(0);
+  await expect(page.getByRole("note")).toHaveCount(0);
+});
+
+test("without OPENROUTER_API_KEY there is no deployment section and OpenRouter is the first card", async ({
+  page,
+}) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept({ connections: [ANTHROPIC_CONNECTION] });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await expect(settings.providerCardNames()).toHaveText(["OpenRouter", "Anthropic"]);
+  await expect(settings.deploymentSection()).toHaveCount(0);
+  await expect(settings.card()).not.toContainText("OPENROUTER_API_KEY");
 });
 
 test("a key OpenRouter refuses keeps the dialog open and the saved key unchanged", async ({ page }) => {

@@ -12,6 +12,7 @@ import { useLlmProviderActions, useLlmProviderConnections } from "../hooks/use-l
 import type { KeyReplacement, LlmProviderConnection, NewLlmProviderConnection } from "../schemas";
 import { failureMessage } from "../utils";
 import { AddLlmProviderDialog } from "./add-llm-provider-dialog";
+import { DeploymentProviderCard } from "./deployment-provider-card";
 import { ProviderCard } from "./provider-card";
 import { ProviderKeyDialog } from "./provider-key-dialog";
 import { ProviderModelsDialog } from "./provider-models-dialog";
@@ -55,6 +56,10 @@ export function PlatformLlmProviderSettings() {
 
   const connected = new Set(connections.map((connection) => connection.providerType));
   const available = [...KNOWN_PROVIDER_TYPES.filter((type) => !connected.has(type)), ...BASE_URL_PROVIDER_TYPES];
+  const deployment = connections.find(
+    (connection) => connection.providerType === "openrouter" && connection.envKeyConfigured,
+  );
+  const listed = connections.filter((connection) => connection !== deployment);
 
   function openAdd() {
     resetAdd();
@@ -106,6 +111,15 @@ export function PlatformLlmProviderSettings() {
 
   return (
     <>
+      {deployment && (
+        <section aria-labelledby="llm-providers-deployment-heading" className="mb-6">
+          <h2 id="llm-providers-deployment-heading" className="mb-3 mt-0 text-[0.95rem] font-semibold">
+            Set by this deployment
+          </h2>
+          <DeploymentProviderCard connection={deployment} onReplaceKey={() => openKeyDialog(deployment)} />
+        </section>
+      )}
+
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <p className="m-0 min-w-0 flex-1 basis-[24rem] text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
           Each key is checked with its provider before it is saved, and only its last four characters are shown.
@@ -116,7 +130,7 @@ export function PlatformLlmProviderSettings() {
       </div>
 
       <ul aria-label="LLM providers" className="m-0 flex list-none flex-col gap-3 p-0">
-        {connections.map((connection) => (
+        {listed.map((connection) => (
           <li key={connection.slug}>
             <ProviderCard
               connection={connection}

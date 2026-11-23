@@ -2,10 +2,9 @@
 
 import { formatDate } from "@/shared/date";
 
-import { MASKED_KEY_PREFIX, PROVIDER_TYPE_LABELS } from "../constants";
+import { MASKED_KEY_PREFIX, OPENROUTER_MASKED_KEY_PREFIX, PROVIDER_TYPE_LABELS } from "../constants";
 import type { LlmProviderConnection } from "../schemas";
 
-const OPENROUTER_MASKED_KEY_PREFIX = "sk-*******";
 const MUTED = { color: "var(--ink-3)" };
 
 export function ProviderCard({
@@ -43,10 +42,7 @@ export function ProviderCard({
           ) : (
             <p className="mb-0 mt-2 text-sm" style={MUTED}>
               No key saved.
-              {isOpenRouter &&
-                (connection.envKeyConfigured
-                  ? " Agents use OPENROUTER_API_KEY from this deployment's secrets until a key is saved here."
-                  : " Agents cannot call OpenRouter models until a key is saved.")}
+              {isOpenRouter && " Agents cannot call OpenRouter models until a key is saved."}
             </p>
           )}
           {changed && (
@@ -71,13 +67,6 @@ export function ProviderCard({
           )}
         </div>
       </div>
-      {isOpenRouter && connection.hasApiKey && connection.envKeyConfigured && (
-        <p role="note" className="mb-0 mt-4 text-sm" style={MUTED}>
-          OPENROUTER_API_KEY is still set in this deployment&apos;s secrets. Agents use the saved key; LiteLLM falls back
-          to the secret only while the saved key&apos;s route is unavailable. Delete the secret once every environment
-          that shares it has a saved key.
-        </p>
-      )}
     </section>
   );
 }
