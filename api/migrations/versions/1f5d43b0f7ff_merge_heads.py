@@ -5,8 +5,8 @@ Revises: b7e2c41d9a63, bc817a73bb6d
 Create Date: 2026-11-23 12:14:38.641512
 
 """
-from collections.abc import Sequence
 
+from collections.abc import Sequence
 
 # revision identifiers, used by Alembic.
 revision: str = '1f5d43b0f7ff'
