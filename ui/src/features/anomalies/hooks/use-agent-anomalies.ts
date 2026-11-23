@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -18,30 +18,35 @@ import { anomaliesKey } from "../utils";
 
 export const ANOMALY_PAGE_SIZE = 50;
 
-/** The Agent's most recent Anomalies. */
+/** The Agent's Anomalies, most recent first, a page at a time. */
 export function useAgentAnomalies(agentId: string) {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id ?? "";
 
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: anomaliesKey.list(organizationId, agentId),
-    queryFn: async () => {
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
       const response = await api.get<AnomalyPage>(
-        `${orgApiBase}/agents/${agentId}/anomalies?page=1&page_size=${ANOMALY_PAGE_SIZE}`,
+        `${orgApiBase}/agents/${agentId}/anomalies?page=${pageParam}&page_size=${ANOMALY_PAGE_SIZE}`,
         { schema: AnomalyPageSchema },
       );
       return response.data;
     },
+    getNextPageParam: (lastPage) =>
+      lastPage.page * lastPage.pageSize < lastPage.total ? lastPage.page + 1 : undefined,
     enabled: Boolean(organizationId && agentId),
   });
 
   return {
-    anomalies: query.data?.items,
-    total: query.data?.total ?? 0,
+    anomalies: query.data?.pages.flatMap((page) => page.items),
     isLoading: query.isPending,
     error: query.error,
     refetch: query.refetch,
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
   };
 }
 

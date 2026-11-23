@@ -83,7 +83,10 @@ export class AnomalyDataSupport {
     await this.page.route(`${base}/anomalies**`, async (route) => {
       const url = new URL(route.request().url());
       mock.requests.push({ method: route.request().method(), url, body: null });
-      return json(route, 200, { page: 1, page_size: 50, total: anomalies.length, items: anomalies });
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const pageSize = Number(url.searchParams.get("page_size") ?? 50);
+      const items = anomalies.slice((page - 1) * pageSize, page * pageSize);
+      return json(route, 200, { page, page_size: pageSize, total: anomalies.length, items });
     });
     await this.page.route(`${base}/normal-behaviour`, async (route) => {
       mock.requests.push({ method: "GET", url: new URL(route.request().url()), body: null });

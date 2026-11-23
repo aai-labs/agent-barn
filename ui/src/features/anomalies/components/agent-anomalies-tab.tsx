@@ -15,7 +15,6 @@ import { Fact } from "@/features/spend-limits/components/fact";
 import { formatDate } from "@/shared/date";
 
 import {
-  ANOMALY_PAGE_SIZE,
   useAgentAnomalies,
   useAgentNormalBehaviour,
   useUpdateAnomalyOverride,
@@ -79,7 +78,7 @@ function AnomalyRow({ anomaly }: { anomaly: Anomaly }) {
 }
 
 function FlaggedActivity({ agent, detectionEnabled }: { agent: Agent; detectionEnabled: boolean | undefined }) {
-  const { anomalies, total, isLoading, error, refetch } = useAgentAnomalies(agent.id);
+  const { anomalies, isLoading, error, refetch, hasMore, loadMore, isLoadingMore } = useAgentAnomalies(agent.id);
   return (
     <section className="af-card overflow-hidden" aria-label="Flagged activity">
       <header className="border-b px-5 py-3.5" style={{ borderColor: "var(--line)" }}>
@@ -115,11 +114,18 @@ function FlaggedActivity({ agent, detectionEnabled }: { agent: Agent; detectionE
               <AnomalyRow key={anomaly.id} anomaly={anomaly} />
             ))}
           </ul>
-          {total > ANOMALY_PAGE_SIZE && (
+          {hasMore && (
             <div className="border-t px-5 py-3" style={{ borderColor: "var(--line)" }}>
-              <Muted>
-                Showing the {ANOMALY_PAGE_SIZE} most recent of {total}.
-              </Muted>
+              <button
+                type="button"
+                className="af-btn af-btn-ghost af-btn-sm"
+                disabled={isLoadingMore}
+                onClick={() => {
+                  void loadMore();
+                }}
+              >
+                {isLoadingMore ? "Loading…" : "Load more"}
+              </button>
             </div>
           )}
         </>

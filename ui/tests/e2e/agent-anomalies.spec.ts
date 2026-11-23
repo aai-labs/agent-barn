@@ -93,6 +93,20 @@ test.describe("Agent · Unusual activity", () => {
     await expect(anomaliesPage.anomalyList()).toContainText("seen in tool calls");
   });
 
+  test("older Anomalies than the first page load on request", async ({ page }) => {
+    const anomalies = Array.from({ length: 51 }, (_, index) =>
+      mockAnomaly({ subject: `host-${index}.example`, signal: "NEW_DESTINATION", usual_value: null, threshold: null }),
+    );
+    const { anomaliesPage } = await openTab(page, { anomalies });
+    await expect(anomaliesPage.anomalies()).toHaveCount(50);
+
+    await anomaliesPage.anomalyList().getByRole("button", { name: "Load more" }).click();
+
+    await expect(anomaliesPage.anomalies()).toHaveCount(51);
+    await expect(anomaliesPage.anomalies().last()).toContainText("host-50.example");
+    await expect(anomaliesPage.anomalyList().getByRole("button", { name: "Load more" })).toHaveCount(0);
+  });
+
   test("an Agent with nothing flagged says so", async ({ page }) => {
     const { anomaliesPage } = await openTab(page);
 
