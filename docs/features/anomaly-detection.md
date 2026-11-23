@@ -16,6 +16,7 @@ nobody is alerted and nothing is stopped.
 This is the first slice of anomaly detection (AF-453, epic AF-198). It finds candidates
 with statistics alone and calls no model. Later slices add off-hours signals, a decision
 model that classifies candidates, alerts with acknowledge and resolve, and quarantine.
+Delivery state across the epic's slices is in the [change log](anomaly-detection/CHANGELOG.md).
 
 ## Authorization
 
