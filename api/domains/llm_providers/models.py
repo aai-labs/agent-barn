@@ -7,6 +7,7 @@ connection has a slug of its own, never a provider type, and a base URL.
 A connection's models each carry an input and output price above zero, per token.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -31,6 +32,7 @@ MODEL_ID_PATTERN = "^[A-Za-z0-9._:/-]+$"
 MAX_PRICE_KEY_LENGTH = 256
 PRICE_PRECISION = 24
 PRICE_SCALE = 18
+MAX_MODELS_PER_CONNECTION = 50
 
 # The connection the migration seeds. Kept here for tests that reset the table to it; the
 # migration carries its own copy, as migrations do.
@@ -204,6 +206,67 @@ class LlmProviderCatalogueEntryRead(PydanticBaseModel):
     cache_read_input_token_cost: ExactPrice | None = None
     cache_creation_input_token_cost: ExactPrice | None = None
     prices_differ: bool
+
+
+@dataclass(frozen=True)
+class LlmProviderModelPrices:
+    """A model's four per-token prices and where they came from."""
+
+    input_cost_per_token: Decimal
+    output_cost_per_token: Decimal
+    cache_read_input_token_cost: Decimal
+    cache_creation_input_token_cost: Decimal
+    price_source: PriceSource
+    litellm_price_key: str | None = None
+
+    @classmethod
+    def of(cls, model: LlmProviderModel) -> Self:
+        return cls(
+            model.input_cost_per_token,
+            model.output_cost_per_token,
+            model.cache_read_input_token_cost,
+            model.cache_creation_input_token_cost,
+            model.price_source,
+            model.litellm_price_key,
+        )
+
+    def amounts(self) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        return (
+            self.input_cost_per_token,
+            self.output_cost_per_token,
+            self.cache_read_input_token_cost,
+            self.cache_creation_input_token_cost,
+        )
+
+
+class LlmProviderTypedPrices(PydanticBaseModel):
+    """Typed per-token prices as decimal strings, whose rules the service checks so that a refusal
+    can say which one was broken."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_cost_per_token: str | None = None
+    output_cost_per_token: str | None = None
+    cache_read_input_token_cost: str | None = None
+    cache_creation_input_token_cost: str | None = None
+
+
+class LlmProviderModelChoice(PydanticBaseModel):
+    """A model to store: `"litellm"` takes LiteLLM's chat price, `"stored"` keeps its stored prices,
+    and typed prices are stored as `manual`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str
+    price: str | LlmProviderTypedPrices
+
+
+class LlmProviderModelsReplace(PydanticBaseModel):
+    """Every model the connection should have; any stored model left out is removed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    models: list[LlmProviderModelChoice]
 
 
 class LlmProviderConnectionCreate(PydanticBaseModel):

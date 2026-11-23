@@ -1731,6 +1731,11 @@
   ],
   [
     "PUT",
+    "/platform/settings/llm-providers/{slug}/models",
+    "replace_models_platform_settings_llm_providers__slug__models_put"
+  ],
+  [
+    "PUT",
     "/platform/settings/organizations",
     "update_organization_settings_platform_settings_organizations_put"
   ],

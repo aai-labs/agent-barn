@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import sqlalchemy as sa
 from injector import inject, singleton
@@ -10,9 +10,11 @@ from sqlmodel import Session, col, select
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     EVENT_REGISTRY,
+    MAX_LISTED_MODEL_IDS,
     PLATFORM_LLM_PROVIDER_CHANGED,
     PLATFORM_LLM_PROVIDER_CREATED,
     PLATFORM_LLM_PROVIDER_DELETED,
+    PLATFORM_LLM_PROVIDER_MODELS_CHANGED,
 )
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.llm_providers.models import (
@@ -20,6 +22,7 @@ from api.domains.llm_providers.models import (
     OPENROUTER_SLUG,
     LlmProviderConnection,
     LlmProviderModel,
+    LlmProviderModelPrices,
     ProviderType,
 )
 from api.domains.users.models import User
@@ -36,6 +39,15 @@ class ConnectionAlreadyExists(Exception):
 
 class ConnectionChanged(Exception):
     pass
+
+
+def _reprice(model: LlmProviderModel, prices: LlmProviderModelPrices) -> None:
+    model.input_cost_per_token = prices.input_cost_per_token
+    model.output_cost_per_token = prices.output_cost_per_token
+    model.cache_read_input_token_cost = prices.cache_read_input_token_cost
+    model.cache_creation_input_token_cost = prices.cache_creation_input_token_cost
+    model.price_source = prices.price_source
+    model.litellm_price_key = prices.litellm_price_key
 
 
 @inject
@@ -138,6 +150,93 @@ class LlmProviderRepository:
                     "provider_type": connection.provider_type.value,
                     "previous_base_url": previous_base_url,
                     "base_url": base_url,
+                    "actor_display": actor_display,
+                },
+            )
+            session.commit()
+            return ids
+
+    def replace_models(
+        self,
+        slug: str,
+        actor_id: UUID,
+        actor_display: str,
+        *,
+        seen_api_key_encrypted: str,
+        seen_base_url: str | None,
+        wanted: list[tuple[str, LlmProviderModelPrices | None]],
+        apply: Callable[[LlmProviderConnection, list[LlmProviderModel]], None],
+    ) -> list[UUID]:
+        """Make the connection's models exactly `wanted`, calling `apply` first under its lock.
+
+        Each wanted model carries its prices, or None to keep its stored ones. A new model's row id
+        is derived from the connection and the model id, so a retried save writes the same route.
+        `apply` gets the connection and the models it will have, and writes their LiteLLM routes;
+        if it raises, nothing is stored. When no model is added, removed or repriced, nothing is
+        stored and no event is staged. Raises ConnectionNotFound when no connection with this slug is
+        live, and ConnectionChanged when its key or base URL is no longer the one read before the
+        provider's list was, or a model to keep is no longer stored.
+        """
+        with Session(self.delegate.engine) as session:
+            self._lock(session, slug)
+            connection = session.exec(
+                select(LlmProviderConnection).where(
+                    LlmProviderConnection.slug == slug, col(LlmProviderConnection.deleted_at).is_(None)
+                )
+            ).one_or_none()
+            if connection is None:
+                raise ConnectionNotFound(slug)
+            if connection.api_key_encrypted != seen_api_key_encrypted or connection.base_url != seen_base_url:
+                raise ConnectionChanged(slug)
+            stored = {model.model_id: model for model in self._models(session, connection.id)}
+            models: list[LlmProviderModel] = []
+            repriced: list[str] = []
+            for model_id, prices in wanted:
+                model = stored.get(model_id)
+                if prices is None:
+                    if model is None:
+                        raise ConnectionChanged(slug)
+                elif model is None:
+                    model = LlmProviderModel(
+                        id=uuid5(connection.id, model_id),
+                        connection_id=connection.id,
+                        model_id=model_id,
+                        input_cost_per_token=prices.input_cost_per_token,
+                        output_cost_per_token=prices.output_cost_per_token,
+                        cache_read_input_token_cost=prices.cache_read_input_token_cost,
+                        cache_creation_input_token_cost=prices.cache_creation_input_token_cost,
+                        price_source=prices.price_source,
+                        litellm_price_key=prices.litellm_price_key,
+                    )
+                elif LlmProviderModelPrices.of(model) != prices:
+                    repriced.append(model_id)
+                    _reprice(model, prices)
+                models.append(model)
+            models.sort(key=lambda model: model.model_id)
+            apply(connection, models)
+            added = sorted(model.model_id for model in models if model.model_id not in stored)
+            removed = sorted(stored.keys() - {model.model_id for model in models})
+            repriced.sort()
+            if not (added or removed or repriced):
+                return []
+            for model_id in removed:
+                session.delete(stored[model_id])
+            session.add_all(models)
+            ids = self._stage(
+                session,
+                PLATFORM_LLM_PROVIDER_MODELS_CHANGED,
+                connection,
+                actor_id,
+                datetime.now(UTC),
+                {
+                    "provider_type": connection.provider_type.value,
+                    "added_count": len(added),
+                    "removed_count": len(removed),
+                    "repriced_count": len(repriced),
+                    "added_model_ids": added[:MAX_LISTED_MODEL_IDS],
+                    "removed_model_ids": removed[:MAX_LISTED_MODEL_IDS],
+                    "repriced_model_ids": repriced[:MAX_LISTED_MODEL_IDS],
+                    "model_ids_truncated": max(len(added), len(removed), len(repriced)) > MAX_LISTED_MODEL_IDS,
                     "actor_display": actor_display,
                 },
             )

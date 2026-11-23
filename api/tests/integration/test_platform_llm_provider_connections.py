@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import Mock
-from uuid import UUID, uuid7
+from uuid import UUID, uuid5, uuid7
 
 import pytest
 from hamcrest import assert_that, equal_to, has_entries, has_length, is_not, none
@@ -79,6 +79,22 @@ ANTHROPIC_REFUSED_STORED_KEY = "Anthropic did not accept the stored key. Replace
 ANTHROPIC_LIST_UNREACHABLE = "Anthropic could not be reached to list its models."
 ANTHROPIC_LIST_UNREADABLE = "Anthropic's model list could not be read."
 PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
+MODELS_CHANGED_EVENT = "platform.llm_provider.models_changed"
+SAVE_LISTED = ["claude-haiku-4-5", "claude-opus-4-1", "claude-sonnet-4-5"]
+SONNET_LISTED = ("0.000003", "0.000015", "0.0000003", "0.00000375")
+SONNET_STORED = ("0.0000025", "0.00001", "0.00000125", "0")
+HAIKU_LISTED = ("0.000001", "0.000005", "0.0000001", "0.00000125")
+TOO_MANY_MODELS = "A connection can have at most 50 models. Nothing was saved."
+MODEL_REPEATED = "A model can be listed only once. Nothing was saved."
+MODEL_ID_FORMAT = "A model id must be 1 to 200 letters, digits or . _ : / - characters. Nothing was saved."
+PRICE_CHOICE = 'Each model takes "litellm", "stored" or its four prices. Nothing was saved.'
+PRICE_FORMAT = "Each price must be a number below 1,000,000 with at most 18 decimal places. Nothing was saved."
+PRICE_RANGE = "Input and output prices must be above 0, and cache prices 0 or more. Nothing was saved."
+ANTHROPIC_NOT_LISTED = "Anthropic does not list one of these models. Nothing was saved."
+NO_CHAT_PRICE = "LiteLLM has no chat price for one of these models; type its prices. Nothing was saved."
+PRICES_NOT_STORED = "Only a stored model can keep its stored prices. Nothing was saved."
+MODELS_CHANGED_WHILE_READING = "The connection changed while its models were read. Nothing was saved."
+MODELS_NOT_ROUTED = "The model proxy could not be updated. Your models were not changed."
 NO_PRICES = {
     "litellm_price_key": None,
     "input_cost_per_token": None,
@@ -1682,3 +1698,640 @@ def test_a_connection_whose_models_are_not_listed_is_refused_before_the_provider
         assert_that(response.status_code, equal_to(409))
         assert_that(response.json(), equal_to({"detail": detail}))
         context.list_models.assert_not_called()
+
+
+def _claude_prices():
+    return litellm_prices(
+        _price("claude-haiku-4-5", "0.000001", "0.000005", "0.0000001", "0.00000125"),
+        _price("claude-opus-4-1", "0.000015", "0.000075"),
+        _price("claude-sonnet-4-5", "0.000003", "0.000015", "0.0000003", "0.00000375"),
+        _price("claude-3-embed", "0.0000001", "0.0000001", mode="embedding"),
+    )
+
+
+def _without_key(route: dict) -> dict:
+    return {**route, "litellm_params": {k: v for k, v in route["litellm_params"].items() if k != "api_key"}}
+
+
+def anthropic_with_routes(context):
+    routes: dict[str, dict] = {}
+    litellm = context.injector.get(LiteLLMClient)
+    litellm.list_model_deployments.side_effect = lambda id_prefix: [
+        _without_key(route) for route_id, route in routes.items() if route_id.startswith(id_prefix)
+    ]
+    litellm.upsert_model_deployment.side_effect = lambda **route: routes.update({route["model_info"]["id"]: route})
+    litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
+    context.routes = routes
+    anthropic_connected(context)
+    routes.update(_other_routes())
+
+
+def _claude_route(context, model_id: str, row_id: UUID, prices: tuple[str, str, str, str]) -> dict[str, dict]:
+    route_id = f"agentbarn:model:{context.connection.id}:{row_id}"
+    return {
+        route_id: {
+            "model_name": f"anthropic/{model_id}",
+            "litellm_params": {
+                "model": f"anthropic/{model_id}",
+                "api_key": ANTHROPIC_KEY,
+                "input_cost_per_token": float(prices[0]),
+                "output_cost_per_token": float(prices[1]),
+                "cache_read_input_token_cost": float(prices[2]),
+                "cache_creation_input_token_cost": float(prices[3]),
+            },
+            "model_info": {"id": route_id, "disable_background_health_check": True},
+        }
+    }
+
+
+def _stored_claude(context, model_id: str, prices: tuple[str, str, str, str], **fields) -> LlmProviderModel:
+    model = _model(
+        context,
+        context.connection,
+        model_id,
+        input_cost_per_token=Decimal(prices[0]),
+        output_cost_per_token=Decimal(prices[1]),
+        cache_read_input_token_cost=Decimal(prices[2]),
+        cache_creation_input_token_cost=Decimal(prices[3]),
+        **fields,
+    )
+    context.routes.update(_claude_route(context, model_id, model.id, prices))
+    return model
+
+
+def _typed(input_price: str, output_price: str, cache_read: str, cache_creation: str) -> dict:
+    return {
+        "input_cost_per_token": input_price,
+        "output_cost_per_token": output_price,
+        "cache_read_input_token_cost": cache_read,
+        "cache_creation_input_token_cost": cache_creation,
+    }
+
+
+def _save(context, slug: str, models: list[dict], headers: dict | None = None):
+    return context.client.put(f"{BASE}/{slug}/models", headers=headers or auth(context), json={"models": models})
+
+
+def _models_changed_events(context) -> list[OutboxMessage]:
+    with _session(context) as session:
+        return list(
+            session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name) == MODELS_CHANGED_EVENT)).all()
+        )
+
+
+def _stored_prices(context) -> dict[str, tuple]:
+    return {
+        model.model_id: (
+            model.input_cost_per_token,
+            model.output_cost_per_token,
+            model.cache_read_input_token_cost,
+            model.cache_creation_input_token_cost,
+            model.price_source,
+            model.litellm_price_key,
+        )
+        for model in _models(context, context.connection)
+    }
+
+
+def _assert_nothing_saved(context, before: dict[str, tuple], routes_before: dict[str, dict]) -> None:
+    assert_that(_stored_prices(context), equal_to(before))
+    assert_that(context.routes, equal_to(routes_before))
+    assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_an_organization_owner_cannot_save_a_connections_models():
+    with given(_setup(anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(403))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_read_only_api_key_cannot_save_a_connections_models():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}], read_only)
+
+        assert_that(response.status_code, equal_to(403))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_saved_models_are_stored_routed_and_audited():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        response = _save(
+            context,
+            "anthropic",
+            [
+                {"model_id": "claude-sonnet-4-5", "price": "litellm"},
+                {"model_id": "claude-opus-4-1", "price": "litellm"},
+                {"model_id": "claude-haiku-4-5", "price": _typed("0.0000012", "0.000006", "0.00000012", "0")},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "claude-haiku-4-5",
+                        "input_cost_per_token": "0.000001200000000000",
+                        "output_cost_per_token": "0.000006000000000000",
+                        "cache_read_input_token_cost": "0.000000120000000000",
+                        "cache_creation_input_token_cost": "0.000000000000000000",
+                        "price_source": "manual",
+                        "litellm_price_key": None,
+                    },
+                    {
+                        "model_id": "claude-opus-4-1",
+                        "input_cost_per_token": "0.000015000000000000",
+                        "output_cost_per_token": "0.000075000000000000",
+                        "cache_read_input_token_cost": "0.000015000000000000",
+                        "cache_creation_input_token_cost": "0.000015000000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "claude-opus-4-1",
+                    },
+                    {
+                        "model_id": "claude-sonnet-4-5",
+                        "input_cost_per_token": "0.000003000000000000",
+                        "output_cost_per_token": "0.000015000000000000",
+                        "cache_read_input_token_cost": "0.000000300000000000",
+                        "cache_creation_input_token_cost": "0.000003750000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "claude-sonnet-4-5",
+                    },
+                ]
+            ),
+        )
+        connection_id = context.connection.id
+        assert_that(
+            context.routes,
+            equal_to(
+                {
+                    **_other_routes(),
+                    **_claude_route(
+                        context,
+                        "claude-haiku-4-5",
+                        uuid5(connection_id, "claude-haiku-4-5"),
+                        ("0.0000012", "0.000006", "0.00000012", "0"),
+                    ),
+                    **_claude_route(
+                        context,
+                        "claude-opus-4-1",
+                        uuid5(connection_id, "claude-opus-4-1"),
+                        ("0.000015", "0.000075", "0.000015", "0.000015"),
+                    ),
+                    **_claude_route(
+                        context,
+                        "claude-sonnet-4-5",
+                        uuid5(connection_id, "claude-sonnet-4-5"),
+                        ("0.000003", "0.000015", "0.0000003", "0.00000375"),
+                    ),
+                }
+            ),
+        )
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            equal_to(
+                {
+                    "connection_id": str(connection_id),
+                    "slug": "anthropic",
+                    "provider_type": "anthropic",
+                    "added_count": 3,
+                    "removed_count": 0,
+                    "repriced_count": 0,
+                    "added_model_ids": ["claude-haiku-4-5", "claude-opus-4-1", "claude-sonnet-4-5"],
+                    "removed_model_ids": [],
+                    "repriced_model_ids": [],
+                    "model_ids_truncated": False,
+                    "actor_display": ADMIN_NAME,
+                    "subject_display": "Anthropic",
+                }
+            ),
+        )
+        assert_that(event.subject, has_entries(type="SYSTEM", id=str(connection_id)))
+        assert ANTHROPIC_KEY not in str(event.payload)
+        context.list_models.assert_called_once_with(ProviderType.ANTHROPIC, ANTHROPIC_KEY)
+
+
+def test_a_model_left_out_is_removed_with_its_route():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        haiku = _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        routes_before = dict(context.routes)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that([model["model_id"] for model in response.json()], equal_to(["claude-sonnet-4-5"]))
+        assert_that(list(_stored_prices(context)), equal_to(["claude-sonnet-4-5"]))
+        haiku_route = _route_id(context.connection, haiku)
+        assert_that(context.routes, equal_to({k: v for k, v in routes_before.items() if k != haiku_route}))
+        upsert.assert_not_called()
+        context.injector.get(LiteLLMClient).get_model_prices.assert_not_called()
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            has_entries(
+                added_count=0,
+                removed_count=1,
+                repriced_count=0,
+                added_model_ids=[],
+                removed_model_ids=["claude-haiku-4-5"],
+                repriced_model_ids=[],
+                model_ids_truncated=False,
+            ),
+        )
+
+
+def test_only_the_routes_that_differ_are_written():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(
+            context,
+            "anthropic",
+            [
+                {"model_id": "claude-sonnet-4-5", "price": "litellm"},
+                {"model_id": "claude-haiku-4-5", "price": "stored"},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(upsert.call_count, equal_to(1))
+        assert_that(upsert.call_args.kwargs["model_info"]["id"], equal_to(_route_id(context.connection, sonnet)))
+        assert_that(
+            context.routes[_route_id(context.connection, sonnet)],
+            equal_to(
+                _claude_route(context, "claude-sonnet-4-5", sonnet.id, SONNET_LISTED)[
+                    _route_id(context.connection, sonnet)
+                ]
+            ),
+        )
+        assert_that(
+            _stored_prices(context)["claude-sonnet-4-5"],
+            equal_to((*(Decimal(price) for price in SONNET_LISTED), PriceSource.LITELLM, "claude-sonnet-4-5")),
+        )
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            has_entries(added_count=0, removed_count=0, repriced_count=1, repriced_model_ids=["claude-sonnet-4-5"]),
+        )
+
+
+def test_a_price_source_change_alone_is_audited_without_writing_the_route():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_LISTED)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        upsert.assert_not_called()
+        assert_that(
+            _stored_prices(context)["claude-sonnet-4-5"][4:], equal_to((PriceSource.LITELLM, "claude-sonnet-4-5"))
+        )
+        [event] = _models_changed_events(context)
+        assert_that(event.payload, has_entries(repriced_count=1, repriced_model_ids=["claude-sonnet-4-5"]))
+
+
+def test_a_save_that_changes_nothing_records_nothing():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        before, routes_before = _stored_prices(context), dict(context.routes)
+        litellm = context.injector.get(LiteLLMClient)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        litellm.upsert_model_deployment.assert_not_called()
+        litellm.delete_model_deployment.assert_not_called()
+        _assert_nothing_saved(context, before, routes_before)
+
+
+def test_a_save_that_changes_nothing_still_restores_a_missing_route():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        route_id = _route_id(context.connection, sonnet)
+        expected = dict(context.routes)
+        del context.routes[route_id]
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(context.routes, equal_to(expected))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_the_audited_ids_are_cut_to_twenty_each():
+    model_ids = [f"model-{number:02d}" for number in range(21)]
+    with given(_setup(admin, anthropic_with_routes, provider_lists(model_ids), litellm_prices())) as context:
+        response = _save(
+            context,
+            "anthropic",
+            [{"model_id": model_id, "price": _typed("0.000001", "0.000002", "0", "0")} for model_id in model_ids],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            has_entries(added_count=21, added_model_ids=model_ids[:20], model_ids_truncated=True),
+        )
+
+
+def _many(count: int) -> list[dict]:
+    return [
+        {"model_id": f"model-{number:02d}", "price": _typed("0.000001", "0.000002", "0", "0")}
+        for number in range(count)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("models", "detail"),
+    [
+        (_many(51), TOO_MANY_MODELS),
+        ([{"model_id": "claude-sonnet-4-5", "price": "litellm"}] * 2, MODEL_REPEATED),
+        ([{"model_id": "claude sonnet", "price": "litellm"}], MODEL_ID_FORMAT),
+        ([{"model_id": "", "price": "litellm"}], MODEL_ID_FORMAT),
+        ([{"model_id": "m" * 201, "price": "litellm"}], MODEL_ID_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": "cheapest"}], PRICE_CHOICE),
+        ([{"model_id": "claude-sonnet-4-5", "price": {"input_cost_per_token": "0.000001"}}], PRICE_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("abc", "0.000002", "0", "0")}], PRICE_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("NaN", "0.000002", "0", "0")}], PRICE_FORMAT),
+        (
+            [{"model_id": "claude-sonnet-4-5", "price": _typed("0.0000010000000000001", "0.000002", "0", "0")}],
+            PRICE_FORMAT,
+        ),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("1000000", "0.000002", "0", "0")}], PRICE_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0", "0.000002", "0", "0")}], PRICE_RANGE),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0.000001", "-0.000002", "0", "0")}], PRICE_RANGE),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0.000001", "0.000002", "-0.1", "0")}], PRICE_RANGE),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0.000001", "0.000002", "0", "-0.1")}], PRICE_RANGE),
+    ],
+)
+def test_a_body_that_breaks_a_rule_is_refused_before_the_provider_is_asked(models, detail):
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        before, routes_before = _stored_prices(context), dict(context.routes)
+
+        response = _save(context, "anthropic", models)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, before, routes_before)
+
+
+@pytest.mark.parametrize(
+    ("models", "detail"),
+    [
+        ([{"model_id": "claude-unlisted", "price": _typed("0.000001", "0.000002", "0", "0")}], ANTHROPIC_NOT_LISTED),
+        ([{"model_id": "claude-unpriced", "price": "litellm"}], NO_CHAT_PRICE),
+        ([{"model_id": "claude-3-embed", "price": "litellm"}], NO_CHAT_PRICE),
+        ([{"model_id": "claude-sonnet-4-5", "price": "stored"}], PRICES_NOT_STORED),
+    ],
+)
+def test_a_model_the_provider_or_litellm_cannot_back_is_refused(models, detail):
+    listed = [*SAVE_LISTED, "claude-3-embed", "claude-unpriced"]
+    with given(_setup(admin, anthropic_with_routes, provider_lists(listed), _claude_prices())) as context:
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        before, routes_before = _stored_prices(context), dict(context.routes)
+
+        response = _save(context, "anthropic", models)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        _assert_nothing_saved(context, before, routes_before)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code", "detail"),
+    [
+        (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
+        (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
+    ],
+)
+def test_a_provider_list_that_fails_saves_nothing(failure, status_code, detail):
+    with given(_setup(admin, anthropic_with_routes, provider_lists(failure), _claude_prices())) as context:
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(status_code))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_price_list_litellm_cannot_give_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED))) as context:
+        context.injector.get(LiteLLMClient).get_model_prices.side_effect = LiteLLMError("proxy down")
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": PRICE_LIST_UNREADABLE}))
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_litellm_failure_part_way_leaves_the_models_unchanged_and_a_retry_repairs_the_routes():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        before = _stored_prices(context)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+
+        def fail_after_the_first_write(**route):
+            if upsert.call_count > 1:
+                raise LiteLLMError("proxy down")
+            write(**route)
+
+        upsert.side_effect = fail_after_the_first_write
+        models = [
+            {"model_id": "claude-opus-4-1", "price": "litellm"},
+            {"model_id": "claude-sonnet-4-5", "price": "litellm"},
+        ]
+
+        failed = _save(context, "anthropic", models)
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": MODELS_NOT_ROUTED}))
+        assert_that(_stored_prices(context), equal_to(before))
+        assert_that(_models_changed_events(context), has_length(0))
+
+        upsert.side_effect = write
+        retried = _save(context, "anthropic", models)
+
+        assert_that(retried.status_code, equal_to(200), retried.text)
+        connection_id = context.connection.id
+        assert_that(
+            context.routes,
+            equal_to(
+                {
+                    **_other_routes(),
+                    **_claude_route(
+                        context,
+                        "claude-opus-4-1",
+                        uuid5(connection_id, "claude-opus-4-1"),
+                        ("0.000015", "0.000075", "0.000015", "0.000015"),
+                    ),
+                    **_claude_route(
+                        context, "claude-sonnet-4-5", uuid5(connection_id, "claude-sonnet-4-5"), SONNET_LISTED
+                    ),
+                }
+            ),
+        )
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_saving_the_models_of_a_missing_connection_is_not_found(deleted):
+    with given(_setup(admin, provider_lists([]), litellm_prices())) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _save(context, "xai", [])
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        context.list_models.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("slug", "detail"),
+    [("openrouter", MODELS_NOT_STORED), ("azure-eu", AZURE_NOT_LISTED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
+)
+def test_a_connection_whose_models_are_not_listed_cannot_save_them(slug, detail):
+    with given(_setup(admin, azure_connected, provider_lists([]), litellm_prices())) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC)
+
+        response = _save(context, slug, [])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+
+
+def test_a_key_replaced_while_the_models_were_listed_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, _claude_prices())) as context:
+
+        def replace_key_while_listing(provider_type, api_key):
+            with _session(context) as session:
+                row = session.get(LlmProviderConnection, context.connection.id)
+                assert row is not None
+                row.api_key_encrypted = encrypt_token(REPLACED_KEY, TEST_ENCRYPTION_KEY)
+                row.api_key_last4 = REPLACED_KEY[-4:]
+                session.add(row)
+                session.commit()
+            return SAVE_LISTED
+
+        context.injector.get(LlmProviderCatalogue).list_models = Mock(side_effect=replace_key_while_listing)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": MODELS_CHANGED_WHILE_READING}))
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_stored_model_removed_while_the_models_were_listed_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+
+        def remove_model_while_listing(provider_type, api_key):
+            with _session(context) as session:
+                session.delete(session.get(LlmProviderModel, sonnet.id))
+                session.commit()
+            return SAVE_LISTED
+
+        context.injector.get(LlmProviderCatalogue).list_models = Mock(side_effect=remove_model_while_listing)
+        routes_before = dict(context.routes)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": MODELS_CHANGED_WHILE_READING}))
+        _assert_nothing_saved(context, {}, routes_before)
+
+
+def test_a_connection_deleted_while_the_models_were_listed_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, _claude_prices())) as context:
+
+        def delete_while_listing(provider_type, api_key):
+            assert_that(context.client.delete(f"{BASE}/anthropic", headers=auth(context)).status_code, equal_to(204))
+            return SAVE_LISTED
+
+        context.injector.get(LlmProviderCatalogue).list_models = Mock(side_effect=delete_while_listing)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        assert_that(context.routes, equal_to(_other_routes()))
+        assert_that(_models(context, context.connection), has_length(0))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_a_custom_connection_saves_typed_prices_routed_at_its_base_url():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(["llama-3"]), litellm_prices())) as context:
+        custom = _connection(
+            context,
+            "custom-lab",
+            "Aardvark lab",
+            ProviderType.CUSTOM,
+            base_url=CUSTOM_BASE_URL,
+            **_with_key(CUSTOM_KEY),
+        )
+
+        response = _save(
+            context, "custom-lab", [{"model_id": "llama-3", "price": _typed("0.000001", "0.000002", "0", "0")}]
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        route_id = f"agentbarn:model:{custom.id}:{uuid5(custom.id, 'llama-3')}"
+        assert_that(
+            context.routes[route_id],
+            equal_to(
+                {
+                    "model_name": "custom-lab/llama-3",
+                    "litellm_params": {
+                        "model": "openai/llama-3",
+                        "api_base": CUSTOM_BASE_URL,
+                        "api_key": CUSTOM_KEY,
+                        "input_cost_per_token": 1e-06,
+                        "output_cost_per_token": 2e-06,
+                        "cache_read_input_token_cost": 0.0,
+                        "cache_creation_input_token_cost": 0.0,
+                    },
+                    "model_info": {"id": route_id, "disable_background_health_check": True},
+                }
+            ),
+        )
+        context.list_models.assert_called_once_with(ProviderType.CUSTOM, CUSTOM_KEY, CUSTOM_BASE_URL)
+
+
+def test_a_custom_model_cannot_take_litellms_price():
+    with given(
+        _setup(admin, provider_lists(["llama-3"]), litellm_prices(_price("openai/llama-3", "0.000001", "0.000002")))
+    ) as context:
+        _connection(
+            context,
+            "custom-lab",
+            "Aardvark lab",
+            ProviderType.CUSTOM,
+            base_url=CUSTOM_BASE_URL,
+            **_with_key(CUSTOM_KEY),
+        )
+
+        response = _save(context, "custom-lab", [{"model_id": "llama-3", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": NO_CHAT_PRICE}))

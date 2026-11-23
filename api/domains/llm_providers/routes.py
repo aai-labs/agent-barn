@@ -14,6 +14,7 @@ from api.domains.llm_providers.models import (
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
     LlmProviderModelRead,
+    LlmProviderModelsReplace,
 )
 from api.domains.llm_providers.service import PlatformLlmProviderService
 
@@ -70,6 +71,16 @@ def list_models(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     return service.list_models(slug, context)
+
+
+@platform_llm_providers_router.put("/{slug}/models", response_model=list[LlmProviderModelRead])
+def replace_models(
+    slug: str,
+    data: LlmProviderModelsReplace,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.replace_models(slug, data, context)
 
 
 @platform_llm_providers_router.get("/{slug}/model-catalogue", response_model=list[LlmProviderCatalogueEntryRead])

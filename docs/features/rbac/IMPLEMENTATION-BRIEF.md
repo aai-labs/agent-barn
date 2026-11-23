@@ -46,7 +46,8 @@ known provider's, Azure or Custom connection after the provider accepts its key,
 `PUT .../{slug}/key` replaces any live connection's key the same way. `DELETE .../{slug}`
 deletes a connection other than OpenRouter and purges its key. `GET .../{slug}/models`
 lists a live connection's stored models and their prices, and `GET .../{slug}/model-catalogue`
-the models its provider lists for the stored key, which never leaves the API. Every write refuses a
+the models its provider lists for the stored key, which never leaves the API. `PUT .../{slug}/models`
+replaces a live connection's models. Every write refuses a
 read-only Personal API Key, and a malformed request gets a fixed `422` that does not echo
 the body.
 
