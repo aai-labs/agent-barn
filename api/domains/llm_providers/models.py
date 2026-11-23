@@ -10,12 +10,12 @@ A connection's models each carry an input and output price above zero, per token
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Self
+from typing import Annotated, Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, SecretStr, field_validator, model_validator
+from pydantic import ConfigDict, PlainSerializer, SecretStr, field_validator, model_validator
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -44,6 +44,8 @@ OPENROUTER_ROUTE_ID = "agentbarn:openrouter"
 OPENROUTER_ROUTE_MODEL = "openrouter/*"
 OPENROUTER_ROUTE_API_BASE = "https://openrouter.ai/api/v1"
 OPENROUTER_ROUTE_ORDER = 1
+
+ExactPrice = Annotated[Decimal, PlainSerializer(lambda price: format(price, "f"), return_type=str)]
 
 
 class ProviderType(StrEnum):
@@ -176,6 +178,18 @@ class LlmProviderConnectionRead(PydanticBaseModel):
     updated_at: datetime | None = None
     updated_by: str | None = None
     env_key_configured: bool
+
+
+class LlmProviderModelRead(PydanticBaseModel):
+    """A stored model and its per-token prices, each an exact fixed-point decimal string."""
+
+    model_id: str
+    input_cost_per_token: ExactPrice
+    output_cost_per_token: ExactPrice
+    cache_read_input_token_cost: ExactPrice
+    cache_creation_input_token_cost: ExactPrice
+    price_source: PriceSource
+    litellm_price_key: str | None = None
 
 
 class LlmProviderConnectionCreate(PydanticBaseModel):

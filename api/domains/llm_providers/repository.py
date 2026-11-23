@@ -74,6 +74,11 @@ class LlmProviderRepository:
             ).all()
         return [(connection, full_name or email) for connection, full_name, email in rows]
 
+    def list_models(self, connection_id: UUID) -> list[LlmProviderModel]:
+        """The connection's models, by model id."""
+        with Session(self.delegate.engine) as session:
+            return self._models(session, connection_id)
+
     def slug_used(self, slug: str) -> bool:
         """Whether any connection, deleted or not, has this slug."""
         with Session(self.delegate.engine) as session:
@@ -115,7 +120,7 @@ class LlmProviderRepository:
                 raise ConnectionChanged(slug)
             replaced_existing = connection.api_key_encrypted is not None
             connection.base_url = base_url
-            apply(connection, self._models(session, connection))
+            apply(connection, self._models(session, connection.id))
             now = datetime.now(UTC)
             connection.api_key_encrypted = api_key_encrypted
             connection.api_key_last4 = api_key_last4
@@ -238,11 +243,11 @@ class LlmProviderRepository:
             return ids
 
     @staticmethod
-    def _models(session: Session, connection: LlmProviderConnection) -> list[LlmProviderModel]:
+    def _models(session: Session, connection_id: UUID) -> list[LlmProviderModel]:
         return list(
             session.exec(
                 select(LlmProviderModel)
-                .where(LlmProviderModel.connection_id == connection.id)
+                .where(LlmProviderModel.connection_id == connection_id)
                 .order_by(col(LlmProviderModel.model_id))
             )
         )

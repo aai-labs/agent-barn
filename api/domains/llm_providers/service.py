@@ -32,6 +32,7 @@ from api.domains.llm_providers.models import (
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
     LlmProviderModel,
+    LlmProviderModelRead,
     ProviderType,
 )
 from api.domains.llm_providers.repository import (
@@ -61,6 +62,7 @@ BASE_URL_NOT_AN_API = "The base URL did not answer like a model API. Nothing was
 BASE_URL_NOT_TAKEN = "Only Azure and Custom connections take a base URL."
 NOT_FOUND = "That connection does not exist."
 OPENROUTER_FIXED = "OpenRouter can't be deleted."
+MODELS_NOT_STORED = "OpenRouter's models are not stored."
 CHANGED_WHILE_CHECKING = "The connection changed while the key was checked. Nothing was saved."
 KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
@@ -191,6 +193,19 @@ class PlatformLlmProviderService:
         if found is None:
             raise HTTPException(404, NOT_FOUND)
         return self._to_read(*found)
+
+    def list_models(self, slug: str, context: CurrentUserContext) -> list[LlmProviderModelRead]:
+        self.authority.require_platform_admin(context.user)
+        found = self.repository.find_active(slug)
+        if found is None:
+            raise HTTPException(404, NOT_FOUND)
+        connection = found[0]
+        if connection.provider_type == ProviderType.OPENROUTER:
+            raise HTTPException(409, MODELS_NOT_STORED)
+        return [
+            LlmProviderModelRead.model_validate(model, from_attributes=True)
+            for model in self.repository.list_models(connection.id)
+        ]
 
     def delete_connection(self, slug: str, context: CurrentUserContext) -> None:
         self.authority.require_platform_admin(context.user)

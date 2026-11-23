@@ -12,6 +12,7 @@ from api.domains.llm_providers.models import (
     LlmProviderConnectionCreate,
     LlmProviderConnectionRead,
     LlmProviderKeyReplace,
+    LlmProviderModelRead,
 )
 from api.domains.llm_providers.service import PlatformLlmProviderService
 
@@ -59,6 +60,15 @@ def replace_key(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     return service.replace_key(slug, data, context)
+
+
+@platform_llm_providers_router.get("/{slug}/models", response_model=list[LlmProviderModelRead])
+def list_models(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.list_models(slug, context)
 
 
 @platform_llm_providers_router.delete("/{slug}", status_code=204)

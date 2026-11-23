@@ -931,6 +931,11 @@
   ],
   [
     "GET",
+    "/platform/settings/llm-providers/{slug}/models",
+    "list_models_platform_settings_llm_providers__slug__models_get"
+  ],
+  [
+    "GET",
     "/platform/settings/organizations",
     "read_organization_settings_platform_settings_organizations_get"
   ],

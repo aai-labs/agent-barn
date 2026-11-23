@@ -64,6 +64,7 @@ OTHER_ROUTE = {
     "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": ANTHROPIC_KEY},
     "model_info": {"id": OTHER_ROUTE_ID, "disable_background_health_check": True},
 }
+MODELS_NOT_STORED = "OpenRouter's models are not stored."
 KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 
@@ -1126,15 +1127,16 @@ def test_a_deleted_connection_has_no_key_to_replace():
         context.check.assert_not_called()
 
 
-def _model(context, connection: LlmProviderConnection, model_id: str) -> LlmProviderModel:
+def _model(context, connection: LlmProviderConnection, model_id: str, **fields) -> LlmProviderModel:
     row = LlmProviderModel(
         connection_id=connection.id,
         model_id=model_id,
-        input_cost_per_token=Decimal("0.0000025"),
-        output_cost_per_token=Decimal("0.00001"),
-        cache_read_input_token_cost=Decimal("0.00000125"),
-        cache_creation_input_token_cost=Decimal(0),
-        price_source=PriceSource.MANUAL,
+        input_cost_per_token=fields.get("input_cost_per_token", Decimal("0.0000025")),
+        output_cost_per_token=fields.get("output_cost_per_token", Decimal("0.00001")),
+        cache_read_input_token_cost=fields.get("cache_read_input_token_cost", Decimal("0.00000125")),
+        cache_creation_input_token_cost=fields.get("cache_creation_input_token_cost", Decimal(0)),
+        price_source=fields.get("price_source", PriceSource.MANUAL),
+        litellm_price_key=fields.get("litellm_price_key"),
     )
     with _session(context) as session:
         session.add(row)
@@ -1304,3 +1306,108 @@ def test_a_key_replaced_while_the_connection_is_deleted_routes_nothing():
         assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
         assert_that(context.routes, equal_to(_other_routes()))
         assert_that(_changed_events(context), has_length(0))
+
+
+def _list_models(context, slug: str, headers: dict | None = None):
+    return context.client.get(f"{BASE}/{slug}/models", headers=headers or auth(context))
+
+
+def test_an_organization_owner_cannot_list_a_connections_models():
+    with given(_setup(anthropic_connected)) as context:
+        response = _list_models(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+
+
+def test_listing_a_connections_models_needs_a_signed_in_user():
+    with given(_setup(anthropic_connected)) as context:
+        response = context.client.get(f"{BASE}/anthropic/models")
+
+        assert_that(response.status_code, equal_to(401))
+
+
+def test_a_read_only_api_key_of_a_platform_admin_can_list_a_connections_models():
+    with given(_setup(admin, anthropic_connected)) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _list_models(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(200), response.text)
+
+
+def test_a_connections_models_are_listed_by_id_with_exact_prices():
+    with given(_setup(admin, anthropic_connected)) as context:
+        _model(context, context.connection, "claude-sonnet-4-5")
+        _model(
+            context,
+            context.connection,
+            "claude-haiku-4-5",
+            input_cost_per_token=Decimal("0.000001"),
+            output_cost_per_token=Decimal("0.000005"),
+            cache_read_input_token_cost=Decimal("0.0000001"),
+            cache_creation_input_token_cost=Decimal("0.00000125"),
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="claude-haiku-4-5",
+        )
+        other = _connection(context, "openai", "OpenAI", ProviderType.OPENAI, **_with_key(NEW_KEY))
+        _model(context, other, "gpt-4o")
+
+        response = _list_models(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "claude-haiku-4-5",
+                        "input_cost_per_token": "0.000001000000000000",
+                        "output_cost_per_token": "0.000005000000000000",
+                        "cache_read_input_token_cost": "0.000000100000000000",
+                        "cache_creation_input_token_cost": "0.000001250000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "claude-haiku-4-5",
+                    },
+                    {
+                        "model_id": "claude-sonnet-4-5",
+                        "input_cost_per_token": "0.000002500000000000",
+                        "output_cost_per_token": "0.000010000000000000",
+                        "cache_read_input_token_cost": "0.000001250000000000",
+                        "cache_creation_input_token_cost": "0.000000000000000000",
+                        "price_source": "manual",
+                        "litellm_price_key": None,
+                    },
+                ]
+            ),
+        )
+
+
+def test_a_connection_without_models_lists_none():
+    with given(_setup(admin, azure_connected)) as context:
+        response = _list_models(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), equal_to([]))
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_the_models_of_a_missing_connection_are_not_found(deleted):
+    with given(_setup(admin)) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _list_models(context, "xai")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+
+
+def test_openrouter_has_no_stored_models():
+    with given(_setup(admin)) as context:
+        response = _list_models(context, "openrouter")
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": MODELS_NOT_STORED}))
