@@ -110,4 +110,39 @@ export class PlatformLlmProvidersPage {
   async confirmDelete() {
     await this.dialog().getByRole("button", { name: "Delete provider" }).click();
   }
+
+  modelsButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: "Models", exact: true });
+  }
+
+  modelCheckbox(modelId: string) {
+    return this.dialog().getByRole("checkbox", { name: modelId, exact: true });
+  }
+
+  modelCheckboxes() {
+    return this.dialog().getByRole("checkbox");
+  }
+
+  modelCells(modelId: string) {
+    return this.dialog()
+      .getByRole("row")
+      .filter({ has: this.page.getByRole("checkbox", { name: modelId, exact: true }) })
+      .getByRole("cell");
+  }
+
+  modelFilter() {
+    return this.dialog().getByLabel("Filter models", { exact: true });
+  }
+
+  tickedCount() {
+    return this.dialog().getByText(/^\d+ of 50 ticked$/);
+  }
+
+  modelsNoLongerListed() {
+    return this.dialog().getByRole("region", { name: "Models no longer listed" });
+  }
+
+  async saveModels() {
+    await this.dialog().getByRole("button", { name: "Save models" }).click();
+  }
 }

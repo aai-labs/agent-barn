@@ -165,7 +165,9 @@ Platform Admin settings → **LLM providers** (`/dashboard/platform/settings?sec
 
 Every card has "Replace key" ("Save a key" while it has none), which opens a dialog with a password field and sends `PUT /platform/settings/llm-providers/{slug}/key`. For Azure and Custom the dialog also shows the base URL, filled in with the stored one; it is sent with the key only when it was changed. A refused or failed save keeps the dialog open with the API's message; an empty key is not sent. Every card but OpenRouter's has "Delete", which asks for confirmation before it sends `DELETE /platform/settings/llm-providers/{slug}`; for Azure and Custom the confirmation says the slug can't be used again. A refused delete keeps the confirmation open with the API's message.
 
-An added provider, a saved key and a deleted connection are each confirmed by a toast.
+The cards of Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita also have "Models" while a key is saved; Azure and Custom don't have it yet. It opens a dialog that reads `GET .../{slug}/model-catalogue` and `GET .../{slug}/models`, and shows either read's failure with the API's message and Retry. It lists the models the provider lists, which can be filtered by id, each with its four prices per 1M tokens, shifted from the API's decimal strings as text: a stored model's own prices, ticked, else LiteLLM's. A stored model whose LiteLLM price changed says so. A model without a LiteLLM price can't be ticked, and nor can more than 50 models (`MAX_MODELS_PER_CONNECTION`). A stored model the provider no longer lists is named apart, as removed by saving. "Save models" sends `PUT .../{slug}/models` with each ticked model, `"stored"` when it is stored and `"litellm"` when it is new; a refused or failed save keeps the dialog open with the API's message.
+
+An added provider, a saved key, saved models and a deleted connection are each confirmed by a toast.
 
 ## Moving off the environment key
 

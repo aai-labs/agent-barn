@@ -31,3 +31,5 @@ export const BASE_URL_HINTS: Partial<Record<ProviderType, string>> = {
 };
 
 export const MASKED_KEY_PREFIX = "*******";
+
+export const MAX_MODELS_PER_CONNECTION = 50;

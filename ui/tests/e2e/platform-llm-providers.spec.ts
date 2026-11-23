@@ -4,8 +4,11 @@ import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   ANTHROPIC_CONNECTION,
+  ANTHROPIC_STORED_MODELS,
   AZURE_CONNECTION,
+  DROPPED_MODEL,
   PlatformLlmProviderDataSupport,
+  pricedCatalogue,
   SAVED_KEY,
 } from "../pages/data-support/platform-llm-provider-data-support.po";
 import { PlatformLlmProvidersPage } from "../pages/platform-llm-providers-page.po";
@@ -414,4 +417,171 @@ test("OpenRouter can't be deleted", async ({ page }) => {
 
   await expect(settings.deleteButton("Anthropic")).toBeVisible();
   await expect(settings.card().getByRole("button", { name: "Delete" })).toHaveCount(0);
+});
+
+type ModelsOptions = Parameters<PlatformLlmProviderDataSupport["interceptModels"]>[0];
+
+async function openAnthropicModels(page: Page, models: ModelsOptions = {}) {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  const mock = await data.interceptModels(models);
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await settings.modelsButton("Anthropic").click();
+  return { mock, settings };
+}
+
+test("Platform Admin ticks a model priced by LiteLLM and saves, keeping the stored models' prices", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await expect(settings.dialog().getByRole("heading", { name: "Anthropic models" })).toBeVisible();
+  await expect(settings.dialog().getByRole("columnheader")).toHaveText([
+    "Model",
+    "Input",
+    "Output",
+    "Cache read",
+    "Cache write",
+  ]);
+  await expect(settings.modelCells("claude-haiku-4-5")).toHaveText(["claude-haiku-4-5", "$1", "$5", "$0.1", "$1.25"]);
+  await expect(settings.modelCheckbox("claude-haiku-4-5")).not.toBeChecked();
+  await expect(settings.modelCells("claude-sonnet-4-5")).toHaveText([
+    "claude-sonnet-4-5",
+    "$3",
+    "$15",
+    "$0.3",
+    "$3.75",
+  ]);
+  await expect(settings.modelCheckbox("claude-sonnet-4-5")).toBeChecked();
+  await expect(settings.modelCells("claude-opus-4-1")).toHaveText([
+    "claude-opus-4-1LiteLLM's price has changed",
+    "$12",
+    "$60",
+    "$1.2",
+    "$15",
+  ]);
+  await expect(settings.modelCheckbox("claude-opus-4-1")).toBeChecked();
+  await expect(settings.tickedCount()).toHaveText("2 of 50 ticked");
+
+  await settings.modelCheckbox("claude-haiku-4-5").click();
+  await expect(settings.tickedCount()).toHaveText("3 of 50 ticked");
+  await settings.saveModels();
+
+  await expect(settings.dialog()).toHaveCount(0);
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves).toEqual([
+    {
+      slug: "anthropic",
+      body: {
+        models: [
+          { model_id: "claude-haiku-4-5", price: "litellm" },
+          { model_id: "claude-opus-4-1", price: "stored" },
+          { model_id: "claude-sonnet-4-5", price: "stored" },
+        ],
+      },
+    },
+  ]);
+});
+
+test("unticking a stored model removes it on save", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await settings.modelCheckbox("claude-opus-4-1").click();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    { models: [{ model_id: "claude-sonnet-4-5", price: "stored" }] },
+  ]);
+});
+
+test("a model LiteLLM has no price for can't be ticked", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page);
+
+  await expect(settings.modelCheckbox("claude-unpriced-preview")).toBeDisabled();
+  await expect(settings.modelCells("claude-unpriced-preview")).toHaveText([
+    "claude-unpriced-preview",
+    "LiteLLM has no price for this model.",
+  ]);
+});
+
+test("the filter narrows the models by id", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page);
+
+  await settings.modelFilter().fill("SONNET");
+
+  await expect(settings.modelCheckboxes()).toHaveCount(1);
+  await expect(settings.modelCheckbox("claude-sonnet-4-5")).toBeVisible();
+});
+
+test("at 50 ticked models the rest can't be ticked", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page, pricedCatalogue(51, 50));
+
+  await expect(settings.tickedCount()).toHaveText("50 of 50 ticked");
+  await expect(settings.modelCheckbox("model-50")).toBeDisabled();
+  await settings.modelCheckbox("model-00").click();
+  await expect(settings.modelCheckbox("model-50")).toBeEnabled();
+});
+
+test("a refused save keeps the dialog open with the API's message", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, {
+    saveStatus: 422,
+    saveDetail: "Anthropic does not list one of these models. Nothing was saved.",
+  });
+
+  await settings.modelCheckbox("claude-haiku-4-5").click();
+  await settings.saveModels();
+
+  await expect(settings.dialog().getByRole("alert")).toHaveText(
+    "Anthropic does not list one of these models. Nothing was saved.",
+  );
+  await expect(settings.modelCheckbox("claude-haiku-4-5")).toBeChecked();
+  expect(mock.saves).toHaveLength(1);
+});
+
+test("a model list the provider refuses shows the API's message and can be retried", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, {
+    catalogueStatus: 409,
+    catalogueDetail: "Anthropic did not accept the stored key. Replace the key, then try again.",
+  });
+
+  await expect(settings.dialog().getByRole("alert")).toHaveText(
+    "Anthropic did not accept the stored key. Replace the key, then try again.",
+  );
+  await expect(settings.modelCheckboxes()).toHaveCount(0);
+  mock.recover();
+  await settings.dialog().getByRole("button", { name: "Retry" }).click();
+
+  await expect(settings.modelCheckbox("claude-sonnet-4-5")).toBeChecked();
+  expect(mock.catalogueReads.length).toBeGreaterThan(1);
+});
+
+test("a stored model the provider no longer lists is shown as removed and left out of the save", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, { models: [...ANTHROPIC_STORED_MODELS, DROPPED_MODEL] });
+
+  await expect(settings.modelsNoLongerListed()).toContainText("No longer listed by Anthropic. Saving removes them.");
+  await expect(settings.modelsNoLongerListed()).toContainText("claude-3-opus-20240229");
+  await expect(settings.modelCheckbox("claude-3-opus-20240229")).toHaveCount(0);
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "claude-opus-4-1", price: "stored" },
+        { model_id: "claude-sonnet-4-5", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("only the known providers' cards have Models", async ({ page }) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept({ connections: [ANTHROPIC_CONNECTION, AZURE_CONNECTION] });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await expect(settings.modelsButton("Anthropic")).toBeVisible();
+  await expect(settings.modelsButton("OpenRouter")).toHaveCount(0);
+  await expect(settings.modelsButton("Azure Europe")).toHaveCount(0);
 });

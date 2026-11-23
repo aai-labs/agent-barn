@@ -11,10 +11,12 @@ const MUTED = { color: "var(--ink-3)" };
 export function ProviderCard({
   connection,
   onReplaceKey,
+  onModels,
   onDelete,
 }: {
   connection: LlmProviderConnection;
   onReplaceKey: () => void;
+  onModels?: () => void;
   onDelete?: () => void;
 }) {
   const headingId = `llm-provider-${connection.slug}-heading`;
@@ -54,6 +56,11 @@ export function ProviderCard({
           )}
         </div>
         <div className="flex shrink-0 gap-2">
+          {onModels && (
+            <button type="button" className="af-btn" onClick={onModels}>
+              Models
+            </button>
+          )}
           <button type="button" className="af-btn" onClick={onReplaceKey}>
             {connection.hasApiKey ? "Replace key" : "Save a key"}
           </button>
