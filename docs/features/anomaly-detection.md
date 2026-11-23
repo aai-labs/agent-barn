@@ -157,6 +157,13 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   without being flagged, since that activity was not new when it happened.
 - The first check of an Agent only fills its ledger from its last 14 days and flags no
   first use.
+- A check of an Agent works out everything first, then records its Anomalies, the ledger
+  and its cursor in one transaction, so one that fails part way leaves nothing behind and
+  its retry records each first use once. That transaction share-locks the Organization's
+  `organization_anomaly_settings` row, which turning detection off locks for update, and
+  records nothing if the setting changed since the check started: a check running while
+  detection is turned off cannot reopen what turning off ended, or bring back the cursor
+  it forgot.
 - Each Agent is checked on its own: one failing is logged, the rest still run and the Job
   succeeds, so it is not restarted to check every Agent again. The next run, 15 minutes
   later, retries the failed Agent. A run that cannot check at all (no database) fails.
