@@ -32,6 +32,15 @@ def public_addresses(host: str, port: int = 443) -> list[str]:
     return addresses
 
 
+def preferred_address(addresses: list[str]) -> str:
+    """The one address a request is pinned to, out of those ``public_addresses`` checked.
+
+    Only one address is tried, and IPv4 is the family a pod is most likely able to reach:
+    an IPv6 answer is unroutable from an IPv4-only cluster even when the host is healthy.
+    """
+    return min(addresses, key=lambda candidate: (":" in candidate, candidate))
+
+
 @dataclass(frozen=True)
 class PinnedRequest:
     """How to send a request to a checked address while still speaking to the real host."""
@@ -51,8 +60,7 @@ def pin_to_public_address(url: str) -> PinnedRequest:
     except (socket.gaierror, UnicodeError) as exc:
         # getaddrinfo raises UnicodeError for names it can't encode, such as an empty label.
         raise NonPublicDestination("Destination could not be resolved") from exc
-    # Only one address is tried, and IPv4 is the family a pod is most likely able to reach.
-    address = min(addresses, key=lambda candidate: (":" in candidate, candidate))
+    address = preferred_address(addresses)
     host_header = f"{target.host}:{target.port}" if target.port else target.host
     return PinnedRequest(
         url=str(target.copy_with(host=address)),
