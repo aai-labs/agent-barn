@@ -76,25 +76,30 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
   );
 }
 
+export function connectionSubtitle(connection: LlmProviderConnection): string {
+  return BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
+    ? `${PROVIDER_TYPE_LABELS[connection.providerType]} · ${connection.baseUrl}`
+    : PROVIDER_SUBTITLES[connection.providerType];
+}
+
 export function ProviderCard({
   connection,
   onReplaceKey,
-  onModels,
-  onDelete,
+  onManage,
 }: {
   connection: LlmProviderConnection;
-  onReplaceKey: () => void;
-  onModels?: () => void;
-  onDelete?: () => void;
+  onReplaceKey?: () => void;
+  onManage?: () => void;
 }) {
   const isOpenRouter = connection.providerType === "openrouter";
   const saved = connection.hasApiKey && connection.updatedAt ? formatDate(connection.updatedAt) : null;
-  const subtitle = BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
-    ? `${PROVIDER_TYPE_LABELS[connection.providerType]} · ${connection.baseUrl}`
-    : PROVIDER_SUBTITLES[connection.providerType];
 
   return (
-    <CardShell providerType={connection.providerType} title={providerTitle(connection)} subtitle={subtitle}>
+    <CardShell
+      providerType={connection.providerType}
+      title={providerTitle(connection)}
+      subtitle={connectionSubtitle(connection)}
+    >
       <ConnectionStatus connected={connection.hasApiKey} />
       {connection.hasApiKey && (
         <p className="mb-0 mt-1 text-sm">
@@ -108,17 +113,14 @@ export function ProviderCard({
         </p>
       )}
       <div className="mt-auto flex flex-wrap gap-2 pt-4">
-        {onModels && (
-          <button type="button" className="af-btn" onClick={onModels}>
-            Models
+        {onManage && (
+          <button type="button" className="af-btn" onClick={onManage}>
+            Manage
           </button>
         )}
-        <button type="button" className="af-btn" onClick={onReplaceKey}>
-          {connection.hasApiKey ? "Replace key" : "Save a key"}
-        </button>
-        {onDelete && (
-          <button type="button" className="af-btn" onClick={onDelete}>
-            Delete
+        {onReplaceKey && (
+          <button type="button" className="af-btn" onClick={onReplaceKey}>
+            {connection.hasApiKey ? "Replace key" : "Save a key"}
           </button>
         )}
       </div>

@@ -65,12 +65,38 @@ export class PlatformLlmProvidersPage {
     return this.providerList().getByRole("heading", { level: 3 });
   }
 
-  replaceKeyButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Replace key" });
+  cardButtons(name: string) {
+    return this.providerCard(name).getByRole("button");
   }
 
-  deleteButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Delete" });
+  manageButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: "Manage", exact: true });
+  }
+
+  manageDialog() {
+    return this.page.getByRole("dialog", { name: /^Manage / });
+  }
+
+  manageActions() {
+    return this.manageDialog().getByRole("button", { name: /^(Models|Replace key|Save a key|Delete)$/ });
+  }
+
+  async manage(name: string, action: "Models" | "Replace key" | "Delete") {
+    await this.manageButton(name).click();
+    await this.manageDialog().getByRole("button", { name: action, exact: true }).click();
+    await expect(this.manageDialog()).toHaveCount(0);
+  }
+
+  async openReplaceKey(name: string) {
+    await this.manage(name, "Replace key");
+  }
+
+  async openDelete(name: string) {
+    await this.manage(name, "Delete");
+  }
+
+  async openModels(name: string) {
+    await this.manage(name, "Models");
   }
 
   addProviderButton() {
@@ -111,7 +137,7 @@ export class PlatformLlmProvidersPage {
   }
 
   async replaceKey(name: string, input: { key: string; baseUrl?: string }) {
-    await this.replaceKeyButton(name).click();
+    await this.openReplaceKey(name);
     if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);
     await this.keyInput(name).fill(input.key);
     await this.dialog().getByRole("button", { name: "Save key" }).click();
@@ -119,10 +145,6 @@ export class PlatformLlmProvidersPage {
 
   async confirmDelete() {
     await this.dialog().getByRole("button", { name: "Delete provider" }).click();
-  }
-
-  modelsButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Models", exact: true });
   }
 
   modelCheckbox(modelId: string) {

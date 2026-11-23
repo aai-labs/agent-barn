@@ -12,6 +12,7 @@ import type { KeyReplacement, LlmProviderConnection, NewLlmProviderConnection, P
 import { failureMessage, providerTitle } from "../utils";
 import { AddLlmProviderDialog } from "./add-llm-provider-dialog";
 import { DeploymentProviderCard } from "./deployment-provider-card";
+import { ManageProviderDialog } from "./manage-provider-dialog";
 import { AddProviderCard, ProviderCard } from "./provider-card";
 import { ProviderKeyDialog } from "./provider-key-dialog";
 import { ProviderModelsDialog } from "./provider-models-dialog";
@@ -43,6 +44,8 @@ export function PlatformLlmProviderSettings() {
   const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsDialogKey, setModelsDialogKey] = useState(0);
+  const [managing, setManaging] = useState<LlmProviderConnection | null>(null);
+  const [manageOpen, setManageOpen] = useState(false);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
   if (connectionsError || !connections)
@@ -114,15 +117,19 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(connection)} deleted`);
   }
 
+  function openManage(connection: LlmProviderConnection) {
+    setManaging(connection);
+    setManageOpen(true);
+  }
+
   function connectionCard(connection: LlmProviderConnection) {
     const isOpenRouter = connection.providerType === "openrouter";
     return (
       <li key={connection.slug}>
         <ProviderCard
           connection={connection}
-          onReplaceKey={() => openKeyDialog(connection)}
-          onModels={connection.hasApiKey && !isOpenRouter ? () => openModels(connection) : undefined}
-          onDelete={isOpenRouter ? undefined : () => openDelete(connection)}
+          onReplaceKey={isOpenRouter ? () => openKeyDialog(connection) : undefined}
+          onManage={isOpenRouter ? undefined : () => openManage(connection)}
         />
       </li>
     );
@@ -167,9 +174,19 @@ export function PlatformLlmProviderSettings() {
         </ul>
       </section>
 
+      {managing && (
+        <ManageProviderDialog
+          connection={managing}
+          open={manageOpen}
+          onOpenChange={setManageOpen}
+          onModels={() => openModels(managing)}
+          onReplaceKey={() => openKeyDialog(managing)}
+          onDelete={() => openDelete(managing)}
+        />
+      )}
       {addType && (
         <AddLlmProviderDialog
-          key={addKey}
+          key={`add-${addKey}`}
           providerType={addType}
           open={addOpen}
           onOpenChange={setAddOpen}
@@ -180,7 +197,7 @@ export function PlatformLlmProviderSettings() {
       )}
       {keyTarget && (
         <ProviderKeyDialog
-          key={keyDialogKey}
+          key={`key-${keyDialogKey}`}
           connection={keyTarget}
           open={keyOpen}
           onOpenChange={setKeyOpen}
@@ -191,7 +208,7 @@ export function PlatformLlmProviderSettings() {
       )}
       {modelsTarget && (
         <ProviderModelsDialog
-          key={modelsDialogKey}
+          key={`models-${modelsDialogKey}`}
           connection={modelsTarget}
           open={modelsOpen}
           onOpenChange={setModelsOpen}

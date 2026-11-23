@@ -307,7 +307,7 @@ test("Google is named by its title on the card, in the add and key dialogs and i
   await expect(settings.toast("Google added")).toBeVisible();
   await expect(settings.providerCard("Google")).toContainText("Connected");
   await expect(settings.providerCard("Google")).toContainText("*******g7h8");
-  await settings.replaceKeyButton("Google").click();
+  await settings.openReplaceKey("Google");
   await expect(settings.dialog().getByRole("heading", { name: "Replace the Google key" })).toBeVisible();
   await settings.keyInput("Google").fill(PROVIDER_KEY);
   await settings.dialog().getByRole("button", { name: "Save key" }).click();
@@ -426,7 +426,7 @@ test("Platform Admin replaces a known provider's key", async ({ page }) => {
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.replaceKeyButton("Anthropic").click();
+  await settings.openReplaceKey("Anthropic");
   await expect(settings.dialog().getByRole("heading", { name: "Replace the Anthropic key" })).toBeVisible();
   await expect(settings.baseUrlInput()).toHaveCount(0);
   await expect(settings.keyInput("Anthropic")).toHaveAttribute("type", "password");
@@ -447,7 +447,7 @@ test("an Azure key is replaced at its stored base URL unless a new one is entere
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.replaceKeyButton("Azure Europe").click();
+  await settings.openReplaceKey("Azure Europe");
   await expect(settings.baseUrlInput()).toHaveValue("https://contoso.openai.azure.com");
   await settings.keyInput("Azure Europe").fill(PROVIDER_KEY);
   await settings.dialog().getByRole("button", { name: "Save key" }).click();
@@ -493,13 +493,13 @@ test("Platform Admin deletes a connection only after confirming", async ({ page 
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.deleteButton("Anthropic").click();
+  await settings.openDelete("Anthropic");
   await expect(settings.dialog().getByRole("heading", { name: "Delete Anthropic?" })).toBeVisible();
   await settings.cancelDialog();
   expect(mock.deletes).toEqual([]);
   await expect(settings.providerCard("Anthropic")).toHaveCount(1);
 
-  await settings.deleteButton("Anthropic").click();
+  await settings.openDelete("Anthropic");
   await settings.confirmDelete();
 
   await expect(settings.dialog()).toHaveCount(0);
@@ -521,7 +521,7 @@ test("deleting an Azure connection warns that its slug can't be used again", asy
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.deleteButton("Azure Europe").click();
+  await settings.openDelete("Azure Europe");
 
   await expect(settings.dialog()).toContainText("azure-eu can't be used again");
 });
@@ -536,21 +536,62 @@ test("a refused delete keeps the confirmation open with the API's message", asyn
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await settings.deleteButton("Anthropic").click();
+  await settings.openDelete("Anthropic");
   await settings.confirmDelete();
 
   await expect(settings.dialog().getByRole("alert")).toHaveText("That connection does not exist.");
   expect(mock.deletes).toEqual(["anthropic"]);
 });
 
-test("OpenRouter can't be deleted", async ({ page }) => {
+test("OpenRouter has no Manage, only its key button", async ({ page }) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept({ connections: [ANTHROPIC_CONNECTION] });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.deleteButton("Anthropic")).toBeVisible();
-  await expect(settings.card().getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(settings.manageButton("Anthropic")).toBeVisible();
+  await expect(settings.cardButtons("OpenRouter")).toHaveText(["Replace key"]);
+});
+
+test("Manage on a connected card lists Models, Replace key and Delete, and the card has no other button", async ({
+  page,
+}) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept({ connections: [ANTHROPIC_CONNECTION] });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await expect(settings.cardButtons("Anthropic")).toHaveText(["Manage"]);
+  await settings.manageButton("Anthropic").click();
+
+  await expect(settings.manageDialog().getByRole("heading", { name: "Manage Anthropic" })).toBeVisible();
+  await expect(settings.manageDialog()).toContainText("Claude models");
+  await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
+});
+
+test("each Manage action closes Manage and opens its own dialog", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  await data.interceptModels();
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.openModels("Anthropic");
+  await expect(settings.dialog()).toHaveCount(1);
+  await expect(settings.dialog().getByRole("heading", { name: "Anthropic models" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(settings.dialog()).toHaveCount(0);
+
+  await settings.openReplaceKey("Anthropic");
+  await expect(settings.dialog()).toHaveCount(1);
+  await expect(settings.dialog().getByRole("heading", { name: "Replace the Anthropic key" })).toBeVisible();
+  await settings.cancelDialog();
+  await expect(settings.dialog()).toHaveCount(0);
+
+  await settings.openDelete("Anthropic");
+  await expect(settings.dialog()).toHaveCount(1);
+  await expect(settings.dialog().getByRole("heading", { name: "Delete Anthropic?" })).toBeVisible();
 });
 
 type ModelsOptions = Parameters<PlatformLlmProviderDataSupport["interceptModels"]>[0];
@@ -562,7 +603,7 @@ async function openAnthropicModels(page: Page, models: ModelsOptions = {}) {
   const mock = await data.interceptModels(models);
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
-  await settings.modelsButton("Anthropic").click();
+  await settings.openModels("Anthropic");
   return { mock, settings };
 }
 
@@ -760,7 +801,7 @@ test("reopening Models ticks a model saved since it was last opened and keeps it
   await expect(settings.modelCheckbox("model-00")).toBeChecked();
   await settings.cancelDialog();
   mock.replace(pricedCatalogue(2, 2));
-  await settings.modelsButton("Anthropic").click();
+  await settings.openModels("Anthropic");
 
   await expect(settings.modelCheckbox("model-01")).toBeChecked();
   await settings.saveModels();
@@ -828,7 +869,7 @@ test("a stored model the provider no longer lists is shown as removed and left o
   ]);
 });
 
-test("every card but OpenRouter's has Models", async ({ page }) => {
+test("Manage on every connection but OpenRouter offers Models", async ({ page }) => {
   await signIn(page);
   await new PlatformLlmProviderDataSupport(page).intercept({
     connections: [ANTHROPIC_CONNECTION, AZURE_CONNECTION, CUSTOM_CONNECTION],
@@ -836,10 +877,13 @@ test("every card but OpenRouter's has Models", async ({ page }) => {
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
 
-  await expect(settings.modelsButton("Anthropic")).toBeVisible();
-  await expect(settings.modelsButton("Azure Europe")).toBeVisible();
-  await expect(settings.modelsButton("Aardvark lab")).toBeVisible();
-  await expect(settings.modelsButton("OpenRouter")).toHaveCount(0);
+  for (const name of ["Anthropic", "Azure Europe", "Aardvark lab"]) {
+    await settings.manageButton(name).click();
+    await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
+    await page.keyboard.press("Escape");
+    await expect(settings.manageDialog()).toHaveCount(0);
+  }
+  await expect(settings.manageButton("OpenRouter")).toHaveCount(0);
 });
 
 test("a Custom model takes typed prices, and Save waits until its input and output are above 0", async ({ page }) => {
@@ -849,7 +893,7 @@ test("a Custom model takes typed prices, and Save waits until its input and outp
   const mock = await data.interceptModels({ catalogue: CUSTOM_CATALOGUE, models: CUSTOM_MODELS });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
-  await settings.modelsButton("Aardvark lab").click();
+  await settings.openModels("Aardvark lab");
 
   await expect(settings.priceInput("mistral-7b", "Input")).toHaveValue("0.2");
   await expect(settings.priceInput("mistral-7b", "Output")).toHaveValue("0.4");
@@ -893,7 +937,7 @@ test("a changed typed price is sent in place of the stored one", async ({ page }
   const mock = await data.interceptModels({ catalogue: CUSTOM_CATALOGUE, models: CUSTOM_MODELS });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
-  await settings.modelsButton("Aardvark lab").click();
+  await settings.openModels("Aardvark lab");
 
   await settings.priceInput("mistral-7b", "Output").fill("0.45");
   await settings.saveModels();
@@ -923,7 +967,7 @@ async function openAzureDeployments(page: Page) {
   const mock = await data.interceptModels({ catalogue: AZURE_CATALOGUE, models: AZURE_DEPLOYMENTS });
   const settings = new PlatformLlmProvidersPage(page);
   await settings.goto();
-  await settings.modelsButton("Azure Europe").click();
+  await settings.openModels("Azure Europe");
   return { mock, settings };
 }
 
@@ -1041,7 +1085,7 @@ test("reopening Azure deployments shows a deployment saved since it was last ope
       },
     ],
   });
-  await settings.modelsButton("Azure Europe").click();
+  await settings.openModels("Azure Europe");
 
   await expect(settings.runsModelPicker("prod-mini")).toHaveText("gpt-4o-mini");
   await settings.saveModels();
