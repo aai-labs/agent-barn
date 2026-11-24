@@ -128,7 +128,7 @@ The Platform-scoped `platform.llm_provider.organizations_changed` event, version
 - `organization_ids_truncated` when a list was cut;
 - actor/subject display snapshots.
 
-It carries no Organization names. Nothing emits it yet: it is to be recorded when a Platform Administrator changes a connection's Provider Access, and when one adds a connection with access other than `all` ([change log](llm-providers/CHANGELOG.md)).
+It carries no Organization names. It is recorded atomically when a Platform Administrator changes a connection's Provider Access (`PUT .../llm-providers/{slug}/organizations`); a save that changes nothing records none. An added connection with access other than `all` is to record it too ([change log](llm-providers/CHANGELOG.md)).
 
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 

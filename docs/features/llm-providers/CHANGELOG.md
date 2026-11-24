@@ -12,10 +12,39 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 3, PRs 1 to 16. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices. `GET .../{slug}/models` lists them with exact prices, and `PUT .../{slug}/models` saves them for every provider but OpenRouter, Azure's as deployments priced from the model each runs, writing each model's LiteLLM route under the connection's lock and recording `platform.llm_provider.models_changed`. `GET .../{slug}/model-catalogue` lists the models the provider lists for the stored key, read by `LlmProviderCatalogue`, with LiteLLM's chat prices from `LiteLLMClient.get_model_prices()`, and marks which are stored and whose stored prices differ. Under the connection's lock, replacing a key rewrites the LiteLLM route of each of the connection's models before the key is stored, and deleting a connection removes its routes before its models and key. A contract test checks how a real LiteLLM serves and bills these routes. In the UI, every connection but OpenRouter has a Models dialog: it ticks a provider's models, priced by LiteLLM or by typed prices, edits Azure deployments with the model each runs or typed prices, and takes a changed LiteLLM price once accepted.
 - Next: slice 3, PR 17, the feature doc for slice 3 delivered and its known limits.
 - Delivered: providers page layout, PRs 1 to 4. `GET .../llm-providers` reports `env_key_last4`, the last four characters of `OPENROUTER_API_KEY`, on OpenRouter while the variable is set. While it is set, the settings page shows OpenRouter's card under "Set by this deployment", with the variable's last four, any saved key, and "In use" or "Fallback". Below it, "Providers · X of Y connected" is a grid with a card per provider, connected or not, one per Azure or Custom connection, and cards to add Azure and Custom connections; providers are named by their titles, Gemini as "Google". OpenRouter's card has only its key button; every other connection's card has only "Manage", whose menu leads to Models, Replace key and Delete. The providers page layout is complete.
-- In progress: AF-474, Provider Access per Organization, PRs 1 to 3 of 14. Each connection stores `organization_access` (`all`, `none`, `all_except` or `only`; every existing connection is `all`) and the Organizations listed for it. `LlmProviderAccessLookup` answers whether an Organization may use a connection, under the connection's lock taken shared when in a caller's transaction; no other domain calls it yet. The `platform.llm_provider.organizations_changed` event is registered; nothing emits it yet. Next: PR 4, reading and replacing a connection's access through the API.
+- In progress: AF-474, Provider Access per Organization, PRs 1 to 4 of 14. Each connection stores `organization_access` (`all`, `none`, `all_except` or `only`; every existing connection is `all`) and the Organizations listed for it. `LlmProviderAccessLookup` answers whether an Organization may use a connection, under the connection's lock taken shared when in a caller's transaction; no other domain calls it yet. Platform Administrators read and replace a connection's access through `GET` and `PUT .../{slug}/organizations`. Withdrawing OpenRouter from an Organization that still uses it is refused, and a change records `platform.llm_provider.organizations_changed`. Next: PR 5, access on Add and in the connection list.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-24 — AF-474 — provider access, PR 4
+
+- Delivered: `GET` and `PUT /api/v1/platform/settings/llm-providers/{slug}/organizations`, for Platform Administrators only. A read-only Personal API Key may read but not replace.
+  - `GET` answers `{organization_access, organizations: [{id, name}]}`, sorted by name.
+  - `PUT` takes `{organization_access, organization_ids}` and answers the same body.
+- Delivered, the `PUT` refusals:
+  - `400`, each with a fixed message: an unknown mode, more than 1000 ids (`MAX_LISTED_ORGANIZATIONS`), ids with `all` or `none`, and an id that is malformed or names no Organization;
+  - `404` for an unknown or deleted slug;
+  - `409` for OpenRouter when an Organization that would lose access still uses it: a non-empty allowlist, its own default model, or any Agent with `deleted_at` unset (Bots and suspended Agents included). The message names up to 10 such Organizations by name, with what each uses, and counts the rest, for example "OpenRouter is still used by Beta Org (allowed models, its default model, 2 Agents) and 3 more organizations. Nothing was saved.". The wording and the order (by name) are mine.
+- Delivered, the write: `LlmProviderRepository.replace_organizations` checks the ids, works out who loses access with `can_use` on the old and new access, and writes under the connection's exclusive lock in one transaction. `all` and `none` clear the listed rows. A change records the event, with each id list sorted, then cut to 20. A save that changes nothing records none, and a repeated id counts once.
+- Changed: the connection row's `organization_access` is updated with `updated_at` set to itself. `BaseModel.updated_at` has an `onupdate` (`api/infrastructure/postgres/models.py`), and a column named in the `SET` clause doesn't get it, so the key's "Saved" time in the list doesn't move when access changes.
+- Changed: [`llm-providers.md`](../llm-providers.md) lists both routes and the event. `api/developer_docs/operations-v1.json` lists both operations. [`domain-events.md`](../domain-events.md) now says the event is recorded.
+- Verification: the new `test_platform_llm_provider_organizations.py` (28 tests) covers:
+  - an Organization owner and a read-only key;
+  - the starting state;
+  - a missing and a deleted slug;
+  - `only` with two Organizations, with the body and the event;
+  - `all`/`none` clearing the list;
+  - added and removed ids;
+  - no event when nothing changes;
+  - 21 ids cut to 20;
+  - each `400`;
+  - each in-use rule, plus an Organization with only deleted Agents;
+  - the 10-name cap;
+  - widening access, and an unchanged Organization staying unchecked;
+  - another connection never being in use;
+  - the key's save time kept.
+  A red run of four of them failed before the change; all 28 pass in two serial `-k` halves. `test_public_api_contract.py`, ruff, ruff format and `ty` pass.
 
 ### 2026-11-24 — AF-474 — provider access, PR 3
 

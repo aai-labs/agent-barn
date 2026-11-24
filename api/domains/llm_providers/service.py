@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from functools import partial
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from fastapi import HTTPException
 from injector import inject, singleton
@@ -23,6 +24,7 @@ from api.domains.llm_providers.models import (
     KNOWN_PROVIDER_NAMES,
     MAX_AZURE_DEPLOYMENT_LENGTH,
     MAX_BASE_URL_LENGTH,
+    MAX_LISTED_ORGANIZATIONS,
     MAX_MODEL_ID_LENGTH,
     MAX_MODELS_PER_CONNECTION,
     MAX_NAME_LENGTH,
@@ -45,15 +47,23 @@ from api.domains.llm_providers.models import (
     LlmProviderModelPrices,
     LlmProviderModelRead,
     LlmProviderModelsReplace,
+    LlmProviderOrganizationRead,
+    LlmProviderOrganizationsRead,
+    LlmProviderOrganizationsReplace,
     LlmProviderTypedPrices,
+    OrganizationAccess,
     PriceSource,
     ProviderType,
 )
 from api.domains.llm_providers.repository import (
     ConnectionAlreadyExists,
     ConnectionChanged,
+    ConnectionInUse,
     ConnectionNotFound,
+    ListedOrganizations,
     LlmProviderRepository,
+    OrganizationUse,
+    UnknownOrganization,
 )
 from api.domains.platform_admin.service import PlatformAdminService
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -124,6 +134,12 @@ CHAT_MODE = "chat"
 MIN_KEY_LENGTH_FOR_LAST4 = 8
 PRICE_STEP = Decimal(1).scaleb(-PRICE_SCALE)
 MAX_PRICE = Decimal(10) ** (PRICE_PRECISION - PRICE_SCALE)
+ACCESS_CHOICE = 'Organization access is "all", "none", "all_except" or "only". Nothing was saved.'
+ORGANIZATIONS_NOT_TAKEN = 'Organizations are listed only for "all_except" and "only". Nothing was saved.'
+UNKNOWN_ORGANIZATION = "One of these organizations does not exist. Nothing was saved."
+TOO_MANY_ORGANIZATIONS = f"A provider can list at most {MAX_LISTED_ORGANIZATIONS} organizations. Nothing was saved."
+LISTING_ACCESS = frozenset({OrganizationAccess.ALL_EXCEPT, OrganizationAccess.ONLY})
+MAX_NAMED_ORGANIZATIONS = 10
 
 
 def _own_connection_fields(data: LlmProviderConnectionCreate) -> tuple[str, str, str]:
@@ -296,6 +312,47 @@ def _checked_choices(
             raise HTTPException(422, RUNS_MODEL_NOT_TAKEN)
         checked.append((choice.model_id, price, choice.runs_model))
     return checked
+
+
+def _checked_organizations(data: LlmProviderOrganizationsReplace) -> tuple[OrganizationAccess, frozenset[UUID]]:
+    try:
+        organization_access = OrganizationAccess(data.organization_access)
+    except ValueError:
+        raise HTTPException(400, ACCESS_CHOICE) from None
+    if len(data.organization_ids) > MAX_LISTED_ORGANIZATIONS:
+        raise HTTPException(400, TOO_MANY_ORGANIZATIONS)
+    if data.organization_ids and organization_access not in LISTING_ACCESS:
+        raise HTTPException(400, ORGANIZATIONS_NOT_TAKEN)
+    try:
+        return organization_access, frozenset(UUID(organization_id) for organization_id in data.organization_ids)
+    except ValueError:
+        raise HTTPException(400, UNKNOWN_ORGANIZATION) from None
+
+
+def _organizations_read(found: ListedOrganizations) -> LlmProviderOrganizationsRead:
+    organization_access, listed = found
+    return LlmProviderOrganizationsRead(
+        organization_access=organization_access,
+        organizations=[LlmProviderOrganizationRead(id=organization_id, name=name) for organization_id, name in listed],
+    )
+
+
+def _what_it_uses(use: OrganizationUse) -> str:
+    uses = []
+    if use.allowlist:
+        uses.append("allowed models")
+    if use.own_default:
+        uses.append("its default model")
+    if use.agents:
+        uses.append(f"{use.agents} Agent{'' if use.agents == 1 else 's'}")
+    return ", ".join(uses)
+
+
+def _in_use(refused: ConnectionInUse) -> str:
+    named = "; ".join(f"{use.name} ({_what_it_uses(use)})" for use in refused.users[:MAX_NAMED_ORGANIZATIONS])
+    more = len(refused.users) - MAX_NAMED_ORGANIZATIONS
+    rest = f" and {more} more organization{'' if more == 1 else 's'}" if more > 0 else ""
+    return f"{refused.name} is still used by {named}{rest}. Nothing was saved."
 
 
 def _route_matches(route: dict | None, deployment: LiteLLMDeployment) -> bool:
@@ -475,6 +532,35 @@ class PlatformLlmProviderService:
             LlmProviderModelRead.model_validate(model, from_attributes=True)
             for model in self.repository.list_models(connection.id)
         ]
+
+    def read_organizations(self, slug: str, context: CurrentUserContext) -> LlmProviderOrganizationsRead:
+        self.authority.require_platform_admin(context.user)
+        found = self.repository.organizations(slug)
+        if found is None:
+            raise HTTPException(404, NOT_FOUND)
+        return _organizations_read(found)
+
+    def replace_organizations(
+        self, slug: str, data: LlmProviderOrganizationsReplace, context: CurrentUserContext
+    ) -> LlmProviderOrganizationsRead:
+        self.authority.require_platform_admin(context.user)
+        organization_access, organization_ids = _checked_organizations(data)
+        try:
+            found, ids = self.repository.replace_organizations(
+                slug,
+                organization_access,
+                organization_ids,
+                context.user.id,
+                context.user.full_name or context.user.email,
+            )
+        except ConnectionNotFound:
+            raise HTTPException(404, NOT_FOUND) from None
+        except UnknownOrganization:
+            raise HTTPException(400, UNKNOWN_ORGANIZATION) from None
+        except ConnectionInUse as refused:
+            raise HTTPException(409, _in_use(refused)) from None
+        self.dispatcher.enqueue_immediate(ids)
+        return _organizations_read(found)
 
     def delete_connection(self, slug: str, context: CurrentUserContext) -> None:
         self.authority.require_platform_admin(context.user)

@@ -18,7 +18,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, PlainSerializer, SecretStr, field_validator, model_validator
+from pydantic import ConfigDict, Field, PlainSerializer, SecretStr, field_validator, model_validator
 from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
@@ -37,6 +37,7 @@ PRICE_SCALE = 18
 MAX_MODELS_PER_CONNECTION = 50
 MAX_AZURE_DEPLOYMENT_LENGTH = 64
 AZURE_DEPLOYMENT_PATTERN = "^[A-Za-z0-9._-]+$"
+MAX_LISTED_ORGANIZATIONS = 1000
 
 # The connection the migration seeds. Kept here for tests that reset the table to it; the
 # migration carries its own copy, as migrations do.
@@ -334,6 +335,28 @@ class LlmProviderConnectionCreate(PydanticBaseModel):
         if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
             raise ValueError("Enter a key.")
         return SecretStr(trimmed)
+
+
+class LlmProviderOrganizationRead(PydanticBaseModel):
+    id: UUID
+    name: str
+
+
+class LlmProviderOrganizationsRead(PydanticBaseModel):
+    """A connection's Provider Access and its listed Organizations, by name."""
+
+    organization_access: OrganizationAccess
+    organizations: list[LlmProviderOrganizationRead]
+
+
+class LlmProviderOrganizationsReplace(PydanticBaseModel):
+    """A connection's new Provider Access and the Organizations it lists, whose rules the service
+    checks so that a refusal can say which one was broken."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_access: str
+    organization_ids: list[str] = Field(default_factory=list)
 
 
 class LlmProviderKeyReplace(PydanticBaseModel):
