@@ -20,11 +20,11 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 ### 2026-11-24 — AF-474 — provider access, PR 6
 
 - Delivered: `GET /api/v1/organizations/{organization_id}/agents/models` answers `[]` while OpenRouter is not open to the Organization, with or without `catalog=true`, and with no default appended. `AgentService.list_models` asks `LlmProviderAccessLookup.can_use` without a lock, since it only reads, after the permission checks and before OpenRouter's catalogue is fetched, so a refused `catalog=true` is still `403`. With access, the answer is unchanged.
-- Changed: `AgentService` takes `LlmProviderAccessLookup`.
+- Changed: `AgentService` takes `LlmProviderAccessLookup`, so `tests/unit/test_openrouter_client.py`, which builds it by hand, passes one too, as you asked. [`llm-providers.md`](../llm-providers.md) says only the model list enforces access so far, as you asked.
 - Verification: `test_agents_models_catalog.py` gains 9 tests:
   - `none`, `only` another Organization and `all_except` this one each give `[]` in both modes, and the catalogue isn't fetched;
   - `all`, `only` this Organization and `all_except` another each give the allowlisted model with the default first, and the full catalogue with `catalog=true`.
-  The 6 no-access cases failed before the change and the 3 with-access cases passed. All 11 tests in the file pass after it, as do ruff, ruff format and `ty`.
+  The 6 no-access cases failed before the change and the 3 with-access cases passed. All 11 tests in the file pass after it, as do `test_openrouter_client.py`, ruff, ruff format and `ty`.
 
 ### 2026-11-24 — AF-474 — provider access, PR 5
 
