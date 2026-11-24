@@ -1221,13 +1221,23 @@ def _azure_routes(context, key: str, base_url: str) -> dict[str, dict]:
     }
 
 
+def _record_route(routes: dict[str, dict]):
+    """Stands in for LiteLLM: writes the route, and checks the caller knew whether it was there."""
+
+    def write(exists=None, **route):
+        assert exists == (route["model_info"]["id"] in routes), "upsert was told the wrong `exists`"
+        routes[route["model_info"]["id"]] = route
+
+    return write
+
+
 def azure_with_routed_models(context):
     routes: dict[str, dict] = {}
     litellm = context.injector.get(LiteLLMClient)
     litellm.list_model_deployments.side_effect = lambda id_prefix: [
         route for route_id, route in routes.items() if route_id.startswith(id_prefix)
     ]
-    litellm.upsert_model_deployment.side_effect = lambda **route: routes.update({route["model_info"]["id"]: route})
+    litellm.upsert_model_deployment.side_effect = _record_route(routes)
     litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
     context.routes = routes
     azure_connected(context)
@@ -1728,7 +1738,7 @@ def _route_store(context) -> None:
     litellm.list_model_deployments.side_effect = lambda id_prefix: [
         _without_key(route) for route_id, route in routes.items() if route_id.startswith(id_prefix)
     ]
-    litellm.upsert_model_deployment.side_effect = lambda **route: routes.update({route["model_info"]["id"]: route})
+    litellm.upsert_model_deployment.side_effect = _record_route(routes)
     litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
     context.routes = routes
 

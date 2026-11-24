@@ -484,9 +484,15 @@ class LiteLLMClient:
             raise LiteLLMError("Failed to look up the model route") from None
         return True
 
-    def upsert_model_deployment(self, model_name: str, litellm_params: dict, model_info: dict) -> None:
+    def upsert_model_deployment(
+        self, model_name: str, litellm_params: dict, model_info: dict, *, exists: bool | None = None
+    ) -> None:
+        """Write the route, updating it when LiteLLM has it. A caller that has just listed the routes
+        passes `exists`, which saves looking the route up."""
         headers = self._headers(self._master_key())
-        endpoint = "update" if self._has_model_deployment(model_info["id"], headers) else "new"
+        if exists is None:
+            exists = self._has_model_deployment(model_info["id"], headers)
+        endpoint = "update" if exists else "new"
         try:
             response = httpx.post(
                 f"{self.config.litellm_base_url}/model/{endpoint}",

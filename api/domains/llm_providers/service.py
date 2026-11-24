@@ -586,6 +586,7 @@ class PlatformLlmProviderService:
                 model_name=deployment.model_name,
                 litellm_params=deployment.litellm_params,
                 model_info=deployment.model_info,
+                exists=deployment.model_info["id"] in listed,
             )
         wanted_ids = {deployment.model_info["id"] for deployment in wanted}
         for route_id in listed.keys() - wanted_ids:
