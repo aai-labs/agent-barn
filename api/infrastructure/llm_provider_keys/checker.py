@@ -4,6 +4,7 @@ import httpx
 from injector import singleton
 
 from api.domains.llm_providers.models import BASE_URL_PROVIDER_TYPES, ProviderType
+from api.infrastructure.llm_provider_catalogue.catalogue import ANTHROPIC_VERSION
 from api.infrastructure.public_http import NonPublicDestination, pin_to_public_address
 
 TIMEOUT_SECONDS = 10
@@ -20,11 +21,14 @@ class _Endpoint:
     url: str
     header: str
     prefix: str = ""
+    headers: tuple[tuple[str, str], ...] = ()
 
 
 _BEARER = ("Authorization", "Bearer ")
 _ENDPOINTS = {
-    ProviderType.ANTHROPIC: _Endpoint("https://api.anthropic.com/v1/models", "x-api-key"),
+    ProviderType.ANTHROPIC: _Endpoint(
+        "https://api.anthropic.com/v1/models", "x-api-key", headers=(("anthropic-version", ANTHROPIC_VERSION),)
+    ),
     ProviderType.OPENAI: _Endpoint("https://api.openai.com/v1/models", *_BEARER),
     ProviderType.GEMINI: _Endpoint("https://generativelanguage.googleapis.com/v1beta/models", "x-goog-api-key"),
     ProviderType.XAI: _Endpoint("https://api.x.ai/v1/models", *_BEARER),
@@ -89,7 +93,7 @@ class LlmProviderKeyChecker:
                 raise BaseUrlNotPublic from None
             raise LlmProviderUnreachable from None
 
-        headers = {**pinned.headers, endpoint.header: f"{endpoint.prefix}{api_key}"}
+        headers = {**pinned.headers, **dict(endpoint.headers), endpoint.header: f"{endpoint.prefix}{api_key}"}
         try:
             with (
                 httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client,

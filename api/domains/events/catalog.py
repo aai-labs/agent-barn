@@ -1,12 +1,13 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from api.domains.communications.models import CommunicationErrorDetails
 from api.domains.events.models import EventScope
 from api.domains.events.registry import DomainEventDefinition, DomainEventRegistry
+from api.domains.llm_providers.models import MAX_MODEL_ID_LENGTH
 
 ORGANIZATION_ROLE_CHANGED = "organization.role.changed"
 AGENT_ACCESS_GRANTED = "agent.access.granted"
@@ -54,6 +55,7 @@ PLATFORM_DECISION_MODEL_CHANGED = "platform.decision_model.changed"
 PLATFORM_LLM_PROVIDER_CREATED = "platform.llm_provider.created"
 PLATFORM_LLM_PROVIDER_CHANGED = "platform.llm_provider.changed"
 PLATFORM_LLM_PROVIDER_DELETED = "platform.llm_provider.deleted"
+PLATFORM_LLM_PROVIDER_MODELS_CHANGED = "platform.llm_provider.models_changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
@@ -107,6 +109,9 @@ AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 WORKFLOW_RUN_CHANGED = "workflow.run.changed"
 WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
+MAX_LISTED_MODEL_IDS = 20
+
+ModelId = Annotated[str, StringConstraints(max_length=MAX_MODEL_ID_LENGTH)]
 
 
 class WorkflowRunChangedPayload(BaseModel):
@@ -393,6 +398,22 @@ class PlatformLlmProviderDeletedPayload(BaseModel):
     provider_type: str
     base_url: str | None = None
     key_purged: bool
+    actor_display: str
+    subject_display: str
+
+
+class PlatformLlmProviderModelsChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: UUID
+    slug: str
+    provider_type: str
+    added_count: int
+    removed_count: int
+    repriced_count: int
+    added_model_ids: list[ModelId] = Field(max_length=MAX_LISTED_MODEL_IDS)
+    removed_model_ids: list[ModelId] = Field(max_length=MAX_LISTED_MODEL_IDS)
+    repriced_model_ids: list[ModelId] = Field(max_length=MAX_LISTED_MODEL_IDS)
+    model_ids_truncated: bool
     actor_display: str
     subject_display: str
 
@@ -1309,6 +1330,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_LLM_PROVIDER_DELETED,
             schema_version=1,
             payload_model=PlatformLlmProviderDeletedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_LLM_PROVIDER_MODELS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformLlmProviderModelsChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )

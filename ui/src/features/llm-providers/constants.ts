@@ -1,4 +1,4 @@
-import type { ProviderType } from "./schemas";
+import type { PriceField, ProviderType } from "./schemas";
 
 export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   openrouter: "OpenRouter",
@@ -31,3 +31,18 @@ export const BASE_URL_HINTS: Partial<Record<ProviderType, string>> = {
 };
 
 export const MASKED_KEY_PREFIX = "*******";
+
+export const MAX_MODELS_PER_CONNECTION = 50;
+
+export const AZURE_DEPLOYMENT_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+export const TYPED_PRICE_PATTERN = /^\d{1,12}(\.\d{1,12})?$/;
+
+export const PRICE_FIELDS = [
+  { field: "inputCostPerToken", column: "Input" },
+  { field: "outputCostPerToken", column: "Output" },
+  { field: "cacheReadInputTokenCost", column: "Cache read" },
+  { field: "cacheCreationInputTokenCost", column: "Cache write" },
+] as const satisfies readonly { field: PriceField; column: string }[];
+
+export const POSITIVE_PRICE_FIELDS: readonly PriceField[] = ["inputCostPerToken", "outputCostPerToken"];

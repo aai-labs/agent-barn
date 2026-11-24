@@ -43,3 +43,45 @@ export type KeyReplacement = {
   apiKey: string;
   baseUrl?: string;
 };
+
+export const LlmProviderModelSchema = z.object({
+  modelId: z.string(),
+  inputCostPerToken: z.string(),
+  outputCostPerToken: z.string(),
+  cacheReadInputTokenCost: z.string(),
+  cacheCreationInputTokenCost: z.string(),
+  priceSource: z.enum(["litellm", "manual"]),
+  litellmPriceKey: z.string().nullable(),
+});
+
+export type LlmProviderModel = z.infer<typeof LlmProviderModelSchema>;
+
+export const LlmProviderModelListSchema = z.array(LlmProviderModelSchema);
+
+export const LlmProviderCatalogueEntrySchema = z.object({
+  modelId: z.string(),
+  stored: z.boolean(),
+  litellmPriceKey: z.string().nullable(),
+  inputCostPerToken: z.string().nullable(),
+  outputCostPerToken: z.string().nullable(),
+  cacheReadInputTokenCost: z.string().nullable(),
+  cacheCreationInputTokenCost: z.string().nullable(),
+  pricesDiffer: z.boolean(),
+});
+
+export type LlmProviderCatalogueEntry = z.infer<typeof LlmProviderCatalogueEntrySchema>;
+
+export const LlmProviderCatalogueSchema = z.array(LlmProviderCatalogueEntrySchema);
+
+export type ModelPrices = Pick<
+  LlmProviderModel,
+  "inputCostPerToken" | "outputCostPerToken" | "cacheReadInputTokenCost" | "cacheCreationInputTokenCost"
+>;
+
+export type PriceField = keyof ModelPrices;
+
+export type ModelChoice = {
+  modelId: string;
+  price: "litellm" | "stored" | ModelPrices;
+  runsModel?: string;
+};

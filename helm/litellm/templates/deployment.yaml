@@ -45,6 +45,9 @@ spec:
           ports:
             - name: http
               containerPort: 4000
+          env:
+            - name: LITELLM_LOCAL_MODEL_COST_MAP
+              value: "true"
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}

@@ -6,15 +6,15 @@ import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
-import { ApiError } from "@/shared/api/error/errors";
-import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { BASE_URL_PROVIDER_TYPES, KNOWN_PROVIDER_TYPES } from "../constants";
 import { useLlmProviderActions, useLlmProviderConnections } from "../hooks/use-llm-provider-connections";
 import type { KeyReplacement, LlmProviderConnection, NewLlmProviderConnection } from "../schemas";
+import { failureMessage } from "../utils";
 import { AddLlmProviderDialog } from "./add-llm-provider-dialog";
 import { ProviderCard } from "./provider-card";
 import { ProviderKeyDialog } from "./provider-key-dialog";
+import { ProviderModelsDialog } from "./provider-models-dialog";
 
 export function PlatformLlmProviderSettings() {
   const { connections, isLoadingConnections, connectionsError, reloadConnections } = useLlmProviderConnections();
@@ -39,6 +39,9 @@ export function PlatformLlmProviderSettings() {
   const [keyDialogKey, setKeyDialogKey] = useState(0);
   const [deleting, setDeleting] = useState<LlmProviderConnection | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const [modelsDialogKey, setModelsDialogKey] = useState(0);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
   if (connectionsError || !connections)
@@ -78,6 +81,17 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${saved.name} key saved`);
   }
 
+  function openModels(connection: LlmProviderConnection) {
+    setModelsTarget(connection);
+    setModelsDialogKey((current) => current + 1);
+    setModelsOpen(true);
+  }
+
+  function modelsSaved(connection: LlmProviderConnection) {
+    setModelsOpen(false);
+    toast.success(`${connection.name} models saved`);
+  }
+
   function openDelete(connection: LlmProviderConnection) {
     resetDelete();
     setDeleting(connection);
@@ -107,6 +121,11 @@ export function PlatformLlmProviderSettings() {
             <ProviderCard
               connection={connection}
               onReplaceKey={() => openKeyDialog(connection)}
+              onModels={
+                connection.hasApiKey && connection.providerType !== "openrouter"
+                  ? () => openModels(connection)
+                  : undefined
+              }
               onDelete={connection.providerType === "openrouter" ? undefined : () => openDelete(connection)}
             />
           </li>
@@ -133,6 +152,15 @@ export function PlatformLlmProviderSettings() {
           saveError={replaceError}
         />
       )}
+      {modelsTarget && (
+        <ProviderModelsDialog
+          key={modelsDialogKey}
+          connection={modelsTarget}
+          open={modelsOpen}
+          onOpenChange={setModelsOpen}
+          onSaved={() => modelsSaved(modelsTarget)}
+        />
+      )}
       {deleting && (
         <ConfirmationDialog
           open={deleteOpen}
@@ -141,8 +169,8 @@ export function PlatformLlmProviderSettings() {
           title={`Delete ${deleting.name}?`}
           description={
             BASE_URL_PROVIDER_TYPES.includes(deleting.providerType)
-              ? `Its key is removed, and ${deleting.slug} can't be used again as a slug.`
-              : `Its key is removed. You can add ${deleting.name} again later with a new key.`
+              ? `Its key and models are removed, and ${deleting.slug} can't be used again as a slug.`
+              : `Its key and models are removed. You can add ${deleting.name} again later with a new key.`
           }
           confirmLabel="Delete provider"
           pendingLabel="Deleting…"
@@ -151,16 +179,11 @@ export function PlatformLlmProviderSettings() {
         >
           {deleteError ? (
             <p className="mb-0 mt-3 text-[0.8rem]" style={{ color: "var(--err)" }} role="alert">
-              {deleteFailure(deleteError)}
+              {failureMessage(deleteError)}
             </p>
           ) : null}
         </ConfirmationDialog>
       )}
     </>
   );
-}
-
-function deleteFailure(error: unknown) {
-  if (error instanceof ApiError && error.status === 404 && error.message) return error.message;
-  return getErrorDisplay(error).description;
 }

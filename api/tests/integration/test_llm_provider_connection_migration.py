@@ -1,4 +1,5 @@
-"""The migrations that create LLM Provider Connections and add more providers, each run against a database of its own."""
+"""The migrations that create LLM Provider Connections, add more providers and add their models, each run against a
+database of its own."""
 
 import os
 from pathlib import Path
@@ -29,6 +30,9 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 PRE_MIGRATION_REVISION = "38de1199ae19"
 CONNECTIONS_REVISION = "22b93965859f"
 PROVIDERS_REVISION = "91ad0093c626"
+BEFORE_MODELS_REVISION = "3f9f88255e3b"
+MODELS_REVISION = "bc817a73bb6d"
+MODEL_TABLE = "llm_provider_model"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 TABLE = LlmProviderConnection.__tablename__
 SEEDED_ROW = (OPENROUTER_CONNECTION_ID, OPENROUTER_SLUG, OPENROUTER_NAME, "openrouter", None, None, None, None)
@@ -251,3 +255,121 @@ def test_a_clean_database_has_only_the_seeded_openrouter_connection():
         with engine.connect() as connection:
             rows = connection.execute(text(f"SELECT {ROW_COLUMNS} FROM {TABLE}")).all()
         assert_that([tuple(row) for row in rows], equal_to([SEEDED_ROW]))
+
+
+def _insert_model(connection, connection_id, **overrides):
+    row = {
+        "id": uuid7(),
+        "connection_id": connection_id,
+        "model_id": "claude-sonnet-4-5",
+        "input_cost_per_token": "0.000003",
+        "output_cost_per_token": "0.000015",
+        "cache_read_input_token_cost": "0",
+        "cache_creation_input_token_cost": "0",
+        "price_source": "manual",
+        "litellm_price_key": None,
+        **overrides,
+    }
+    columns = ", ".join(row)
+    values = ", ".join(f":{column}" for column in row)
+    connection.execute(
+        text(f"INSERT INTO {MODEL_TABLE} (created_at, updated_at, {columns}) VALUES (now(), now(), {values})"), row
+    )
+
+
+def test_the_models_migration_starts_with_no_models(database_before_connections):
+    database = database_before_connections
+
+    command.upgrade(database.config, MODELS_REVISION)
+
+    with database.engine.connect() as connection:
+        count = connection.execute(text(f"SELECT count(*) FROM {MODEL_TABLE}")).scalar_one()
+    assert_that(count, equal_to(0))
+
+
+def test_a_model_priced_by_hand_or_from_litellm_is_accepted(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, MODELS_REVISION)
+
+    with database.engine.begin() as connection:
+        _insert_model(connection, OPENROUTER_CONNECTION_ID)
+        _insert_model(
+            connection,
+            OPENROUTER_CONNECTION_ID,
+            model_id="accounts/fireworks/models/llama-v3:latest",
+            cache_creation_input_token_cost="0.000000000000000001",
+            price_source="litellm",
+            litellm_price_key="fireworks_ai/accounts/fireworks/models/llama-v3",
+        )
+
+        rows = connection.execute(
+            text(f"SELECT model_id, cache_creation_input_token_cost FROM {MODEL_TABLE} ORDER BY model_id")
+        ).all()
+    assert_that(
+        [(model_id, str(price)) for model_id, price in rows],
+        equal_to([("accounts/fireworks/models/llama-v3:latest", "1E-18"), ("claude-sonnet-4-5", "0E-18")]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "constraint"),
+    [
+        ({"input_cost_per_token": "0"}, "ck_llm_provider_model_input_price_positive"),
+        ({"output_cost_per_token": "0"}, "ck_llm_provider_model_output_price_positive"),
+        ({"cache_read_input_token_cost": "-0.000001"}, "ck_llm_provider_model_cache_read_price_not_negative"),
+        ({"cache_creation_input_token_cost": "-0.000001"}, "ck_llm_provider_model_cache_creation_price_not_negative"),
+        ({"price_source": "guessed"}, "ck_llm_provider_model_price_source_known"),
+        ({"price_source": "litellm"}, "ck_llm_provider_model_price_key_by_source"),  # LiteLLM's price with no key
+        ({"litellm_price_key": "gpt-4o"}, "ck_llm_provider_model_price_key_by_source"),  # a typed price with a key
+        ({"model_id": "gpt 4o"}, "ck_llm_provider_model_model_id_format"),
+        ({"model_id": ""}, "ck_llm_provider_model_model_id_format"),
+    ],
+)
+def test_the_database_refuses_a_model_that_could_not_be_routed_and_priced(
+    database_before_connections, overrides, constraint
+):
+    database = database_before_connections
+    command.upgrade(database.config, MODELS_REVISION)
+
+    with pytest.raises(IntegrityError, match=constraint), database.engine.begin() as connection:
+        _insert_model(connection, OPENROUTER_CONNECTION_ID, **overrides)
+
+
+def test_the_database_refuses_a_model_listed_twice_or_without_its_connection(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, MODELS_REVISION)
+    with database.engine.begin() as connection:
+        _insert_model(connection, OPENROUTER_CONNECTION_ID)
+
+    with (
+        pytest.raises(IntegrityError, match="uq_llm_provider_model_connection_model"),
+        database.engine.begin() as connection,
+    ):
+        _insert_model(connection, OPENROUTER_CONNECTION_ID)
+    with pytest.raises(IntegrityError), database.engine.begin() as connection:
+        _insert_model(connection, uuid7())
+
+
+def test_the_model_table_matches_its_migration(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, "head")
+
+    with database.engine.connect() as connection:
+        context = MigrationContext.configure(connection, opts={"compare_type": True})
+        diffs = [diff for diff in compare_metadata(context, SQLModel.metadata) if MODEL_TABLE in repr(diff)]
+
+    assert_that(diffs, equal_to([]))
+
+
+def test_the_models_downgrade_removes_the_table_and_keeps_the_connections(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, MODELS_REVISION)
+    with database.engine.begin() as connection:
+        _insert_model(connection, OPENROUTER_CONNECTION_ID)
+
+    command.downgrade(database.config, BEFORE_MODELS_REVISION)
+
+    assert_that(inspect(database.engine).has_table(MODEL_TABLE), equal_to(False))
+    with database.engine.connect() as connection:
+        count = connection.execute(text(f"SELECT count(*) FROM {TABLE}")).scalar_one()
+    assert_that(count, equal_to(1))

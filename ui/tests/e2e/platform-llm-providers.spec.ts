@@ -4,8 +4,16 @@ import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   ANTHROPIC_CONNECTION,
+  ANTHROPIC_STORED_MODELS,
+  AZURE_CATALOGUE,
   AZURE_CONNECTION,
+  AZURE_DEPLOYMENTS,
+  CUSTOM_CATALOGUE,
+  CUSTOM_CONNECTION,
+  CUSTOM_MODELS,
+  DROPPED_MODEL,
   PlatformLlmProviderDataSupport,
+  pricedCatalogue,
   SAVED_KEY,
 } from "../pages/data-support/platform-llm-provider-data-support.po";
 import { PlatformLlmProvidersPage } from "../pages/platform-llm-providers-page.po";
@@ -361,6 +369,7 @@ test("Platform Admin deletes a connection only after confirming", async ({ page 
 
   await settings.deleteButton("Anthropic").click();
   await expect(settings.dialog().getByRole("heading", { name: "Delete Anthropic?" })).toBeVisible();
+  await expect(settings.dialog()).toContainText("Its key and models are removed.");
   await settings.cancelDialog();
   expect(mock.deletes).toEqual([]);
   await expect(settings.providerCard("Anthropic")).toHaveCount(1);
@@ -386,7 +395,7 @@ test("deleting an Azure connection warns that its slug can't be used again", asy
 
   await settings.deleteButton("Azure Europe").click();
 
-  await expect(settings.dialog()).toContainText("azure-eu can't be used again");
+  await expect(settings.dialog()).toContainText("Its key and models are removed, and azure-eu can't be used again");
 });
 
 test("a refused delete keeps the confirmation open with the API's message", async ({ page }) => {
@@ -414,4 +423,546 @@ test("OpenRouter can't be deleted", async ({ page }) => {
 
   await expect(settings.deleteButton("Anthropic")).toBeVisible();
   await expect(settings.card().getByRole("button", { name: "Delete" })).toHaveCount(0);
+});
+
+type ModelsOptions = Parameters<PlatformLlmProviderDataSupport["interceptModels"]>[0];
+
+async function openAnthropicModels(page: Page, models: ModelsOptions = {}) {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  const mock = await data.interceptModels(models);
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await settings.modelsButton("Anthropic").click();
+  return { mock, settings };
+}
+
+test("Platform Admin ticks a model priced by LiteLLM and saves, keeping the stored models' prices", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await expect(settings.dialog().getByRole("heading", { name: "Anthropic models" })).toBeVisible();
+  await expect(settings.dialog().getByRole("columnheader")).toHaveText([
+    "Model",
+    "Input",
+    "Output",
+    "Cache read",
+    "Cache write",
+  ]);
+  await expect(settings.modelCells("claude-haiku-4-5")).toHaveText(["claude-haiku-4-5", "$1", "$5", "$0.1", "$1.25"]);
+  await expect(settings.modelCheckbox("claude-haiku-4-5")).not.toBeChecked();
+  await expect(settings.modelCells("claude-sonnet-4-5")).toHaveText([
+    "claude-sonnet-4-5",
+    "$3",
+    "$15",
+    "$0.3",
+    "$3.75",
+  ]);
+  await expect(settings.modelCheckbox("claude-sonnet-4-5")).toBeChecked();
+  await expect(settings.modelCells("claude-opus-4-1")).toHaveText([
+    "claude-opus-4-1LiteLLM's price has changedUse LiteLLM's price",
+    "$12LiteLLM $15",
+    "$60LiteLLM $75",
+    "$1.5",
+    "$15LiteLLM $18.75",
+  ]);
+  await expect(settings.modelCheckbox("claude-opus-4-1")).toBeChecked();
+  await expect(settings.tickedCount()).toHaveText("2 of 50 ticked");
+
+  await settings.modelCheckbox("claude-haiku-4-5").click();
+  await expect(settings.tickedCount()).toHaveText("3 of 50 ticked");
+  await settings.saveModels();
+
+  await expect(settings.dialog()).toHaveCount(0);
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves).toEqual([
+    {
+      slug: "anthropic",
+      body: {
+        models: [
+          { model_id: "claude-haiku-4-5", price: "litellm" },
+          { model_id: "claude-opus-4-1", price: "stored" },
+          { model_id: "claude-sonnet-4-5", price: "stored" },
+        ],
+      },
+    },
+  ]);
+});
+
+test("unticking a stored model removes it on save", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await settings.modelCheckbox("claude-opus-4-1").click();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    { models: [{ model_id: "claude-sonnet-4-5", price: "stored" }] },
+  ]);
+});
+
+test("a model LiteLLM has no price for is ticked with typed prices per 1M tokens", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await expect(settings.modelCells("claude-unpriced-preview")).toHaveText([
+    "claude-unpriced-preview",
+    "LiteLLM has no price for this model; tick it to type its prices.",
+  ]);
+  await settings.modelCheckbox("claude-unpriced-preview").click();
+  await expect(settings.saveModelsButton()).toBeDisabled();
+  await settings.typePrices("claude-unpriced-preview", ["1.5", "6", "0.15", "0"]);
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "claude-opus-4-1", price: "stored" },
+        { model_id: "claude-sonnet-4-5", price: "stored" },
+        {
+          model_id: "claude-unpriced-preview",
+          price: {
+            input_cost_per_token: "0.0000015",
+            output_cost_per_token: "0.000006",
+            cache_read_input_token_cost: "0.00000015",
+            cache_creation_input_token_cost: "0",
+          },
+        },
+      ],
+    },
+  ]);
+});
+
+test("a stored model whose LiteLLM price changed is saved at LiteLLM's price once accepted", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await expect(settings.useLiteLLMPriceButton("claude-sonnet-4-5")).toHaveCount(0);
+  await settings.useLiteLLMPriceButton("claude-opus-4-1").click();
+
+  await expect(settings.modelCells("claude-opus-4-1")).toHaveText([
+    "claude-opus-4-1Takes LiteLLM's price when saved",
+    "$15",
+    "$75",
+    "$1.5",
+    "$18.75",
+  ]);
+  expect(mock.saves).toEqual([]);
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "claude-opus-4-1", price: "litellm" },
+        { model_id: "claude-sonnet-4-5", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("the filter narrows the models by id", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page);
+
+  await settings.modelFilter().fill("SONNET");
+
+  await expect(settings.modelCheckboxes()).toHaveCount(1);
+  await expect(settings.modelCheckbox("claude-sonnet-4-5")).toBeVisible();
+});
+
+test("at 50 ticked models the rest can't be ticked", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page, pricedCatalogue(51, 50));
+
+  await expect(settings.tickedCount()).toHaveText("50 of 50 ticked");
+  await expect(settings.modelCheckbox("model-50")).toBeDisabled();
+  await settings.modelCheckbox("model-00").click();
+  await expect(settings.modelCheckbox("model-50")).toBeEnabled();
+});
+
+test("Select all priced ticks every model LiteLLM prices and saves them at LiteLLM's price", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await settings.selectAllPricedButton().click();
+
+  await expect(settings.modelCheckbox("claude-haiku-4-5")).toBeChecked();
+  await expect(settings.modelCheckbox("claude-unpriced-preview")).not.toBeChecked();
+  await expect(settings.tickedCount()).toHaveText("3 of 50 ticked");
+  await expect(settings.selectAllPricedButton()).toBeDisabled();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "claude-haiku-4-5", price: "litellm" },
+        { model_id: "claude-opus-4-1", price: "stored" },
+        { model_id: "claude-sonnet-4-5", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("Select all priced ticks only the models the filter shows", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page, pricedCatalogue(12, 0));
+
+  await settings.modelFilter().fill("model-1");
+  await settings.selectAllPricedButton().click();
+  await settings.modelFilter().fill("");
+
+  await expect(settings.tickedCount()).toHaveText("2 of 50 ticked");
+  await expect(settings.modelCheckbox("model-10")).toBeChecked();
+  await expect(settings.modelCheckbox("model-11")).toBeChecked();
+  await expect(settings.modelCheckbox("model-01")).not.toBeChecked();
+});
+
+test("Select all priced stops at 50 models and says how many it left unticked", async ({ page }) => {
+  const { settings } = await openAnthropicModels(page, pricedCatalogue(60, 10));
+
+  await settings.selectAllPricedButton().click();
+
+  await expect(settings.tickedCount()).toHaveText("50 of 50 ticked");
+  await expect(settings.modelCheckbox("model-49")).toBeChecked();
+  await expect(settings.modelCheckbox("model-50")).not.toBeChecked();
+  await expect(settings.dialog()).toContainText("The 50-model limit left 10 priced models unticked.");
+  await expect(settings.selectAllPricedButton()).toBeDisabled();
+});
+
+test("reopening Models ticks a model saved since it was last opened and keeps it on save", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, pricedCatalogue(2, 1));
+
+  await expect(settings.modelCheckbox("model-00")).toBeChecked();
+  await settings.cancelDialog();
+  mock.replace(pricedCatalogue(2, 2));
+  await settings.modelsButton("Anthropic").click();
+
+  await expect(settings.modelCheckbox("model-01")).toBeChecked();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "model-00", price: "stored" },
+        { model_id: "model-01", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("a refused save keeps the dialog open with the API's message", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, {
+    saveStatus: 422,
+    saveDetail: "Anthropic does not list one of these models. Nothing was saved.",
+  });
+
+  await settings.modelCheckbox("claude-haiku-4-5").click();
+  await settings.saveModels();
+
+  await expect(settings.dialog().getByRole("alert")).toHaveText(
+    "Anthropic does not list one of these models. Nothing was saved.",
+  );
+  await expect(settings.modelCheckbox("claude-haiku-4-5")).toBeChecked();
+  expect(mock.saves).toHaveLength(1);
+});
+
+test("a model list the provider refuses shows the API's message and can be retried", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, {
+    catalogueStatus: 409,
+    catalogueDetail: "Anthropic did not accept the stored key. Replace the key, then try again.",
+  });
+
+  await expect(settings.dialog().getByRole("alert")).toHaveText(
+    "Anthropic did not accept the stored key. Replace the key, then try again.",
+  );
+  await expect(settings.modelCheckboxes()).toHaveCount(0);
+  mock.recover();
+  await settings.dialog().getByRole("button", { name: "Retry" }).click();
+
+  await expect(settings.modelCheckbox("claude-sonnet-4-5")).toBeChecked();
+  expect(mock.catalogueReads.length).toBeGreaterThan(1);
+});
+
+test("a stored model the provider no longer lists is shown as removed and left out of the save", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page, { models: [...ANTHROPIC_STORED_MODELS, DROPPED_MODEL] });
+
+  await expect(settings.modelsNoLongerListed()).toContainText("No longer listed by Anthropic. Saving removes them.");
+  await expect(settings.modelsNoLongerListed()).toContainText("claude-3-opus-20240229");
+  await expect(settings.modelCheckbox("claude-3-opus-20240229")).toHaveCount(0);
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "claude-opus-4-1", price: "stored" },
+        { model_id: "claude-sonnet-4-5", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("every card but OpenRouter's has Models", async ({ page }) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept({
+    connections: [ANTHROPIC_CONNECTION, AZURE_CONNECTION, CUSTOM_CONNECTION],
+  });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await expect(settings.modelsButton("Anthropic")).toBeVisible();
+  await expect(settings.modelsButton("Azure Europe")).toBeVisible();
+  await expect(settings.modelsButton("Aardvark lab")).toBeVisible();
+  await expect(settings.modelsButton("OpenRouter")).toHaveCount(0);
+});
+
+test("a Custom model takes typed prices, and Save waits until its input and output are above 0", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [CUSTOM_CONNECTION] });
+  const mock = await data.interceptModels({ catalogue: CUSTOM_CATALOGUE, models: CUSTOM_MODELS });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await settings.modelsButton("Aardvark lab").click();
+
+  await expect(settings.priceInput("mistral-7b", "Input")).toHaveValue("0.2");
+  await expect(settings.priceInput("mistral-7b", "Output")).toHaveValue("0.4");
+  await expect(settings.priceInput("mistral-7b", "Cache read")).toHaveValue("0");
+  await expect(settings.selectAllPricedButton()).toHaveCount(0);
+  await settings.modelCheckbox("llama-3").click();
+  await expect(settings.priceInput("llama-3", "Input")).toHaveValue("");
+  await expect(settings.saveModelsButton()).toBeDisabled();
+  await settings.typePrices("llama-3", ["0", "1", "0", "0"]);
+  await expect(settings.saveModelsButton()).toBeDisabled();
+  await settings.priceInput("llama-3", "Input").fill("0.5");
+  await expect(settings.saveModelsButton()).toBeEnabled();
+  await settings.saveModels();
+
+  await expect(settings.toast("Aardvark lab models saved")).toBeVisible();
+  expect(mock.saves).toEqual([
+    {
+      slug: "lab",
+      body: {
+        models: [
+          {
+            model_id: "llama-3",
+            price: {
+              input_cost_per_token: "0.0000005",
+              output_cost_per_token: "0.000001",
+              cache_read_input_token_cost: "0",
+              cache_creation_input_token_cost: "0",
+            },
+          },
+          { model_id: "mistral-7b", price: "stored" },
+        ],
+      },
+    },
+  ]);
+});
+
+test("a changed typed price is sent in place of the stored one", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [CUSTOM_CONNECTION] });
+  const mock = await data.interceptModels({ catalogue: CUSTOM_CATALOGUE, models: CUSTOM_MODELS });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await settings.modelsButton("Aardvark lab").click();
+
+  await settings.priceInput("mistral-7b", "Output").fill("0.45");
+  await settings.saveModels();
+
+  await expect(settings.toast("Aardvark lab models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        {
+          model_id: "mistral-7b",
+          price: {
+            input_cost_per_token: "0.0000002",
+            output_cost_per_token: "0.00000045",
+            cache_read_input_token_cost: "0",
+            cache_creation_input_token_cost: "0",
+          },
+        },
+      ],
+    },
+  ]);
+});
+
+async function openAzureDeployments(page: Page) {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [AZURE_CONNECTION] });
+  const mock = await data.interceptModels({ catalogue: AZURE_CATALOGUE, models: AZURE_DEPLOYMENTS });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await settings.modelsButton("Azure Europe").click();
+  return { mock, settings };
+}
+
+test("an Azure deployment is added by name and priced from the model it runs", async ({ page }) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await expect(settings.dialog().getByRole("heading", { name: "Azure Europe deployments" })).toBeVisible();
+  await expect(settings.runsModelPicker("prod-gpt4o")).toHaveText("gpt-4o");
+  await expect(settings.runsModelPicker("lab-router")).toHaveText("Other (type prices)");
+  await expect(settings.priceInput("lab-router", "Input")).toHaveValue("1");
+  await settings.addDeployment("prod-mini");
+  await settings.chooseRunsModel("prod-mini", "mini", "gpt-4o-mini");
+
+  await expect(settings.deploymentCells("prod-mini")).toHaveText([
+    "",
+    "gpt-4o-mini",
+    "$0.15",
+    "$0.6",
+    "$0.075",
+    "$0.15",
+    "Remove",
+  ]);
+  await settings.saveModels();
+
+  await expect(settings.toast("Azure Europe models saved")).toBeVisible();
+  expect(mock.saves).toEqual([
+    {
+      slug: "azure-eu",
+      body: {
+        models: [
+          { model_id: "lab-router", price: "stored" },
+          { model_id: "prod-gpt4o", price: "stored" },
+          { model_id: "prod-mini", price: "litellm", runs_model: "gpt-4o-mini" },
+        ],
+      },
+    },
+  ]);
+});
+
+test("an Azure deployment on Other is saved with its typed prices per token", async ({ page }) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await settings.addDeployment("router-2");
+  await settings.chooseRunsModel("router-2", "other", "Other (type prices)");
+  await settings.typePrices("router-2", ["1.5", "6", "0.15", "0"]);
+  await settings.saveModels();
+
+  await expect(settings.toast("Azure Europe models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body.models[2])).toEqual([
+    {
+      model_id: "router-2",
+      price: {
+        input_cost_per_token: "0.0000015",
+        output_cost_per_token: "0.000006",
+        cache_read_input_token_cost: "0.00000015",
+        cache_creation_input_token_cost: "0",
+      },
+    },
+  ]);
+});
+
+test("an Azure deployment name that breaks the rules or repeats keeps Save disabled", async ({ page }) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await settings.addDeployment("bad name!");
+  await settings.chooseRunsModel("bad name!", "mini", "gpt-4o-mini");
+  await expect(settings.dialog()).toContainText("A deployment name is 1 to 64 letters, digits or . _ - characters.");
+  await expect(settings.saveModelsButton()).toBeDisabled();
+  await settings.newDeploymentName().fill("prod-gpt4o");
+  await expect(settings.dialog()).toContainText("Another deployment has this name.");
+  await expect(settings.saveModelsButton()).toBeDisabled();
+  await settings.newDeploymentName().fill("prod-gpt4o-2");
+  await expect(settings.saveModelsButton()).toBeEnabled();
+  expect(mock.saves).toEqual([]);
+});
+
+test("a new Azure deployment needs the model it runs before Save", async ({ page }) => {
+  const { settings } = await openAzureDeployments(page);
+
+  await settings.addDeployment("prod-mini");
+
+  await expect(settings.runsModelPicker("prod-mini")).toHaveText("Choose a model");
+  await expect(settings.saveModelsButton()).toBeDisabled();
+});
+
+test("a removed Azure deployment is left out of the save", async ({ page }) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await settings.removeDeploymentButton("lab-router").click();
+  await settings.saveModels();
+
+  await expect(settings.toast("Azure Europe models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([{ models: [{ model_id: "prod-gpt4o", price: "stored" }] }]);
+});
+
+test("reopening Azure deployments shows a deployment saved since it was last opened and keeps it on save", async ({
+  page,
+}) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await expect(settings.runsModelPicker("prod-gpt4o")).toHaveText("gpt-4o");
+  await settings.cancelDialog();
+  mock.replace({
+    catalogue: AZURE_CATALOGUE.map((entry) => (entry.model_id === "gpt-4o-mini" ? { ...entry, stored: true } : entry)),
+    models: [
+      ...AZURE_DEPLOYMENTS,
+      {
+        model_id: "prod-mini",
+        input_cost_per_token: "0.000000150000000000",
+        output_cost_per_token: "0.000000600000000000",
+        cache_read_input_token_cost: "0.000000075000000000",
+        cache_creation_input_token_cost: "0.000000150000000000",
+        price_source: "litellm",
+        litellm_price_key: "azure/gpt-4o-mini",
+      },
+    ],
+  });
+  await settings.modelsButton("Azure Europe").click();
+
+  await expect(settings.runsModelPicker("prod-mini")).toHaveText("gpt-4o-mini");
+  await settings.saveModels();
+
+  await expect(settings.toast("Azure Europe models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "lab-router", price: "stored" },
+        { model_id: "prod-gpt4o", price: "stored" },
+        { model_id: "prod-mini", price: "stored" },
+      ],
+    },
+  ]);
+});
+
+test("an Azure deployment whose LiteLLM price changed shows the difference and takes it once accepted", async ({
+  page,
+}) => {
+  const { mock, settings } = await openAzureDeployments(page);
+
+  await expect(settings.deploymentCells("prod-gpt4o")).toHaveText([
+    "prod-gpt4oLiteLLM's price has changedUse LiteLLM's price",
+    "gpt-4o",
+    "$2LiteLLM $2.5",
+    "$8LiteLLM $10",
+    "$1.25",
+    "$2LiteLLM $2.5",
+    "Remove",
+  ]);
+  await settings.useLiteLLMPriceButton("prod-gpt4o").click();
+  await expect(settings.deploymentCells("prod-gpt4o")).toHaveText([
+    "prod-gpt4oTakes LiteLLM's price when saved",
+    "gpt-4o",
+    "$2.5",
+    "$10",
+    "$1.25",
+    "$2.5",
+    "Remove",
+  ]);
+  await settings.saveModels();
+
+  await expect(settings.toast("Azure Europe models saved")).toBeVisible();
+  expect(mock.saves.map((save) => save.body)).toEqual([
+    {
+      models: [
+        { model_id: "lab-router", price: "stored" },
+        { model_id: "prod-gpt4o", price: "litellm", runs_model: "gpt-4o" },
+      ],
+    },
+  ]);
 });

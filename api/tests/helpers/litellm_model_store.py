@@ -34,16 +34,21 @@ def _free_port() -> int:
         return listener.getsockname()[1]
 
 
-class OpenRouterStub:
+class ChatCompletionsStub:
+    """An OpenAI-compatible chat endpoint that records each request's key and model and sends `reply`."""
+
     def __init__(self):
         self.keys: list[str] = []
+        self.models: list[str] = []
+        self.reply: dict = COMPLETION
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                posted = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 stub.keys.append(self.headers.get("Authorization", "").removeprefix("Bearer "))
-                body = json.dumps(COMPLETION).encode()
+                stub.models.append(posted.get("model"))
+                body = json.dumps(stub.reply).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -57,10 +62,10 @@ class OpenRouterStub:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/v1"
 
 
-def openrouter_stub_is_running():
+def chat_stub_is_running():
     def step(context):
-        stub = OpenRouterStub()
-        context.openrouter_stub = stub
+        stub = ChatCompletionsStub()
+        context.chat_stub = stub
         thread = threading.Thread(target=stub.server.serve_forever, daemon=True)
 
         def stop():
@@ -85,7 +90,8 @@ def _wait_until_ready(url: str) -> None:
 
 
 def pinned_litellm_runs_the_repository_config(openrouter_api_key: str):
-    """The repository's LiteLLM config with its OpenRouter route pointed at `context.openrouter_stub`."""
+    """The repository's LiteLLM config with its OpenRouter route pointed at `context.chat_stub`, using the
+    price list bundled in the image."""
 
     def step(context):
         source = REPOSITORY_CONFIG.read_text(encoding="utf-8")
@@ -93,7 +99,7 @@ def pinned_litellm_runs_the_repository_config(openrouter_api_key: str):
         database = PostgresContainer("postgres:16")
         directory = tempfile.TemporaryDirectory()
         config_file = Path(directory.name) / "config.yaml"
-        config_file.write_text(source.replace(OPENROUTER_API_BASE, context.openrouter_stub.url), encoding="utf-8")
+        config_file.write_text(source.replace(OPENROUTER_API_BASE, context.chat_stub.url), encoding="utf-8")
         context.litellm_container = None
 
         def start():
@@ -105,6 +111,7 @@ def pinned_litellm_runs_the_repository_config(openrouter_api_key: str):
                 "LITELLM_MASTER_KEY": MASTER_KEY,
                 "LITELLM_SALT_KEY": SALT_KEY,
                 "OPENROUTER_API_KEY": openrouter_api_key,
+                "LITELLM_LOCAL_MODEL_COST_MAP": "true",
             }
             context.litellm_container = subprocess.run(
                 [

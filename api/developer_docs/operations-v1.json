@@ -956,6 +956,16 @@
   ],
   [
     "GET",
+    "/platform/settings/llm-providers/{slug}/model-catalogue",
+    "read_model_catalogue_platform_settings_llm_providers__slug__model_catalogue_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/llm-providers/{slug}/models",
+    "list_models_platform_settings_llm_providers__slug__models_get"
+  ],
+  [
+    "GET",
     "/platform/settings/organizations",
     "read_organization_settings_platform_settings_organizations_get"
   ],
@@ -1768,6 +1778,11 @@
     "PUT",
     "/platform/settings/llm-providers/{slug}/key",
     "replace_key_platform_settings_llm_providers__slug__key_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/llm-providers/{slug}/models",
+    "replace_models_platform_settings_llm_providers__slug__models_put"
   ],
   [
     "PUT",

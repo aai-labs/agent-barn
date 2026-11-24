@@ -23,6 +23,8 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
 )
 
+MODEL_ID_LISTS = ["added_model_ids", "removed_model_ids", "repriced_model_ids"]
+
 
 class SamplePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -609,3 +611,113 @@ def test_the_llm_provider_deleted_event_needs_the_connection_and_whether_its_key
         _build_llm_provider_deleted_event(payload)
 
     assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+def _llm_provider_models_changed_payload(**extra) -> dict[str, object]:
+    return {
+        "connection_id": str(uuid4()),
+        "slug": "azure-eu",
+        "provider_type": "azure",
+        "added_count": 2,
+        "removed_count": 1,
+        "repriced_count": 1,
+        "added_model_ids": ["gpt-4o", "gpt-4o-mini"],
+        "removed_model_ids": ["gpt-35-turbo"],
+        "repriced_model_ids": ["o3"],
+        "model_ids_truncated": False,
+        "actor_display": "Platform Person",
+        "subject_display": "Azure Europe",
+        **extra,
+    }
+
+
+def _build_llm_provider_models_changed_event(payload: dict[str, object]):
+    return EVENT_REGISTRY.build_event(
+        event_name="platform.llm_provider.models_changed",
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=None,
+        actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+        subject=SubjectIdentity(type=SubjectIdentityType.SYSTEM, id=str(uuid4())),
+        correlation_id=uuid4(),
+        payload=payload,
+    )
+
+
+def test_the_llm_provider_models_changed_event_carries_counts_and_model_ids():
+    payload = _llm_provider_models_changed_payload()
+
+    event = _build_llm_provider_models_changed_event(payload)
+
+    assert_that(event.event_scope, equal_to(EventScope.PLATFORM))
+    assert_that(event.payload, equal_to(payload))
+
+
+@pytest.mark.parametrize(
+    "extra", [{"api_key_last4": "a1b2"}, {"key_hint": "sk-******a1b2"}, {"input_cost_per_token": 0.000003}]
+)
+def test_the_llm_provider_models_changed_event_refuses_any_other_field(extra):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_models_changed_event(_llm_provider_models_changed_payload(**extra))
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "connection_id",
+        "slug",
+        "provider_type",
+        "added_count",
+        "removed_count",
+        "repriced_count",
+        *MODEL_ID_LISTS,
+        "model_ids_truncated",
+    ],
+)
+def test_the_llm_provider_models_changed_event_needs_the_connection_its_counts_and_its_lists(missing):
+    payload = _llm_provider_models_changed_payload()
+    del payload[missing]
+
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_models_changed_event(payload)
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize("field", MODEL_ID_LISTS)
+def test_the_llm_provider_models_changed_event_lists_at_most_20_ids_each(field):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_models_changed_event(
+            _llm_provider_models_changed_payload(**{field: [f"model-{index}" for index in range(21)]})
+        )
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize("field", MODEL_ID_LISTS)
+def test_the_llm_provider_models_changed_event_refuses_a_model_id_over_200_characters(field):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_models_changed_event(_llm_provider_models_changed_payload(**{field: ["m" * 201]}))
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+def test_the_llm_provider_models_changed_event_at_its_limits_fits_the_payload_cap():
+    longest = [f"{index:02d}{'m' * 198}" for index in range(20)]
+    payload = _llm_provider_models_changed_payload(
+        slug="s" * 32,
+        subject_display="n" * 64,
+        added_count=50,
+        removed_count=50,
+        repriced_count=50,
+        added_model_ids=longest,
+        removed_model_ids=longest,
+        repriced_model_ids=longest,
+        model_ids_truncated=True,
+    )
+
+    event = _build_llm_provider_models_changed_event(payload)
+
+    assert_that(event.payload, equal_to(payload))

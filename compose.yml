@@ -571,6 +571,7 @@ services:
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
+      LITELLM_LOCAL_MODEL_COST_MAP: "true"
     ports:
       # Bind all interfaces (not just loopback) so agent pods inside k3d can
       # reach LiteLLM through the host on Linux, where host.docker.internal maps
