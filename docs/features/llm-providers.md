@@ -43,7 +43,7 @@ Agents never hold a provider key. They call LiteLLM with their own virtual keys,
 
 OpenRouter's key is checked by `OpenRouterClient.check_key` with `GET {openrouter_base_url}/key` (`https://openrouter.ai/api/v1/key` by default).
 
-Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_provider_keys/`). It sends one `GET`, pinned to a checked public address, with redirects off and a 10-second timeout, and reads only the status and headers, never the body.
+Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_provider_keys/`). It sends one `GET` (a Custom endpoint may take two more, below), pinned to a checked public address, with redirects off and a 10-second timeout, and reads only the status and headers, never the body.
 
 | Provider | Request | Key header |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ Every other key is checked by `LlmProviderKeyChecker` (`api/infrastructure/llm_p
 | Azure | `GET {base_url}/openai/v1/models`, the base URL being the resource endpoint such as `https://<resource>.openai.azure.com` | `api-key` |
 | Custom | `GET {base_url}/models` | `Authorization: Bearer` |
 
-`200` accepts the key. `401` or `403` refuses it, and for Gemini and xAI so does `400`. Any other answer, or none, means the provider could not be reached. For Azure and Custom, a base URL whose host is not a public address is refused before any request, and a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json` means the base URL does not answer like a model API. A Custom server whose `/models` does not check the key accepts any key. Why Fireworks, Gemini, Azure, Novita and xAI are checked this way is in the [change log](llm-providers/CHANGELOG.md) (slice 2, PR 2 and the review fixes).
+`200` accepts the key. `401` or `403` refuses it, and for Gemini and xAI so does `400`. Any other answer, or none, means the provider could not be reached. For Azure and Custom, a base URL whose host is not a public address is refused before any request, and a redirect, a `404`, or a `200` whose `Content-Type` is not `application/json` or `+json` means the base URL does not answer like a model API. A Custom server whose `/models` also answers `200` without any key, as OpenRouter's does, proves nothing about the key with it, so the checker then sends `POST {base_url}/chat/completions` with the key and an empty JSON body `{}`. Servers check the key before the body, so nothing is generated: `401` or `403` refuses the key, `400` or `422` (the missing input) or a `2xx` accepts it, `404` means the base URL does not answer like a model API, and anything else means it could not be reached. A server that needs no key at all answers `400` and is accepted, as any key works there. Why Fireworks, Gemini, Azure, Novita and xAI are checked this way is in the [change log](llm-providers/CHANGELOG.md) (slice 2, PR 2 and the review fixes).
 
 ## Listing a provider's models
 
