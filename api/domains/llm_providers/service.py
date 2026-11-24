@@ -65,6 +65,7 @@ from api.infrastructure.litellm.client import (
 )
 from api.infrastructure.llm_provider_catalogue.catalogue import (
     LlmProviderCatalogue,
+    ProviderListBusy,
     ProviderListRefused,
     ProviderListUnreachable,
     ProviderListUnreadable,
@@ -521,6 +522,8 @@ class PlatformLlmProviderService:
             raise HTTPException(
                 409, f"{name} did not accept the stored key. Replace the key, then try again."
             ) from None
+        except ProviderListBusy:
+            raise HTTPException(503, f"{name} is limiting requests. Try again in a minute.") from None
         except ProviderListUnreachable:
             raise HTTPException(503, f"{name} could not be reached to list its models.") from None
         except ProviderListUnreadable:

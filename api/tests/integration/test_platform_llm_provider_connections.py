@@ -20,6 +20,7 @@ from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice
 from api.infrastructure.llm_provider_catalogue.catalogue import (
     LlmProviderCatalogue,
+    ProviderListBusy,
     ProviderListRefused,
     ProviderListUnreachable,
     ProviderListUnreadable,
@@ -82,6 +83,7 @@ GPT4O_LISTED = ("0.0000025", "0.00001", "0.00000125", "0.0000025")
 ANTHROPIC_HAS_NO_KEY = "Anthropic has no key."
 ANTHROPIC_REFUSED_STORED_KEY = "Anthropic did not accept the stored key. Replace the key, then try again."
 ANTHROPIC_LIST_UNREACHABLE = "Anthropic could not be reached to list its models."
+ANTHROPIC_LIST_BUSY = "Anthropic is limiting requests. Try again in a minute."
 ANTHROPIC_LIST_UNREADABLE = "Anthropic's model list could not be read."
 PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
 MODELS_CHANGED_EVENT = "platform.llm_provider.models_changed"
@@ -1697,6 +1699,7 @@ def test_a_custom_connection_is_listed_at_its_base_url_without_prices():
     [
         (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
         (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListBusy(), 503, ANTHROPIC_LIST_BUSY),
         (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
     ],
 )
@@ -2174,6 +2177,7 @@ def test_a_model_the_provider_or_litellm_cannot_back_is_refused(models, detail):
     [
         (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
         (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListBusy(), 503, ANTHROPIC_LIST_BUSY),
         (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
     ],
 )
