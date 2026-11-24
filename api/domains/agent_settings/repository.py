@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -47,8 +48,10 @@ class AgentSettingsRepository:
         actor_display: str,
         subject_display: str,
         correlation_id: UUID | None = None,
+        in_transaction: Callable[[Session], None] | None = None,
     ) -> AgentSettingsChangeResult:
-        """Persists the default model and stages its change Event atomically."""
+        """Persists the default model and stages its change Event atomically, after
+        `in_transaction`, which may raise to refuse the write."""
         return self._set_with_event(
             organization_id,
             DEFAULT_MODEL_SETTING,
@@ -59,6 +62,7 @@ class AgentSettingsRepository:
             actor_display=actor_display,
             subject_display=subject_display,
             correlation_id=correlation_id,
+            in_transaction=in_transaction,
         )
 
     def set_default_agent_llm_budget_with_event(
@@ -99,15 +103,20 @@ class AgentSettingsRepository:
         subject_display: str,
         reason: str | None = None,
         correlation_id: UUID | None = None,
+        in_transaction: Callable[[Session], None] | None = None,
     ) -> AgentSettingsChangeResult:
         """One setting column and its change Event, atomically.
 
         The settings row, the Outbox Message and its Event Deliveries share one
         session and one commit, so a settings change can never be visible without
         its audit record. The row is created here on first write; callers read a
-        missing row as "follows the platform default".
+        missing row as "follows the platform default". `in_transaction` runs first in
+        that session, so whatever it reads or locks holds until the commit; if it
+        raises, nothing is written.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if in_transaction is not None:
+                in_transaction(session)
             settings = session.exec(
                 select(OrganizationAgentSettings).where(
                     col(OrganizationAgentSettings.organization_id) == organization_id

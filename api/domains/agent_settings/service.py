@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from sqlmodel import Session
 
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agent_settings.models import (
@@ -17,6 +18,9 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.selection import is_model_allowed
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.llm_providers.access import ProviderNotOpen
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
+from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED, OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -25,6 +29,7 @@ from api.infrastructure.openrouter.client import OpenRouterClient
 logger = logging.getLogger(__name__)
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+NO_LLM_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 
 
 @inject
@@ -48,6 +53,7 @@ class AgentSettingsService:
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
     agent_budgets: AgentLlmBudgetService
+    llm_provider_access: LlmProviderAccessLookup
 
     def get_settings(self, organization_id: UUID, context: CurrentUserContext) -> AgentSettingsRead:
         self._require_manage(organization_id, context)
@@ -78,18 +84,27 @@ class AgentSettingsService:
             return
 
         if candidate is not None:
+            if not self.llm_provider_access.can_use(OPENROUTER_SLUG, organization_id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
             self._ensure_selectable_default(candidate, organization_id)
 
+        def require_openrouter(session: Session) -> None:
+            self.llm_provider_access.require_open(session, OPENROUTER_SLUG, organization_id)
+
         inheriting, _ = self.agent_repository.count_by_model_source(organization_id)
-        result = self.repository.set_default_model_with_event(
-            organization_id,
-            candidate,
-            previous=previous,
-            inheriting_agent_count=inheriting,
-            actor=resolve_actor_identity(context, organization_id),
-            actor_display=context.user.full_name or context.user.email,
-            subject_display=self.organization_lookup.get_name(organization_id),
-        )
+        try:
+            result = self.repository.set_default_model_with_event(
+                organization_id,
+                candidate,
+                previous=previous,
+                inheriting_agent_count=inheriting,
+                actor=resolve_actor_identity(context, organization_id),
+                actor_display=context.user.full_name or context.user.email,
+                subject_display=self.organization_lookup.get_name(organization_id),
+                in_transaction=require_openrouter if candidate is not None else None,
+            )
+        except ProviderNotOpen:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
 
     def _update_default_agent_llm_budget(
