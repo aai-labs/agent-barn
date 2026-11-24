@@ -238,13 +238,11 @@ class OrganizationService:
                 detail="Trial accounts can't create more organizations.",
             )
         config = get_config()
-        allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
         organization = Organization(
             name=data.name,
             description=data.description,
             created_by_user_id=actor.user.id,
-            allowed_models=allowed_models,
         )
         # With self-signup on, only accounts a Platform Administrator set up spend the
         # platform's budget. Everyone else (signed up themselves, or invited by an
@@ -291,6 +289,13 @@ class OrganizationService:
                 )
             self.trial_settings.record_trial(email, session)
 
+        def prepare(session: Session) -> None:
+            if trial:
+                admit_trial(session)
+            organization.allowed_models = self.agent_service.llm_provider_access.initial_allowed_models(
+                session, config.agent_default_model.removeprefix("litellm/openrouter/")
+            )
+
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
@@ -301,7 +306,7 @@ class OrganizationService:
                 ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
                 opening_credit_usd=opening_credit if on_credit else None,
                 opening_credit_kind=CreditGrantKind.TRIAL if trial else CreditGrantKind.ADJUSTMENT,
-                in_transaction=admit_trial if trial else None,
+                in_transaction=prepare,
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
