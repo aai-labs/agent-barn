@@ -15,6 +15,14 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-24 — AF-447 — slice 3, review fixes 2
+
+- Fixed: a key replacement that failed part way left some routes on the new key, which was never stored, and a Models save did not rewrite them, because LiteLLM lists a route without its key and the save compared everything else. Each model route's `model_info` now carries `key_fingerprint`, the first 16 hex characters of its key's SHA-256, so the save rewrites a route left on another key.
+- Changed: reconciling a connection's routes tells each write whether LiteLLM already lists the route, instead of `upsert_model_deployment` looking it up, so a write is one LiteLLM call instead of two while the connection's lock is held: 50 calls rather than about 100 for a 50-model key replacement.
+- Changed: deleting a connection now says its models are removed with its key.
+- Restored: `test_llm_provider_connection_migration.py`, removed in PR 2, as you asked; it passes unchanged. It now covers migration `bc817a73bb6d` too: the table starts empty, a typed and a LiteLLM-priced model are accepted with prices down to 1e-18, each check constraint refuses its row, a repeated model or one without its connection is refused, the model matches the migration, and the downgrade drops the table and keeps the connections.
+- Verification: the connections, migration, LiteLLM client, deployment and domain event tests pass, as does the contract test against a real LiteLLM v1.108.6, which shows LiteLLM lists `key_fingerprint` back, so an unchanged save writes no route. `ui/tests/e2e/platform-llm-providers.spec.ts` passes. New tests fail when the fingerprint is dropped, when `exists` is inverted, and when a migration check constraint is removed.
+
 ### 2026-11-23 — AF-447 — slice 3, review fixes
 
 - Fixed: reopening the Models dialog showed the models from the previous opening while its reads ran again, and both editors kept that first snapshot, so a model or Azure deployment another administrator saved in between was left unticked and saving removed it. `useLlmProviderModels` now reports loading until both reads made after the dialog mounts have answered (`isFetchedAfterMount`, true after a success or a failure: `@tanstack/query-core` 5.101.4 `src/queryObserver.ts:580-582`), so each editor starts from what the API holds now.
