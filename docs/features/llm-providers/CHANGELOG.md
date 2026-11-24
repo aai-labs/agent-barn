@@ -24,6 +24,7 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
   - a pre-check with `LlmProviderAccessLookup.can_use`, before the OpenRouter catalogue is read;
   - `require_open` in the save's own session after the allowlist checks, so the shared lock is held from just before the write until the commit, and not during the catalogue call. An Organization that loses access between the two checks is refused and nothing is stored.
 - Changed: `OrganizationService` reaches the lookup through `agent_service.llm_provider_access`, as it already reaches OpenRouter through `agent_service.openrouter`. It gains no field, so `tests/unit/test_service_edge_cases.py`, which builds it by hand, is unchanged.
+- Changed: [`llm-providers.md`](../llm-providers.md) says the allowlist save enforces access too. Each of PRs 7 to 10 updates that sentence, as you asked.
 - Changed: `test_organization_update_models.py` was checked out with CRLF line endings while the index holds LF. Saving it rewrote it as LF, so its diff shows only the new tests.
 - Verification: `test_organization_update_models.py` gains 8 tests:
   - `none`, `only` another Organization and `all_except` this one each refuse a save with an entry, without reading the catalogue, storing anything or recording `organization.model_allowlist_changed`;
