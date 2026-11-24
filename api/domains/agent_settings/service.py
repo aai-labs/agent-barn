@@ -18,7 +18,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.selection import is_model_allowed
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.llm_providers.access import ProviderNotOpen
+from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
 from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED, OrganizationLookupService
@@ -29,7 +29,6 @@ from api.infrastructure.openrouter.client import OpenRouterClient
 logger = logging.getLogger(__name__)
 
 _OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
-NO_LLM_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 
 
 @inject

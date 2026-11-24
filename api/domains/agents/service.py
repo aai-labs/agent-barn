@@ -195,6 +195,7 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
+from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
 from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
@@ -1080,6 +1081,8 @@ class AgentService:
     ) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
@@ -1274,10 +1277,15 @@ class AgentService:
                         if self.config.artifact_s3_endpoint_url
                         else None
                     ),
+                    in_transaction=lambda session: self.llm_provider_access.require_open(
+                        session, OPENROUTER_SLUG, org_id
+                    ),
                 )
             except AgentSizeUnavailable:
                 # Disabled or withdrawn since the check above.
                 raise _size_unavailable() from None
+            except ProviderNotOpen:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:

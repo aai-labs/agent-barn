@@ -5,6 +5,8 @@ from uuid import UUID
 
 from api.domains.llm_providers.models import OrganizationAccess
 
+NO_LLM_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
+
 
 class ProviderNotOpen(Exception):
     pass

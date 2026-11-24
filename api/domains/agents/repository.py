@@ -1,4 +1,4 @@
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1030,6 +1030,7 @@ class AgentRepository:
         actor_display: str | None = None,
         artifact_bucket: ArtifactBucket | None = None,
         agent_limit: int | None = None,
+        in_transaction: Callable[[Session], None] | None = None,
     ) -> AgentLifecycleEventResult:
         """Create an Agent and its initial resources in one transaction.
 
@@ -1043,6 +1044,9 @@ class AgentRepository:
 
         A size chosen on hire is re-checked under its locks, as a later choice is, and
         recorded as `agent.agent_size.changed` from the default. Raises AgentSizeUnavailable.
+
+        `in_transaction` runs in that transaction after the Agent-limit check, so whatever it
+        reads or locks holds until the commit; if it raises, nothing is created.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if agent_limit is not None:
@@ -1061,6 +1065,8 @@ class AgentRepository:
                 )
                 if (live or 0) >= agent_limit:
                     raise AgentLimitReached(agent_limit)
+            if in_transaction is not None:
+                in_transaction(session)
             size = None
             if agent.agent_size_id is not None:
                 size = self._lock_choosable_size(session, agent.organization_id, agent.agent_size_id, any_enabled=False)

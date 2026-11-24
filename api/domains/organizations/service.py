@@ -29,7 +29,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
     ORGANIZATION_UPDATED,
 )
-from api.domains.llm_providers.access import ProviderNotOpen
+from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
@@ -57,7 +57,6 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 logger = logging.getLogger(__name__)
 
 _TRACKED_ORGANIZATION_FIELDS = ("name", "description")
-NO_LLM_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 
 
 def _and_list(items: list[str]) -> str:
