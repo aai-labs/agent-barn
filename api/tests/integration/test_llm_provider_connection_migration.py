@@ -12,7 +12,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from hamcrest import assert_that, equal_to
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import CheckConstraint, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel
@@ -340,8 +340,8 @@ def test_the_model_table_matches_its_migration(database_before_connections):
     assert_that(diffs, equal_to([]))
     declared = {
         constraint.name
-        for constraint in LlmProviderModel.__table__.constraints
-        if constraint.__class__.__name__ == "CheckConstraint"
+        for constraint in SQLModel.metadata.tables[MODEL_TABLE].constraints
+        if isinstance(constraint, CheckConstraint)
     }
     assert_that(set(constraints), equal_to(declared))
 
