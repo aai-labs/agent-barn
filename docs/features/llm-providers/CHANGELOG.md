@@ -12,10 +12,31 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 3, PRs 1 to 16. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices. `GET .../{slug}/models` lists them with exact prices, and `PUT .../{slug}/models` saves them for every provider but OpenRouter, Azure's as deployments priced from the model each runs, writing each model's LiteLLM route under the connection's lock and recording `platform.llm_provider.models_changed`. `GET .../{slug}/model-catalogue` lists the models the provider lists for the stored key, read by `LlmProviderCatalogue`, with LiteLLM's chat prices from `LiteLLMClient.get_model_prices()`, and marks which are stored and whose stored prices differ. Under the connection's lock, replacing a key rewrites the LiteLLM route of each of the connection's models before the key is stored, and deleting a connection removes its routes before its models and key. A contract test checks how a real LiteLLM serves and bills these routes. In the UI, every connection but OpenRouter has a Models dialog: it ticks a provider's models, priced by LiteLLM or by typed prices, edits Azure deployments with the model each runs or typed prices, and takes a changed LiteLLM price once accepted.
 - Next: slice 3, PR 17, the feature doc for slice 3 delivered and its known limits.
 - Delivered: providers page layout, PRs 1 to 4. `GET .../llm-providers` reports `env_key_last4`, the last four characters of `OPENROUTER_API_KEY`, on OpenRouter while the variable is set. While it is set, the settings page shows OpenRouter's card under "Set by this deployment", with the variable's last four, any saved key, and "In use" or "Fallback". Below it, "Providers · X of Y connected" is a grid with a card per provider, connected or not, one per Azure or Custom connection, and cards to add Azure and Custom connections; providers are named by their titles, Gemini as "Google". OpenRouter's card has only its key button; every other connection's card has only "Manage", whose menu leads to Models, Replace key and Delete. The providers page layout is complete.
-- In progress: AF-474, Provider Access per Organization, PRs 1 and 2 of 14. Each connection stores `organization_access` (`all`, `none`, `all_except` or `only`; every existing connection is `all`) and the Organizations listed for it. `LlmProviderAccessLookup` answers whether an Organization may use a connection, under the connection's lock taken shared when in a caller's transaction; no other domain calls it yet. Next: PR 3, the `platform.llm_provider.organizations_changed` event.
+- In progress: AF-474, Provider Access per Organization, PRs 1 to 3 of 14. Each connection stores `organization_access` (`all`, `none`, `all_except` or `only`; every existing connection is `all`) and the Organizations listed for it. `LlmProviderAccessLookup` answers whether an Organization may use a connection, under the connection's lock taken shared when in a caller's transaction; no other domain calls it yet. The `platform.llm_provider.organizations_changed` event is registered; nothing emits it yet. Next: PR 4, reading and replacing a connection's access through the API.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-24 — AF-474 — provider access, PR 3
+
+- Delivered: the Platform-scoped `platform.llm_provider.organizations_changed` event, version 1, projected by `security_audit.projection` and by no other handler. Its payload is:
+  - the connection id and slug;
+  - `previous_organization_access` and `organization_access`, each validated as an `OrganizationAccess`;
+  - `added_count` and `removed_count`;
+  - `added_organization_ids` and `removed_organization_ids`, Organization ids only, at most 20 each (`MAX_LISTED_ORGANIZATION_IDS`, the plan's number);
+  - `organization_ids_truncated`;
+  - the display names.
+  It refuses any other field, so it can't carry an Organization's name or a key. Nothing emits it yet. [`domain-events.md`](../domain-events.md) describes it.
+- Changed: the wiring test for the LLM provider events is renamed `test_the_llm_provider_events_reach_only_the_security_audit` and covers the new event.
+- Verification: `test_domain_events.py` covers:
+  - the fields;
+  - another field;
+  - each missing field;
+  - an unknown mode;
+  - a list over 20;
+  - a non-UUID id;
+  - a payload at its limits.
+  `test_event_handler_registry_wiring.py` checks that the event reaches only the security audit. The 20 new cases failed before the change. Both files pass (106 tests), as do ruff, ruff format and `ty`.
 
 ### 2026-11-24 — AF-474 — provider access, PR 2
 

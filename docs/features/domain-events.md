@@ -121,6 +121,15 @@ The Platform-scoped `platform.llm_provider.deleted` event is projected by `secur
 
 The Platform-scoped `platform.llm_provider.models_changed` event is projected by `security_audit.projection` and emitted atomically when a Platform Administrator saves a connection's models and any is added, removed or repriced (a price, its price source or its LiteLLM price key changed). Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug and provider type, how many models were added, removed and repriced, the ids of each (`added_model_ids`, `removed_model_ids`, `repriced_model_ids`, at most 20 per list and 200 characters per id, so full lists take about 12 KB of the 16 KB cap), `model_ids_truncated` when a list was cut, and actor/subject display snapshots, never a key or a price. Each list is sorted before it is cut.
 
+The Platform-scoped `platform.llm_provider.organizations_changed` event, version 1, is projected by `security_audit.projection`. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries:
+- the connection id and slug;
+- the [Provider Access](../../CONTEXT.md) mode before and after (`previous_organization_access`, `organization_access`, each `all`, `none`, `all_except` or `only`);
+- how many listed Organizations were added and removed, with their ids (`added_organization_ids`, `removed_organization_ids`, at most 20 per list);
+- `organization_ids_truncated` when a list was cut;
+- actor/subject display snapshots.
+
+It carries no Organization names. Nothing emits it yet: it is to be recorded when a Platform Administrator changes a connection's Provider Access, and when one adds a connection with access other than `all` ([change log](llm-providers/CHANGELOG.md)).
+
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 
 File Sync adds `agent.file_sync.enabled` and `agent.file_sync.disabled`, handled by `security_audit.projection`. The Subject is the Agent whose per-Agent File Sync switch changed. The payload carries the Organization and Agent ids and display snapshots of the actor and the Agent, and nothing about the folder or its files. See [Sync providers](sync-provider/README.md#agent-file-sync).
