@@ -76,6 +76,19 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
   );
 }
 
+function organizationsLabel({ organizationAccess, organizationCount }: LlmProviderConnection): string {
+  switch (organizationAccess) {
+    case "all":
+      return "All organizations";
+    case "none":
+      return "No organizations";
+    case "all_except":
+      return `All except ${organizationCount}`;
+    case "only":
+      return `Only ${organizationCount}`;
+  }
+}
+
 function connectionSubtitle(connection: LlmProviderConnection): string {
   return BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
     ? `${PROVIDER_TYPE_LABELS[connection.providerType]} · ${connection.baseUrl}`
@@ -107,6 +120,9 @@ export function ProviderCard({
           {connection.apiKeyLast4}
         </p>
       )}
+      <p className="mb-0 mt-1 text-sm" style={MUTED}>
+        {organizationsLabel(connection)}
+      </p>
       {saved && (
         <p className="mb-0 mt-1 text-sm" style={MUTED}>
           Saved {saved}

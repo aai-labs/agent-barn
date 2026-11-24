@@ -15,6 +15,10 @@ export const ProviderTypeSchema = z.enum([
 
 export type ProviderType = z.infer<typeof ProviderTypeSchema>;
 
+export const OrganizationAccessSchema = z.enum(["all", "none", "all_except", "only"]);
+
+export type OrganizationAccess = z.infer<typeof OrganizationAccessSchema>;
+
 export const LlmProviderConnectionSchema = z.object({
   slug: z.string(),
   name: z.string(),
@@ -26,6 +30,8 @@ export const LlmProviderConnectionSchema = z.object({
   updatedBy: z.string().nullable(),
   envKeyConfigured: z.boolean(),
   envKeyLast4: z.string().nullable(),
+  organizationAccess: OrganizationAccessSchema,
+  organizationCount: z.number(),
 });
 
 export type LlmProviderConnection = z.infer<typeof LlmProviderConnectionSchema>;
@@ -38,6 +44,20 @@ export type NewLlmProviderConnection = {
   slug?: string;
   name?: string;
   baseUrl?: string;
+  organizationAccess?: OrganizationAccess;
+  organizationIds?: string[];
+};
+
+export const LlmProviderOrganizationsSchema = z.object({
+  organizationAccess: OrganizationAccessSchema,
+  organizations: z.array(z.object({ id: z.string(), name: z.string() })),
+});
+
+export type LlmProviderOrganizations = z.infer<typeof LlmProviderOrganizationsSchema>;
+
+export type OrganizationsReplacement = {
+  organizationAccess: OrganizationAccess;
+  organizationIds: string[];
 };
 
 export type KeyReplacement = {

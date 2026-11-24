@@ -6,6 +6,11 @@ import { org } from "../pages/data-support/organization-data-support.po";
 import { SettingsAgentDefaultsPage } from "../pages/settings-agent-defaults.po";
 import UserContext from "../fixtures/user-context.json";
 
+const OFFERED_MODELS = [
+  { value: "litellm/openrouter/z-ai/glm-5.2", label: "GLM 5.2", is_default: true },
+  { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini" },
+];
+
 /** The default fixture is a platform-admin Owner; Agent Settings is admin-only, so a
  *  Member needs both of those stripped to prove the tab is hidden. */
 function memberContext() {
@@ -50,6 +55,7 @@ test.describe("Settings · Models", () => {
   });
 
   test("naming the blast radius before changing the default", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({ body: OFFERED_MODELS });
     await settings.open();
     await settings.editDefaultModel();
     await settings.chooseModel(/gpt-5 mini/i);
@@ -63,6 +69,7 @@ test.describe("Settings · Models", () => {
   });
 
   test("a saved default becomes the organization's own", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({ body: OFFERED_MODELS });
     await settings.open();
     await settings.editDefaultModel();
     await settings.chooseModel(/gpt-5 mini/i);
@@ -123,6 +130,7 @@ test.describe("Settings · Models", () => {
       status: 409,
       detail: "1 Agent is still pinned to 'openai/gpt-5-mini': Staging. Point them at an allowed model before removing it.",
     });
+    await dataSupport.agents.interceptGetModelsRequest({ body: OFFERED_MODELS });
     await settings.open();
     const section = page.getByRole("region", { name: "Allowed models" });
     await section.getByRole("button", { name: "Edit" }).click();

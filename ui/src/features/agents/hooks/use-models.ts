@@ -9,8 +9,8 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { ModelOption, ModelOptionSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
-// Shown while the catalogue loads and as a safety net if the fetch fails, so
-// the picker is never empty. Kept in sync with AGENT_DEFAULT_MODEL.
+// Shown while the catalogue loads and as a safety net if the fetch fails.
+// Kept in sync with AGENT_DEFAULT_MODEL.
 export const FALLBACK_MODELS: ModelOption[] = [
   { value: "litellm/openrouter/z-ai/glm-5.2", label: "GLM 5.2", isDefault: true },
   { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini" },
@@ -35,7 +35,7 @@ export function useModels({ catalog = false }: { catalog?: boolean } = {}) {
     staleTime: 0,
   });
 
-  const models = query.data?.length ? query.data : FALLBACK_MODELS;
+  const models = query.data ?? FALLBACK_MODELS;
   const defaultModel =
     models.find((m) => m.isDefault)?.value ?? models[0]?.value ?? "";
 

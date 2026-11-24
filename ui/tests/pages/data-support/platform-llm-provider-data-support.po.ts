@@ -9,14 +9,28 @@ export type OpenRouterConnectionBody = {
   env_key_last4: string | null;
 };
 
-export type LlmProviderConnectionBody = OpenRouterConnectionBody & {
+export type ProviderAccessBody = {
+  organization_access: "all" | "none" | "all_except" | "only";
+  organization_count: number;
+};
+
+export type LlmProviderConnectionBody = OpenRouterConnectionBody &
+  ProviderAccessBody & {
   slug: string;
   name: string;
   provider_type: string;
   base_url: string | null;
 };
 
-type AddBody = { provider_type: string; api_key: string; slug?: string; name?: string; base_url?: string };
+type AddBody = {
+  provider_type: string;
+  api_key: string;
+  slug?: string;
+  name?: string;
+  base_url?: string;
+  organization_access?: ProviderAccessBody["organization_access"];
+  organization_ids?: string[];
+};
 type KeyBody = { api_key: string; base_url?: string };
 
 export type ModelPricesBody = {
@@ -248,6 +262,8 @@ export const ANTHROPIC_CONNECTION: LlmProviderConnectionBody = {
   updated_by: "Platform Person",
   env_key_configured: false,
   env_key_last4: null,
+  organization_access: "all",
+  organization_count: 0,
 };
 
 export const AZURE_CONNECTION: LlmProviderConnectionBody = {
@@ -261,6 +277,8 @@ export const AZURE_CONNECTION: LlmProviderConnectionBody = {
   updated_by: "Platform Person",
   env_key_configured: false,
   env_key_last4: null,
+  organization_access: "all",
+  organization_count: 0,
 };
 
 export const CUSTOM_CONNECTION: LlmProviderConnectionBody = {
@@ -274,6 +292,8 @@ export const CUSTOM_CONNECTION: LlmProviderConnectionBody = {
   updated_by: "Platform Person",
   env_key_configured: false,
   env_key_last4: null,
+  organization_access: "all",
+  organization_count: 0,
 };
 
 const KNOWN_PROVIDER_NAMES: Record<string, string> = {
@@ -297,7 +317,7 @@ export class PlatformLlmProviderDataSupport {
 
   async intercept(
     options: {
-      connection?: OpenRouterConnectionBody;
+      connection?: OpenRouterConnectionBody & Partial<ProviderAccessBody>;
       connections?: LlmProviderConnectionBody[];
       listStatus?: number;
       saveStatus?: number;
@@ -316,6 +336,8 @@ export class PlatformLlmProviderDataSupport {
         name: "OpenRouter",
         provider_type: "openrouter",
         base_url: null,
+        organization_access: "all",
+        organization_count: 0,
         ...(options.connection ?? SAVED_KEY),
       },
       ...(options.connections ?? []),
@@ -354,6 +376,8 @@ export class PlatformLlmProviderDataSupport {
           updated_by: "Platform Person",
           env_key_configured: false,
           env_key_last4: null,
+          organization_access: body.organization_access ?? "all",
+          organization_count: body.organization_ids?.length ?? 0,
         };
         rows.push(added);
         return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(added) });

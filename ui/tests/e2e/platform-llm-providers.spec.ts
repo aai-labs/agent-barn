@@ -16,6 +16,7 @@ import {
   PlatformLlmProviderDataSupport,
   pricedCatalogue,
   SAVED_AND_ENVIRONMENT_KEYS,
+  SAVED_KEY,
 } from "../pages/data-support/platform-llm-provider-data-support.po";
 import { PlatformLlmProvidersPage } from "../pages/platform-llm-providers-page.po";
 
@@ -252,6 +253,25 @@ test("Platform Admin sees a card per provider and per Azure or Custom connection
   await expect(settings.addKeyButton("Azure OpenAI")).toHaveText("Add key");
   await expect(settings.providerCard("Custom endpoint")).toContainText("OpenAI-compatible API");
   await expect(settings.addKeyButton("Custom endpoint")).toHaveText("Add endpoint");
+});
+
+test("each provider card says which Organizations may use it", async ({ page }) => {
+  await signIn(page);
+  await new PlatformLlmProviderDataSupport(page).intercept({
+    connection: { ...SAVED_KEY, organization_access: "all", organization_count: 0 },
+    connections: [
+      { ...ANTHROPIC_CONNECTION, organization_access: "none", organization_count: 0 },
+      { ...AZURE_CONNECTION, organization_access: "all_except", organization_count: 3 },
+      { ...CUSTOM_CONNECTION, organization_access: "only", organization_count: 1 },
+    ],
+  });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await expect(settings.card()).toContainText("All organizations");
+  await expect(settings.providerCard("Anthropic")).toContainText("No organizations");
+  await expect(settings.providerCard("Azure Europe")).toContainText("All except 3");
+  await expect(settings.providerCard("Aardvark lab")).toContainText("Only 1");
 });
 
 test("a platform with only OpenRouter shows every provider as not connected, with no Add provider button", async ({
