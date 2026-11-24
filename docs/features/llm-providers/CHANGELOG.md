@@ -16,6 +16,15 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-24 — AF-447 — review follow-ups for slice 3 and the providers page
+
+- Fixed: a key replacement that failed part-way left the routes it had already written on the new key while the database kept the old one, and a later models save didn't repair them because LiteLLM never lists a key. The API now rewrites the connection's routes with the stored key and base URL before answering `503`, best effort.
+- Fixed: `LlmProviderCatalogue` asks for an uncompressed list and refuses a compressed one instead of inflating it, gives up on a listing after 30 seconds overall (`LIST_DEADLINE_SECONDS`), and reports a `429` as "{name} is limiting requests. Try again in a minute." instead of unreachable. Gemini's and xAI's `400` still refuses the key, since that is how both refuse an invalid one.
+- Fixed: `env_key_last4` is `null` for an `OPENROUTER_API_KEY` of 8 characters or fewer, whose last four would show most of it.
+- Fixed: the Models dialog read the provider's list again on every page refresh after it closed, and once more after each save. It now reads only while open and marks its lists stale on save. Focus returns to the card's Manage button when it closes, which is now a non-modal menu named "Manage {title}". Unnamed Azure deployments are labelled by position ("new deployment 3"), and a model stored at typed prices says "LiteLLM has a price for it" instead of "LiteLLM's price has changed".
+- Restored: `test_llm_provider_connection_migration.py`, removed with the model schema though it still passed. It now also checks `llm_provider_model`'s constraints, its match with the model, and its downgrade.
+- Verification: new tests for each fix, and each guard mutated once to see its test fail. `test_platform_llm_provider_connections.py`, the catalogue unit tests, the migration tests and all 57 tests in `ui/tests/e2e/platform-llm-providers.spec.ts` pass.
+
 ### 2026-11-23 — AF-447 — providers page layout, PR 4 follow-up
 
 - Changed: "Manage" opens a dropdown menu instead of a dialog, as you chose, because the PR 4 dialog didn't match the rest of the app. Agent sizes (`agent-sizes-settings.tsx`), Tiers (`tiers-settings.tsx`) and workflow cards (`workflow-card.tsx`) put an item's actions in the shared `DropdownMenu`, and no other page uses a dialog that only lists actions. `manage-provider-menu.tsx` replaces `manage-provider-dialog.tsx`: the menu opens from the card's button with Models (while a key is saved), Replace key or Save a key, and Delete as a `destructive` item. Each item opens the same dialog as before. The card takes the menu as its `manage` slot, and the settings page no longer keeps Manage state.
