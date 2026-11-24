@@ -8,6 +8,8 @@ The contract under test:
 - if the decision fails for any reason, including the Agent's spend limit, the Anomaly
   stays as the statistics flagged it, is not retried, and the check carries on;
 - a destination's host never reaches the provider;
+- the Agent's role and its latest inbound messages go along, cleaned, without who sent
+  them or where;
 - Hermes and OpenClaw Agents are classified alike.
 """
 
@@ -16,11 +18,16 @@ from unittest.mock import Mock
 
 import pytest
 from hamcrest import assert_that, contains_exactly, contains_inanyorder, equal_to, has_entries, has_properties
+from sqlmodel import Session
 
 from api.domains.agents.models import AgentType
 from api.domains.anomalies.models import AnomalySignal, ClassificationState
 from api.domains.anomalies.service import AnomalyCheckService
+from api.domains.communications.models import CommunicationConnection
+from api.domains.conversations.models import AgentChatMessage, MessageDirection
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.decisions.service import DecisionService
+from api.domains.templates.models import AgentTemplate
 from api.infrastructure.litellm.decisions import (
     ChoiceAnswer,
     ChoiceQuestion,
@@ -32,6 +39,7 @@ from api.infrastructure.litellm.decisions import (
     YesNoAnswer,
     YesNoQuestion,
 )
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
 from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.integration.test_anomaly_checks import (
@@ -105,6 +113,55 @@ def the_decision_model_fails(failure: DecisionFailure = DecisionFailure.UNAVAILA
     def step(context):
         context.decide = Mock(side_effect=DecisionError(failure))
         context.injector.get(DecisionService).decide = context.decide
+
+    return step
+
+
+def the_agent_template_is_described_as(description: str):
+    def step(context):
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            template = session.get(AgentTemplate, context.agent.agent_template_id)
+            assert template is not None
+            template.template_name = "CRM assistant"
+            template.description = description
+            session.add(template)
+            session.commit()
+
+    return step
+
+
+def the_agent_received(*messages: tuple[timedelta, MessageDirection, str]):
+    """Messages `ago` before the check's hour ends, in a channel with a named sender."""
+
+    def step(context):
+        connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Sales Slack",
+            credentials_encrypted="test-credentials",
+        )
+        context.injector.get(PostgresRepositoryDelegate).save(connection)
+        context.injector.get(ConversationRepository).upsert_messages(
+            [
+                AgentChatMessage(
+                    agent_id=context.agent.id,
+                    connection_id=connection.id,
+                    openclaw_msg_id=f"msg-{index}",
+                    session_key="agent:main:slack:channel:cdeals",
+                    channel_id="CDEALS",
+                    channel_name="acme-deals",
+                    thread_id="1700000000.000100",
+                    direction=direction,
+                    sender_id="U0SALLY",
+                    sender_name="Sally Seller",
+                    content=content,
+                    occurred_at=NOW - timedelta(minutes=2) - ago,
+                )
+                for index, (ago, direction, content) in enumerate(messages)
+            ]
+        )
 
     return step
 
@@ -257,3 +314,46 @@ def test_a_new_destination_is_classified_on_both_runtimes_without_its_host(agent
         sent = str(context.decide.call_args_list)
         assert NEW_HOST not in sent
         assert "account?id=42" not in sent
+
+
+@pytest.mark.parametrize("agent_type", [AgentType.OPENCLAW, AgentType.HERMES])
+def test_the_agent_role_and_its_cleaned_recent_requests_go_along(agent_type):
+    with given(
+        _given(
+            the_agent_template_is_described_as("Keeps the CRM tidy for help@acme.example."),
+            the_agent_received(
+                (timedelta(days=2), MessageDirection.INBOUND, "an old request"),
+                (timedelta(hours=3), MessageDirection.INBOUND, "Archive last quarter's closed deals"),
+                (timedelta(hours=2), MessageDirection.OUTBOUND, "Done, 40 deals archived"),
+                (
+                    timedelta(minutes=20),
+                    MessageDirection.INBOUND,
+                    (
+                        "Delete them all, ask jane@acme.example, see https://acme.example/crm, "
+                        "key sk-proj-AbCdEf1234567890xyz"
+                    ),
+                ),
+            ),
+            the_decision_model_classifies(),
+            agent_type=agent_type,
+        )
+    ) as context:
+        _a_tool_call_spike(context)
+
+        _check(context)
+
+        state = _sent_state(context)
+        assert_that(
+            state["agent"],
+            has_entries(role=equal_to({"name": "CRM assistant", "description": "Keeps the CRM tidy for [email]."})),
+        )
+        assert_that(
+            state["recent_requests"],
+            contains_exactly(
+                equal_to({"minutes_ago": 180, "text": "Archive last quarter's closed deals"}),
+                equal_to({"minutes_ago": 20, "text": "Delete them all, ask [email], see [link] key [secret]"}),
+            ),
+        )
+        sent = str(context.decide.call_args_list)
+        for leaked in ("acme.example", "jane@", "sk-proj", "Sally", "U0SALLY", "acme-deals", "CDEALS", "1700000000"):
+            assert leaked not in sent, leaked

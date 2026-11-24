@@ -114,7 +114,7 @@ def test_a_rate_is_described_by_how_far_it_went_from_usual_and_for_how_long():
 def test_the_agent_is_described_by_its_sensitivity_and_history():
     state, _ = classification_request([_rate()], CONTEXT, other_ongoing=[])
 
-    assert_that(state["agent"], equal_to({"sensitivity": "HIGH", "active_days_in_last_14": 9}))
+    assert_that(state["agent"], has_entries(sensitivity="HIGH", active_days_in_last_14=9))
 
 
 def test_a_usual_value_of_zero_gives_no_multiple_of_usual():

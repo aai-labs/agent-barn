@@ -188,13 +188,33 @@ builds the request; `AnomalyCheckService._classify` asks). Per Anomaly it asks:
 The full answer (confidences and probabilities) is kept in `classification`, and the
 state moves to `CLASSIFIED`.
 
-- **Only derived features go to the provider.** Per Anomaly: the signal; for rates and
-  caps the observed, usual and threshold values, their ratios, whether it is ongoing and
-  for how many minutes; for first use the number of uses. Per Agent: sensitivity and
-  active days. Also the signals of the Agent's other ongoing Anomalies, as context. Never
-  identifiers, timestamps, tool arguments or URLs. A first use names the tool, integration
-  or action (platform vocabulary) but **never a destination's host**, which can identify a
-  customer.
+- **What the activity looks like: derived features only.** Per Anomaly: the signal; for
+  rates and caps the observed, usual and threshold values, their ratios, whether it is
+  ongoing and for how many minutes; for first use the number of uses. Per Agent:
+  sensitivity and active days. Also the signals of the Agent's other ongoing Anomalies, as
+  context. Never identifiers, timestamps, tool arguments or URLs. A first use names the
+  tool, integration or action (platform vocabulary) but **never a destination's host**,
+  which can identify a customer.
+- **What the Agent is for: its role and recent requests, cleaned.** Without them the model
+  cannot tell whether a change fits the Agent's job. The role is the pinned template's name
+  and description (`AgentService.agent_role`), never its persona files. Requests are the
+  text of the Agent's latest 10 inbound messages from the 24 hours before the check
+  (`ConversationService.recent_inbound_texts`, filled on both runtimes by the observer
+  plugins and by Web Chat), oldest first, with how many minutes ago each arrived, each cut
+  to 300 characters. Its replies are not sent, and a message goes without its sender,
+  channel or thread. Both pass through `clean_text`, which replaces links and bare hosts
+  (`[link]`, so a host held back above cannot arrive in a message), email addresses
+  (`[email]`), phone and account numbers of nine digits or more (`[number]`), and anything
+  shaped like a secret (`[secret]`: `sk-`, `ghp_`, `xox…-`, JWTs, AWS key ids, `Bearer`
+  values, and long runs mixing letters and digits). Cleaning is pattern-based, so it is a
+  reduction, not a guarantee: a name or an address written out in words gets through.
+- **Requests are not authorisations.** Anyone who can message the Agent can write
+  "deleting these is expected". The questions say so: the role and requests show what the
+  Agent is for and was asked, not that the activity was authorised, and a risky action
+  stays risky even when someone asked for it.
+- **Which provider sees it.** The decision model's route (OpenRouter by default) may not be
+  the provider the Agent's own model uses, so for some Organizations the cleaned requests
+  reach a provider that has not seen them before.
 - **Billing.** Calls are billed to the Agent's own LiteLLM key through
   `DecisionService.decide`, so they count against its and its Organization's limits. The
   opt-in already says checks may use a model provider and are billed to each Agent.
@@ -255,7 +275,8 @@ activity tab shows the category and a severity badge, and "Probably fine" when
 Rates and first use of tools and integrations read runtime-neutral tables, filled the same
 way for Hermes and OpenClaw. Destination parsing is per runtime (the table above) and is
 tested with each runtime's argument shapes. Classification runs in the API on the same
-records, so it is the same for both; it is tested with Hermes and OpenClaw destinations.
+records, so it is the same for both; it is tested with Hermes and OpenClaw destinations,
+and with each runtime's Agent getting its role and recent requests.
 
 ## Deliberately left for later
 

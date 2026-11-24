@@ -117,6 +117,24 @@ class ConversationRepository:
             rows = session.exec(select(Agent.id, latest_inbound).where(col(Agent.id).in_(agent_ids))).all()
         return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
 
+    def recent_inbound_texts(
+        self, agent_id: UUID, *, since: datetime, until: datetime, limit: int
+    ) -> list[tuple[datetime, str]]:
+        """The latest `limit` inbound messages in [since, until], newest first."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentChatMessage.occurred_at, AgentChatMessage.content)
+                .where(
+                    col(AgentChatMessage.agent_id) == agent_id,
+                    col(AgentChatMessage.direction) == MessageDirection.INBOUND,
+                    col(AgentChatMessage.occurred_at) >= since,
+                    col(AgentChatMessage.occurred_at) <= until,
+                )
+                .order_by(col(AgentChatMessage.occurred_at).desc(), col(AgentChatMessage.id).desc())
+                .limit(limit)
+            ).all()
+        return [(occurred_at, content) for occurred_at, content in rows]
+
     def upsert_messages(self, messages: list[AgentChatMessage]) -> None:
         if not messages:
             return

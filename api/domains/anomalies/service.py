@@ -1,7 +1,7 @@
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from itertools import batched
 from uuid import UUID
@@ -14,6 +14,8 @@ from api.domains.agents.service import AgentService
 from api.domains.anomalies.classification import (
     MAX_ITEMS_PER_DECISION,
     AgentContext,
+    AgentRole,
+    RecentRequest,
     classification_request,
     read_classifications,
     severity_level,
@@ -56,6 +58,7 @@ from api.domains.anomalies.repository import (
 )
 from api.domains.auth.models import CurrentUserContext
 from api.domains.business_value.service import BusinessValueService
+from api.domains.conversations.service import ConversationService
 from api.domains.costs.service import CostService
 from api.domains.decisions.service import DecisionService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
@@ -124,6 +127,9 @@ LATE_USE = timedelta(hours=1)
 # The cost sync runs every 15 minutes. Past this, it has stopped, and its last figures
 # say nothing about what the Agent is doing now.
 COST_SYNC_STALE = timedelta(hours=1)
+# What the Agent was recently asked, as context for classifying what it then did.
+RECENT_REQUESTS_WINDOW = timedelta(hours=24)
+RECENT_REQUESTS_LIMIT = 10
 LLM_SIGNALS = (
     AnomalySignal.LLM_CALLS_PER_HOUR,
     AnomalySignal.LLM_TOKENS_PER_HOUR,
@@ -222,6 +228,7 @@ class AnomalyCheckService:
     cost_service: CostService
     business_value_service: BusinessValueService
     decision_service: DecisionService
+    conversation_service: ConversationService
 
     def windows(self, now: datetime) -> tuple[datetime, datetime | None]:
         """Where the checked hour ends for tool and Business Action figures, and for LLM
@@ -277,17 +284,19 @@ class AnomalyCheckService:
                 tool_calls_read_through=found.tool_calls_read_through,
                 business_actions_read_through=found.business_actions_read_through,
             )
-        self._classify(agent_id, started, context)
+        self._classify(agent_id, started, context, until)
 
-    def _classify(self, agent_id: UUID, anomaly_ids: list[UUID], context: AgentContext) -> None:
+    def _classify(self, agent_id: UUID, anomaly_ids: list[UUID], context: AgentContext, until: datetime) -> None:
         """Ask the decision model about Anomalies that started in this check, once.
 
         Billed to the Agent. A failure, such as its spend limit, leaves them as the
         statistics flagged them; they are not asked about again, so a spent budget does
-        not turn into a billed retry every check. Ongoing ones go along as context.
+        not turn into a billed retry every check. Ongoing ones go along as context, and
+        so do the Agent's role and what it was recently asked.
         """
         if not anomaly_ids:
             return
+        context = self._with_job(agent_id, context, until)
         anomalies = self.repository.get_anomalies(anomaly_ids)
         other_ongoing = self.repository.ongoing_signals(agent_id, excluding=anomaly_ids)
         for batch in batched(anomalies, MAX_ITEMS_PER_DECISION):
@@ -301,6 +310,21 @@ class AnomalyCheckService:
                 self.repository.set_classification(
                     anomaly_id, classification.category, classification.severity, classification.details
                 )
+
+    def _with_job(self, agent_id: UUID, context: AgentContext, until: datetime) -> AgentContext:
+        """`context` with the Agent's role and what it was asked in the day before `until`."""
+        role = self.agent_service.agent_role(agent_id)
+        requests = self.conversation_service.recent_inbound_texts(
+            agent_id, since=until - RECENT_REQUESTS_WINDOW, until=until, limit=RECENT_REQUESTS_LIMIT
+        )
+        return replace(
+            context,
+            role=AgentRole(name=role[0], description=role[1]) if role is not None else None,
+            recent_requests=tuple(
+                RecentRequest(minutes_ago=int((until - occurred_at).total_seconds() // 60), text=text)
+                for occurred_at, text in requests
+            ),
+        )
 
     def _rate_findings(
         self, agent_id: UUID, until: datetime, cost_until: datetime | None
