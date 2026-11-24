@@ -2,6 +2,7 @@ COMPOSE := docker compose -f compose.yml
 RUNTIME ?= hermes
 
 .PHONY: \
+	check-api-probes \
 	check-workflows \
 	check-restore-points \
 	reconcile-workflows \
@@ -91,6 +92,9 @@ dev-memory:
 
 check-memory:
 	cd api && uv run python scripts/check_memory_charts.py
+
+check-api-probes:
+	cd api && uv run --frozen python scripts/check_api_probes.py
 
 check-workflows:
 	cd api && uv run --frozen python scripts/check_workflow_charts.py
