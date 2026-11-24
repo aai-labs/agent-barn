@@ -148,11 +148,12 @@ export function ListedModelsPicker({
           unticked.
         </p>
       )}
-      <div className="max-h-[45vh] overflow-y-auto">
-        <table className="w-full border-collapse text-left text-[0.8rem]">
+      {/* Below the table's width, it scrolls sideways rather than squeeze model ids into a few letters a line. */}
+      <div className="max-h-[45vh] overflow-auto">
+        <table className="w-full min-w-[36rem] border-collapse text-left text-[0.8rem]">
           <thead>
             <tr>
-              <th className="py-2 pr-3 font-medium">Model</th>
+              <th className="min-w-[13rem] py-2 pr-3 font-medium">Model</th>
               <PriceHeaders />
             </tr>
           </thead>
@@ -183,7 +184,7 @@ export function ListedModelsPicker({
           </p>
           <ul className="m-0 mt-1 pl-5">
             {noLongerListed.map((model) => (
-              <li key={model.modelId} className="break-all">
+              <li key={model.modelId} className="break-words">
                 {model.modelId}
               </li>
             ))}
@@ -227,7 +228,7 @@ function ModelRow({
             disabled={!canTick}
             onCheckedChange={onToggle}
           />
-          <span className="min-w-0 break-all">
+          <span className="min-w-0 break-words">
             <span className="block">{entry.modelId}</span>
             {showsChange && (
               <>

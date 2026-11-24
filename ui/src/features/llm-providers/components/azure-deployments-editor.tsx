@@ -157,8 +157,9 @@ export function AzureDeploymentsEditor({
           {deployments.length} of {MAX_MODELS_PER_CONNECTION} deployments
         </span>
       </div>
-      <div className="max-h-[45vh] overflow-y-auto">
-        <table className="w-full border-collapse text-left text-[0.8rem]">
+      {/* Below the table's width, it scrolls sideways rather than squeeze names into a few letters a line. */}
+      <div className="max-h-[45vh] overflow-auto">
+        <table className="w-full min-w-[48rem] border-collapse text-left text-[0.8rem]">
           <thead>
             <tr>
               <th className="py-2 pr-3 font-medium">Deployment</th>
@@ -187,7 +188,7 @@ export function AzureDeploymentsEditor({
                 <tr key={deployment.key} className="border-t" style={{ borderColor: "var(--line)" }}>
                   <td className="py-2 pr-3 align-top">
                     {deployment.stored ? (
-                      <span className="block min-w-0 break-all">
+                      <span className="block min-w-0 break-words">
                         <span className="block">{deployment.name}</span>
                         {showsChange && (
                           <>

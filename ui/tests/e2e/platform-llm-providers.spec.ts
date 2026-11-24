@@ -712,6 +712,17 @@ test("a key saved from Manage gives focus back to Manage, even when the check ta
   await expect(settings.manageButton("Anthropic")).toBeFocused();
 });
 
+test("at phone width the models table scrolls sideways and keeps each model id on one line", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { settings } = await openAnthropicModels(page);
+
+  const id = settings.dialog().getByText("claude-unpriced-preview", { exact: true });
+  const lineHeight = await id.evaluate((element) => parseFloat(getComputedStyle(element).lineHeight));
+  expect((await id.boundingBox())?.height).toBeLessThanOrEqual(lineHeight + 1);
+  const scroller = settings.dialog().locator("table").locator("..");
+  expect(await scroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+});
+
 test("unticking a stored model removes it on save", async ({ page }) => {
   const { mock, settings } = await openAnthropicModels(page);
 
