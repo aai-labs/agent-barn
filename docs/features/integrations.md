@@ -348,7 +348,12 @@ The destination policy allows public HTTPS on the configured port (443 by defaul
 Requests must match the configured effective port. Internal/private/link-local,
 loopback, multicast and reserved addresses are unsupported in this initial version.
 All DNS answers must be public and the connection is pinned to a validated address
-while TLS verifies the configured hostname. Environment proxies are not used.
+while TLS verifies the configured hostname. Only one address is tried, and an IPv4
+answer is preferred over an IPv6 one, because the gateway's pod may have no IPv6 route;
+the token URL of an OAuth2 connection is reached the same way. When the gateway cannot
+reach the upstream it answers 502 and logs the connection id and the error's class,
+which is the only record of the cause since aai-cli reports any gateway error status to
+the agent as a generic refusal. Environment proxies are not used.
 The destination must match the configured origin and path segment boundary.
 Userinfo, fragments, backslashes, dot segments, duplicate slashes, encoded separators,
 and double encoding are refused; ordinary encoded resource names are supported.

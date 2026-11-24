@@ -15,6 +15,17 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-11-23 — Custom Slack server for Hermes Slack Connections — PR pending
+
+- Added: the Connection picker offers **Custom Slack** beside Slack on Hermes Agents that are not Bots. It opens a short form (server address, the administrator-issued tokens, and Slack's settings folded under one row) without the Slack-app steps or manifest, and saved Connections show a Custom Slack label with the server's host. It is the same Slack Connection, so an Agent has Slack or Custom Slack, and the plain Slack form never shows the server address.
+- Added: Slack Connections have an optional **Custom Slack server** setting (`api_url`), the Slack API address of a self-hosted chat that implements Slack's bot API with Socket Mode, such as a client's Slawk-based chat. Empty means Slack itself. It must be a plain `https` URL that is not on `slack.com`, and it is stored with a trailing slash. An empty server is not stored at all, so a release without the setting can still read every Slack Connection after a rollback. The setup checks, directory suggestions and default-target resolution call that server, pinned to its checked public addresses, and the directory cache is kept per server.
+- Added: on Hermes, the setting enables the `agentbarn-slack-compat` runtime plugin. It sends Slack API calls that carry this Connection's bot or app token to the server, so the Web API, Socket Mode handshake and standalone scheduled sends reach it, and it trusts that host for file downloads with this Connection's bot token only. Hermes keeps treating the Connection as Slack, so threads, scheduled delivery, approvals and the Slack access plugin behave as they do on Slack.
+- Limits: Hermes Agents only. OpenClaw Agents and Bots are refused, because the plugin is configured for the whole Hermes process. An Agent uses Slack or one Custom Slack server, as it has at most one Slack Connection. Agents pick up the setting when they restart; no image rebuild or migration is needed.
+
+### 2026-11-18 — AF-458 — Hermes observer keeps the gateway's lock on state.db — PR pending
+
+- Fixed: the Hermes `agentbarn-observer` plugin polled `state.db` through a SQLite connection Hermes could not see. When a turn or cron run opened Hermes's session store during a poll, Hermes read the file header as a plain file, and closing it cancelled the gateway's POSIX lock on `state.db` until the pod restarted. The next process to open and close `state.db`, such as the Agent querying its own history with `sqlite3`, then deleted the WAL under the running gateway, which lost committed writes and corrupted the database. The observer now opens `state.db` through Hermes's connection registry and closes it after each poll. Running Hermes Agents show an update until they restart, and the restart also restores a lock that was already lost. The runtime configuration digest changes.
+
 ### 2026-11-07 — MDP-118 — OpenClaw guard decides per run; no auto-threads beside listen-in — PR pending
 
 - Fixed: the OpenClaw listen-in guard decided from a per-session queue of dispatched messages, so a mention steered into a running turn, or a command, left a stale entry that shifted every later turn: unmentioned chatter could reach `exec` and a mention could lose its tools. It now decides per run from OpenClaw's room-event marker in the run's own messages.

@@ -39,7 +39,10 @@ class PermissionKey(str, Enum):
     LLM_BUDGET_MANAGE = "llm_budget.manage"
     AGENT_SIZE_MANAGE = "agent.size.manage"
     BILLING_MANAGE = "billing.manage"
+    WORKFLOW_MANAGE = "workflow.manage"
     TIER_HOLD_MANAGE = "tier_hold.manage"
+    ANOMALY_READ = "anomaly.read"
+    ANOMALY_MANAGE = "anomaly.manage"
     MCP_SERVER_MANAGE = "mcp_server.manage"
 
 
@@ -101,7 +104,10 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90"), PermissionKey.LLM_BUDGET_MANAGE),
     PermissionSeed(UUID("bdca6a6b-54cd-5741-98ef-6cdc10cfea69"), PermissionKey.AGENT_SIZE_MANAGE),
     PermissionSeed(UUID("9a3e6c1f-2b74-5d08-8e5a-4c7f1b2d6e33"), PermissionKey.BILLING_MANAGE),
+    PermissionSeed(UUID("c3f7a1d2-6b48-5e90-8a2c-7d4e1f9b0a56"), PermissionKey.WORKFLOW_MANAGE),
     PermissionSeed(UUID("f236e2c1-a221-559e-946b-9c25232caa30"), PermissionKey.TIER_HOLD_MANAGE),
+    PermissionSeed(UUID("6508f7e2-8def-5582-92bd-88cde6051e36"), PermissionKey.ANOMALY_READ),
+    PermissionSeed(UUID("3daa360b-a401-5882-9d4b-f6230ed2b217"), PermissionKey.ANOMALY_MANAGE),
     PermissionSeed(UUID("9649cb6a-fc1a-51b1-9160-8b13c09de27a"), PermissionKey.MCP_SERVER_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
@@ -132,9 +138,17 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.AGENT_SIZE_MANAGE,
         # Buying credit spends the Owner's money, so it stays with the Owner.
         PermissionKey.BILLING_MANAGE,
+        # Changing or archiving any workflow of the Organization; a workflow's creator
+        # may always change their own.
+        PermissionKey.WORKFLOW_MANAGE,
         # Which Agents stay on hold when the Tier no longer covers them all is the
         # Organization's decision, like dividing its spend.
         PermissionKey.TIER_HOLD_MANAGE,
+        # Organization-scoped only: watching what Agents do and deciding what counts as
+        # unusual is oversight of the Organization, so an Agent's own Owner who is a
+        # Member neither sees an Agent's Anomalies nor changes its normal.
+        PermissionKey.ANOMALY_READ,
+        PermissionKey.ANOMALY_MANAGE,
         # Organization-scoped only: an Organization MCP Server lends one Organization
         # credential to many Agents, so choosing it is not an Agent Owner's call.
         PermissionKey.MCP_SERVER_MANAGE,

@@ -3,6 +3,7 @@ import { Page } from "@playwright/test";
 import { AgentDataSupport } from "./agent-data-support.po";
 import { AgentMemoryDataSupport } from "./agent-memory-data-support.po";
 import { AgentWebhookDataSupport } from "./agent-webhook-data-support.po";
+import { AnomalyDataSupport } from "./anomaly-data-support.po";
 import { AuthSupport } from "./auth-support.po";
 import { CommunicationConnectionDataSupport } from "./communication-connection-data-support.po";
 import { CostDataSupport } from "./cost-data-support.po";
@@ -46,6 +47,7 @@ export class DataSupport {
   public platformMemory: PlatformMemoryDataSupport;
   public platformStats: PlatformStatsDataSupport;
   public playbooks: PlaybookDataSupport;
+  public anomalies: AnomalyDataSupport;
   public resourceUsage: ResourceUsageDataSupport;
   public tasks: TaskDataSupport;
 
@@ -71,6 +73,7 @@ export class DataSupport {
     this.platformMemory = new PlatformMemoryDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
     this.playbooks = new PlaybookDataSupport(page);
+    this.anomalies = new AnomalyDataSupport(page);
     this.resourceUsage = new ResourceUsageDataSupport(page);
     this.tasks = new TaskDataSupport(page);
   }

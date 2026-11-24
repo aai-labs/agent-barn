@@ -793,6 +793,26 @@ test.describe("Platform opened agent rows (platform_admin)", () => {
     await expect(usage.getByRole("img", { name: "Memory over time" })).toBeVisible();
   });
 
+  test("an open row stops refreshing while scrolled out of sight, and catches up when it is back", async ({ page }) => {
+    // Short enough that the open row, at the top of the page, sits past the 200px margin.
+    await page.setViewportSize({ width: 1440, height: 100 });
+    await page.clock.install();
+    const asked = await data.resourceUsage.interceptPlatformAgentDetails();
+    await usagePage.gotoAgentResourceUsage();
+    await usagePage.agentToggle(PLATFORM_CY_ID).click();
+    await expect(usagePage.agentDetails()).toBeVisible();
+    expect(asked).toHaveLength(1);
+
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const belowTheFold = await usagePage.agentDetails().evaluate((el) => el.getBoundingClientRect().top - window.innerHeight);
+    expect(belowTheFold).toBeGreaterThan(200);
+    await page.clock.runFor(130_000);
+    expect(asked).toHaveLength(1);
+
+    await usagePage.agentDetails().scrollIntoViewIfNeeded();
+    await expect.poll(() => asked.length).toBe(2);
+  });
+
   test("has no Cost panel and no links, since an organization's agent pages are not an admin's to open", async () => {
     await data.resourceUsage.interceptPlatformAgentDetails();
     await usagePage.gotoAgentResourceUsage();

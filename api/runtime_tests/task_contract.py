@@ -30,6 +30,7 @@ OPENCLAW_PLUGIN_HOOKS = [
     "agent_end",
     "before_agent_finalize",
     "before_prompt_build",
+    "cron_changed",
     "tool_result_persist",
 ]
 

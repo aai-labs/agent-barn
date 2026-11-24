@@ -15,6 +15,7 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { BASE_URL_HINTS } from "../constants";
 import type { KeyReplacement, LlmProviderConnection } from "../schemas";
+import { providerTitle, returnFocusTo as focusOnClose } from "../utils";
 
 const OPENROUTER_EMPTY_KEY_MESSAGE = "Paste the key from your OpenRouter dashboard.";
 const EMPTY_KEY_MESSAGE = "Paste the provider's API key.";
@@ -27,6 +28,7 @@ export function ProviderKeyDialog({
   onSave,
   isSaving,
   saveError,
+  returnFocusTo,
 }: {
   connection: LlmProviderConnection;
   open: boolean;
@@ -34,6 +36,8 @@ export function ProviderKeyDialog({
   onSave: (replacement: KeyReplacement) => Promise<unknown>;
   isSaving: boolean;
   saveError: unknown;
+  /** Focused when the dialog closes; see `returnFocusTo` in utils. */
+  returnFocusTo?: HTMLElement | null;
 }) {
   const isOpenRouter = connection.providerType === "openrouter";
   const storedBaseUrl = connection.baseUrl;
@@ -63,10 +67,12 @@ export function ProviderKeyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onCloseAutoFocus={focusOnClose(returnFocusTo)}>
         <DialogHeader>
           <DialogTitle>
-            {connection.hasApiKey ? `Replace the ${connection.name} key` : `Save a key for ${connection.name}`}
+            {connection.hasApiKey
+              ? `Replace the ${providerTitle(connection)} key`
+              : `Save a key for ${providerTitle(connection)}`}
           </DialogTitle>
           <DialogDescription>
             {isOpenRouter
@@ -103,7 +109,7 @@ export function ProviderKeyDialog({
           )}
           <div className="flex flex-col gap-1.5">
             <label className={LABEL_CLASS} style={{ color: "var(--ink-2)" }} htmlFor="provider-key-api-key">
-              {connection.name} API key
+              {providerTitle(connection)} API key
             </label>
             <input
               id="provider-key-api-key"

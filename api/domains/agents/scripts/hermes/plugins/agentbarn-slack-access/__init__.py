@@ -11,7 +11,7 @@ from functools import wraps
 # The pinned-image hermes_slack_access_driver.py contract guards these private
 # Hermes APIs; run it whenever updating the Hermes image.
 def register(ctx):
-    from gateway.authz_mixin import GatewayAuthorizationMixin, _auth_env  # ty: ignore[unresolved-import]
+    from gateway.authz_mixin import GatewayAuthorizationMixin, _platform_gate_env  # ty: ignore[unresolved-import]
     from plugins.platforms.slack.adapter import SlackAdapter  # ty: ignore[unresolved-import]
 
     original = GatewayAuthorizationMixin._is_user_authorized
@@ -47,14 +47,14 @@ def register(ctx):
         if source.chat_type == "dm":
             if not source.chat_id.startswith("D"):
                 return False
-            policy = _auth_env("AGENTBARN_SLACK_DM_POLICY", "off")
-            allowed = _auth_env("AGENTBARN_SLACK_DM_ALLOWED_USERS")
+            policy = _platform_gate_env("AGENTBARN_SLACK_DM_POLICY", "off")
+            allowed = _platform_gate_env("AGENTBARN_SLACK_DM_ALLOWED_USERS")
             identity = source.user_id
         elif source.chat_type in {"group", "channel", "forum", "thread"}:
             if not (source.chat_id.startswith("C") or source.chat_id in private_channels):
                 return False
-            policy = _auth_env("AGENTBARN_SLACK_GROUP_POLICY", "allowlist")
-            allowed = _auth_env("SLACK_ALLOWED_CHANNELS")
+            policy = _platform_gate_env("AGENTBARN_SLACK_GROUP_POLICY", "allowlist")
+            allowed = _platform_gate_env("SLACK_ALLOWED_CHANNELS")
             identity = source.chat_id
         else:
             return False

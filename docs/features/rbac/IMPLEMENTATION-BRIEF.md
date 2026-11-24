@@ -44,7 +44,11 @@ lists the connections that are not deleted, each with its provider, base URL and
 status, never the key or its ciphertext. `POST /platform/settings/llm-providers` adds a
 known provider's, Azure or Custom connection after the provider accepts its key, and
 `PUT .../{slug}/key` replaces any live connection's key the same way. `DELETE .../{slug}`
-deletes a connection other than OpenRouter and purges its key. Every write refuses a
+deletes a connection other than OpenRouter and purges its key. `GET .../{slug}/models`
+lists a live connection's stored models and their prices, and `GET .../{slug}/model-catalogue`
+the models its provider lists for the stored key, which never leaves the API (for Azure, LiteLLM's Azure
+chat models). `PUT .../{slug}/models`
+replaces a live connection's models. Every write refuses a
 read-only Personal API Key, and a malformed request gets a fixed `422` that does not echo
 the body.
 
@@ -82,6 +86,8 @@ Managing [Organization MCP Servers](../mcp-servers.md#management-api) uses the O
 
 Signing an OAuth MCP server in for the Organization needs `mcp_server.manage`. Signing it in for one Agent, or giving an Agent its own token for a server (an Agent MCP Credential), needs that Agent's `agent.update` and `agent.secret.manage`. For a [Restricted MCP Server](../mcp-servers.md#restricted-servers), changing an Agent's attachment to it or its Agent MCP Credential also needs `mcp_server.manage`, so an Agent Access Role alone never lends it. An [Agent MCP Server](../mcp-servers.md#agent-mcp-servers) is managed through its Agent with that Agent's `agent.update` and `agent.secret.manage`, resolved through `AgentAuthorization`; it must belong to the resolved Agent (`404` otherwise) and is never reachable through the Organization routes. No route lists every Agent's servers, and no Organization setting turns them off. Completing a sign-in requires the user who started it, and rechecks those Permissions. The unauthenticated popup callback only relays the code and the signed state to the opener. The gateway's MCP route (`/gateway/v1/mcp/{identifier}`) has no user Membership. A per-start token resolves the Agent and its Organization only while its generation is the running Agent's current one. The server is then looked up among that Agent's own effective servers, so no request value can choose another Organization or Agent. See [Organization MCP Servers](../mcp-servers.md#gateway-route).
 
+[Anomaly detection](../anomaly-detection.md#authorization) uses the Organization Permissions `anomaly.read` (see an Agent's Anomalies and normal, and whether detection is on) and `anomaly.manage` (turn detection on or off, change an Agent's sensitivity and hourly caps), held only by Owners and Admins. No Agent Access Role carries them: watching Agents is oversight of the Organization, so a Member who created or owns an Agent does not see its Anomalies. The Agent routes resolve the Agent through `AgentAuthorization.require_visible` first (`404` when concealed), then check the Organization grant (`403`).
+
 ## Agent Access
 
 An Agent remains owned by its Organization. Agent Creator is immutable provenance; authority comes from implicit Organization governance or explicit Agent Access.
@@ -89,6 +95,7 @@ An Agent remains owned by its Organization. Agent Creator is immutable provenanc
 - Organization Owner/Admin have implicit Agent Owner authority over every Agent in that Organization. No bulk Agent Access rows are required.
 - Creating an Agent atomically records creator provenance and grants the creator explicit Agent Owner access, including when the creator is currently Organization Owner/Admin.
 - An Organization Member without explicit Agent Access or applicable Agent General Access cannot see the Agent or any subordinate resource.
+- A Bot's effective Permissions are its own grants plus its Parent Agent's grants. A Membership may be granted access to a Bot only if it can read the Parent Agent. Reads enforce it too: `agent_scope_predicates` and `find_agent_permissions` give a Bot nothing unless the Membership can read its Parent Agent. Creating a Bot needs `agent.create` in the Organization and `agent.update` on the Parent Agent; lifecycle needs `agent.lifecycle.manage` on the Parent Agent. Inside the pod a Bot is not a security boundary: Bot grants control what people see in Agent Barn, not what one Bot can reach of another's credentials. See [Agent Bots](../agent-bots.md).
 - One Membership has at most one explicit Agent Access Role per Agent.
 - Agent General Access is one Agent-scoped setting: Restricted (`NULL`) or All Organization Members with one Agent Access Role. New and migrated Agents default to Restricted.
 - Agent General Access applies dynamically to current and future accepted Organization Members. Pending and removed Memberships receive nothing from it.
@@ -129,16 +136,22 @@ Agent file sync traffic from the pod has no user Membership either.
 - **Reading an Agent's File Sync status and history** (`GET …/agents/{agent_id}/file-sync` and `…/file-sync/activity`) requires `activity.read`. `AgentFileSyncRepository.status_inputs` reads the Agent through `agent_scope_predicates` and then only that Agent's Organization's active connection and that Agent's own folder ([Sync providers](../sync-provider/README.md#status)). `activity_page` joins `sync_activity` to the Agent under the same predicates before counting, ordering and paging.
 - **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
 
+Workflows split across both authority families ([Agent workflows](../agent-workflows.md#ownership-and-authority)).
+- **Definitions are Organization resources, not Agent-subordinate ones.** Reading them, their versions and the capabilities, and creating one, requires only an accepted Membership (`organization.read` through `PermissionPolicy.require_organization`). Saving a version, changing the default Agent and archiving are limited to the Membership that created the workflow and to Members holding the Organization Permission `workflow.manage`, which Owners and Admins hold; other Members receive 403. `WorkflowRepository` scopes every query by `workflow.organization_id`, so another Organization's workflow is a 404. Definition reads return the creator's name and User and Membership identifiers to every Member, including Members without `membership.read`.
+- **A default Agent grants nothing.** Setting one requires the author to read that Agent, and reads return it only to callers who can read it.
+- **Runs are subordinate resources of the Agent that runs them.** The Agent is named in the start request body and stored on the run; no workflow route carries an Agent in its path. Starting requires `agent.update` on that Agent through `AgentAuthorization.require_action`. Reads join the run to its Agent under `agent_scope_predicates` with `agent.read` before counting and paging; cancel, decide (a command or an Approval step) and re-run repeat the query under `agent.update`. An unreadable run is a 404.
+- **Runs of a deleted Agent** stay readable under the same `agent.read` predicates with the deleted Agent included, and accept no mutation.
+
 Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
 A purpose-separated credential derived from the per-start Agent secret resolves one
 undeleted, running Agent and its Organization. Runtime callers cannot choose another
 owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
-against that owning Agent, current generation/state/deadline and initiating Membership
+against the Agent running that run, current generation/state/deadline and initiating Membership
 authority. Workflow retrieval with an attempt ID uses those same fences and
 requires an active reference owned by that run. Human run start resolves and pins
 only READY files of the authorized Agent and Organization under `agent.update`.
 Completion credentials never enter model prompts or file-tool arguments.
-The entire owning Agent is the runtime trust boundary: all of its sessions share
+The entire Agent is the runtime trust boundary: all of its sessions share
 that identity and may publish into its current workflow attempts. Attempt IDs are
 non-secret provenance, not per-session capabilities; this is not session isolation.
 Human artifact reads require current `agent.read` and scoped visibility; publication
@@ -163,7 +176,7 @@ Agent Barn Telegram traffic has no user Membership either. Two callers reach it:
 
 These paths are not the background work described below: product users trigger them, so they keep explicit authority checks against the linking Membership rather than running unscoped.
 
-Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified`, and the Sync Engine's `FileSyncRepository` reads and writes run unscoped. The Sync Engine's methods take the Organization and connection from persisted connection rows, never from a caller. The exception holds only while all three of these do:
+Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified`, the Sync Engine's `FileSyncRepository` reads and writes, and the anomaly check (`AnomalyCheckService` with `AnomalyRepository`, and the hourly and stored-since reads it takes from `ToolCallService`, `CostService`, `BusinessValueService` and `AgentService.live_agent_ids`) run unscoped. The Sync Engine's methods take the Organization and connection from persisted connection rows, never from a caller. The exception holds only while all three of these do:
 
 - the method is never reachable from a router
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged

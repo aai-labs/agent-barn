@@ -17,7 +17,7 @@ from sqlmodel import SQLModel
 
 import api.domains.mcp_servers.models  # noqa: F401 - registers the tables on SQLModel.metadata
 
-PRE_MIGRATION_REVISION = "3f9f88255e3b"
+PRE_MIGRATION_REVISION = "9a64534a1a2f"
 MCP_SERVERS_REVISION = "d3a8b61f4c20"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 _TABLES = {

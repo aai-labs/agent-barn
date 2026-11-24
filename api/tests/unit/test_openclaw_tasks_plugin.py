@@ -9,13 +9,22 @@ import time
 from pathlib import Path
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, has_entries, is_
+from hamcrest import assert_that, contains_string, equal_to, has_entries, is_, is_not
 
 _PLUGIN_DIR = Path(__file__).parents[2] / "domains/agents/scripts/openclaw/plugins/agentbarn-tasks"
 _DRIVER = Path(__file__).parents[1] / "fixtures/agent_tasks/openclaw_tasks_plugin_driver.mjs"
 _FAKE_COMMAND = Path(__file__).parents[1] / "fixtures/agent_tasks/fake_task_command.py"
 _TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
 _SESSIONS_KEPT = 500
+_PARENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+_BOT_ID = "0000000b-0000-4000-8000-00000000000b"
+_BOT_IDENTITY = {
+    "AGENT_ID": _BOT_ID,
+    "INGEST_URL": "http://ingest/bot",
+    "INGEST_API_KEY": "bot-ingest-key",
+    "ARTIFACT_URL": "http://artifacts/bot",
+    "ARTIFACT_API_KEY": "bot-artifact-key",
+}
 
 
 def _drive(tmp_path: Path, steps: list[dict], open_tasks: list[dict] | None = None, **env: str) -> dict:
@@ -38,7 +47,7 @@ def _drive(tmp_path: Path, steps: list[dict], open_tasks: list[dict] | None = No
         env={
             "PATH": os.environ["PATH"],
             "HOME": str(tmp_path),
-            "AGENT_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "AGENT_ID": _PARENT_ID,
             "INGEST_URL": "http://localhost:8001/ingest/v1",
             "INGEST_API_KEY": "test-key-123",
             "AGENTBARN_TASK_COMMAND": str(wrapper),
@@ -126,7 +135,14 @@ def test_the_task_tool_and_turn_hooks_are_registered(tmp_path: Path):
     assert_that(
         driven["hooks"],
         equal_to(
-            ["after_tool_call", "agent_end", "before_agent_finalize", "before_prompt_build", "tool_result_persist"]
+            [
+                "after_tool_call",
+                "agent_end",
+                "before_agent_finalize",
+                "before_prompt_build",
+                "cron_changed",
+                "tool_result_persist",
+            ]
         ),
     )
     [tool] = driven["tools"]
@@ -1077,3 +1093,551 @@ def test_only_the_latest_sessions_requests_are_kept(tmp_path: Path):
     _drive(tmp_path, [_prompt(session="s1", prompt="Write the states CSV"), *later, wrote, _agent_end()])
 
     assert_that(_option(_creates(tmp_path)[0], "title"), equal_to("Work recorded automatically"))
+
+
+# --- each agent in a pod with Bots ---
+
+
+def _bot_pod(tmp_path: Path, **secret: str) -> str:
+    directory = tmp_path / "bots" / _BOT_ID
+    directory.mkdir(parents=True)
+    for name, value in {**_BOT_IDENTITY, **secret}.items():
+        (directory / name).write_text(value)
+    (tmp_path / ".openclaw" / f"workspace-{_BOT_ID}").mkdir(parents=True)
+    return str(tmp_path / "bots")
+
+
+def _as(step: dict, agent: str | None = _BOT_ID) -> dict:
+    ctx = step.get("ctx", {})
+    session = f"agent:{agent or _BOT_ID}:{ctx.get('sessionKey', 's1')}"
+    return {**step, "ctx": {**ctx, "sessionKey": session, **({"agentId": agent} if agent else {})}}
+
+
+def _env_of(tmp_path: Path, command: str) -> list[dict]:
+    return [call["env"] for call in _calls(tmp_path) if call["argv"][0] == command]
+
+
+def test_a_bots_task_tool_runs_the_command_as_that_bot_in_its_own_workspace(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(tmp_path, [_as(_tool(action="create", title="Report"))], BOT_SECRET_ROOT=pod)
+
+    call = _calls(tmp_path)[-1]
+    assert_that(call["env"], equal_to(_BOT_IDENTITY))
+    workspace = tmp_path / ".openclaw" / f"workspace-{_BOT_ID}"
+    assert_that(os.path.realpath(call["cwd"]), equal_to(os.path.realpath(workspace)))
+
+
+@pytest.mark.parametrize("agent", [_BOT_ID, None])
+def test_a_bots_unrecorded_work_is_recorded_as_that_bot(tmp_path: Path, agent: str | None):
+    pod = _bot_pod(tmp_path)
+    work = [_as(_after_tool(f"c{n}"), agent) for n in range(3)]
+
+    _drive(tmp_path, [*work, _as(_agent_end(), agent)], BOT_SECRET_ROOT=pod)
+
+    assert_that(_env_of(tmp_path, "create"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_files_are_found_in_its_own_workspace(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    states = tmp_path / ".openclaw" / f"workspace-{_BOT_ID}" / "states.csv"
+    states.write_text("a,b\n")
+    wrote = _after_tool("c1", tool="write", params={"path": "states.csv"})
+
+    _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end())], BOT_SECRET_ROOT=pod)
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, str(states), "--replace"]]))
+    assert_that(_env_of(tmp_path, "attach"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_file_over_its_own_limit_is_named_on_the_next_turn(tmp_path: Path):
+    pod = _bot_pod(tmp_path, ARTIFACT_MAX_BYTES="1")
+    (tmp_path / ".openclaw" / f"workspace-{_BOT_ID}" / "states.csv").write_text("a,b\n")
+    wrote = _after_tool("c1", tool="write", params={"path": "states.csv"})
+
+    driven = _drive(tmp_path, [_as(wrote), _as(_created()), _as(_agent_end()), _as(_prompt())], BOT_SECRET_ROOT=pod)
+
+    assert_that((_attaches(tmp_path), "states.csv" in _context(driven["results"][-1])), equal_to(([], True)))
+
+
+@pytest.mark.parametrize(
+    "secret", [None, {"AGENT_ID": _PARENT_ID}, {"INGEST_API_KEY": ""}], ids=["missing", "another_agent", "no_key"]
+)
+def test_a_bot_without_its_own_secret_records_nothing_and_never_as_the_parent(tmp_path: Path, secret: dict | None):
+    pod = _bot_pod(tmp_path, **secret) if secret is not None else str(tmp_path / "bots")
+    work = [_as(_after_tool(f"c{n}")) for n in range(3)]
+
+    driven = _drive(
+        tmp_path,
+        [_as(_tool(action="create", title="Report")), *work, _as(_agent_end()), _as(_prompt())],
+        BOT_SECRET_ROOT=pod,
+    )
+
+    assert_that(_calls(tmp_path), equal_to([]))
+    assert_that(_tool_output(driven["results"][0])["error"], contains_string("unavailable"))
+    assert_that(_context(driven["results"][-1]), is_not(contains_string("Your open and latest finished Tasks")))
+
+
+def test_each_agent_is_shown_its_own_open_tasks(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(
+        tmp_path,
+        [_prompt(), _as(_prompt()), _prompt(), _as(_prompt())],
+        open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}],
+        BOT_SECRET_ROOT=pod,
+    )
+
+    assert_that([env["AGENT_ID"] for env in _env_of(tmp_path, "list")], equal_to([_PARENT_ID, _BOT_ID]))
+
+
+def test_the_parent_in_a_pod_with_bots_keeps_its_own_identity_and_workspace(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(tmp_path, [_as(_tool(action="create", title="Report"), "main")], BOT_SECRET_ROOT=pod)
+
+    call = _calls(tmp_path)[-1]
+    assert_that(call["env"], has_entries(AGENT_ID=_PARENT_ID, INGEST_API_KEY="test-key-123"))
+    workspace = tmp_path / ".openclaw" / "workspace"
+    assert_that(os.path.realpath(call["cwd"]), equal_to(os.path.realpath(workspace)))
+
+
+# --- schedules: a Task follows the schedule it was created for ---
+
+_JOB_ID = "a829ba55-d319-4b26-962a-7eee853a53f0"
+_GREETING = "Post a greeting every minute, 7 times. It is done after 7 greetings."
+_CRON_SESSION = f"agent:main:cron:{_JOB_ID}:run:r1"
+
+
+def _links(tmp_path: Path) -> dict:
+    path = tmp_path / ".openclaw" / "agentbarn-task-schedules.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _linked(tmp_path: Path, runs: int = 0) -> None:
+    (tmp_path / ".openclaw").mkdir(parents=True, exist_ok=True)
+    link = {"task_id": _TASK_ID, **({"runs": runs} if runs else {})}
+    (tmp_path / ".openclaw" / "agentbarn-task-schedules.json").write_text(json.dumps({_JOB_ID: link}))
+
+
+def _schedule_added(tool: str = "automations", kind: str = "every") -> dict:
+    schedule = {"kind": "every", "everyMs": 60000} if kind == "every" else {"kind": "at", "at": "2026-11-18T09:00:00Z"}
+    job = {"name": "greeting-7x", "schedule": schedule, "payload": {"kind": "agentTurn", "message": "Post a greeting"}}
+    return _after_tool(
+        "call-s", tool=tool, params={"action": "add", "job": job}, result={"details": {"id": _JOB_ID, **job}}
+    )
+
+
+def _task_recorded(status: str = "done", keep: bool = False) -> dict:
+    params = {"action": "create", "title": "Greetings for a week", "status": status, **({"keep": True} if keep else {})}
+    return _after_tool("call-t", tool="agentbarn_task", params=params, result={"details": {"id": _TASK_ID}})
+
+
+def _statuses(tmp_path: Path) -> list[list[str]]:
+    return [call["argv"] for call in _calls(tmp_path) if call["argv"][0] == "status"]
+
+
+def _argvs(tmp_path: Path, command: str) -> list[list[str]]:
+    return [call["argv"] for call in _calls(tmp_path) if call["argv"][0] == command]
+
+
+def _cron_prompt(run_id: str = "cron-1") -> dict:
+    return {
+        "hook": "before_prompt_build",
+        "event": {"prompt": f"[cron:{_JOB_ID} greeting-7x] Post a greeting", "messages": []},
+        "ctx": {"sessionKey": _CRON_SESSION, "trigger": "cron", "runId": run_id, "jobId": _JOB_ID},
+    }
+
+
+def _cron_end(run_id: str = "cron-1", reply: str = "Good morning, team!") -> dict:
+    return {
+        "hook": "agent_end",
+        "event": {"runId": run_id, "success": True, "messages": [{"role": "assistant", "content": reply}]},
+        "ctx": {"sessionKey": _CRON_SESSION, "runId": run_id, "trigger": "cron", "jobId": _JOB_ID},
+    }
+
+
+def _cron_tool(call_id: str, run_id: str = "cron-1", **kwargs) -> dict:
+    return _after_tool(call_id, run_id=run_id, session=_CRON_SESSION, trigger="cron", **kwargs)
+
+
+@pytest.mark.parametrize("tool", ["automations", "cron"])
+def test_a_task_whose_job_is_the_runs_stays_in_progress_and_follows_the_schedule(tmp_path: Path, tool: str):
+    _drive(
+        tmp_path,
+        [_prompt(prompt=_GREETING), _schedule_added(tool), _task_recorded("done"), _agent_end()],
+        FAKE_SCHEDULE_INTENT="runs",
+    )
+
+    asked = json.loads(next(call["stdin"] for call in _calls(tmp_path) if call["argv"][0] == "schedule-intent"))
+    assert_that(
+        asked,
+        has_entries(
+            request=_GREETING,
+            schedule=has_entries(recurrence="every 60s", run_limit=None),
+            task=has_entries(title="Greetings for a week", status="done"),
+        ),
+    )
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "in_progress"]]))
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "agent": "main"}}))
+
+
+def test_a_task_whose_job_was_setting_up_the_schedule_is_done_even_if_the_agent_kept_it(tmp_path: Path):
+    steps = [_prompt(prompt="Remind me every morning"), _schedule_added(), _task_recorded("in_progress", keep=True)]
+    _drive(tmp_path, [*steps, _agent_end()], FAKE_SCHEDULE_INTENT="setup")
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(tmp_path), equal_to({}))
+
+
+@pytest.mark.parametrize(
+    ("keep", "linked", "statuses"), [(True, True, []), (False, False, [["status", _TASK_ID, "done"]])]
+)
+def test_without_a_decision_the_agents_own_choice_stands(tmp_path: Path, keep: bool, linked: bool, statuses: list):
+    _drive(tmp_path, [_prompt(prompt=_GREETING), _schedule_added(), _task_recorded("in_progress", keep), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to(statuses))
+    assert_that(bool(_links(tmp_path)), equal_to(linked))
+
+
+def test_a_schedule_whose_runs_are_the_job_gets_a_task_when_the_agent_recorded_none(tmp_path: Path):
+    _drive(tmp_path, [_prompt(prompt=_GREETING), _schedule_added(), _agent_end()], FAKE_SCHEDULE_INTENT="runs")
+
+    [created] = _argvs(tmp_path, "create")
+    assert_that("--status=in_progress" in created and "--origin=automatic" in created, equal_to(True))
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "agent": "main"}}))
+
+
+def test_a_one_off_schedule_is_asked_about_with_a_limit_of_one_run(tmp_path: Path):
+    _drive(
+        tmp_path, [_prompt(), _schedule_added(kind="at"), _task_recorded(), _agent_end()], FAKE_SCHEDULE_INTENT="setup"
+    )
+
+    asked = json.loads(next(call["stdin"] for call in _calls(tmp_path) if call["argv"][0] == "schedule-intent"))
+    assert_that(asked["schedule"], has_entries(run_limit=1))
+
+
+def test_each_scheduled_run_is_noted_on_its_task_without_the_agent_doing_anything(tmp_path: Path):
+    _linked(tmp_path, runs=2)
+    work = [_cron_tool(f"work-{index}") for index in range(4)]
+
+    _drive(tmp_path, [_cron_prompt(), *work, _cron_end()])
+
+    notes = [call for call in _calls(tmp_path) if call["argv"][:2] == ["note", _TASK_ID]]
+    assert_that([note["stdin"] for note in notes], equal_to(["Run 3: Good morning, team!"]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+    assert_that(_argvs(tmp_path, "create"), equal_to([]))
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "runs": 3}}))
+
+
+def test_a_run_that_removes_its_own_schedule_finishes_the_task(tmp_path: Path):
+    _linked(tmp_path, runs=6)
+    removal = _cron_tool("call-r", tool="automations", params={"action": "remove", "jobId": _JOB_ID}, result={})
+    changed = {"hook": "cron_changed", "event": {"action": "removed", "jobId": _JOB_ID}, "ctx": {}}
+
+    _drive(tmp_path, [_cron_prompt(), removal, changed, _cron_end()])
+
+    assert_that(_argvs(tmp_path, "note"), equal_to([["note", _TASK_ID]]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_argvs(tmp_path, "create"), equal_to([]))
+    assert_that(_links(tmp_path), equal_to({}))
+
+
+def test_a_schedule_removed_outside_a_run_finishes_its_task(tmp_path: Path):
+    _linked(tmp_path)
+
+    _drive(tmp_path, [{"hook": "cron_changed", "event": {"action": "removed", "jobId": _JOB_ID}, "ctx": {}}])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(tmp_path), equal_to({}))
+
+
+def test_a_one_off_schedule_finishes_its_task_when_it_has_run(tmp_path: Path):
+    _linked(tmp_path)
+    finished = {
+        "hook": "cron_changed",
+        "event": {"action": "finished", "jobId": _JOB_ID, "job": {"schedule": {"kind": "at"}}},
+        "ctx": {},
+    }
+
+    _drive(tmp_path, [finished])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_recurring_schedule_finishing_one_run_leaves_its_task_in_progress(tmp_path: Path):
+    _linked(tmp_path)
+    finished = {
+        "hook": "cron_changed",
+        "event": {"action": "finished", "jobId": _JOB_ID, "job": {"schedule": {"kind": "every"}}},
+        "ctx": {},
+    }
+
+    _drive(tmp_path, [finished])
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+    assert_that(bool(_links(tmp_path)), equal_to(True))
+
+
+def test_a_task_the_agent_closed_during_an_earlier_run_is_put_back_in_progress(tmp_path: Path):
+    _linked(tmp_path)
+    closed = _cron_tool(
+        "call-1", tool="agentbarn_task", params={"action": "status", "task_id": _TASK_ID, "status": "done"}, result={}
+    )
+
+    _drive(tmp_path, [_cron_prompt(), closed, _cron_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "in_progress"]]))
+
+
+def test_a_run_of_a_schedule_with_no_task_is_handled_as_before(tmp_path: Path):
+    work = [_cron_tool(f"work-{index}") for index in range(3)]
+
+    _drive(tmp_path, [_cron_prompt(), *work, _cron_end()])
+
+    assert_that(_argvs(tmp_path, "note"), equal_to([]))
+    assert_that(len(_argvs(tmp_path, "create")), equal_to(1))
+
+
+def test_removing_the_schedule_in_a_conversation_finishes_its_task(tmp_path: Path):
+    _linked(tmp_path)
+    removal = _after_tool("call-r", tool="automations", params={"action": "remove", "jobId": _JOB_ID}, result={})
+
+    _drive(tmp_path, [_prompt(prompt="Stop the greetings"), removal, _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_links(tmp_path), equal_to({}))
+
+
+def test_a_scheduled_run_is_recognised_from_its_prompt_when_the_runtime_names_no_job(tmp_path: Path):
+    _linked(tmp_path)
+    session = "agent:main:connection:abc:thread-1"
+    prompt = {
+        "hook": "before_prompt_build",
+        "event": {"prompt": f"[cron:{_JOB_ID} greeting-7x] Post a greeting", "messages": []},
+        "ctx": {"sessionKey": session, "trigger": "cron"},
+    }
+    end = {
+        "hook": "agent_end",
+        "event": {"runId": "cron-9", "success": True, "messages": [{"role": "assistant", "content": "Hello!"}]},
+        "ctx": {"sessionKey": session, "runId": "cron-9", "trigger": "cron"},
+    }
+
+    _drive(tmp_path, [prompt, end])
+
+    assert_that([call["stdin"] for call in _calls(tmp_path) if call["argv"][0] == "note"], equal_to(["Run 1: Hello!"]))
+
+
+def test_a_conversation_turn_that_quotes_a_schedule_prefix_is_not_a_scheduled_run(tmp_path: Path):
+    _linked(tmp_path)
+
+    _drive(tmp_path, [_prompt(prompt=f"[cron:{_JOB_ID} greeting-7x] what does this mean?"), _agent_end()])
+
+    assert_that(_argvs(tmp_path, "note"), equal_to([]))
+
+
+# --- a Task about to be marked done can be held back ---
+
+
+def _ended(reply: str = "I asked the channel.", run_id: str = "run-1", session: str = "s1", **ctx) -> dict:
+    return {
+        "hook": "agent_end",
+        "event": {"runId": run_id, "success": True, "messages": [{"role": "assistant", "content": reply}]},
+        "ctx": {"sessionKey": session, "runId": run_id, "trigger": "user", **ctx},
+    }
+
+
+def _asked(tmp_path: Path) -> list[dict]:
+    return [json.loads(call["stdin"]) for call in _calls(tmp_path) if call["argv"] == ["turn-end"]]
+
+
+def _left_in_progress(call_id: str = "c2", **kwargs) -> dict:
+    return _after_tool(
+        call_id,
+        tool="agentbarn_task",
+        params={"action": "create", "title": "Ask QA", "status": "in_progress"},
+        result={"details": {"id": _TASK_ID, "status": "in_progress"}},
+        **kwargs,
+    )
+
+
+def test_agent_barn_is_asked_about_a_task_before_it_is_marked_done(tmp_path: Path):
+    steps = [
+        _prompt(prompt="Ask the QA channel for the priority"),
+        _after_tool("c1", command="post question"),
+        _left_in_progress(),
+        _ended(),
+    ]
+
+    _drive(tmp_path, steps)
+
+    [asked] = _asked(tmp_path)
+    assert_that(
+        asked,
+        has_entries(
+            request="Ask the QA channel for the priority",
+            reply="I asked the channel.",
+            closing=[_TASK_ID],
+            trigger="user",
+        ),
+    )
+    assert_that(asked["tools"][0], contains_string("exec"))
+    assert_that(asked["tools"][0], contains_string("post question"))
+    assert_that(len(asked["tools"]), equal_to(2))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_task_whose_job_is_still_going_is_not_marked_done(tmp_path: Path):
+    _drive(tmp_path, [_left_in_progress(), _ended()], FAKE_TURN_END="in_progress")
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_task_waiting_on_the_user_is_left_open(tmp_path: Path):
+    _drive(tmp_path, [_left_in_progress(), _ended()], FAKE_TURN_END="open")
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_a_task_the_agent_kept_is_not_asked_about(tmp_path: Path):
+    _drive(tmp_path, [_kept(), _ended()], FAKE_TURN_END="open")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+@pytest.mark.parametrize("status", ["done", "open", "failed"])
+def test_a_status_the_agent_set_itself_is_not_asked_about(tmp_path: Path, status: str):
+    set_by_agent = _task("c1", result={"details": {"id": _TASK_ID}}, action="status", task_id=_TASK_ID, status=status)
+
+    _drive(tmp_path, [set_by_agent, _ended()], FAKE_TURN_END="in_progress")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_run_that_failed_reopens_its_task_without_asking(tmp_path: Path):
+    _drive(tmp_path, [_left_in_progress(), _agent_end(success=False)], FAKE_TURN_END="in_progress")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "open"]]))
+
+
+def test_a_run_that_touched_no_task_asks_nothing(tmp_path: Path):
+    _drive(tmp_path, [_after_tool("c1"), _ended()], FAKE_TURN_END="in_progress")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+
+
+def test_secrets_are_not_sent_with_the_question(tmp_path: Path):
+    secret = "sk-" + "a1B2c3D4" * 5
+    steps = [
+        _prompt(prompt=f"Use the key {secret} to call the API"),
+        _after_tool("c1", command=f"curl -H 'Authorization: Bearer {secret}' https://example.com"),
+        _left_in_progress(),
+        _ended(f"I used {secret}."),
+    ]
+
+    _drive(tmp_path, steps)
+
+    assert_that(len(_asked(tmp_path)), equal_to(1))
+    assert_that(secret in json.dumps(_asked(tmp_path)), equal_to(False))
+
+
+def test_a_task_finished_by_setting_up_its_schedule_is_marked_done_without_asking(tmp_path: Path):
+    steps = [
+        _prompt(prompt="Remind me to stretch every morning"),
+        _schedule_added(),
+        _task_recorded("in_progress", keep=True),
+        _ended(),
+    ]
+
+    _drive(tmp_path, steps, FAKE_TURN_END="in_progress", FAKE_SCHEDULE_INTENT="setup")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+def test_a_task_following_a_schedule_is_not_asked_about(tmp_path: Path):
+    steps = [_prompt(prompt=_GREETING), _schedule_added(), _task_recorded("in_progress"), _ended()]
+
+    _drive(tmp_path, steps, FAKE_TURN_END="open", FAKE_SCHEDULE_INTENT="runs")
+
+    assert_that(_asked(tmp_path), equal_to([]))
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_scheduled_run_with_no_linked_task_is_asked_about_as_a_scheduled_run(tmp_path: Path):
+    steps = [_cron_prompt(), _left_in_progress(run_id="cron-1", session=_CRON_SESSION, trigger="cron"), _cron_end()]
+
+    _drive(tmp_path, steps)
+
+    assert_that(_asked(tmp_path)[0]["trigger"], equal_to("cron"))
+
+
+# --- a Bot's schedules and turn-end questions ---
+
+_BOT_CRON_SESSION = f"agent:{_BOT_ID}:cron:{_JOB_ID}:run:r1"
+
+
+def _bot_cron(step: dict) -> dict:
+    return {**step, "ctx": {**step["ctx"], "sessionKey": _BOT_CRON_SESSION, "agentId": _BOT_ID}}
+
+
+def _bot_linked(tmp_path: Path) -> None:
+    (tmp_path / ".openclaw").mkdir(parents=True, exist_ok=True)
+    link = {"task_id": _TASK_ID, "agent": _BOT_ID}
+    (tmp_path / ".openclaw" / "agentbarn-task-schedules.json").write_text(json.dumps({_JOB_ID: link}))
+
+
+def _removed() -> dict:
+    return {"hook": "cron_changed", "event": {"action": "removed", "jobId": _JOB_ID, "agentId": _BOT_ID}, "ctx": {}}
+
+
+def test_a_bots_schedule_is_linked_to_its_task_as_that_bot(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    steps = [_prompt(prompt=_GREETING), _schedule_added(), _task_recorded("done"), _agent_end()]
+
+    _drive(tmp_path, [_as(step) for step in steps], FAKE_SCHEDULE_INTENT="runs", BOT_SECRET_ROOT=pod)
+
+    assert_that(_links(tmp_path), equal_to({_JOB_ID: {"task_id": _TASK_ID, "agent": _BOT_ID}}))
+    assert_that(_env_of(tmp_path, "schedule-intent"), equal_to([_BOT_IDENTITY]))
+    assert_that(_env_of(tmp_path, "status"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_scheduled_run_is_noted_on_its_task_as_that_bot(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    _bot_linked(tmp_path)
+
+    _drive(tmp_path, [_bot_cron(_cron_prompt()), _bot_cron(_cron_end())], BOT_SECRET_ROOT=pod)
+
+    assert_that(_env_of(tmp_path, "note"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_schedule_removed_outside_a_run_finishes_its_task_as_that_bot(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    _bot_linked(tmp_path)
+
+    _drive(tmp_path, [_removed()], BOT_SECRET_ROOT=pod)
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_env_of(tmp_path, "status"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_bots_task_is_asked_about_as_that_bot_before_it_is_marked_done(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+
+    _drive(tmp_path, [_as(_left_in_progress()), _as(_ended())], BOT_SECRET_ROOT=pod)
+
+    assert_that(_env_of(tmp_path, "turn-end"), equal_to([_BOT_IDENTITY]))
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+    assert_that(_env_of(tmp_path, "status"), equal_to([_BOT_IDENTITY]))
+
+
+def test_a_schedule_linked_without_an_agent_finishes_its_task_as_the_parent(tmp_path: Path):
+    pod = _bot_pod(tmp_path)
+    _linked(tmp_path)
+
+    _drive(tmp_path, [_removed()], BOT_SECRET_ROOT=pod)
+
+    assert_that([env["AGENT_ID"] for env in _env_of(tmp_path, "status")], equal_to([_PARENT_ID]))

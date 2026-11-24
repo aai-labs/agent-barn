@@ -57,6 +57,18 @@ docker run --rm --network none \
     -v "$repo_root/api/tests/fixtures/hermes_native_delivery_driver.py:/native-driver.py:ro" \
     --entrypoint python3 "$image" /native-driver.py
 
+# A Slack-compatible server (Slawk) Connection relies on rerouting Hermes' private
+# Slack call sites and file-host checks; an upgrade that moves any of them fails here.
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-slack-compat:/plugin:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_slack_compat_driver.py:/driver.py:ro" \
+    --entrypoint python3 "$image" /driver.py
+
+docker run --rm --network none \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-slack-access:/slack-access:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_bots_driver.py:/driver.py:ro" \
+    --entrypoint python3 "$image" /driver.py
+
 sh "$repo_root/api/tests/fixtures/test-messaging-retirement.sh" "$image" hermes
 
 # The healthz server reports the container's own CPU and memory from its cgroup v2

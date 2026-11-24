@@ -6,7 +6,8 @@ import { ChevronDown, ChevronRight, ChevronUp, TriangleAlert } from "lucide-reac
 
 import { AgentAvatar } from "@/features/agents/components/agent-avatar";
 import { StatusLine } from "@/features/agents/components/status-line";
-import { useAgentHealth } from "@/features/agents/hooks/use-agent-health";
+import { useAgentsHealth, useListedAgentHealth } from "@/features/agents/hooks/use-agents-health";
+import type { AgentHealth } from "@/features/agents/schemas";
 import { canAgent, formatModelName } from "@/features/agents/utils";
 import { formatPercent, formatSpend } from "@/features/costs/format";
 
@@ -93,6 +94,12 @@ export function AgentsOverviewTable({ items, period, orgId }: AgentsOverviewTabl
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [direction, setDirection] = useState<SortDirection>("desc");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  // Health needs activity.read and a running Agent; without either the request would be
+  // refused, so those rows are not asked about and do not claim to know.
+  useAgentsHealth(
+    items.filter((item) => item.status === "RUNNING" && canAgent(item, "activity.read")).map((item) => item.id),
+    OVERVIEW_HEALTH_REFETCH_MS,
+  );
 
   const sorted = useMemo(
     () => [...items].sort((a, b) => compareItems(a, b, sortKey, direction)),
@@ -187,13 +194,8 @@ function AgentRow({
   onToggle: () => void;
 }) {
   const canReadActivity = canAgent(item, "activity.read");
-  // Health needs activity.read and a running Agent; without either the request would be
-  // refused, so it is not made and the row does not claim to know.
-  const { health } = useAgentHealth(
-    item.id,
-    canReadActivity && item.status === "RUNNING",
-    OVERVIEW_HEALTH_REFETCH_MS,
-  );
+  // The table reads every row's health in one request (`useAgentsHealth` above).
+  const health = useListedAgentHealth(item.id, canReadActivity && item.status === "RUNNING");
   const agentHref = `/dashboard/${orgId}/agents/${item.id}`;
   const detailsId = `agent-overview-details-${item.id}`;
 
@@ -277,7 +279,7 @@ function RowStatus({
   canReadActivity,
 }: {
   item: AgentOverviewItem;
-  health: ReturnType<typeof useAgentHealth>["health"];
+  health: AgentHealth | null;
   canReadActivity: boolean;
 }) {
   // A running Agent whose health cannot be read is only known to be running.

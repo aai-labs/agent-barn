@@ -245,7 +245,9 @@ def fetch_access_token(auth: dict, *, timeout: int = TOKEN_EXCHANGE_TIMEOUT) -> 
         # Inside the try because a DNS failure is an OSError too; a private or missing
         # address is a configuration refusal and stays a RequestRefused.
         addresses = public_addresses(parsed.hostname, parsed.port or 443)
-        connection = PinnedHTTPSConnection(parsed.hostname, addresses[0], parsed.port or 443, timeout=timeout)
+        connection = PinnedHTTPSConnection(
+            parsed.hostname, public_http.preferred_address(addresses), parsed.port or 443, timeout=timeout
+        )
         connection.request(
             "POST",
             path,
@@ -326,7 +328,7 @@ def execute(config: dict, request: dict, *, access_token: str | None = None) -> 
         if len(body) > MAX_BYTES:
             raise RequestRefused("Request body exceeds 1 MiB")
     addresses = public_addresses(parsed.hostname, parsed.port or 443)
-    connection = PinnedHTTPSConnection(parsed.hostname, addresses[0], parsed.port or 443)
+    connection = PinnedHTTPSConnection(parsed.hostname, public_http.preferred_address(addresses), parsed.port or 443)
     try:
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()

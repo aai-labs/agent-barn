@@ -25,7 +25,11 @@ export function stepTiming(
   if (step.startedAt && step.completedAt)
     return duration(step.startedAt, step.completedAt);
   if (step.state === "COMPLETED") return "Unavailable";
-  if (["CANCELLED", "FAILED", "BLOCKED", "PAUSED", "AWAITING_APPROVAL"].includes(runState))
+  if (
+    ["CANCELLED", "FAILED", "BLOCKED", "PAUSED", "AWAITING_APPROVAL", "REJECTED"].includes(
+      runState,
+    )
+  )
     return "Not completed";
   return step.startedAt || step.state === "RUNNING"
     ? "In progress"

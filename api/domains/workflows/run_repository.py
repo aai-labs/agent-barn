@@ -26,7 +26,7 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.domains.workflows import config as workflow_config
-from api.domains.workflows.models import Workflow, WorkflowVersion
+from api.domains.workflows.models import Workflow, WorkflowVersion, allowed_decisions, is_approval
 from api.domains.workflows.repository import WorkflowConflict
 from api.domains.workflows.run_models import (
     DECIDABLE_APPROVAL_STATES,
@@ -41,8 +41,18 @@ from api.domains.workflows.run_models import (
     WorkflowHistory,
     WorkflowRun,
     WorkflowRunCreate,
+    WorkflowStepApproval,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+
+class DecisionNotAllowed(Exception):
+    """The workflow's author did not offer this decision at the Approval step."""
+
+
+def approval_summary(item: WorkflowStepApproval) -> str:
+    """An approved Approval step's result, as shown on the run and passed to later steps."""
+    return "A person approved the previous step's result" + (f". Their note: {item.note}" if item.note else ".")
 
 
 def _timeout_cause(accepted: bool) -> str:
@@ -81,8 +91,6 @@ class WorkflowRunRepository:
 
     def existing_start(
         self,
-        workflow_id: UUID,
-        agent_id: UUID,
         scope: AuthorizationScope,
         payload: WorkflowRunCreate,
         user_id: UUID,
@@ -90,8 +98,9 @@ class WorkflowRunRepository:
     ) -> UUID | None:
         with Session(self.delegate.engine) as session:
             run = session.exec(
-                self.scoped(agent_id, scope).where(
-                    col(WorkflowRun.workflow_id) == workflow_id,
+                self.scoped(scope).where(
+                    col(WorkflowRun.workflow_id) == payload.workflow_id,
+                    col(WorkflowRun.agent_id) == payload.agent_id,
                     col(WorkflowRun.client_request_id) == payload.client_request_id,
                 )
             ).one_or_none()
@@ -111,24 +120,25 @@ class WorkflowRunRepository:
                 )
             )
 
-    def owning_agent_id(self, workflow_id: UUID) -> UUID:
-        with Session(self.delegate.engine) as session:
-            return session.get_one(Workflow, workflow_id).agent_id
+    def agents(self, agent_ids: Iterable[UUID]) -> dict[UUID, Agent]:
+        """The Agents of already authorized runs, including deleted ones."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            return {agent.id: agent for agent in session.exec(select(Agent).where(col(Agent.id).in_(set(agent_ids))))}
 
     @staticmethod
-    def scoped(agent_id: UUID, scope: AuthorizationScope) -> SelectOfScalar[WorkflowRun]:
+    def scoped(scope: AuthorizationScope, *, include_deleted: bool = False) -> SelectOfScalar[WorkflowRun]:
+        """Runs on the Agents this scope reaches; reads keep the runs of deleted Agents."""
         return (
             select(WorkflowRun)
-            .join(Workflow, col(Workflow.id) == col(WorkflowRun.workflow_id))
-            .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-            .where(col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope))
+            .join(Agent, col(Agent.id) == col(WorkflowRun.agent_id))
+            .where(*agent_scope_predicates(scope, include_deleted=include_deleted))
         )
 
-    def get(
-        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope
-    ) -> tuple[WorkflowRun, WorkflowVersion] | None:
+    def get(self, run_id: UUID, scope: AuthorizationScope) -> tuple[WorkflowRun, WorkflowVersion] | None:
         with Session(self.delegate.engine) as session:
-            run = session.exec(self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id)).one_or_none()
+            run = session.exec(
+                self.scoped(scope, include_deleted=True).where(col(WorkflowRun.id) == run_id)
+            ).one_or_none()
             version = session.get(WorkflowVersion, run.version_id) if run else None
             return (run, version) if run and version else None
 
@@ -144,16 +154,51 @@ class WorkflowRunRepository:
                     .order_by(col(WorkflowAttempt.created_at))
                 )
             )
-            checkpoints = session.exec(select(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run.id))
+            checkpoints = list(
+                session.exec(
+                    select(WorkflowCheckpoint)
+                    .where(col(WorkflowCheckpoint.run_id) == run.id)
+                    .order_by(col(WorkflowCheckpoint.step_index), col(WorkflowCheckpoint.round))
+                )
+            )
+            rounds = list(
+                session.exec(
+                    select(WorkflowStepApproval)
+                    .where(col(WorkflowStepApproval.run_id) == run.id)
+                    .order_by(col(WorkflowStepApproval.created_at))
+                )
+            )
             records: dict[int, dict[str, Any]] = {}
             for attempt in attempts:
                 records.setdefault(attempt.step_index, {"started_at": attempt.created_at})
             for checkpoint in checkpoints:
-                records.setdefault(checkpoint.step_index, {}).update(
+                record = records.setdefault(checkpoint.step_index, {})
+                if checkpoint.superseded_at is not None:
+                    # Results a person sent back with Request changes stay readable, oldest first.
+                    record.setdefault("earlier_rounds", []).append(
+                        {
+                            "round": checkpoint.round,
+                            "summary": checkpoint.result.get("summary"),
+                            "artifacts": checkpoint.result.get("artifacts", []),
+                            "completed_at": checkpoint.created_at,
+                        }
+                    )
+                    continue
+                record.update(
                     summary=checkpoint.result.get("summary"),
                     completed_at=checkpoint.created_at,
                     artifacts=checkpoint.result.get("artifacts", []),
+                    round=checkpoint.round,
                 )
+            for item in rounds:
+                # An Approval step waits from its first round until its latest decision.
+                record = records.setdefault(item.step_index, {"started_at": item.created_at})
+                record["round"] = item.round
+                if item.state == "APPROVED":
+                    record.update(summary=approval_summary(item), completed_at=item.decided_at)
+                elif item.state == "REJECTED":
+                    # The step ended with the run; its time is how long it waited for the decision.
+                    record["completed_at"] = item.decided_at
         step_attempts = [attempt for attempt in attempts if attempt.step_index == run.next_step]
         if run.state != "RUNNING" or not step_attempts or step_attempts[-1].state != "REASONING":
             return records, None
@@ -170,23 +215,35 @@ class WorkflowRunRepository:
 
     def list_runs(
         self,
-        agent_id: UUID,
         scope: AuthorizationScope,
         page: int,
         size: int,
-        workflow_id: UUID | None,
+        workflow_id: UUID | None = None,
+        agent_id: UUID | None = None,
         awaiting_decision: bool = False,
+        settled: bool | None = None,
     ) -> tuple[list[tuple[WorkflowRun, WorkflowVersion]], int]:
         with Session(self.delegate.engine) as session:
-            query = self.scoped(agent_id, scope)
+            query = self.scoped(scope, include_deleted=True)
             if workflow_id:
                 query = query.where(col(WorkflowRun.workflow_id) == workflow_id)
+            if agent_id:
+                query = query.where(col(WorkflowRun.agent_id) == agent_id)
+            if settled is not None:
+                terminal = col(WorkflowRun.state).in_(TERMINAL_STATES)
+                query = query.where(terminal if settled else ~terminal)
             if awaiting_decision:
-                # Correlated per run, so the open-request partial index serves it within this Agent.
+                # Correlated per run, so the open-request partial indexes serve it for the Agents in scope.
                 query = query.where(
-                    sa.exists().where(
-                        col(WorkflowApprovalRequest.run_id) == WorkflowRun.id,
-                        col(WorkflowApprovalRequest.state).in_(DECIDABLE_APPROVAL_STATES),
+                    sa.or_(
+                        sa.exists().where(
+                            col(WorkflowApprovalRequest.run_id) == WorkflowRun.id,
+                            col(WorkflowApprovalRequest.state).in_(DECIDABLE_APPROVAL_STATES),
+                        ),
+                        sa.exists().where(
+                            col(WorkflowStepApproval.run_id) == WorkflowRun.id,
+                            col(WorkflowStepApproval.state) == "WAITING",
+                        ),
                     )
                 )
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
@@ -201,11 +258,13 @@ class WorkflowRunRepository:
             return [(run, version) for run, version in rows], total
 
     def history(
-        self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, newest_first: bool = False
+        self, run_id: UUID, scope: AuthorizationScope, page: int, size: int, newest_first: bool = False
     ) -> tuple[list[WorkflowHistory], int]:
         with Session(self.delegate.engine) as session:
             query = select(WorkflowHistory).where(
-                col(WorkflowHistory.run_id).in_(self.scoped(agent_id, scope).with_only_columns(col(WorkflowRun.id))),
+                col(WorkflowHistory.run_id).in_(
+                    self.scoped(scope, include_deleted=True).with_only_columns(col(WorkflowRun.id))
+                ),
                 col(WorkflowHistory.run_id) == run_id,
             )
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
@@ -219,8 +278,7 @@ class WorkflowRunRepository:
         run.updated_at = now
         session.add(run)
         session.add(WorkflowHistory(run_id=run.id, revision=run.revision, kind=kind, detail=detail))
-        workflow = session.get_one(Workflow, run.workflow_id)
-        agent = session.get_one(Agent, workflow.agent_id)
+        agent = session.get_one(Agent, run.agent_id)
         message = self.outbox.stage(
             session=session,
             registry=EVENT_REGISTRY,
@@ -241,8 +299,6 @@ class WorkflowRunRepository:
 
     def start(
         self,
-        workflow_id: UUID,
-        agent_id: UUID,
         scope: AuthorizationScope,
         payload: WorkflowRunCreate,
         user_id: UUID,
@@ -251,8 +307,9 @@ class WorkflowRunRepository:
         rerun_of_run_id: UUID | None = None,
     ) -> tuple[WorkflowRun, list[UUID]]:
         request_hash = start_hash(payload, user_id, rerun_of_run_id)
+        workflow_id, agent_id = payload.workflow_id, payload.agent_id
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            # Serialize starts across this Agent's definitions, including its first run.
+            # Serialize starts on this Agent, including its first run.
             agent = session.exec(
                 select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope)).with_for_update(of=Agent)
             ).one_or_none()
@@ -260,10 +317,7 @@ class WorkflowRunRepository:
                 raise WorkflowConflict("Workflow access changed")
             workflow = session.exec(
                 select(Workflow)
-                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
-                .where(
-                    col(Workflow.id) == workflow_id, col(Workflow.agent_id) == agent_id, *agent_scope_predicates(scope)
-                )
+                .where(col(Workflow.id) == workflow_id, col(Workflow.organization_id) == scope.organization_id)
                 .with_for_update(of=Workflow)
             ).one_or_none()
             if workflow is None:
@@ -276,7 +330,9 @@ class WorkflowRunRepository:
             ).one_or_none()
             if existing:
                 if existing.request_hash != request_hash:
-                    raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
+                    raise WorkflowConflict(
+                        "Start request identity was reused with a different Agent, inputs, version or actor"
+                    )
                 return existing, []
             if rerun_of_run_id:
                 # Retention may have removed the source's inputs since the caller read them.
@@ -290,7 +346,9 @@ class WorkflowRunRepository:
                 raise WorkflowConflict("The saved version is unavailable or the workflow is archived")
             run = WorkflowRun(
                 workflow_id=workflow_id,
+                agent_id=agent_id,
                 version_id=payload.version_id,
+                title=payload.title,
                 initiating_user_id=user_id,
                 initiating_membership_id=membership_id,
                 client_request_id=payload.client_request_id,
@@ -331,10 +389,10 @@ class WorkflowRunRepository:
             session.commit()
             return run, delivery_ids
 
-    def cancel(self, run_id: UUID, agent_id: UUID, scope: AuthorizationScope, revision: int) -> list[UUID]:
+    def cancel(self, run_id: UUID, scope: AuthorizationScope, revision: int) -> list[UUID]:
         with Session(self.delegate.engine) as session:
             run = session.exec(
-                self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
+                self.scoped(scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
             ).one_or_none()
             if run is None:
                 raise WorkflowConflict("Run access changed")
@@ -362,8 +420,7 @@ class WorkflowRunRepository:
         """The person who decided a request must still hold `agent.update` when the session continues."""
         if user_id is None:
             return False
-        workflow = session.get_one(Workflow, run.workflow_id)
-        agent = session.get(Agent, workflow.agent_id)
+        agent = session.get(Agent, run.agent_id)
         membership = (
             session.exec(
                 select(OrganizationUser).where(
@@ -392,11 +449,10 @@ class WorkflowRunRepository:
                 include_general_access=user.email_verified_at is not None,
             )
         )
-        workflow = session.get_one(Workflow, run.workflow_id)
         return (
             session.exec(
                 select(Agent).where(
-                    col(Agent.id) == workflow.agent_id,
+                    col(Agent.id) == run.agent_id,
                     *([col(Agent.status) == AgentStatus.RUNNING] if running else []),
                     *agent_scope_predicates(scope),
                 )
@@ -420,13 +476,12 @@ class WorkflowRunRepository:
     def artifact_attempt(
         self, session: Session, attempt_id: UUID, agent_id: UUID, *, lock: bool = True
     ) -> tuple[WorkflowRun, WorkflowAttempt]:
-        """Publication authority comes from an authenticated owning Agent, never the completion bearer."""
+        """Publication authority comes from the authenticated Agent running the run, never the completion bearer."""
         attempt = session.get(WorkflowAttempt, attempt_id)
         if attempt is None:
             raise WorkflowConflict("Workflow attempt not found")
         run = session.get_one(WorkflowRun, attempt.run_id)
-        workflow = session.get_one(Workflow, run.workflow_id)
-        if workflow.agent_id != agent_id:
+        if run.agent_id != agent_id:
             raise WorkflowConflict("Workflow attempt belongs to another Agent")
         return self._fenced_attempt(session, attempt, lock=lock)
 
@@ -452,13 +507,25 @@ class WorkflowRunRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             run, attempt = self._bound(session, attempt_id, token)
             version = session.get_one(WorkflowVersion, run.version_id)
-            checkpoints = list(
-                session.exec(
-                    select(WorkflowCheckpoint)
-                    .where(col(WorkflowCheckpoint.run_id) == run.id)
-                    .order_by(col(WorkflowCheckpoint.step_index))
+            checkpoints = self._current_checkpoints(session, run.id)
+            approved = {
+                item.step_index: item
+                for item in session.exec(
+                    select(WorkflowStepApproval)
+                    .where(col(WorkflowStepApproval.run_id) == run.id, col(WorkflowStepApproval.state) == "APPROVED")
+                    .order_by(col(WorkflowStepApproval.created_at))
                 )
+            }
+            completed = sorted(
+                [(item.step_index, item.result) for item in checkpoints]
+                + [
+                    (index, {"step_id": version.snapshot["steps"][index]["id"], "summary": approval_summary(item)})
+                    for index, item in approved.items()
+                    if index < attempt.step_index
+                ],
+                key=lambda pair: pair[0],
             )
+            revision = self._revision_request(session, run, version, attempt.step_index)
             packet = {
                 "attempt_id": str(attempt.id),
                 "inputs": run.inputs,
@@ -470,13 +537,14 @@ class WorkflowRunRepository:
                     },
                     "output_description": version.snapshot["steps"][attempt.step_index].get("artifact_description"),
                 },
-                "completed_steps": [item.result for item in checkpoints],
+                "completed_steps": [result for _, result in completed],
                 "files": list(
                     {
                         item["artifact_id"]: item
                         for item in [
                             *[value for value in run.inputs.values() if isinstance(value, dict)],
                             *[file for checkpoint in checkpoints for file in checkpoint.result.get("artifacts", [])],
+                            *(revision["previous_result"].get("artifacts", []) if revision else []),
                         ]
                     }.values()
                 ),
@@ -484,6 +552,8 @@ class WorkflowRunRepository:
                 if attempt.step_index == len(version.snapshot["steps"]) - 1
                 else None,
             }
+            if revision is not None:
+                packet["revision_request"] = revision
             continued = self.continuation(session, attempt)
             if continued is not None:
                 packet["continuation"] = continued.model_dump(
@@ -514,22 +584,106 @@ class WorkflowRunRepository:
                 "artifacts": files,
                 "output_description": step.get("artifact_description"),
             }
+            rounds = session.exec(
+                select(sa.func.max(WorkflowCheckpoint.round)).where(
+                    col(WorkflowCheckpoint.run_id) == run.id,
+                    col(WorkflowCheckpoint.step_index) == attempt.step_index,
+                )
+            ).one()
             session.add(
                 WorkflowCheckpoint(
-                    run_id=run.id, attempt_id=attempt.id, step_index=attempt.step_index, result=checkpoint
+                    run_id=run.id,
+                    attempt_id=attempt.id,
+                    step_index=attempt.step_index,
+                    round=(rounds or 0) + 1,
+                    result=checkpoint,
                 )
             )
             attempt.state, attempt.result_hash = "COMPLETED", result_hash
             session.add(attempt)
-            run.next_step += 1
             run.revision += 1
-            run.reason = None
-            run.state = "SUCCEEDED" if run.next_step == len(version.snapshot["steps"]) else "QUEUED"
-            if run.state == "SUCCEEDED":
-                self._settle(session, run)
+            waiting = self._next_step(session, run, version)
             delivery_ids = self._event(session, run, "STEP_COMPLETED", result.summary)
+            self._waiting(session, run, waiting)
             session.commit()
             return delivery_ids
+
+    def _next_step(self, session: Session, run: WorkflowRun, version: WorkflowVersion) -> str | None:
+        """Move past the current step: finish the run, wait at an Approval step or queue an Agent step.
+
+        Returns why the run now waits, which the caller records after its own event."""
+        steps = version.snapshot["steps"]
+        run.next_step += 1
+        run.reason = None
+        if run.next_step == len(steps):
+            run.state = "SUCCEEDED"
+            self._settle(session, run)
+            return None
+        if not is_approval(steps[run.next_step]):
+            run.state = "QUEUED"
+            return None
+        rounds = session.exec(
+            select(sa.func.count()).where(
+                col(WorkflowStepApproval.run_id) == run.id,
+                col(WorkflowStepApproval.step_index) == run.next_step,
+            )
+        ).one()
+        session.add(WorkflowStepApproval(run_id=run.id, step_index=run.next_step, round=rounds + 1))
+        run.state = "AWAITING_APPROVAL"
+        run.reason = f"Waiting for approval at step {run.next_step + 1}: {steps[run.next_step]['name']}"
+        return run.reason
+
+    @staticmethod
+    def _waiting(session: Session, run: WorkflowRun, reason: str | None) -> None:
+        if reason:
+            session.add(
+                WorkflowHistory(run_id=run.id, revision=run.revision, kind="APPROVAL_STEP_WAITING", detail=reason)
+            )
+
+    @staticmethod
+    def _current_checkpoints(session: Session, run_id: UUID) -> list[WorkflowCheckpoint]:
+        """Each step's latest result; rounds superseded by Request changes no longer count."""
+        return list(
+            session.exec(
+                select(WorkflowCheckpoint)
+                .where(col(WorkflowCheckpoint.run_id) == run_id, col(WorkflowCheckpoint.superseded_at).is_(None))
+                .order_by(col(WorkflowCheckpoint.step_index))
+            )
+        )
+
+    @staticmethod
+    def _revision_request(
+        session: Session, run: WorkflowRun, version: WorkflowVersion, step_index: int
+    ) -> dict[str, Any] | None:
+        """What a step running again after Request changes must revise, and why."""
+        steps = version.snapshot["steps"]
+        if step_index + 1 >= len(steps) or not is_approval(steps[step_index + 1]):
+            return None
+        requested = session.exec(
+            select(WorkflowStepApproval)
+            .where(
+                col(WorkflowStepApproval.run_id) == run.id,
+                col(WorkflowStepApproval.step_index) == step_index + 1,
+            )
+            .order_by(col(WorkflowStepApproval.round).desc())
+            .limit(1)
+        ).one_or_none()
+        # Defence in depth: the step before an Approval step runs again only after Request changes.
+        if requested is None or requested.state != "CHANGES_REQUESTED":
+            return None
+        previous = session.exec(
+            select(WorkflowCheckpoint)
+            .where(
+                col(WorkflowCheckpoint.run_id) == run.id,
+                col(WorkflowCheckpoint.step_index) == step_index,
+                col(WorkflowCheckpoint.superseded_at).is_not(None),
+            )
+            .order_by(col(WorkflowCheckpoint.round).desc())
+            .limit(1)
+        ).one_or_none()
+        if previous is None:
+            return None
+        return {"notes": requested.note, "previous_result": previous.result}
 
     def fail(self, attempt_id: UUID, token: str, failure: AttemptFailure) -> list[UUID]:
         """The Agent reported that its session for this step ended without a result."""
@@ -585,13 +739,19 @@ class WorkflowRunRepository:
 
     @staticmethod
     def _lapse(session: Session, run_id: UUID) -> None:
+        now = datetime.now(UTC)
         session.exec(
             sa.update(WorkflowApprovalRequest)
             .where(
                 col(WorkflowApprovalRequest.run_id) == run_id,
                 col(WorkflowApprovalRequest.state).in_(DECIDABLE_APPROVAL_STATES),
             )
-            .values(state="LAPSED", updated_at=datetime.now(UTC))
+            .values(state="LAPSED", updated_at=now)
+        )
+        session.exec(
+            sa.update(WorkflowStepApproval)
+            .where(col(WorkflowStepApproval.run_id) == run_id, col(WorkflowStepApproval.state) == "WAITING")
+            .values(state="LAPSED", updated_at=now)
         )
 
     def _park(self, session: Session, run: WorkflowRun, request: WorkflowApprovalRequest) -> None:
@@ -734,7 +894,6 @@ class WorkflowRunRepository:
         self,
         run_id: UUID,
         request_id: UUID,
-        agent_id: UUID,
         scope: AuthorizationScope,
         user_id: UUID,
         approve: bool,
@@ -742,7 +901,7 @@ class WorkflowRunRepository:
     ) -> list[UUID]:
         with Session(self.delegate.engine) as session:
             run = session.exec(
-                self.scoped(agent_id, scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
+                self.scoped(scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
             ).one_or_none()
             if run is None:
                 raise WorkflowConflict("Run access changed")
@@ -836,6 +995,95 @@ class WorkflowRunRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             return list(session.exec(query.order_by(col(WorkflowApprovalRequest.created_at))))
 
+    def decide_step(
+        self,
+        run_id: UUID,
+        approval_id: UUID,
+        scope: AuthorizationScope,
+        user_id: UUID,
+        decision: str,
+        note: str | None,
+    ) -> list[UUID]:
+        """A person's decision at an Approval step; the first of concurrent decisions wins."""
+        with Session(self.delegate.engine) as session:
+            run = session.exec(
+                self.scoped(scope).where(col(WorkflowRun.id) == run_id).with_for_update(of=WorkflowRun)
+            ).one_or_none()
+            if run is None:
+                raise WorkflowConflict("Run access changed")
+            approval = session.get(WorkflowStepApproval, approval_id)
+            if (
+                approval is None
+                or approval.run_id != run.id
+                or approval.state != "WAITING"
+                or run.state != "AWAITING_APPROVAL"
+                # Defence in depth: a waiting round always matches the run's state and step today.
+                or run.next_step != approval.step_index
+            ):
+                raise WorkflowConflict("This approval step is no longer awaiting a decision")
+            version = session.get_one(WorkflowVersion, run.version_id)
+            allowed = allowed_decisions(version.snapshot["steps"][approval.step_index])
+            if decision not in allowed:
+                raise DecisionNotAllowed(
+                    f"This approval step allows only {', '.join(item.replace('_', ' ') for item in allowed)}"
+                )
+            now = datetime.now(UTC)
+            approval.decided_by_user_id, approval.decided_at, approval.note = user_id, now, note
+            approval.state = {"approve": "APPROVED", "request_changes": "CHANGES_REQUESTED"}.get(decision, "REJECTED")
+            # Recorded before anything below lapses the run's still-waiting rounds.
+            session.add(approval)
+            session.flush()
+            run.revision += 1
+            number = approval.step_index + 1
+            waiting = None
+            if decision == "approve":
+                waiting = self._next_step(session, run, version)
+                kind, detail = "APPROVAL_STEP_APPROVED", f"Step {number} approved" + (f": {note}" if note else "")
+            elif decision == "request_changes":
+                reviewed = approval.step_index - 1
+                # The reviewed step runs again; its earlier result stays visible as a superseded round.
+                session.exec(
+                    sa.update(WorkflowCheckpoint)
+                    .where(
+                        col(WorkflowCheckpoint.run_id) == run.id,
+                        col(WorkflowCheckpoint.step_index) == reviewed,
+                        col(WorkflowCheckpoint.superseded_at).is_(None),
+                    )
+                    .values(superseded_at=now, updated_at=now)
+                )
+                # A command decided in an earlier round belongs to that round's session; the fresh
+                # session must not continue it, even when the runtime never confirmed its release.
+                session.exec(
+                    sa.update(WorkflowApprovalRequest)
+                    .where(
+                        col(WorkflowApprovalRequest.run_id) == run.id,
+                        col(WorkflowApprovalRequest.step_index) == reviewed,
+                        col(WorkflowApprovalRequest.state).in_(("APPROVED", "DECLINED")),
+                        col(WorkflowApprovalRequest.continued_by_attempt_id).is_(None),
+                    )
+                    .values(continued_by_attempt_id=WorkflowApprovalRequest.attempt_id, updated_at=now)
+                )
+                run.next_step, run.state = reviewed, "QUEUED"
+                run.reason = None
+                kind, detail = "CHANGES_REQUESTED", f"Changes requested at step {number}: {note}"
+            else:
+                run.state = "REJECTED"
+                run.reason = f"Rejected at step {number}" + (f": {note[:500]}" if note else "")
+                self._settle(session, run)
+                kind, detail = "APPROVAL_STEP_REJECTED", run.reason
+            delivery_ids = self._event(session, run, kind, detail)
+            self._waiting(session, run, waiting)
+            session.commit()
+            return delivery_ids
+
+    def step_approvals(self, run_ids: Iterable[UUID], waiting_only: bool = False) -> list[WorkflowStepApproval]:
+        """Approval step rounds of these runs, oldest first. Callers must already have authorized the runs."""
+        query = select(WorkflowStepApproval).where(col(WorkflowStepApproval.run_id).in_(set(run_ids)))
+        if waiting_only:
+            query = query.where(col(WorkflowStepApproval.state) == "WAITING")
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            return list(session.exec(query.order_by(col(WorkflowStepApproval.created_at))))
+
     def current_approval(self, run: WorkflowRun) -> WorkflowApprovalRequest | None:
         """The latest request of the run's current step. Callers must already have authorized the run."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -887,8 +1135,7 @@ class WorkflowRunRepository:
             run = session.exec(select(WorkflowRun).where(col(WorkflowRun.id) == run_id).with_for_update()).one_or_none()
             if run is None or run.state in TERMINAL_STATES:
                 return None, []
-            workflow = session.get_one(Workflow, run.workflow_id)
-            agent = session.get(Agent, workflow.agent_id)
+            agent = session.get(Agent, run.agent_id)
             if agent is None or agent.deleted_at is not None:
                 run.state = "CANCELLING"
             attempt = session.exec(
@@ -993,6 +1240,9 @@ class WorkflowRunRepository:
             for run in settled:
                 run.inputs = {}
                 run.content_expired = True
+                if run.state == "REJECTED":
+                    # The reason quotes the decider's note; a rejected run stops at its Approval step.
+                    run.reason = f"Rejected at step {run.next_step + 1}"
                 session.add(run)
                 session.exec(sa.delete(WorkflowCheckpoint).where(col(WorkflowCheckpoint.run_id) == run.id))
                 session.exec(
@@ -1009,5 +1259,9 @@ class WorkflowRunRepository:
                         command_sha256="",
                         guidance=None,
                     )
+                )
+                # So are the notes left at Approval steps; who decided, how and when remain.
+                session.exec(
+                    sa.update(WorkflowStepApproval).where(col(WorkflowStepApproval.run_id) == run.id).values(note=None)
                 )
             session.commit()

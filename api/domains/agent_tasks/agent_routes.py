@@ -21,7 +21,9 @@ from api.domains.agent_tasks.models import (
     AgentTaskStatusUpdate,
     AgentTaskSummary,
 )
+from api.domains.agent_tasks.schedule_intent import ScheduleIntentRead, ScheduleIntentRequest, ScheduleIntentService
 from api.domains.agent_tasks.service import AgentTaskService
+from api.domains.agent_tasks.turn_end import AgentTaskTurnEnd, AgentTaskTurnEndRead, AgentTaskTurnEndService
 from api.domains.agents.models import Agent
 from api.domains.ingest.service import authenticated_agent
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -36,6 +38,25 @@ def create_task(
     service: Annotated[AgentTaskService, Injected(AgentTaskService)],
 ):
     return service.create_task(agent.organization_id, agent.id, data)
+
+
+@agent_task_router.post("/{agent_id}/tasks/schedule-intent", response_model=ScheduleIntentRead)
+def schedule_intent(
+    agent: Annotated[Agent, Depends(authenticated_agent)],
+    data: ScheduleIntentRequest,
+    service: Annotated[ScheduleIntentService, Injected(ScheduleIntentService)],
+):
+    """Whether the runs of a schedule the Agent just created are part of the Task that tracks the request."""
+    return service.decide(agent.id, data)
+
+
+@agent_task_router.post("/{agent_id}/tasks/turn-end", response_model=AgentTaskTurnEndRead)
+def hold_unfinished_tasks(
+    agent: Annotated[Agent, Depends(authenticated_agent)],
+    data: AgentTaskTurnEnd,
+    service: Annotated[AgentTaskTurnEndService, Injected(AgentTaskTurnEndService)],
+):
+    return service.holds(agent.organization_id, agent.id, data)
 
 
 @agent_task_router.get("/{agent_id}/tasks", response_model=PaginatedItems[AgentTaskSummary])

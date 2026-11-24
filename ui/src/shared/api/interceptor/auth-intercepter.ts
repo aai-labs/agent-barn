@@ -1,6 +1,8 @@
 import axios from "axios";
 import { camelizeKeys } from "humps";
 import { ApiError } from "../error/errors";
+import { handleError } from "../error/error-handler";
+import { isServerUnavailable } from "../error/server-unavailable";
 import { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { AuthConfig, AuthTokens } from "../types";
 
@@ -8,6 +10,18 @@ type AuthAwareRequestConfig = InternalAxiosRequestConfig & {
   skipAuth?: boolean;
   _retried?: boolean;
 };
+
+/**
+ * The server answered the refresh and refused it: the token is missing, expired or
+ * revoked, or its user is gone. Only this ends the session. When the API is down,
+ * unreachable, slow or failing (no response, 5xx, 408, 429) the refresh cookie may still
+ * be good, so the session stays and the next request tries again.
+ */
+function isRefreshRejected(error: unknown): boolean {
+  if (!axios.isAxiosError(error) || !error.response) return false;
+  const { status } = error.response;
+  return status >= 400 && status < 500 && !isServerUnavailable(status);
+}
 
 export class AuthInterceptor {
   private refreshPromise: Promise<AuthTokens> | null = null;
@@ -76,16 +90,16 @@ export class AuthInterceptor {
       !originalRequest._retried
     ) {
       originalRequest._retried = true;
+      let tokens: AuthTokens;
       try {
-        const tokens = await this.refreshTokens();
-        if (tokens) {
-          originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
-          return this.axiosInstance(originalRequest);
-        }
-      } catch {
-        this.config.onSessionExpired?.();
-        throw ApiError.unauthorizedError("Token refresh failed.");
+        tokens = await this.refreshTokens();
+      } catch (refreshError) {
+        // A refused refresh has already expired the session. Otherwise report the outage
+        // rather than the 401, so callers that log out on 401 keep the session.
+        throw isRefreshRejected(refreshError) ? error : handleError(refreshError);
       }
+      originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
+      return this.axiosInstance(originalRequest);
     }
 
     throw error instanceof ApiError
@@ -96,11 +110,11 @@ export class AuthInterceptor {
   private async getValidTokens(): Promise<AuthTokens | null> {
     const tokens = this.config.getTokens();
     if (!tokens) {
-      return await this.refreshTokens();
+      return await this.tryRefreshTokens();
     }
 
     if (this.isTokenNearExpiry(tokens)) {
-      return await this.refreshTokens();
+      return await this.tryRefreshTokens();
     }
 
     return tokens;
@@ -116,23 +130,19 @@ export class AuthInterceptor {
     return now >= expiryTime - bufferTime;
   }
 
-  private async refreshTokens(): Promise<AuthTokens | null> {
-    if (this.refreshPromise) {
-      try {
-        return await this.refreshPromise;
-      } catch {
-        return null;
-      }
-    }
+  /** One refresh at a time: concurrent callers share it. Rejects when it fails. */
+  private refreshTokens(): Promise<AuthTokens> {
+    this.refreshPromise ??= this.performTokenRefresh().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
 
-    this.refreshPromise = this.performTokenRefresh();
-
+  private async tryRefreshTokens(): Promise<AuthTokens | null> {
     try {
-      return await this.refreshPromise;
+      return await this.refreshTokens();
     } catch {
       return null;
-    } finally {
-      this.refreshPromise = null;
     }
   }
 
@@ -155,9 +165,11 @@ export class AuthInterceptor {
 
       this.config.setTokens(newTokens);
       return newTokens;
-    } catch {
-      this.config.onSessionExpired?.();
-      throw new Error("Token refresh failed");
+    } catch (error) {
+      if (isRefreshRejected(error)) {
+        this.config.onSessionExpired?.();
+      }
+      throw error;
     }
   }
 
@@ -170,6 +182,6 @@ export class AuthInterceptor {
   }
 
   public async refresh(): Promise<AuthTokens | null> {
-    return this.refreshTokens();
+    return this.tryRefreshTokens();
   }
 }

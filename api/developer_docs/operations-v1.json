@@ -286,6 +286,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/health",
+    "get_agents_health_organizations__organization_id__agents_health_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/llm-budgets",
     "list_agent_llm_budgets_organizations__organization_id__agents_llm_budgets_get"
   ],
@@ -326,6 +331,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/anomalies",
+    "list_anomalies_organizations__organization_id__agents__agent_id__anomalies_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts",
     "list_artifacts_organizations__organization_id__agents__agent_id__artifacts_get"
   ],
@@ -343,6 +353,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/download-link",
     "artifact_download_link_organizations__organization_id__agents__agent_id__artifacts__artifact_id__download_link_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/bots",
+    "list_agent_bots_organizations__organization_id__agents__agent_id__bots_get"
   ],
   [
     "GET",
@@ -471,6 +486,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/normal-behaviour",
+    "get_normal_behaviour_organizations__organization_id__agents__agent_id__normal_behaviour_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
     "list_agent_playbook_extractions_organizations__organization_id__agents__agent_id__playbook_extractions_get"
   ],
@@ -591,38 +611,8 @@
   ],
   [
     "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-capabilities",
-    "get_workflow_capabilities_organizations__organization_id__agents__agent_id__workflow_capabilities_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
-    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
-    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
-    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows",
-    "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}",
-    "get_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
-    "list_workflow_versions_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_get"
+    "/organizations/{organization_id}/anomaly-detection",
+    "get_anomaly_detection_organizations__organization_id__anomaly_detection_get"
   ],
   [
     "GET",
@@ -841,6 +831,41 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/workflow-capabilities",
+    "get_workflow_capabilities_organizations__organization_id__workflow_capabilities_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs",
+    "list_runs_organizations__organization_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows",
+    "list_workflows_organizations__organization_id__workflows_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows/{workflow_id}",
+    "get_workflow_organizations__organization_id__workflows__workflow_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/workflows/{workflow_id}/versions",
+    "list_workflow_versions_organizations__organization_id__workflows__workflow_id__versions_get"
+  ],
+  [
+    "GET",
     "/platform/agent-sizes",
     "list_agent_sizes_platform_agent_sizes_get"
   ],
@@ -968,6 +993,16 @@
     "GET",
     "/platform/settings/llm-providers",
     "list_connections_platform_settings_llm_providers_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/llm-providers/{slug}/model-catalogue",
+    "read_model_catalogue_platform_settings_llm_providers__slug__model_catalogue_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/llm-providers/{slug}/models",
+    "list_models_platform_settings_llm_providers__slug__models_get"
   ],
   [
     "GET",
@@ -1151,6 +1186,11 @@
   ],
   [
     "PATCH",
+    "/organizations/{organization_id}/workflows/{workflow_id}",
+    "update_workflow_organizations__organization_id__workflows__workflow_id__patch"
+  ],
+  [
+    "PATCH",
     "/platform/agent-sizes/{size_id}",
     "update_agent_size_platform_agent_sizes__size_id__patch"
   ],
@@ -1268,6 +1308,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
     "provision_storage_organizations__organization_id__agents__agent_id__artifacts_storage_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/bots",
+    "create_agent_bot_organizations__organization_id__agents__agent_id__bots_post"
   ],
   [
     "POST",
@@ -1451,41 +1496,6 @@
   ],
   [
     "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
-    "decide_approval_organizations__organization_id__agents__agent_id__workflow_runs__run_id__approvals__request_id__decision_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
-    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/re-run",
-    "rerun_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__re_run_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows",
-    "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
-    "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
-    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
-    "save_workflow_version_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_post"
-  ],
-  [
-    "POST",
     "/organizations/{organization_id}/billing/checkout",
     "create_checkout_organizations__organization_id__billing_checkout_post"
   ],
@@ -1641,6 +1651,46 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/workflow-runs",
+    "start_run_organizations__organization_id__workflow_runs_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/approvals/{request_id}/decision",
+    "decide_approval_organizations__organization_id__workflow_runs__run_id__approvals__request_id__decision_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/re-run",
+    "rerun_run_organizations__organization_id__workflow_runs__run_id__re_run_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflow-runs/{run_id}/step-approvals/{approval_id}/decision",
+    "decide_step_approval_organizations__organization_id__workflow_runs__run_id__step_approvals__approval_id__decision_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows",
+    "create_workflow_organizations__organization_id__workflows_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows/{workflow_id}/archive",
+    "archive_workflow_organizations__organization_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/workflows/{workflow_id}/versions",
+    "save_workflow_version_organizations__organization_id__workflows__workflow_id__versions_post"
+  ],
+  [
+    "POST",
     "/platform/agent-sizes",
     "create_agent_size_platform_agent_sizes_post"
   ],
@@ -1726,6 +1776,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/anomaly-override",
+    "set_anomaly_override_organizations__organization_id__agents__agent_id__anomaly_override_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/content",
     "publish_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__content_put"
   ],
@@ -1763,6 +1818,11 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/share",
     "replace_agent_share_settings_organizations__organization_id__agents__agent_id__share_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/anomaly-detection",
+    "update_anomaly_detection_organizations__organization_id__anomaly_detection_put"
   ],
   [
     "PUT",
@@ -1823,6 +1883,11 @@
     "PUT",
     "/platform/settings/llm-providers/{slug}/key",
     "replace_key_platform_settings_llm_providers__slug__key_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/llm-providers/{slug}/models",
+    "replace_models_platform_settings_llm_providers__slug__models_put"
   ],
   [
     "PUT",

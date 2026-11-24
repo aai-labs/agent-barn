@@ -14,6 +14,7 @@ import type { Agent } from "@/features/agents/schemas";
 import { useCachedAgentHealth } from "../hooks/use-cached-agent";
 import { useContextPanel, type ContextPanelModel } from "../hooks/use-context-panel";
 import type { NavItem } from "../nav-model";
+import { LinkPendingHint } from "./link-pending-hint";
 
 /**
  * The light panel beside the rail on desktop, below the path bar: the sections of the
@@ -192,6 +193,11 @@ export function PanelGroups({
               {group.label}
             </div>
           )}
+          {group.hint && (
+            <div className="px-2.5 text-[11.5px]" style={{ color: "var(--ink-4)" }}>
+              {group.hint}
+            </div>
+          )}
           <div className="flex flex-col gap-px pt-1">
             {group.items.map((item) => (
               <PanelLink key={item.key} item={item} onNavigate={onNavigate} />
@@ -235,7 +241,7 @@ export function PanelLink({
         onPointerEnter={item.onIntent}
         onFocus={item.onIntent}
         onPointerDown={item.onIntent}
-        className={`flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13.5px] transition-colors ${item.active ? "" : "af-hover-bg"}`}
+        className={`relative flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13.5px] transition-colors ${item.active ? "" : "af-hover-bg"}`}
         style={{
           color,
           fontWeight: item.active ? 600 : 500,
@@ -254,6 +260,7 @@ export function PanelLink({
           </span>
         ) : null}
         {trailing && <ChevronRight size={14} aria-hidden style={{ color: "var(--ink-4)" }} />}
+        <LinkPendingHint />
       </Link>
       {(item.active || item.expanded) && item.children && (
         <div className="my-1 ml-[19px] flex flex-col gap-px pl-2" style={{ borderLeft: "1px solid var(--line)" }}>

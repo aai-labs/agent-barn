@@ -53,10 +53,13 @@ from api.domains.usage.guard import UsageAction, UsageGuard, UsageSubject
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+BOT_UNSUPPORTED_PLATFORMS = frozenset({"teams", "agentbarn_telegram"})
+BOT_PLATFORM_CONFLICTS = {"telegram": "agentbarn_telegram", "agentbarn_telegram": "telegram"}
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 
 # OpenClaw has one rule per Agent for untagged messages, so it can't answer them in
 # some channels while only listening in others.
+_CUSTOM_SLACK_UNSUPPORTED = "A Custom Slack server is available only for Hermes Agents, not OpenClaw Agents or Bots"
 _OPENCLAW_MENTION_CONFLICT = (
     "On OpenClaw, Require @mention can't be off while the Agent has listen-in channels. "
     "Turn it on, or remove the listen-in channels."
@@ -224,6 +227,7 @@ class CommunicationsService:
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
         self._reject_web_chat_mutation(plugin.key)
+        self._require_platform_allowed_with_bots(agent, plugin.key, plugin.display_name)
         if not plugin.is_offered():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -238,6 +242,7 @@ class CommunicationsService:
             agent_id=agent.id,
         )
         self._require_openclaw_mention_rule(agent, context, plugin.key, validated.settings, data.enabled)
+        self._require_custom_slack_runtime(agent, plugin.key, validated.settings)
         connection = CommunicationConnection(
             organization_id=agent.organization_id,
             agent_id=agent.id,
@@ -260,6 +265,19 @@ class CommunicationsService:
             return self._read(created)
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    def _require_platform_allowed_with_bots(self, agent: Agent, platform_key: str, display_name: str) -> None:
+        if agent.parent_agent_id is not None and platform_key in BOT_UNSUPPORTED_PLATFORMS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{display_name} is not available for a Bot",
+            )
+        conflicting = BOT_PLATFORM_CONFLICTS.get(platform_key)
+        if conflicting and conflicting in self.repository.related_bot_platform_keys(agent):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Agent Barn Telegram on a Parent Agent cannot run alongside a Bot's own Telegram",
+            )
 
     def _allocates_address(self, plugin) -> bool:
         return PlatformCapability.MANAGED_ADDRESS in plugin.capabilities
@@ -315,6 +333,7 @@ class CommunicationsService:
         self._require_openclaw_mention_rule(
             agent, context, connection.platform_key, validated.settings, enabled, replacing=connection.id
         )
+        self._require_custom_slack_runtime(agent, connection.platform_key, validated.settings)
         if data.display_name is not None:
             connection.display_name = data.display_name.strip()
         if data.enabled is not None:
@@ -605,6 +624,18 @@ class CommunicationsService:
             return self.plugins.require(key)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @staticmethod
+    def _require_custom_slack_runtime(agent: Agent, platform_key: str, settings: dict) -> None:
+        """Only the Hermes runtime can route its Slack app to a Slack-compatible server.
+
+        The Hermes plugin that does it is configured for the whole process, so a Bot's
+        profile cannot carry its own server.
+        """
+        if platform_key != "slack" or not settings.get("api_url"):
+            return
+        if agent.agent_type != AgentType.HERMES or agent.parent_agent_id is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CUSTOM_SLACK_UNSUPPORTED)
 
     def _require_openclaw_mention_rule(
         self,

@@ -285,3 +285,60 @@ def test_get_bot_info_returns_empty_dict_on_network_error():
         info = SlackClient("xoxb-token").get_bot_info()
 
     assert info == {}
+
+
+# --- Custom Slack server -----------------------------------------------------
+
+
+def _resolves_to(address: str):
+    import socket
+
+    rows = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+    return patch("api.infrastructure.public_http.socket.getaddrinfo", return_value=rows)
+
+
+def test_custom_server_calls_go_to_its_api_pinned_to_the_checked_address():
+    request = _mock_httpx([_resp({"ok": True, "user_id": "U204", "team": "Chatty"})])
+    with _resolves_to("93.184.216.34"), patch("httpx.Client.request", request):
+        ok, _ = SlackClient("xoxb-t", api_url="https://chat.example.com/slack/api/").validate_bot_token()
+
+    assert ok
+    _, url = request.call_args.args
+    kwargs = request.call_args.kwargs
+    assert url == "https://93.184.216.34/slack/api/auth.test"
+    assert kwargs["headers"]["Host"] == "chat.example.com"
+    assert kwargs["extensions"] == {"sni_hostname": "chat.example.com"}
+
+
+def test_custom_server_on_a_private_address_is_refused_without_a_request():
+    request = _mock_httpx([])
+    with _resolves_to("10.0.0.5"), patch("httpx.request", request), patch("httpx.Client.request", request):
+        ok, reason = SlackClient("xoxb-t", api_url="https://chat.internal/slack/api").validate_bot_token()
+
+    assert not ok
+    assert "Private" in reason
+    request.assert_not_called()
+
+
+def test_slack_itself_is_not_pinned():
+    request = _mock_httpx([_resp({"ok": True})])
+    with patch("httpx.request", request):
+        SlackClient("xoxb-t").validate_bot_token()
+
+    assert request.call_args.args[1] == "https://slack.com/api/auth.test"
+    assert "extensions" not in request.call_args.kwargs
+
+
+def test_directory_cache_is_kept_apart_per_server():
+    page = {"ok": True, "members": [{"id": "U1", "name": "a", "profile": {}}], "response_metadata": {}}
+    other = {"ok": True, "members": [{"id": "U2", "name": "b", "profile": {}}], "response_metadata": {}}
+    with (
+        _resolves_to("93.184.216.34"),
+        patch("httpx.request", _mock_httpx([_resp(page)])),
+        patch("httpx.Client.request", _mock_httpx([_resp(other)])),
+    ):
+        slack = SlackClient("xoxb-same").list_users()
+        custom = SlackClient("xoxb-same", api_url="https://chat.example.com/slack/api/").list_users()
+
+    assert [u["id"] for u in slack] == ["U1"]
+    assert [u["id"] for u in custom] == ["U2"]

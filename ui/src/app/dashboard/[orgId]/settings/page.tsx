@@ -6,6 +6,7 @@ import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { MemoryItemsViewer } from "@/features/agent-memory/components/memory-items-viewer";
 import { MemoryAccessPanel } from "@/features/agent-memory/components/memory-access-panel";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
+import { UnusualActivityPanel } from "@/features/anomalies/components/unusual-activity-panel";
 import { TemplatesPanel } from "@/features/templates/components/templates-panel";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import {
@@ -65,6 +66,7 @@ export default function SettingsPage() {
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
           {/* mcp_server.manage belongs to Owner and Admin Memberships only, not platform administrators. */}
           {section.key === "mcp-servers" && <McpServersPanel canManage={isMembershipAdmin} />}
+          {section.key === "unusual-activity" && <UnusualActivityPanel />}
           {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
           {section.key === "tier" && selectedOrganization && (
             <TierHoldsPanel organizationId={selectedOrganization.id} canManage={isMembershipAdmin} />

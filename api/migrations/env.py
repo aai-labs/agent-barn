@@ -14,6 +14,7 @@ import api.domains.agent_tasks.models
 import api.domains.agent_webhooks.models
 import api.domains.agents.models
 import api.domains.analytics.models
+import api.domains.anomalies.models
 import api.domains.api_keys.models
 import api.domains.artifacts.models
 import api.domains.auth.models

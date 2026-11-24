@@ -14,19 +14,22 @@ import {
 import { WorkflowRunsPage } from "../pages/workflow-runs-page.po";
 import { WorkflowsPage } from "../pages/workflows-page.po";
 import { artifactFixture } from "../fixtures/artifacts";
+import { WORKFLOW_ID } from "../fixtures/workflows";
+import UserContext from "../fixtures/user-context.json";
 
 test.describe("WF02 run progress and text results", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
   let support: WorkflowRunDataSupport;
+  let workflowData: WorkflowDataSupport;
   test.beforeEach(async ({ page }) => {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.users.interceptGetOrganizationsRequest();
     await data.agents.interceptGetAgentRequest({ body: mockAgent });
-    await new WorkflowDataSupport(page).intercept(MOCK_AGENT_ID, {
-      saved: true,
-    });
+    await data.agents.interceptGetAgentsRequest();
+    workflowData = new WorkflowDataSupport(page);
+    await workflowData.intercept(MOCK_AGENT_ID, { saved: true });
     support = new WorkflowRunDataSupport(page);
     await support.intercept(MOCK_AGENT_ID);
   });
@@ -198,21 +201,24 @@ test.describe("WF02 run progress and text results", () => {
       page.getByRole("region", { name: "Run detail" }),
     ).toBeVisible();
     expect(support.starts[0]).toMatchObject({
+      workflow_id: WORKFLOW_ID,
+      agent_id: MOCK_AGENT_ID,
       version_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
       inputs: { period: "This week" },
     });
+    expect(support.starts[0]).not.toHaveProperty("title");
     await expect(page.getByLabel("Step progress")).toBeVisible();
     await expect(page.getByLabel("Run timing")).toContainText("Time taken");
   });
   test("run detail returns to the Workflows page's Runs tab", async ({ page }) => {
     const runs = new WorkflowRunsPage(page);
-    await runs.goto(MOCK_AGENT_ID, true);
+    await runs.gotoOrganizationRun();
     await expect(page.getByLabel("Run detail")).toBeVisible();
     const navigation = page.getByRole("navigation", { name: "Workflow navigation" });
     await expect(navigation).toContainText("Run detail");
     await runs.backToRuns();
     await expect(page.getByRole("tab", { name: "Runs", selected: true })).toBeVisible();
-    await expect(page.getByLabel("Recent runs", { exact: true })).toBeVisible();
+    await expect(runs.runs("Active")).toBeVisible();
     await expect(page.getByLabel("Run detail")).not.toBeVisible();
     await expect(page).not.toHaveURL(/workflowRun=/);
     await page.reload();
@@ -220,13 +226,24 @@ test.describe("WF02 run progress and text results", () => {
     await page.goBack();
     await expect(page.getByLabel("Run detail")).toBeVisible();
     await page.goForward();
-    await expect(page.getByLabel("Recent runs", { exact: true })).toBeVisible();
+    await expect(runs.runs("Active")).toBeVisible();
   });
 
-  test("a workflow has no Runs tab and old Runs links open Overview", async ({ page }) => {
-    await new WorkflowRunsPage(page).gotoView(MOCK_AGENT_ID, "runs");
-    await expect(page.getByRole("tab", { name: "Overview", selected: true })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Runs", exact: true })).toHaveCount(0);
+  test("a run opened on its Agent's page returns to that Agent's runs", async ({ page }) => {
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await runs.backToRuns();
+    await expect(runs.runs("Recent runs")).toBeVisible();
+    await expect(page).not.toHaveURL(/workflowRun=/);
+  });
+
+  test("a saved workflow lists its own runs", async ({ page }) => {
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoView("runs");
+    await expect(page.getByRole("tab", { name: "Runs", selected: true })).toBeVisible();
+    await expect(runs.runs("Runs of this workflow")).toContainText("Weekly pipeline report");
+    expect(support.listQueries.at(-1)).toContain(`workflow_id=${WORKFLOW_ID}`);
   });
 
   for (const state of ["PAUSED", "BLOCKED"]) {
@@ -236,7 +253,7 @@ test.describe("WF02 run progress and text results", () => {
         support.state = state;
         const runs = new WorkflowRunsPage(page);
         if (detail) await runs.goto(MOCK_AGENT_ID, true);
-        else await runs.gotoLanding(MOCK_AGENT_ID);
+        else await runs.gotoAgentRuns(MOCK_AGENT_ID);
         await expect(page.getByLabel(detail ? "Run detail" : "Recent runs", { exact: true })).toBeVisible();
         const reads = support.reads;
         await page.clock.runFor(10_000);
@@ -244,6 +261,30 @@ test.describe("WF02 run progress and text results", () => {
       });
     }
   }
+
+  test("the Runs tab stops polling while every active run is parked", async ({ page }) => {
+    await page.clock.install();
+    support.state = "PAUSED";
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await expect(runs.runs("Active")).toBeVisible();
+    const reads = support.reads;
+    await page.clock.runFor(10_000);
+    expect(support.reads).toBe(reads);
+  });
+
+  test("active runs past the first page are reached with the pager", async ({ page }) => {
+    support.listTotal = 120;
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await runs.runs("Active").getByRole("button", { name: "Next runs" }).click();
+    await expect(page).toHaveURL(/workflowActivePage=2/);
+    await expect
+      .poll(() => support.listQueries.some((query) => /page=2&status=active/.test(query)))
+      .toBe(true);
+    // The badge counts within one page, so it asks for the largest the API serves.
+    expect(support.awaitingQueries.at(-1)).toContain("page_size=100");
+  });
 
   test("blocked runs explain how to proceed", async ({ page }) => {
     support.state = "BLOCKED";
@@ -333,18 +374,190 @@ test.describe("WF02 run progress and text results", () => {
     const inbox = page.getByLabel("Waiting on your approval");
     await expect(inbox.getByText("rm -rf ./out && ./deploy.sh --prod")).toBeVisible();
     await expect(inbox.getByText(/^Paused · /)).toBeVisible();
-    await expect(page.getByLabel("1 waiting on you")).toBeVisible();
+    // The Agent's Workflows section and the Organization's Workflows page both count it.
+    await expect(page.getByRole("complementary").getByLabel("1 waiting on you")).toBeVisible();
     await inbox.getByRole("button", { name: "Review →" }).click();
     await expect(page.getByLabel("Approval required")).toBeVisible();
   });
 
-  test("the Workflows page opens on recent runs, keeps Create workflow and lists saved workflows", async ({ page }) => {
+  test("an approval the viewer cannot decide is listed without counting as waiting on them", async ({
+    page,
+  }) => {
+    support.viewer = true;
+    support.state = "AWAITING_APPROVAL";
+    support.approval = approvalRequest("PARKED");
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await expect(
+      page.getByLabel("Waiting on approval").getByText("rm -rf ./out && ./deploy.sh --prod"),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Workflows/ }).getByLabel(/waiting on you/),
+    ).toHaveCount(0);
+  });
+
+  test("the Organization's Workflows page lists approvals across Agents with their Agent", async ({ page }) => {
+    support.state = "AWAITING_APPROVAL";
+    support.approval = approvalRequest("PARKED");
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    const inbox = page.getByLabel("Waiting on your approval");
+    await expect(inbox.getByText("rm -rf ./out && ./deploy.sh --prod")).toBeVisible();
+    await expect(inbox).toContainText("Maya");
+    await expect(
+      page.getByRole("link", { name: /Workflows/ }).getByLabel("1 waiting on you"),
+    ).toBeVisible();
+    await inbox.getByRole("button", { name: "Review →" }).click();
+    await expect(page.getByLabel("Approval required")).toBeVisible();
+  });
+
+  test("a run waiting at an approval step shows what to check and the result, and approves it", async ({
+    page,
+  }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByRole("status").getByText("Awaiting approval")).toBeVisible();
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await expect(panel.getByRole("heading")).toHaveText("Approve step 1 before the run continues?");
+    await expect(panel.getByText("Step 1: Draft the report", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Check the numbers and the tone")).toBeVisible();
+    await expect(panel.getByText("Q3 pipeline")).toBeVisible();
+    await expect(
+      page.getByLabel("Step progress").getByText("Waiting for approval"),
+    ).toBeVisible();
+    // Notes are needed only to request changes.
+    await expect(panel.getByRole("button", { name: "Request changes" })).toBeDisabled();
+    await panel.getByRole("button", { name: "Approve" }).click();
+    await expect(panel).toHaveCount(0);
+    expect(support.stepDecisions).toEqual([{ decision: "approve" }]);
+    await expect(page.getByRole("status").getByText("Completed")).toBeVisible();
+  });
+
+  test("requesting changes sends the notes and the step shows its earlier round", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await panel.getByRole("textbox").fill("Use last quarter's numbers");
+    await panel.getByRole("button", { name: "Request changes" }).click();
+    await expect(panel).toHaveCount(0);
+    expect(support.stepDecisions).toEqual([
+      { decision: "request_changes", note: "Use last quarter's numbers" },
+    ]);
+    await expect(page.getByLabel("Run summary").getByRole("heading")).toHaveText("Waiting to start");
+
+    // The step ran again and the run waits for round 2.
+    support.earlierRounds = [
+      {
+        round: 1,
+        summary: "Draft round 1: the old numbers.",
+        artifacts: [],
+        completed_at: "2026-10-17T10:01:54Z",
+      },
+    ];
+    support.state = "AWAITING_APPROVAL";
+    await page.reload();
+    await expect(page.getByLabel("Approval step", { exact: true })).toContainText("round 2");
+    await expect(page.getByLabel("Approval step", { exact: true })).toContainText(
+      "“Use last quarter's numbers”",
+    );
+    await runs.selectStep("Step 1: Draft the report");
+    const detail = page.getByLabel("Step detail");
+    await expect(detail.getByText("Round 2: revised after changes were requested.")).toBeVisible();
+    await detail.getByText(/^Round 1 · /).click();
+    await expect(detail.getByText("Draft round 1: the old numbers.")).toBeVisible();
+  });
+
+  test("rejecting asks first, then the run reads as rejected with the reason", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await panel.getByRole("textbox").fill("Wrong quarter");
+    await panel.getByRole("button", { name: "Reject" }).click();
+    const dialog = page.getByRole("dialog", { name: "Reject this run?" });
+    await expect(dialog).toContainText("with your note as the reason");
+    await dialog.getByRole("button", { name: "Reject run" }).click();
+    expect(support.stepDecisions).toEqual([{ decision: "reject", note: "Wrong quarter" }]);
+    await expect(page.getByRole("status").getByText("Rejected")).toBeVisible();
+    const summary = page.getByLabel("Run summary");
+    await expect(summary.getByRole("heading")).toHaveText("Run rejected");
+    await expect(summary.getByText("Rejected at step 2: Wrong quarter")).toBeVisible();
+    await expect(page.getByLabel("Step progress").getByText("Rejected")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run again" })).toBeVisible();
+  });
+
+  test("an approval step offers only the decisions its author allowed", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    support.allowedDecisions = ["approve"];
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await expect(panel.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Request changes" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Reject" })).toHaveCount(0);
+    await expect(panel.getByText("Notes for Maya (optional)")).toBeVisible();
+  });
+
+  test("the approval decision sits in the approval step's pane, which the run opens on", async ({
+    page,
+  }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    const pane = page.getByLabel("Selected run view");
+    await expect(pane.getByLabel("Approval step", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Run summary")).toHaveCount(0);
+
+    await runs.selectStep("Step 1: Draft the report");
+    await expect(page.getByLabel("Approval step", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Step detail")).toBeVisible();
+
+    await page.getByRole("button", { name: "Run overview" }).click();
+    const summary = page.getByLabel("Run summary");
+    await expect(summary).toContainText("Step 2 waits for a decision on step 1.");
+    await summary.getByRole("button", { name: "Open approval step" }).click();
+    await expect(pane.getByLabel("Approval step", { exact: true })).toBeVisible();
+  });
+
+  test("Viewers see a waiting approval step but cannot decide it", async ({ page }) => {
+    support.approvalStep = true;
+    support.viewer = true;
+    support.state = "AWAITING_APPROVAL";
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const panel = page.getByLabel("Approval step", { exact: true });
+    await expect(panel.getByText("Check the numbers and the tone")).toBeVisible();
+    await expect(panel.getByRole("button")).toHaveCount(0);
+    await expect(panel.getByText(/Ask someone who can edit Maya/)).toBeVisible();
+  });
+
+  test("the inbox lists a run waiting at an approval step and the badge counts it", async ({ page }) => {
+    support.approvalStep = true;
+    support.state = "AWAITING_APPROVAL";
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    const inbox = page.getByLabel("Waiting on your approval");
+    await expect(inbox.getByText("Approval step 2 · Review the draft")).toBeVisible();
+    await expect(inbox.getByText(/^Waiting · /)).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Workflows/ }).getByLabel("1 waiting on you"),
+    ).toBeVisible();
+    await inbox.getByRole("button", { name: "Review →" }).click();
+    await expect(page.getByLabel("Approval step", { exact: true })).toBeVisible();
+  });
+
+  test("the Workflows page opens on runs, keeps New workflow and lists saved workflows", async ({ page }) => {
     support.state = "SUCCEEDED";
-    await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=workflows`);
-    await expect(page.getByRole("button", { name: "+ Create workflow" })).toBeVisible();
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await expect(page.getByRole("button", { name: "New workflow" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Runs", selected: true })).toBeVisible();
-    const recent = page.getByLabel("Recent runs");
+    const recent = runs.runs("Recent");
     await expect(recent.getByText("Completed")).toBeVisible();
+    await expect(runs.runs("Active")).toHaveCount(0);
     await expect(page.getByLabel("Waiting on your approval")).toHaveCount(0);
     await page.getByRole("tab", { name: "Workflows" }).click();
     await expect(page.getByLabel("Saved workflows")).toBeVisible();
@@ -393,17 +606,17 @@ test.describe("WF02 run progress and text results", () => {
     page,
   }) => {
     const runs = new WorkflowRunsPage(page);
-    await runs.gotoLanding(MOCK_AGENT_ID);
-    await runs.openFirstRun();
+    await runs.gotoLanding();
+    await runs.openFirstRun("Active");
     await expect(page.getByLabel("Run detail")).toBeVisible();
     await runs.backToRuns();
     await expect(page.getByRole("heading", { name: "Workflows", exact: true })).toBeVisible();
-    await expect(page.getByLabel("Recent runs", { exact: true })).toBeVisible();
+    await expect(runs.runs("Active")).toBeVisible();
     expect(new URL(page.url()).searchParams.get("workflow")).toBeNull();
   });
 
   test("an invalid workflow view falls back to Overview", async ({ page }) => {
-    await new WorkflowRunsPage(page).gotoView(MOCK_AGENT_ID, "unknown");
+    await new WorkflowRunsPage(page).gotoView("unknown");
     await expect(
       page.getByRole("tab", { name: "Overview", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
@@ -752,6 +965,19 @@ test.describe("WF02 run progress and text results", () => {
     ).toBeVisible();
     await expect(page.getByLabel("Run summary")).toHaveCount(0);
   });
+  test("a Tier without workflows does not offer Run again", async ({ page }) => {
+    support.state = "SUCCEEDED";
+    await new DataSupport(page).organizations.interceptGetOrganization({
+      organization: {
+        ...UserContext.organization_users[0].organization,
+        entitlements: { features: ["team"], allowed_platform_keys: null },
+      },
+    });
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run summary")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run again", exact: true })).toHaveCount(0);
+  });
+
   test("Viewers cannot run a settled run again", async ({ page }) => {
     support.viewer = true;
     support.state = "FAILED";
@@ -770,13 +996,21 @@ test.describe("WF02 run progress and text results", () => {
   }) => {
     support.viewer = true;
     support.state = "SUCCEEDED";
-    await new DataSupport(page).agents.interceptGetAgentRequest({
-      body: { ...mockAgent, allowed_actions: ["agent.read"] },
+    const viewerAgent = { ...mockAgent, allowed_actions: ["agent.read"] };
+    const data = new DataSupport(page);
+    await data.agents.interceptGetAgentRequest({ body: viewerAgent });
+    await data.agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [viewerAgent] },
     });
     const runs = new WorkflowRunsPage(page);
     await runs.goto(MOCK_AGENT_ID);
+    // Any Member may open the dialog; starting needs an Agent they can update.
+    await runs.openRunDialog();
+    await expect(runs.dialog()).toContainText("Running a workflow needs edit access to an agent");
+    await expect(runs.dialog()).not.toContainText("Start an agent");
+    await expect(runs.runAs("Maya")).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Run workflow", exact: true }),
+      runs.dialog().getByRole("button", { name: "Start run", exact: true }),
     ).toBeDisabled();
     await runs.goto(MOCK_AGENT_ID, true);
     await expect(page.getByLabel("Run summary")).toContainText(
@@ -786,6 +1020,19 @@ test.describe("WF02 run progress and text results", () => {
       page.getByRole("button", { name: "Cancel run", exact: true }),
     ).toHaveCount(0);
   });
+  test("with every updatable Agent stopped, the Run dialog asks to start one", async ({ page }) => {
+    const stopped = { ...mockAgent, status: "STOPPED" };
+    const data = new DataSupport(page);
+    await data.agents.interceptGetAgentRequest({ body: stopped });
+    await data.agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [stopped] },
+    });
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.dialog()).toContainText("No running agent you can update. Start an agent");
+  });
+
   test("revoked access conceals the run and text results", async ({ page }) => {
     support.failRead = true;
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true, TEST_ORG_ID);
@@ -811,5 +1058,270 @@ test.describe("WF02 run progress and text results", () => {
     ).toBeVisible();
     await expect(page.getByLabel("Run summary")).toHaveCount(0);
     await expect(page.getByLabel("Run history")).toHaveCount(0);
+  });
+  const OTHER_AGENT_ID = "77777777-7777-4777-8777-777777777777";
+  const twoAgents = async (page: import("@playwright/test").Page) =>
+    new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: {
+        page: 1,
+        page_size: 50,
+        total: 2,
+        items: [mockAgent, { ...mockAgent, id: OTHER_AGENT_ID, name: "Rex" }],
+      },
+    });
+
+  test("the Run dialog preselects the workflow's default Agent and runs as the one chosen", async ({
+    page,
+  }) => {
+    await twoAgents(page);
+    support.defaultAgentId = OTHER_AGENT_ID;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.runAs("Rex")).toBeChecked();
+    await expect(runs.runAs("Maya")).not.toBeChecked();
+    await runs.chooseAgent("Maya");
+    await runs.dialog().getByLabel("Name this run").fill("Week 42 report");
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({
+      agent_id: MOCK_AGENT_ID,
+      title: "Week 42 report",
+    });
+    await expect(page.getByRole("heading", { name: "Week 42 report" })).toBeVisible();
+  });
+
+  test("Run as shows four Agents and the default, with the rest behind a search", async ({
+    page,
+  }) => {
+    const team = Array.from({ length: 8 }, (_, i) => ({
+      ...mockAgent,
+      id: i === 0 ? MOCK_AGENT_ID : `00000000-0000-4000-8000-0000000001${String(i + 10)}`,
+      name: i === 0 ? "Maya" : `Agent ${String.fromCharCode(65 + i)}`,
+    }));
+    await new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: { page: 1, page_size: 50, total: team.length, items: team },
+    });
+    // The default is past the first four, so it gets a pill of its own.
+    support.defaultAgentId = team[5].id;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.runAs(team[5].name)).toBeChecked();
+    await expect(runs.dialog().getByRole("radio")).toHaveCount(5);
+    await expect(runs.runAs(team[6].name)).toHaveCount(0);
+    await runs.dialog().getByRole("button", { name: "Choose from all 8 agents" }).click();
+    await page.getByPlaceholder("Search agents…").fill(team[6].name);
+    await page.getByRole("option", { name: team[6].name }).click();
+    await expect(runs.runAs(team[6].name)).toBeChecked();
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({ agent_id: team[6].id });
+  });
+
+  test("a link from an Agent's page preselects that Agent over the default", async ({ page }) => {
+    await twoAgents(page);
+    support.defaultAgentId = OTHER_AGENT_ID;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoAgentRuns(MOCK_AGENT_ID);
+    await page.getByRole("link", { name: "Run a workflow" }).click();
+    await expect(page).toHaveURL(new RegExp(`/workflows\\?.*agent=${MOCK_AGENT_ID}`));
+    await page.getByRole("button", { name: "Run Weekly pipeline report" }).click();
+    await expect(runs.runAs("Maya")).toBeChecked();
+    // The link named the Agent for this run only: once it starts, the default returns.
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await expect(page).not.toHaveURL(/agent=/);
+  });
+
+  const BOT_ID = "0000000b-0000-4000-8000-00000000000b";
+  const withBot = async (page: import("@playwright/test").Page) =>
+    new DataSupport(page).agents.interceptGetAgentsRequest({
+      body: {
+        page: 1,
+        page_size: 100,
+        total: 3,
+        items: [
+          mockAgent,
+          { ...mockAgent, id: OTHER_AGENT_ID, name: "Rex" },
+          { ...mockAgent, id: BOT_ID, name: "Scout", parent_agent_id: MOCK_AGENT_ID },
+        ],
+      },
+    });
+
+  test("a link from a Bot's page preselects the Bot, named and placed after its Parent Agent", async ({
+    page,
+  }) => {
+    await withBot(page);
+    support.defaultAgentId = OTHER_AGENT_ID;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding(`?workflowsTab=workflows&agent=${BOT_ID}`);
+    await page.getByRole("button", { name: "Run Weekly pipeline report" }).click();
+    await expect(runs.runAs("Scout · Maya")).toBeChecked();
+    await expect(runs.dialog().getByRole("radio").nth(1)).toHaveAccessibleName("Scout · Maya");
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    expect(support.starts[0]).toMatchObject({ agent_id: BOT_ID });
+  });
+
+  test("a Bot that is the workflow's default is preselected", async ({ page }) => {
+    await withBot(page);
+    support.defaultAgentId = BOT_ID;
+    await support.intercept(MOCK_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.runAs("Scout · Maya")).toBeChecked();
+  });
+
+  test("with no default the dialog waits for an Agent, and files follow the Agent chosen", async ({
+    page,
+  }) => {
+    await twoAgents(page);
+    support.fileInputs = true;
+    await support.intercept(OTHER_AGENT_ID);
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await expect(runs.dialog()).toContainText("Choose an agent under “Run as”");
+    await expect(
+      runs.dialog().getByRole("button", { name: "Start run", exact: true }),
+    ).toBeDisabled();
+    await runs.chooseAgent("Maya");
+    await runs.selectFile("Reporting period", "pipeline.csv");
+    await expect(runs.dialog()).toContainText("pipeline.csv");
+    // Another Agent has other files, so the earlier pick is dropped.
+    await runs.chooseAgent("Rex");
+    await expect(
+      page.getByRole("combobox", { name: "Select file for Reporting period" }),
+    ).not.toContainText("pipeline.csv");
+    // The dropped file is gone from the run too, not only from the picker.
+    await runs.start();
+    await expect(runs.dialog().getByRole("alert")).toContainText("Reporting period is required");
+    expect(support.starts).toHaveLength(0);
+  });
+
+  test("the Agent cannot change while a file uploads", async ({ page }) => {
+    await twoAgents(page);
+    support.fileInputs = true;
+    await support.intercept(OTHER_AGENT_ID);
+    let release = () => {};
+    support.uploadGate = new Promise((resolve) => (release = resolve));
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID);
+    await runs.openRunDialog();
+    await runs.chooseAgent("Maya");
+    await runs.uploadFile("Reporting period", Buffer.from("product,quantity\n"));
+    await expect(runs.runAs("Rex")).toBeDisabled();
+    release();
+    await expect(page.getByRole("button", { name: "Remove uploaded.csv", exact: true })).toBeVisible();
+    await expect(runs.runAs("Rex")).toBeEnabled();
+  });
+
+  test("a workflow's runs open on their first page, whatever page the landing list was on", async ({
+    page,
+  }) => {
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding("?workflowsTab=workflows&workflowRunPage=3");
+    await new WorkflowsPage(page).open("Weekly pipeline report");
+    await expect(page).toHaveURL(new RegExp(`workflow=${WORKFLOW_ID}`));
+    await expect(page).not.toHaveURL(/workflowRunPage/);
+  });
+
+  test("the Organization lists runs across Agents; an Agent's tab lists only its own", async ({
+    page,
+  }) => {
+    support.state = "SUCCEEDED";
+    support.otherAgentRun = { agent_id: OTHER_AGENT_ID, agent_name: "Rex" };
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    const recent = runs.runs("Recent");
+    await expect(recent.getByRole("button")).toHaveCount(2);
+    await expect(recent).toContainText("Maya");
+    await expect(recent).toContainText("Rex");
+    await runs.gotoAgentRuns(MOCK_AGENT_ID);
+    await expect(runs.runs("Recent runs").getByRole("button")).toHaveCount(1);
+    expect(support.listQueries.at(-1)).toContain(`agent_id=${MOCK_AGENT_ID}`);
+    // Workflows are created for the Organization, not on an Agent's page.
+    await expect(page.getByRole("button", { name: "New workflow" })).toHaveCount(0);
+  });
+
+  test("a run on a deleted Agent names it as archived, without a link to it", async ({ page }) => {
+    support.state = "SUCCEEDED";
+    support.agentArchived = true;
+    support.viewer = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoLanding();
+    await expect(runs.runs("Recent")).toContainText("Archived");
+    await runs.openFirstRun();
+    const detail = page.getByLabel("Run detail");
+    await expect(detail).toContainText("Archived");
+    await expect(detail.getByRole("link", { name: /Open Maya/ })).toHaveCount(0);
+    await expect(detail.getByRole("button", { name: "Run again" })).toHaveCount(0);
+  });
+
+  test("a run on a deleted Agent names its files without offering or failing on them", async ({
+    page,
+  }) => {
+    support.state = "SUCCEEDED";
+    support.agentArchived = true;
+    support.fileInputs = true;
+    support.viewer = true;
+    const runs = new WorkflowRunsPage(page);
+    await runs.gotoOrganizationRun();
+    const outputs = page.getByLabel("Final outputs", { exact: true });
+    await expect(outputs).toContainText("pipeline.csv");
+    await expect(outputs).toContainText("can no longer be downloaded");
+    await expect(outputs.getByRole("button", { name: /Download/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "All artifacts", exact: true }).click();
+    const panel = page.getByLabel("Selected run view", { exact: true });
+    await expect(panel).toContainText("can no longer be downloaded");
+    await expect(panel).not.toContainText("not found");
+    await expect(panel).not.toContainText("unavailable");
+  });
+
+  test("a workflow's card counts a run just started from it", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    const card = workflows.card("Weekly pipeline report");
+    await expect(card).toContainText("0 runs");
+    await card.getByRole("button", { name: "Run Weekly pipeline report" }).click();
+    const runs = new WorkflowRunsPage(page);
+    await runs.chooseAgent("Maya");
+    await page.getByLabel("Reporting period (required)").fill("Week 42");
+    workflowData.runCount = 1;
+    await runs.start();
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await runs.backToRuns();
+    await page.getByRole("tab", { name: "Workflows" }).click();
+    await expect(workflows.card("Weekly pipeline report")).toContainText("1 run");
+  });
+
+  test("an old run still shows the output its step was asked for", async ({ page }) => {
+    support.state = "SUCCEEDED";
+    support.fileInputs = true;
+    support.outputDescription = "A readable Markdown report";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    await runs.selectStep("Step 1: Read pipeline");
+    await expect(page.getByLabel("Step outputs")).toContainText("A readable Markdown report");
+  });
+  test("Open latest run on a workflow card opens its newest run", async ({ page }) => {
+    support.state = "SUCCEEDED";
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.cardAction("Weekly pipeline report", "Open latest run");
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`workflowRun=${RUN_ID}`));
+    expect(support.listQueries.at(-1)).toContain(`workflow_id=${WORKFLOW_ID}`);
+    expect(support.listQueries.at(-1)).toContain("page_size=1");
   });
 });

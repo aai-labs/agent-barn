@@ -22,8 +22,10 @@ from api.domains.business_value.models import (
     TOOL_CALL_ORDINAL_CONSTRAINT,
     VALUE_SETTINGS_ORGANIZATION_CONSTRAINT,
     BusinessAction,
+    HourlyWrites,
     OrganizationOutcomeMinutes,
     OrganizationValueSettings,
+    StoredBusinessAction,
 )
 from api.domains.communications.models import (
     CommunicationDelivery,
@@ -96,6 +98,60 @@ class BusinessActionRepository:
             return []
         savepoint.commit()
         return inserted
+
+    def hourly_writes(self, agent_id: UUID, since: datetime, until: datetime) -> list[HourlyWrites]:
+        """An Agent's writes and deletes per UTC hour of `occurred_at`, for hours with any.
+
+        Unscoped: only the scheduled anomaly check calls this, and no router reaches it.
+        """
+        hour = sa.func.date_trunc("hour", sa.func.timezone("UTC", col(BusinessAction.occurred_at)))
+        query = (
+            select(sa.func.timezone("UTC", hour), sa.func.count())
+            .where(
+                col(BusinessAction.agent_id) == agent_id,
+                col(BusinessAction.occurred_at) >= since,
+                col(BusinessAction.occurred_at) < until,
+                col(BusinessAction.is_write).is_(True),
+            )
+            .group_by(hour)
+            .order_by(hour)
+        )
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(query).all()  # type: ignore[call-overload]
+        return [HourlyWrites(hour=bucket, writes=writes) for bucket, writes in rows]
+
+    def stored_between(
+        self,
+        agent_id: UUID,
+        *,
+        after: datetime | None,
+        until: datetime,
+        occurred_since: datetime,
+    ) -> list[StoredBusinessAction]:
+        """An Agent's Business Actions that happened since `occurred_since` and were
+        stored in (`after`, `until`], oldest first. `occurred_since` keeps the read on
+        `ix_business_action_agent_occurred`.
+
+        Unscoped: only the scheduled anomaly check calls this, and no router reaches it.
+        """
+        query = select(
+            col(BusinessAction.created_at),
+            col(BusinessAction.occurred_at),
+            col(BusinessAction.integration),
+            col(BusinessAction.verb),
+        ).where(
+            col(BusinessAction.agent_id) == agent_id,
+            col(BusinessAction.occurred_at) >= occurred_since,
+            col(BusinessAction.created_at) <= until,
+        )
+        if after is not None:
+            query = query.where(col(BusinessAction.created_at) > after)
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(query.order_by(col(BusinessAction.created_at), col(BusinessAction.id))).all()  # type: ignore[call-overload]
+        return [
+            StoredBusinessAction(stored_at=stored, occurred_at=occurred, integration=integration, verb=verb)
+            for stored, occurred, integration, verb in rows
+        ]
 
     def find_backfill_batch(self, after_id: UUID | None, limit: int) -> list[ToolCall]:
         """Completed shell Tool Calls after ``after_id``, in id order.

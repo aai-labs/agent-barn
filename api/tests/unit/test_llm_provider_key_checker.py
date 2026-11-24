@@ -27,7 +27,12 @@ REAL_HTTPX_CLIENT = httpx.Client
 JSON = {"Content-Type": "application/json"}
 
 PROVIDER_REQUESTS = [
-    (ProviderType.ANTHROPIC, None, "https://api.anthropic.com/v1/models", {"x-api-key": CANDIDATE_KEY}),
+    (
+        ProviderType.ANTHROPIC,
+        None,
+        "https://api.anthropic.com/v1/models",
+        {"x-api-key": CANDIDATE_KEY, "anthropic-version": "2026-10-21"},
+    ),
     (ProviderType.OPENAI, None, "https://api.openai.com/v1/models", BEARER),
     (
         ProviderType.GEMINI,
@@ -50,12 +55,20 @@ PROVIDER_REQUESTS = [
 PROVIDERS = [(provider_type, base_url) for provider_type, base_url, _, _ in PROVIDER_REQUESTS]
 
 
+KEY_HEADERS = ("Authorization", "x-api-key", "x-goog-api-key", "api-key")
+
+
 class _Provider:
-    def __init__(self, status_code=200, headers=JSON, failure=None, stream=None):
+    """Answers `status_code` to a request with a key, `keyless_status` to one without, and
+    `chat_status` to the empty chat request."""
+
+    def __init__(self, status_code=200, headers=JSON, failure=None, stream=None, keyless_status=401, chat_status=400):
         self.status_code = status_code
         self.headers = headers
         self.failure = failure
         self.stream = stream
+        self.keyless_status = keyless_status
+        self.chat_status = chat_status
         self.requests: list[httpx.Request] = []
         self.client_settings: list[dict] = []
 
@@ -63,6 +76,10 @@ class _Provider:
         self.requests.append(request)
         if self.failure is not None:
             raise self.failure
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(self.chat_status, headers=JSON, stream=_UnreadableBody())
+        if not any(header in request.headers for header in KEY_HEADERS):
+            return httpx.Response(self.keyless_status, headers=JSON)
         return httpx.Response(self.status_code, headers=self.headers, stream=self.stream)
 
     def client(self, **settings) -> httpx.Client:
@@ -98,7 +115,8 @@ def test_each_provider_is_asked_at_its_documented_endpoint(provider_type, base_u
         accepted = _check(provider_type, base_url)
 
     assert_that(accepted, equal_to(True))
-    assert_that(len(provider.requests), equal_to(1))
+    # A Custom endpoint is also asked for its list without the key, which it refuses here.
+    assert_that(len(provider.requests), equal_to(2 if provider_type is ProviderType.CUSTOM else 1))
     request = provider.requests[0]
     assert_that(request.method, equal_to("GET"))
     assert_that(request.url.host, equal_to(PUBLIC_ADDRESS))
@@ -252,3 +270,60 @@ def test_a_check_the_checker_does_not_make_is_a_programming_error(provider_type,
         _check(provider_type, base_url)
 
     assert_that(provider.requests, equal_to([]))
+
+
+def test_a_custom_endpoint_that_lists_only_with_a_key_is_not_sent_a_chat_request():
+    provider = _Provider(200, keyless_status=401)
+
+    with _answering(provider):
+        accepted = _check(ProviderType.CUSTOM, CUSTOM_BASE_URL)
+
+    assert_that(accepted, equal_to(True))
+    keyless = provider.requests[1]
+    assert_that([request.method for request in provider.requests], equal_to(["GET", "GET"]))
+    assert_that(_requested_url(keyless), equal_to("https://models.example.com/v1/models"))
+    assert_that(any(header in keyless.headers for header in KEY_HEADERS), equal_to(False))
+
+
+@pytest.mark.parametrize(
+    ("chat_status", "accepted"), [(401, False), (403, False), (400, True), (422, True), (200, True)]
+)
+def test_a_custom_endpoint_that_lists_without_a_key_is_judged_by_an_empty_chat_request(chat_status, accepted):
+    provider = _Provider(200, keyless_status=200, chat_status=chat_status)
+
+    with _answering(provider):
+        result = _check(ProviderType.CUSTOM, CUSTOM_BASE_URL)
+
+    assert_that(result, equal_to(accepted))
+    chat = provider.requests[2]
+    assert_that(chat.method, equal_to("POST"))
+    assert_that(_requested_url(chat), equal_to("https://models.example.com/v1/chat/completions"))
+    assert_that(chat.headers["Authorization"], equal_to(f"Bearer {CANDIDATE_KEY}"))
+    assert_that(chat.content, equal_to(b"{}"))
+
+
+def test_a_custom_endpoint_with_no_chat_api_is_not_an_api():
+    provider = _Provider(200, keyless_status=200, chat_status=404)
+
+    with _answering(provider), pytest.raises(BaseUrlNotAnApi):
+        _check(ProviderType.CUSTOM, CUSTOM_BASE_URL)
+
+
+@pytest.mark.parametrize("chat_status", [429, 500, 503])
+def test_a_chat_request_answered_with_neither_a_refusal_nor_a_body_error_is_unreachable(chat_status):
+    provider = _Provider(200, keyless_status=200, chat_status=chat_status)
+
+    with _answering(provider), pytest.raises(LlmProviderUnreachable):
+        _check(ProviderType.CUSTOM, CUSTOM_BASE_URL)
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "base_url"), [(ProviderType.AZURE, AZURE_BASE_URL), (ProviderType.OPENAI, None)]
+)
+def test_only_a_custom_endpoint_is_asked_without_the_key(provider_type, base_url):
+    provider = _Provider(200, keyless_status=200)
+
+    with _answering(provider):
+        _check(provider_type, base_url)
+
+    assert_that(len(provider.requests), equal_to(1))
