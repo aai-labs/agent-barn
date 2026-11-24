@@ -21,14 +21,18 @@ function catalogueKey(slug: string) {
   return [...llmProvidersKey.detail(slug), "model-catalogue"] as const;
 }
 
-export function useLlmProviderModels(slug: string) {
+/** The stored models and the provider's catalogue, read only while `enabled`, so a closed dialog
+ * never asks the provider for its list. */
+export function useLlmProviderModels(slug: string, enabled: boolean) {
   const stored = useQuery({
     queryKey: modelsKey(slug),
+    enabled,
     queryFn: async () =>
       (await api.get<LlmProviderModel[]>(`${connectionUrl(slug)}/models`, { schema: LlmProviderModelListSchema })).data,
   });
   const catalogue = useQuery({
     queryKey: catalogueKey(slug),
+    enabled,
     queryFn: async () =>
       (
         await api.get<LlmProviderCatalogueEntry[]>(`${connectionUrl(slug)}/model-catalogue`, {
@@ -56,7 +60,11 @@ export function useLlmProviderModelActions(slug: string) {
           { schema: LlmProviderModelListSchema },
         )
       ).data,
-    onSuccess: () => client.invalidateQueries({ queryKey: llmProvidersKey.detail(slug) }),
+    // Mark the lists stale without refetching them: the dialog closes on save, and the next one to
+    // open reads them afresh, so refetching now would only ask the provider for its list again.
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: llmProvidersKey.detail(slug), refetchType: "none" });
+    },
   });
   return { saveModels: save.mutateAsync, isSavingModels: save.isPending, saveModelsError: save.error };
 }

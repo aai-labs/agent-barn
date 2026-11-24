@@ -44,6 +44,7 @@ export function PlatformLlmProviderSettings() {
   const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsDialogKey, setModelsDialogKey] = useState(0);
+  const [modelsTrigger, setModelsTrigger] = useState<HTMLElement | null>(null);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
   if (connectionsError || !connections)
@@ -92,7 +93,8 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(saved)} key saved`);
   }
 
-  function openModels(connection: LlmProviderConnection) {
+  function openModels(connection: LlmProviderConnection, trigger: HTMLElement | null) {
+    setModelsTrigger(trigger);
     setModelsTarget(connection);
     setModelsDialogKey((current) => current + 1);
     setModelsOpen(true);
@@ -126,7 +128,7 @@ export function PlatformLlmProviderSettings() {
             isOpenRouter ? undefined : (
               <ManageProviderMenu
                 connection={connection}
-                onModels={() => openModels(connection)}
+                onModels={(trigger) => openModels(connection, trigger)}
                 onReplaceKey={() => openKeyDialog(connection)}
                 onDelete={() => openDelete(connection)}
               />
@@ -205,6 +207,7 @@ export function PlatformLlmProviderSettings() {
           open={modelsOpen}
           onOpenChange={setModelsOpen}
           onSaved={() => modelsSaved(modelsTarget)}
+          returnFocusTo={modelsTrigger}
         />
       )}
       {deleting && (

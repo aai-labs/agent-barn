@@ -70,7 +70,7 @@ export class PlatformLlmProvidersPage {
   }
 
   manageButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Manage", exact: true });
+    return this.providerCard(name).getByRole("button", { name: `Manage ${name}`, exact: true });
   }
 
   manageMenu() {
@@ -215,7 +215,7 @@ export class PlatformLlmProvidersPage {
   }
 
   newDeploymentName() {
-    return this.dialog().getByLabel("New deployment name", { exact: true }).last();
+    return this.dialog().getByLabel(/^New deployment \d+ name$/).last();
   }
 
   async addDeployment(name: string) {

@@ -232,7 +232,7 @@ function ModelRow({
             {showsChange && (
               <>
                 <span className="block text-[0.72rem]" style={MUTED}>
-                  LiteLLM&apos;s price has changed
+                  {stored?.priceSource === "manual" ? "LiteLLM has a price for it" : "LiteLLM's price has changed"}
                 </span>
                 <button
                   type="button"

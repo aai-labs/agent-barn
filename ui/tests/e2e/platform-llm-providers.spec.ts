@@ -666,6 +666,39 @@ test("Platform Admin ticks a model priced by LiteLLM and saves, keeping the stor
   ]);
 });
 
+test("saving models reads the provider's list once and returns focus to Manage", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+
+  await settings.modelCheckbox("claude-haiku-4-5").click();
+  await settings.saveModels();
+
+  await expect(settings.toast("Anthropic models saved")).toBeVisible();
+  await expect(settings.manageButton("Anthropic")).toBeFocused();
+  expect(mock.catalogueReads).toEqual(["anthropic"]);
+});
+
+test("a closed Models dialog does not read the provider's list again when the page refreshes", async ({ page }) => {
+  const { mock, settings } = await openAnthropicModels(page);
+  await page.keyboard.press("Escape");
+  await expect(settings.dialog()).toHaveCount(0);
+
+  await settings.replaceKey("Anthropic", { key: PROVIDER_KEY });
+
+  await expect(settings.toast("Anthropic key saved")).toBeVisible();
+  expect(mock.catalogueReads).toEqual(["anthropic"]);
+});
+
+test("a model stored at typed prices is offered LiteLLM's price without saying it changed", async ({ page }) => {
+  const [opus, sonnet] = ANTHROPIC_STORED_MODELS;
+  const { settings } = await openAnthropicModels(page, {
+    models: [{ ...opus, price_source: "manual", litellm_price_key: null }, sonnet],
+  });
+
+  await expect(settings.modelCells("claude-opus-4-1").first()).toContainText("LiteLLM has a price for it");
+  await expect(settings.modelCells("claude-opus-4-1").first()).not.toContainText("price has changed");
+  await expect(settings.useLiteLLMPriceButton("claude-opus-4-1")).toBeVisible();
+});
+
 test("unticking a stored model removes it on save", async ({ page }) => {
   const { mock, settings } = await openAnthropicModels(page);
 
@@ -894,6 +927,23 @@ test("Manage on every connection but OpenRouter offers Models", async ({ page })
   await expect(settings.manageButton("OpenRouter")).toHaveCount(0);
 });
 
+test("a typed price takes at most 12 decimal places", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [CUSTOM_CONNECTION] });
+  await data.interceptModels({ catalogue: CUSTOM_CATALOGUE, models: CUSTOM_MODELS });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await settings.openModels("Aardvark lab");
+  await settings.modelCheckbox("llama-3").click();
+
+  await settings.typePrices("llama-3", ["0.123456789012", "1", "0", "0"]);
+  await expect(settings.saveModelsButton()).toBeEnabled();
+  await settings.priceInput("llama-3", "Input").fill("0.1234567890123");
+
+  await expect(settings.saveModelsButton()).toBeDisabled();
+});
+
 test("a Custom model takes typed prices, and Save waits until its input and output are above 0", async ({ page }) => {
   await signIn(page);
   const data = new PlatformLlmProviderDataSupport(page);
@@ -979,6 +1029,23 @@ async function openAzureDeployments(page: Page) {
   return { mock, settings };
 }
 
+test("unnamed Azure deployments are told apart by their position", async ({ page }) => {
+  const { settings } = await openAzureDeployments(page);
+  const addButton = settings.dialog().getByRole("button", { name: "Add deployment" });
+
+  await addButton.click();
+  await addButton.click();
+
+  await expect(settings.dialog().getByLabel("New deployment 3 name", { exact: true })).toHaveValue("");
+  await expect(settings.dialog().getByLabel("New deployment 4 name", { exact: true })).toHaveValue("");
+  await expect(settings.runsModelPicker("new deployment 3")).toBeVisible();
+  await expect(settings.runsModelPicker("new deployment 4")).toBeVisible();
+  await settings.removeDeploymentButton("new deployment 3").click();
+
+  await expect(settings.dialog().getByLabel("New deployment 3 name", { exact: true })).toHaveValue("");
+  await expect(settings.runsModelPicker("new deployment 4")).toHaveCount(0);
+});
+
 test("an Azure deployment is added by name and priced from the model it runs", async ({ page }) => {
   const { mock, settings } = await openAzureDeployments(page);
 
@@ -1050,6 +1117,19 @@ test("an Azure deployment name that breaks the rules or repeats keeps Save disab
   await settings.newDeploymentName().fill("prod-gpt4o-2");
   await expect(settings.saveModelsButton()).toBeEnabled();
   expect(mock.saves).toEqual([]);
+});
+
+test("an Azure deployment name of 64 characters is accepted and one of 65 is not", async ({ page }) => {
+  const { settings } = await openAzureDeployments(page);
+  const longest = "d".repeat(64);
+
+  await settings.addDeployment(longest);
+  await settings.chooseRunsModel(longest, "mini", "gpt-4o-mini");
+  await expect(settings.saveModelsButton()).toBeEnabled();
+  await settings.newDeploymentName().fill(`${longest}d`);
+
+  await expect(settings.dialog()).toContainText("A deployment name is 1 to 64 letters, digits or . _ - characters.");
+  await expect(settings.saveModelsButton()).toBeDisabled();
 });
 
 test("a new Azure deployment needs the model it runs before Save", async ({ page }) => {

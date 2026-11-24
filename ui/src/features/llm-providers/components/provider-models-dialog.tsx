@@ -15,21 +15,33 @@ export function ProviderModelsDialog({
   open,
   onOpenChange,
   onSaved,
+  returnFocusTo,
 }: {
   connection: LlmProviderConnection;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
+  /** Focused when the dialog closes. The dialog opens from a menu item that is gone by then, and
+   * Save is disabled while saving, so without it focus would fall to the page. */
+  returnFocusTo?: HTMLElement | null;
 }) {
   const { storedModels, catalogue, isLoadingModels, modelsError, reloadModels } = useLlmProviderModels(
     connection.slug,
+    open,
   );
   const isAzure = connection.providerType === "azure";
   const Editor = isAzure ? AzureDeploymentsEditor : ListedModelsPicker;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] sm:max-w-4xl">
+      <DialogContent
+        className="max-h-[85vh] sm:max-w-4xl"
+        onCloseAutoFocus={(event) => {
+          if (!returnFocusTo?.isConnected) return;
+          event.preventDefault();
+          returnFocusTo.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>
             {providerTitle(connection)} {isAzure ? "deployments" : "models"}
