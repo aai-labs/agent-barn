@@ -6,6 +6,7 @@ import pytest
 from api.domains.llm_providers.litellm_deployments import (
     LiteLLMDeployment,
     build_model_deployment,
+    key_fingerprint,
     model_route_id,
     model_route_prefix,
 )
@@ -22,7 +23,8 @@ PRICES = {
     "cache_read_input_token_cost": 3e-07,
     "cache_creation_input_token_cost": 3.75e-06,
 }
-MODEL_INFO = {"id": ROUTE_ID, "disable_background_health_check": True}
+API_KEY_FINGERPRINT = "5aee43ea47c03b00"
+MODEL_INFO = {"id": ROUTE_ID, "disable_background_health_check": True, "key_fingerprint": API_KEY_FINGERPRINT}
 
 
 def _connection(provider_type: ProviderType, slug: str | None = None, base_url: str | None = None):
@@ -126,6 +128,15 @@ def test_build_model_deployment_sends_prices_as_floats():
     deployment = build_model_deployment(_connection(ProviderType.OPENAI), _model("gpt-4o"), API_KEY)
 
     assert all(type(deployment.litellm_params[name]) is float for name in PRICES)
+
+
+def test_build_model_deployment_marks_the_route_with_its_keys_fingerprint_not_the_key():
+    deployment = build_model_deployment(_connection(ProviderType.OPENAI), _model("gpt-4o"), API_KEY)
+    other = build_model_deployment(_connection(ProviderType.OPENAI), _model("gpt-4o"), "sk-another-key")
+
+    assert deployment.model_info["key_fingerprint"] == key_fingerprint(API_KEY)
+    assert other.model_info["key_fingerprint"] != deployment.model_info["key_fingerprint"]
+    assert API_KEY not in str(deployment.model_info)
 
 
 def test_model_route_id_starts_with_its_connections_prefix():

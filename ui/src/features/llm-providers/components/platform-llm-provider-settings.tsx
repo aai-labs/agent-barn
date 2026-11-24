@@ -220,8 +220,8 @@ export function PlatformLlmProviderSettings() {
           title={`Delete ${providerTitle(deleting)}?`}
           description={
             BASE_URL_PROVIDER_TYPES.includes(deleting.providerType)
-              ? `Its key is removed, and ${deleting.slug} can't be used again as a slug.`
-              : `Its key is removed. You can add ${providerTitle(deleting)} again later with a new key.`
+              ? `Its key and models are removed, and ${deleting.slug} can't be used again as a slug.`
+              : `Its key and models are removed. You can add ${providerTitle(deleting)} again later with a new key.`
           }
           confirmLabel="Delete provider"
           pendingLabel="Deleting…"

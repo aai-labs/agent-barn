@@ -408,3 +408,21 @@ def test_list_model_deployments_raises_without_the_master_key(response, caplog):
     assert raised.value.__cause__ is None
     assert raised.value.__suppress_context__ is True
     assert MASTER_KEY not in caplog.text
+
+
+@pytest.mark.parametrize(("exists", "endpoint"), [(True, "update"), (False, "new")])
+def test_upsert_model_deployment_told_whether_the_route_exists_skips_the_lookup(exists, endpoint):
+    client = _client()
+
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get") as get:
+            with patch("api.infrastructure.litellm.client.httpx.post", return_value=_response(200)) as post:
+                client.upsert_model_deployment("openrouter/*", LITELLM_PARAMS, MODEL_INFO, exists=exists)
+
+    get.assert_not_called()
+    post.assert_called_once_with(
+        f"http://litellm:4000/model/{endpoint}",
+        json={"model_name": "openrouter/*", "litellm_params": LITELLM_PARAMS, "model_info": MODEL_INFO},
+        headers=HEADERS,
+        timeout=10,
+    )

@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -20,6 +21,7 @@ FIXED_API_BASES = {
     ProviderType.NOVITA: "https://api.novita.ai/openai",
 }
 AZURE_API_VERSION = "v1"
+KEY_FINGERPRINT_LENGTH = 16
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,12 @@ def model_route_prefix(connection_id: UUID) -> str:
 
 def model_route_id(connection_id: UUID, model_row_id: UUID) -> str:
     return f"{model_route_prefix(connection_id)}{model_row_id}"
+
+
+def key_fingerprint(api_key: str) -> str:
+    """A short digest of the key. LiteLLM lists a route without its key, so the route carries this
+    instead, to show which key it was written with."""
+    return hashlib.sha256(api_key.encode()).hexdigest()[:KEY_FINGERPRINT_LENGTH]
 
 
 def _provider_params(connection: LlmProviderConnection) -> dict:
@@ -66,5 +74,9 @@ def build_model_deployment(
             "cache_read_input_token_cost": float(model.cache_read_input_token_cost),
             "cache_creation_input_token_cost": float(model.cache_creation_input_token_cost),
         },
-        model_info={"id": model_route_id(connection.id, model.id), "disable_background_health_check": True},
+        model_info={
+            "id": model_route_id(connection.id, model.id),
+            "disable_background_health_check": True,
+            "key_fingerprint": key_fingerprint(api_key),
+        },
     )
