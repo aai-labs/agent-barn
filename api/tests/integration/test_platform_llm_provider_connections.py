@@ -311,6 +311,15 @@ def test_the_environment_keys_last_four_are_null_without_the_variable():
         assert_that(response.json()[0], has_entries(slug="openrouter", env_key_last4=None))
 
 
+@pytest.mark.parametrize("short_key", ["sk-1", "sk-12345"])
+def test_an_environment_key_of_8_characters_or_fewer_reports_no_last_four(short_key):
+    with given(_setup(admin, env_key(short_key))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json()[0], has_entries(slug="openrouter", env_key_configured=True, env_key_last4=None))
+
+
 def test_only_env_key_last4_carries_the_end_of_the_environment_key():
     with given(_setup(admin, env_key(ENV_KEY))) as context:
         _store_openrouter_key(context, OPENROUTER_KEY, context.admin_id)

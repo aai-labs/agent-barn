@@ -121,6 +121,7 @@ KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 PROVIDER_TYPE_NAMES = frozenset(provider_type.value for provider_type in ProviderType)
 CHAT_MODE = "chat"
+MIN_KEY_LENGTH_FOR_LAST4 = 8
 PRICE_STEP = Decimal(1).scaleb(-PRICE_SCALE)
 MAX_PRICE = Decimal(10) ** (PRICE_PRECISION - PRICE_SCALE)
 
@@ -153,6 +154,11 @@ def _checked_base_url(value: str) -> str:
     if parts.username is not None or parts.password is not None or "?" in base_url or "#" in base_url:
         raise HTTPException(422, BASE_URL_EXTRAS)
     return base_url
+
+
+def _env_key_last4(key: str) -> str | None:
+    """The key's last four characters, or None for a key so short that they would show most of it."""
+    return key[-4:] if len(key) > MIN_KEY_LENGTH_FOR_LAST4 else None
 
 
 def _exact(price: Decimal) -> Decimal:
@@ -637,5 +643,5 @@ class PlatformLlmProviderService:
             updated_at=connection.updated_at if has_api_key else None,
             updated_by=updated_by if has_api_key else None,
             env_key_configured=env_key_configured,
-            env_key_last4=self.config.openrouter_api_key[-4:] if env_key_configured else None,
+            env_key_last4=_env_key_last4(self.config.openrouter_api_key) if env_key_configured else None,
         )
