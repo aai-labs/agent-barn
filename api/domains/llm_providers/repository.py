@@ -21,8 +21,10 @@ from api.domains.llm_providers.models import (
     BASE_URL_PROVIDER_TYPES,
     OPENROUTER_SLUG,
     LlmProviderConnection,
+    LlmProviderConnectionOrganization,
     LlmProviderModel,
     LlmProviderModelPrices,
+    OrganizationAccess,
     ProviderType,
 )
 from api.domains.users.models import User
@@ -98,6 +100,20 @@ class LlmProviderRepository:
                 session.exec(select(LlmProviderConnection.id).where(LlmProviderConnection.slug == slug)).first()
                 is not None
             )
+
+    def access(self, slug: str, organization_id: UUID | None) -> tuple[OrganizationAccess, frozenset[UUID]] | None:
+        """The live connection's Organization access and, of its listed Organizations, only this one
+        if listed."""
+        with Session(self.delegate.engine) as session:
+            return self._access(session, slug, organization_id)
+
+    def access_held(
+        self, session: Session, slug: str, organization_id: UUID | None
+    ) -> tuple[OrganizationAccess, frozenset[UUID]] | None:
+        """As `access`, read in the caller's transaction after taking the connection's lock shared,
+        so no withdrawal can commit until that transaction ends."""
+        self._lock(session, slug, shared=True)
+        return self._access(session, slug, organization_id)
 
     def replace_key(
         self,
@@ -352,11 +368,31 @@ class LlmProviderRepository:
         )
 
     @staticmethod
-    def _lock(session: Session, slug: str) -> None:
+    def _lock(session: Session, slug: str, *, shared: bool = False) -> None:
+        function = "pg_advisory_xact_lock_shared" if shared else "pg_advisory_xact_lock"
         session.connection().execute(
-            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            sa.text(f"SELECT {function}(hashtextextended(:key, 0))"),
             {"key": f"llm_provider_connection:{slug}"},
         )
+
+    @staticmethod
+    def _access(
+        session: Session, slug: str, organization_id: UUID | None
+    ) -> tuple[OrganizationAccess, frozenset[UUID]] | None:
+        connection = session.exec(
+            select(LlmProviderConnection).where(
+                LlmProviderConnection.slug == slug, col(LlmProviderConnection.deleted_at).is_(None)
+            )
+        ).first()
+        if connection is None:
+            return None
+        listed = session.exec(
+            select(LlmProviderConnectionOrganization.organization_id).where(
+                LlmProviderConnectionOrganization.connection_id == connection.id,
+                LlmProviderConnectionOrganization.organization_id == organization_id,
+            )
+        ).all()
+        return connection.organization_access, frozenset(listed)
 
     def _stage(
         self,
