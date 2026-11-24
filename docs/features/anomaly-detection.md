@@ -177,7 +177,9 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
 
 Each check ends by asking the platform's decision model ([Decisions](decisions.md)) about
 the Anomalies that started in it, one call per Agent covering all of them (`api/domains/anomalies/classification.py`
-builds the request; `AnomalyCheckService._classify` asks). Per Anomaly it asks:
+builds the request; `AnomalyCheckService._classify` asks). The call is made after the
+check's transaction has committed, so a slow provider never holds the Organization's
+settings row locked, and each answer is stored in its own small write. Per Anomaly it asks:
 
 | Question | Type | Stored as |
 | --- | --- | --- |
