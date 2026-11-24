@@ -1338,6 +1338,49 @@ def test_a_route_failure_part_way_keeps_the_key_and_a_retry_leaves_one_route_per
         )
 
 
+def test_a_route_failure_part_way_puts_the_stored_key_and_base_url_back_on_every_route():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_second(**route):
+            written.append(route)
+            if len(written) == 2:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_second
+
+        failed = _replace(context, "azure-eu", base_url=FABRIKAM_BASE_URL)
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+        assert_that(context.routes, equal_to({**_other_routes(), **_azure_routes(context, AZURE_KEY, AZURE_BASE_URL)}))
+
+
+def test_a_route_failure_that_also_fails_to_restore_still_stores_nothing():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_after_first(**route):
+            written.append(route)
+            if len(written) > 1:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_after_first
+
+        failed = _replace(context, "azure-eu")
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+
 def test_deleting_a_connection_removes_its_routes_before_its_models():
     with given(_setup(admin, azure_with_routed_models)) as context:
         models_while_removing = []

@@ -1,3 +1,4 @@
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -77,6 +78,8 @@ from api.infrastructure.llm_provider_keys.checker import (
     LlmProviderUnreachable,
 )
 from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterError
+
+logger = logging.getLogger(__name__)
 
 SLUG_FORMAT = f"The slug must be at most {MAX_SLUG_LENGTH} lowercase letters, digits and single hyphens."
 SLUG_IS_A_PROVIDER = "The slug can't be a provider's name."
@@ -384,7 +387,7 @@ class PlatformLlmProviderService:
                 context.user.full_name or context.user.email,
                 seen_base_url=connection.base_url,
                 base_url=base_url,
-                apply=partial(self._route_key, api_key),
+                apply=partial(self._route_key, api_key, connection.base_url),
             )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
@@ -539,7 +542,15 @@ class PlatformLlmProviderService:
         if not accepted:
             raise HTTPException(422, "OpenRouter did not accept this key. Your key was not changed.")
 
-    def _route_key(self, api_key: str, connection: LlmProviderConnection, models: list[LlmProviderModel]) -> None:
+    def _route_key(
+        self,
+        api_key: str,
+        stored_base_url: str | None,
+        connection: LlmProviderConnection,
+        models: list[LlmProviderModel],
+    ) -> None:
+        """Route the new key; when that fails part way, put the stored key and base URL back on the
+        connection's routes, so no route keeps a key that was not saved."""
         try:
             if connection.provider_type == ProviderType.OPENROUTER:
                 self.litellm.upsert_model_deployment(
@@ -557,7 +568,26 @@ class PlatformLlmProviderService:
                     connection, [build_model_deployment(connection, model, api_key) for model in models]
                 )
         except LiteLLMError:
+            if connection.provider_type != ProviderType.OPENROUTER:
+                self._restore_routes(connection, models, stored_base_url)
             raise HTTPException(503, KEY_NOT_ROUTED) from None
+
+    def _restore_routes(
+        self, connection: LlmProviderConnection, models: list[LlmProviderModel], stored_base_url: str | None
+    ) -> None:
+        """Best effort: rewrite the routes with the stored key. `connection` is the locked row, which
+        still holds the stored key; its base URL is set back here, and the failed replacement rolls
+        the row back either way."""
+        if connection.api_key_encrypted is None:
+            return
+        connection.base_url = stored_base_url
+        stored_key = decrypt_token(connection.api_key_encrypted, self.config.agent_token_encryption_key)
+        try:
+            self._reconcile_routes(
+                connection, [build_model_deployment(connection, model, stored_key) for model in models]
+            )
+        except LiteLLMError:
+            logger.warning("Could not restore the stored key on the routes of connection %s", connection.id)
 
     def _remove_routes(self, connection: LlmProviderConnection) -> None:
         try:
