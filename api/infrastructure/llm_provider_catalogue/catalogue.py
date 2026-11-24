@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as LookupTimeout
@@ -13,6 +14,7 @@ from api.domains.llm_providers.models import MAX_MODEL_ID_LENGTH, MODEL_ID_PATTE
 from api.infrastructure.public_http import NonPublicDestination, PinnedRequest, pin_to_public_address
 
 TIMEOUT_SECONDS = 10
+LIST_DEADLINE_SECONDS = 30
 DNS_TIMEOUT_SECONDS = 5
 DNS_WORKERS = 4
 MAX_LIST_BYTES = 2 * 1024 * 1024
@@ -24,6 +26,8 @@ GEMINI_CHAT_METHOD = "generateContent"
 REFUSED_MESSAGE = "The provider did not accept the stored key"
 UNREACHABLE_MESSAGE = "The provider could not be reached to list its models"
 UNREADABLE_MESSAGE = "The provider's model list could not be read"
+BUSY_MESSAGE = "The provider is limiting requests"
+IDENTITY = "identity"
 REFUSED_STATUSES = frozenset({httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
 
 
@@ -44,6 +48,11 @@ class ProviderListUnreachable(ProviderListError):
 class ProviderListUnreadable(ProviderListError):
     def __init__(self) -> None:
         super().__init__(UNREADABLE_MESSAGE)
+
+
+class ProviderListBusy(ProviderListError):
+    def __init__(self) -> None:
+        super().__init__(BUSY_MESSAGE)
 
 
 def _entry_id(entry: dict) -> object:
@@ -151,12 +160,23 @@ def _document(body: bytes) -> dict:
     return document
 
 
-def _read_capped(response: httpx.Response) -> bytes:
+def _check_deadline(deadline: float) -> None:
+    if time.monotonic() > deadline:
+        raise ProviderListUnreachable
+
+
+def _read_capped(response: httpx.Response, deadline: float) -> bytes:
+    """The body as sent, refused when it is compressed, over the byte cap, or still arriving at the
+    deadline. A compressed body is refused rather than inflated, since a small one can inflate to
+    far more than the cap before the cap is checked."""
+    if response.headers.get("Content-Encoding", IDENTITY).strip().lower() != IDENTITY:
+        raise ProviderListUnreadable
     body = bytearray()
     for chunk in response.iter_bytes():
         body.extend(chunk)
         if len(body) > MAX_LIST_BYTES:
             raise ProviderListUnreadable
+        _check_deadline(deadline)
     return bytes(body)
 
 
@@ -168,9 +188,10 @@ class LlmProviderCatalogue:
     def list_models(self, provider_type: ProviderType, api_key: str, base_url: str | None = None) -> list[str]:
         """The ids the provider lists for this key that a model row can hold, sorted and each once.
 
-        Raises ``ProviderListRefused`` when the provider refuses the key, ``ProviderListUnreachable``
-        when it gives no list, and ``ProviderListUnreadable`` when its answer is not a model list or
-        is over the size, entry or page cap.
+        Raises ``ProviderListRefused`` when the provider refuses the key, ``ProviderListBusy`` when
+        it is limiting requests, ``ProviderListUnreachable`` when it gives no list or not all of it
+        within ``LIST_DEADLINE_SECONDS``, and ``ProviderListUnreadable`` when its answer is not a
+        model list, is compressed, or is over the size, entry or page cap.
         """
         endpoint = _ENDPOINTS.get(provider_type)
         if endpoint is None:
@@ -184,16 +205,19 @@ class LlmProviderCatalogue:
             **pinned.headers,
             **dict(endpoint.headers),
             endpoint.key_header: f"{endpoint.key_prefix}{api_key}",
+            "Accept-Encoding": IDENTITY,
         }
         refused = REFUSED_STATUSES | _EXTRA_REFUSED_STATUSES.get(provider_type, frozenset())
         model_ids: set[str] = set()
         entry_count = 0
         cursor: tuple[str, str] | None = None
+        deadline = time.monotonic() + LIST_DEADLINE_SECONDS
         try:
             with httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client:
                 for _ in range(MAX_LIST_PAGES):
                     params = endpoint.params if cursor is None else (*endpoint.params, cursor)
-                    document = self._page(client, pinned, headers, params, refused)
+                    _check_deadline(deadline)
+                    document = self._page(client, pinned, headers, params, refused, deadline)
                     entries = document.get(endpoint.list_key)
                     if not isinstance(entries, list):
                         raise ProviderListUnreadable
@@ -219,12 +243,15 @@ class LlmProviderCatalogue:
         headers: dict[str, str],
         params: tuple[tuple[str, str], ...],
         refused: frozenset[int],
+        deadline: float,
     ) -> dict:
         with client.stream("GET", pinned.url, params=params, headers=headers, extensions=pinned.extensions) as response:
             if response.status_code == httpx.codes.OK:
-                return _document(_read_capped(response))
+                return _document(_read_capped(response, deadline))
             if response.status_code in refused:
                 raise ProviderListRefused
+            if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+                raise ProviderListBusy
             raise ProviderListUnreachable
 
     def _pin(self, url: str) -> PinnedRequest:

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -9,10 +8,12 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 import { BASE_URL_PROVIDER_TYPES, KNOWN_PROVIDER_TYPES } from "../constants";
 import { useLlmProviderActions, useLlmProviderConnections } from "../hooks/use-llm-provider-connections";
-import type { KeyReplacement, LlmProviderConnection, NewLlmProviderConnection } from "../schemas";
-import { failureMessage } from "../utils";
+import type { KeyReplacement, LlmProviderConnection, NewLlmProviderConnection, ProviderType } from "../schemas";
+import { failureMessage, providerTitle } from "../utils";
 import { AddLlmProviderDialog } from "./add-llm-provider-dialog";
-import { ProviderCard } from "./provider-card";
+import { DeploymentProviderCard } from "./deployment-provider-card";
+import { ManageProviderMenu } from "./manage-provider-menu";
+import { AddProviderCard, ProviderCard } from "./provider-card";
 import { ProviderKeyDialog } from "./provider-key-dialog";
 import { ProviderModelsDialog } from "./provider-models-dialog";
 
@@ -32,6 +33,7 @@ export function PlatformLlmProviderSettings() {
     deleteError,
     resetDelete,
   } = useLlmProviderActions();
+  const [addType, setAddType] = useState<ProviderType | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [keyTarget, setKeyTarget] = useState<LlmProviderConnection | null>(null);
@@ -42,6 +44,7 @@ export function PlatformLlmProviderSettings() {
   const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsDialogKey, setModelsDialogKey] = useState(0);
+  const [menuTrigger, setMenuTrigger] = useState<HTMLElement | null>(null);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
   if (connectionsError || !connections)
@@ -53,11 +56,20 @@ export function PlatformLlmProviderSettings() {
       />
     );
 
-  const connected = new Set(connections.map((connection) => connection.providerType));
-  const available = [...KNOWN_PROVIDER_TYPES.filter((type) => !connected.has(type)), ...BASE_URL_PROVIDER_TYPES];
+  const ofType = (type: ProviderType) => connections.filter((connection) => connection.providerType === type);
+  const openRouter = ofType("openrouter")[0];
+  const deployment = openRouter?.envKeyConfigured ? openRouter : undefined;
+  const gridOpenRouter = deployment ? undefined : openRouter;
+  const countedTypes: LlmProviderConnection[][] = [
+    ...(gridOpenRouter ? [[gridOpenRouter]] : []),
+    ...KNOWN_PROVIDER_TYPES.map(ofType),
+    ofType("azure"),
+  ];
+  const connectedCount = countedTypes.filter((group) => group.some((connection) => connection.hasApiKey)).length;
 
-  function openAdd() {
+  function openAdd(type: ProviderType) {
     resetAdd();
+    setAddType(type);
     setAddKey((current) => current + 1);
     setAddOpen(true);
   }
@@ -65,10 +77,11 @@ export function PlatformLlmProviderSettings() {
   async function add(connection: NewLlmProviderConnection) {
     const saved = await addConnection(connection);
     setAddOpen(false);
-    toast.success(`${saved.name} added`);
+    toast.success(`${providerTitle(saved)} added`);
   }
 
-  function openKeyDialog(connection: LlmProviderConnection) {
+  function openKeyDialog(connection: LlmProviderConnection, trigger: HTMLElement | null = null) {
+    setMenuTrigger(trigger);
     resetReplace();
     setKeyTarget(connection);
     setKeyDialogKey((current) => current + 1);
@@ -78,10 +91,11 @@ export function PlatformLlmProviderSettings() {
   async function save(slug: string, replacement: KeyReplacement) {
     const saved = await replaceKey({ slug, ...replacement });
     setKeyOpen(false);
-    toast.success(`${saved.name} key saved`);
+    toast.success(`${providerTitle(saved)} key saved`);
   }
 
-  function openModels(connection: LlmProviderConnection) {
+  function openModels(connection: LlmProviderConnection, trigger: HTMLElement | null) {
+    setMenuTrigger(trigger);
     setModelsTarget(connection);
     setModelsDialogKey((current) => current + 1);
     setModelsOpen(true);
@@ -89,7 +103,7 @@ export function PlatformLlmProviderSettings() {
 
   function modelsSaved(connection: LlmProviderConnection) {
     setModelsOpen(false);
-    toast.success(`${connection.name} models saved`);
+    toast.success(`${providerTitle(connection)} models saved`);
   }
 
   function openDelete(connection: LlmProviderConnection) {
@@ -101,64 +115,101 @@ export function PlatformLlmProviderSettings() {
   async function confirmDelete(connection: LlmProviderConnection) {
     await deleteConnection(connection.slug);
     setDeleteOpen(false);
-    toast.success(`${connection.name} deleted`);
+    toast.success(`${providerTitle(connection)} deleted`);
+  }
+
+  function connectionCard(connection: LlmProviderConnection) {
+    const isOpenRouter = connection.providerType === "openrouter";
+    return (
+      <li key={connection.slug}>
+        <ProviderCard
+          connection={connection}
+          onReplaceKey={isOpenRouter ? () => openKeyDialog(connection) : undefined}
+          manage={
+            isOpenRouter ? undefined : (
+              <ManageProviderMenu
+                connection={connection}
+                onModels={(trigger) => openModels(connection, trigger)}
+                onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
+                onDelete={() => openDelete(connection)}
+              />
+            )
+          }
+        />
+      </li>
+    );
   }
 
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-        <p className="m-0 min-w-0 flex-1 basis-[24rem] text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+      {deployment && (
+        <section aria-labelledby="llm-providers-deployment-heading" className="mb-6">
+          <h2 id="llm-providers-deployment-heading" className="mb-3 mt-0 text-[0.95rem] font-semibold">
+            Set by this deployment
+          </h2>
+          <DeploymentProviderCard connection={deployment} onReplaceKey={() => openKeyDialog(deployment)} />
+        </section>
+      )}
+
+      <section aria-labelledby="llm-providers-grid-heading">
+        <h2 id="llm-providers-grid-heading" className="mb-1 mt-0 text-[0.95rem] font-semibold">
+          Providers · {connectedCount} of {countedTypes.length} connected
+        </h2>
+        <p className="mb-3 mt-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
           Each key is checked with its provider before it is saved, and only its last four characters are shown.
         </p>
-        <button type="button" className="af-btn af-btn-sm" onClick={openAdd}>
-          <Plus size={14} /> Add provider
-        </button>
-      </div>
-
-      <ul aria-label="LLM providers" className="m-0 flex list-none flex-col gap-3 p-0">
-        {connections.map((connection) => (
-          <li key={connection.slug}>
-            <ProviderCard
-              connection={connection}
-              onReplaceKey={() => openKeyDialog(connection)}
-              onModels={
-                connection.hasApiKey && connection.providerType !== "openrouter"
-                  ? () => openModels(connection)
-                  : undefined
-              }
-              onDelete={connection.providerType === "openrouter" ? undefined : () => openDelete(connection)}
-            />
+        <ul aria-label="LLM providers" className="m-0 grid list-none grid-cols-1 gap-3 p-0 md:grid-cols-3">
+          {gridOpenRouter && connectionCard(gridOpenRouter)}
+          {KNOWN_PROVIDER_TYPES.map((type) => {
+            const connection = ofType(type)[0];
+            if (connection) return connectionCard(connection);
+            return (
+              <li key={type}>
+                <AddProviderCard providerType={type} actionLabel="Add key" showStatus onAdd={() => openAdd(type)} />
+              </li>
+            );
+          })}
+          {BASE_URL_PROVIDER_TYPES.flatMap(ofType).map(connectionCard)}
+          <li>
+            <AddProviderCard providerType="azure" actionLabel="Add key" onAdd={() => openAdd("azure")} />
           </li>
-        ))}
-      </ul>
+          <li>
+            <AddProviderCard providerType="custom" actionLabel="Add endpoint" dashed onAdd={() => openAdd("custom")} />
+          </li>
+        </ul>
+      </section>
 
-      <AddLlmProviderDialog
-        key={addKey}
-        available={available}
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        onAdd={add}
-        isAdding={isAdding}
-        addError={addError}
-      />
+      {addType && (
+        <AddLlmProviderDialog
+          key={`add-${addKey}`}
+          providerType={addType}
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          onAdd={add}
+          isAdding={isAdding}
+          addError={addError}
+        />
+      )}
       {keyTarget && (
         <ProviderKeyDialog
-          key={keyDialogKey}
+          key={`key-${keyDialogKey}`}
           connection={keyTarget}
           open={keyOpen}
           onOpenChange={setKeyOpen}
           onSave={(replacement) => save(keyTarget.slug, replacement)}
           isSaving={isReplacing}
           saveError={replaceError}
+          returnFocusTo={menuTrigger}
         />
       )}
       {modelsTarget && (
         <ProviderModelsDialog
-          key={modelsDialogKey}
+          key={`models-${modelsDialogKey}`}
           connection={modelsTarget}
           open={modelsOpen}
           onOpenChange={setModelsOpen}
           onSaved={() => modelsSaved(modelsTarget)}
+          returnFocusTo={menuTrigger}
         />
       )}
       {deleting && (
@@ -166,11 +217,11 @@ export function PlatformLlmProviderSettings() {
           open={deleteOpen}
           onOpenChange={setDeleteOpen}
           variant="destructive"
-          title={`Delete ${deleting.name}?`}
+          title={`Delete ${providerTitle(deleting)}?`}
           description={
             BASE_URL_PROVIDER_TYPES.includes(deleting.providerType)
               ? `Its key and models are removed, and ${deleting.slug} can't be used again as a slug.`
-              : `Its key and models are removed. You can add ${deleting.name} again later with a new key.`
+              : `Its key and models are removed. You can add ${providerTitle(deleting)} again later with a new key.`
           }
           confirmLabel="Delete provider"
           pendingLabel="Deleting…"

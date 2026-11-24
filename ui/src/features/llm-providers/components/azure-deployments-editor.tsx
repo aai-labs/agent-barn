@@ -157,8 +157,9 @@ export function AzureDeploymentsEditor({
           {deployments.length} of {MAX_MODELS_PER_CONNECTION} deployments
         </span>
       </div>
-      <div className="max-h-[45vh] overflow-y-auto">
-        <table className="w-full border-collapse text-left text-[0.8rem]">
+      {/* Below the table's width, it scrolls sideways rather than squeeze names into a few letters a line. */}
+      <div className="max-h-[45vh] overflow-auto">
+        <table className="w-full min-w-[48rem] border-collapse text-left text-[0.8rem]">
           <thead>
             <tr>
               <th className="py-2 pr-3 font-medium">Deployment</th>
@@ -170,7 +171,9 @@ export function AzureDeploymentsEditor({
             </tr>
           </thead>
           <tbody>
-            {deployments.map((deployment) => {
+            {deployments.map((deployment, index) => {
+              // A new row has no name yet; its position tells it apart for a screen reader.
+              const rowName = deployment.name.trim() || `new deployment ${index + 1}`;
               const runs = deployment.runsModel ? listed.get(deployment.runsModel)?.prices : undefined;
               const keepsStored =
                 deployment.stored &&
@@ -185,7 +188,7 @@ export function AzureDeploymentsEditor({
                 <tr key={deployment.key} className="border-t" style={{ borderColor: "var(--line)" }}>
                   <td className="py-2 pr-3 align-top">
                     {deployment.stored ? (
-                      <span className="block min-w-0 break-all">
+                      <span className="block min-w-0 break-words">
                         <span className="block">{deployment.name}</span>
                         {showsChange && (
                           <>
@@ -212,7 +215,7 @@ export function AzureDeploymentsEditor({
                       <>
                         <input
                           className="af-input w-40"
-                          aria-label="New deployment name"
+                          aria-label={`New deployment ${index + 1} name`}
                           aria-invalid={problem !== null}
                           value={deployment.name}
                           onChange={(event) => update(deployment.key, { name: event.target.value })}
@@ -227,7 +230,7 @@ export function AzureDeploymentsEditor({
                   </td>
                   <td className="py-2 pr-3 align-top">
                     <RunsModelCombobox
-                      label={`Model ${deployment.name} runs`}
+                      label={`Model ${rowName} runs`}
                       models={models}
                       runsModel={deployment.runsModel}
                       other={deployment.other}
@@ -238,7 +241,7 @@ export function AzureDeploymentsEditor({
                   </td>
                   {deployment.other ? (
                     <TypedPriceCells
-                      modelId={deployment.name}
+                      modelId={rowName}
                       prices={deployment.typed}
                       onChange={(typed) => update(deployment.key, { typed })}
                     />
@@ -255,7 +258,7 @@ export function AzureDeploymentsEditor({
                     <button
                       type="button"
                       className="af-btn af-btn-sm"
-                      aria-label={`Remove ${deployment.name}`}
+                      aria-label={`Remove ${rowName}`}
                       onClick={() =>
                         setDeployments((current) => current.filter((row) => row.key !== deployment.key))
                       }

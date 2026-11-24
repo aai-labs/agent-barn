@@ -21,6 +21,7 @@ from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice
 from api.infrastructure.llm_provider_catalogue.catalogue import (
     LlmProviderCatalogue,
+    ProviderListBusy,
     ProviderListRefused,
     ProviderListUnreachable,
     ProviderListUnreadable,
@@ -45,6 +46,7 @@ OPENROUTER_KEY = "sk-or-v1-stored-key-a1b2"
 ANTHROPIC_KEY = "sk-ant-stored-key-c3d4"
 AZURE_KEY = "azure-stored-key-e5f6"
 ENV_KEY = "sk-or-v1-environment-key-9z8y"
+ENV_KEY_LAST4 = "9z8y"
 ADMIN_NAME = "Platform Person"
 AZURE_BASE_URL = "https://contoso.openai.azure.com"
 NEW_KEY = "sk-new-provider-key-g7h8"
@@ -82,6 +84,7 @@ GPT4O_LISTED = ("0.0000025", "0.00001", "0.00000125", "0.0000025")
 ANTHROPIC_HAS_NO_KEY = "Anthropic has no key."
 ANTHROPIC_REFUSED_STORED_KEY = "Anthropic did not accept the stored key. Replace the key, then try again."
 ANTHROPIC_LIST_UNREACHABLE = "Anthropic could not be reached to list its models."
+ANTHROPIC_LIST_BUSY = "Anthropic is limiting requests. Try again in a minute."
 ANTHROPIC_LIST_UNREADABLE = "Anthropic's model list could not be read."
 PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
 MODELS_CHANGED_EVENT = "platform.llm_provider.models_changed"
@@ -229,6 +232,7 @@ def test_a_fresh_platform_lists_openrouter_alone_without_a_key():
                         "updated_at": None,
                         "updated_by": None,
                         "env_key_configured": False,
+                        "env_key_last4": None,
                     }
                 ]
             ),
@@ -285,6 +289,55 @@ def test_only_openrouter_reports_the_environment_key():
             [(item["slug"], item["env_key_configured"]) for item in response.json()],
             equal_to([("openrouter", True), ("anthropic", False)]),
         )
+
+
+def test_only_openrouter_reports_the_environment_keys_last_four():
+    with given(_setup(admin, env_key(ENV_KEY))) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            [(item["slug"], item["env_key_last4"]) for item in response.json()],
+            equal_to([("openrouter", ENV_KEY_LAST4), ("anthropic", None)]),
+        )
+
+
+def test_the_environment_keys_last_four_are_null_without_the_variable():
+    with given(_setup(admin, env_key(""))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json()[0], has_entries(slug="openrouter", env_key_last4=None))
+
+
+@pytest.mark.parametrize("short_key", ["sk-1", "sk-12345"])
+def test_an_environment_key_of_8_characters_or_fewer_reports_no_last_four(short_key):
+    with given(_setup(admin, env_key(short_key))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json()[0], has_entries(slug="openrouter", env_key_configured=True, env_key_last4=None))
+
+
+def test_only_env_key_last4_carries_the_end_of_the_environment_key():
+    with given(_setup(admin, env_key(ENV_KEY))) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY, context.admin_id)
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert ENV_KEY not in response.text
+        carriers = [
+            (item["slug"], field)
+            for item in response.json()
+            for field, value in item.items()
+            if isinstance(value, str) and ENV_KEY_LAST4 in value
+        ]
+        assert_that(carriers, equal_to([("openrouter", "env_key_last4")]))
+        assert_that(response.text.count(ENV_KEY_LAST4), equal_to(1))
 
 
 def test_the_list_never_carries_a_key_or_its_ciphertext():
@@ -1309,6 +1362,49 @@ def test_a_route_failure_part_way_keeps_the_key_and_a_retry_leaves_one_route_per
         )
 
 
+def test_a_route_failure_part_way_puts_the_stored_key_and_base_url_back_on_every_route():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_second(**route):
+            written.append(route)
+            if len(written) == 2:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_second
+
+        failed = _replace(context, "azure-eu", base_url=FABRIKAM_BASE_URL)
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+        assert_that(context.routes, equal_to({**_other_routes(), **_azure_routes(context, AZURE_KEY, AZURE_BASE_URL)}))
+
+
+def test_a_route_failure_that_also_fails_to_restore_still_stores_nothing():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_after_first(**route):
+            written.append(route)
+            if len(written) > 1:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_after_first
+
+        failed = _replace(context, "azure-eu")
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+
 def test_deleting_a_connection_removes_its_routes_before_its_models():
     with given(_setup(admin, azure_with_routed_models)) as context:
         models_while_removing = []
@@ -1670,6 +1766,7 @@ def test_a_custom_connection_is_listed_at_its_base_url_without_prices():
     [
         (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
         (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListBusy(), 503, ANTHROPIC_LIST_BUSY),
         (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
     ],
 )
@@ -2167,6 +2264,7 @@ def test_a_model_the_provider_or_litellm_cannot_back_is_refused(models, detail):
     [
         (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
         (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListBusy(), 503, ANTHROPIC_LIST_BUSY),
         (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
     ],
 )

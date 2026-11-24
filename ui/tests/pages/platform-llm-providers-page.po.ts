@@ -11,8 +11,24 @@ export class PlatformLlmProvidersPage {
     return this.page.getByRole("list", { name: "LLM providers" });
   }
 
+  providersHeading() {
+    return this.page.getByRole("heading", { name: /^Providers · \d+ of \d+ connected$/ });
+  }
+
   card() {
     return this.providerCard("OpenRouter");
+  }
+
+  deploymentSection() {
+    return this.page.getByRole("region", { name: "Set by this deployment", exact: true });
+  }
+
+  deploymentCard() {
+    return this.deploymentSection().getByRole("region", { name: "OpenRouter", exact: true });
+  }
+
+  deploymentKeyButton() {
+    return this.deploymentCard().getByRole("button", { name: /^(Replace key|Save a key)$/ });
   }
 
   toast(text: string) {
@@ -49,24 +65,54 @@ export class PlatformLlmProvidersPage {
     return this.providerList().getByRole("heading", { level: 3 });
   }
 
-  replaceKeyButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Replace key" });
+  cardButtons(name: string) {
+    return this.providerCard(name).getByRole("button");
   }
 
-  deleteButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Delete" });
+  manageButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: `Manage ${name}`, exact: true });
+  }
+
+  manageMenu() {
+    return this.page.getByRole("menu");
+  }
+
+  manageActions() {
+    return this.manageMenu().getByRole("menuitem");
+  }
+
+  manageAction(action: "Models" | "Replace key" | "Save a key" | "Delete") {
+    return this.manageMenu().getByRole("menuitem", { name: action, exact: true });
+  }
+
+  async manage(name: string, action: "Models" | "Replace key" | "Delete") {
+    await this.manageButton(name).click();
+    await this.manageAction(action).click();
+    await expect(this.manageMenu()).toHaveCount(0);
+  }
+
+  async openReplaceKey(name: string) {
+    await this.manage(name, "Replace key");
+  }
+
+  async openDelete(name: string) {
+    await this.manage(name, "Delete");
+  }
+
+  async openModels(name: string) {
+    await this.manage(name, "Models");
   }
 
   addProviderButton() {
     return this.page.getByRole("button", { name: "Add provider" });
   }
 
-  providerSelect() {
-    return this.dialog().getByRole("combobox", { name: "Provider" });
+  addKeyButton(name: string) {
+    return this.providerCard(name).getByRole("button", { name: /^(Add key|Add endpoint)$/ });
   }
 
-  providerOptions() {
-    return this.page.getByRole("option");
+  providerSelect() {
+    return this.dialog().getByRole("combobox", { name: "Provider" });
   }
 
   nameInput() {
@@ -85,14 +131,8 @@ export class PlatformLlmProvidersPage {
     return this.dialog().getByLabel("API key", { exact: true });
   }
 
-  async chooseProvider(label: string) {
-    await this.providerSelect().click();
-    await this.page.getByRole("option", { name: label, exact: true }).click();
-  }
-
-  async addProvider(input: { provider?: string; key: string; name?: string; slug?: string; baseUrl?: string }) {
-    await this.addProviderButton().click();
-    if (input.provider) await this.chooseProvider(input.provider);
+  async addProvider(input: { provider: string; key: string; name?: string; slug?: string; baseUrl?: string }) {
+    await this.addKeyButton(input.provider).click();
     if (input.name !== undefined) await this.nameInput().fill(input.name);
     if (input.slug !== undefined) await this.slugInput().fill(input.slug);
     if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);
@@ -101,7 +141,7 @@ export class PlatformLlmProvidersPage {
   }
 
   async replaceKey(name: string, input: { key: string; baseUrl?: string }) {
-    await this.replaceKeyButton(name).click();
+    await this.openReplaceKey(name);
     if (input.baseUrl !== undefined) await this.baseUrlInput().fill(input.baseUrl);
     await this.keyInput(name).fill(input.key);
     await this.dialog().getByRole("button", { name: "Save key" }).click();
@@ -109,10 +149,6 @@ export class PlatformLlmProvidersPage {
 
   async confirmDelete() {
     await this.dialog().getByRole("button", { name: "Delete provider" }).click();
-  }
-
-  modelsButton(name: string) {
-    return this.providerCard(name).getByRole("button", { name: "Models", exact: true });
   }
 
   modelCheckbox(modelId: string) {
@@ -179,7 +215,7 @@ export class PlatformLlmProvidersPage {
   }
 
   newDeploymentName() {
-    return this.dialog().getByLabel("New deployment name", { exact: true }).last();
+    return this.dialog().getByLabel(/^New deployment \d+ name$/).last();
   }
 
   async addDeployment(name: string) {

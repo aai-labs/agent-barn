@@ -1,8 +1,14 @@
 import { ApiError } from "@/shared/api/error/errors";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
-import { POSITIVE_PRICE_FIELDS, PRICE_FIELDS, TYPED_PRICE_PATTERN } from "./constants";
-import type { LlmProviderCatalogueEntry, ModelPrices } from "./schemas";
+import {
+  BASE_URL_PROVIDER_TYPES,
+  POSITIVE_PRICE_FIELDS,
+  PRICE_FIELDS,
+  PROVIDER_TYPE_LABELS,
+  TYPED_PRICE_PATTERN,
+} from "./constants";
+import type { LlmProviderCatalogueEntry, LlmProviderConnection, ModelPrices } from "./schemas";
 
 const MILLION_DIGITS = 6;
 
@@ -18,6 +24,17 @@ function normalized(value: string): string {
   const integer = whole.replace(/^0+(?=\d)/, "");
   const rest = fraction.replace(/0+$/, "");
   return rest ? `${integer}.${rest}` : integer;
+}
+
+/** A dialog's `onCloseAutoFocus` that gives focus to `target`, the Manage button a dialog opened
+ * from. The menu item it opened from is gone by then, and Save is disabled while saving, so without
+ * it focus falls to the page. With no target, the dialog's own focus return applies. */
+export function returnFocusTo(target: HTMLElement | null | undefined) {
+  return (event: Event) => {
+    if (!target?.isConnected) return;
+    event.preventDefault();
+    target.focus();
+  };
 }
 
 export function perMillion(price: string): string {
@@ -78,6 +95,12 @@ export function perTokenPrices(typed: ModelPrices): ModelPrices {
     cacheReadInputTokenCost: perToken(typed.cacheReadInputTokenCost.trim()),
     cacheCreationInputTokenCost: perToken(typed.cacheCreationInputTokenCost.trim()),
   };
+}
+
+export function providerTitle(connection: Pick<LlmProviderConnection, "name" | "providerType">): string {
+  return BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
+    ? connection.name
+    : PROVIDER_TYPE_LABELS[connection.providerType];
 }
 
 export function failureMessage(error: unknown): string {

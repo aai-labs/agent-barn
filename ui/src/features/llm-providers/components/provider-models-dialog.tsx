@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 
 import { useLlmProviderModels } from "../hooks/use-llm-provider-models";
 import type { LlmProviderConnection } from "../schemas";
-import { failureMessage } from "../utils";
+import { failureMessage, providerTitle, returnFocusTo as focusOnClose } from "../utils";
 import { AzureDeploymentsEditor } from "./azure-deployments-editor";
 import { ListedModelsPicker } from "./listed-models-picker";
 
@@ -15,24 +15,31 @@ export function ProviderModelsDialog({
   open,
   onOpenChange,
   onSaved,
+  returnFocusTo,
 }: {
   connection: LlmProviderConnection;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
+  /** Focused when the dialog closes; see `returnFocusTo` in utils. */
+  returnFocusTo?: HTMLElement | null;
 }) {
   const { storedModels, catalogue, isLoadingModels, modelsError, reloadModels } = useLlmProviderModels(
     connection.slug,
+    open,
   );
   const isAzure = connection.providerType === "azure";
   const Editor = isAzure ? AzureDeploymentsEditor : ListedModelsPicker;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] sm:max-w-4xl">
+      <DialogContent
+        className="max-h-[85vh] sm:max-w-4xl"
+        onCloseAutoFocus={focusOnClose(returnFocusTo)}
+      >
         <DialogHeader>
           <DialogTitle>
-            {connection.name} {isAzure ? "deployments" : "models"}
+            {providerTitle(connection)} {isAzure ? "deployments" : "models"}
           </DialogTitle>
           <DialogDescription>
             {isAzure

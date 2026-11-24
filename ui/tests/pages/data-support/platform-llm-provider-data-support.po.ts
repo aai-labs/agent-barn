@@ -6,6 +6,7 @@ export type OpenRouterConnectionBody = {
   updated_at: string | null;
   updated_by: string | null;
   env_key_configured: boolean;
+  env_key_last4: string | null;
 };
 
 export type LlmProviderConnectionBody = OpenRouterConnectionBody & {
@@ -218,6 +219,22 @@ export const SAVED_KEY: OpenRouterConnectionBody = {
   updated_at: "2026-11-16T09:30:00Z",
   updated_by: "Platform Person",
   env_key_configured: false,
+  env_key_last4: null,
+};
+
+export const ENVIRONMENT_KEY_ONLY: OpenRouterConnectionBody = {
+  has_api_key: false,
+  api_key_last4: null,
+  updated_at: null,
+  updated_by: null,
+  env_key_configured: true,
+  env_key_last4: "9z8y",
+};
+
+export const SAVED_AND_ENVIRONMENT_KEYS: OpenRouterConnectionBody = {
+  ...SAVED_KEY,
+  env_key_configured: true,
+  env_key_last4: "9z8y",
 };
 
 export const ANTHROPIC_CONNECTION: LlmProviderConnectionBody = {
@@ -230,6 +247,7 @@ export const ANTHROPIC_CONNECTION: LlmProviderConnectionBody = {
   updated_at: "2026-11-16T09:30:00Z",
   updated_by: "Platform Person",
   env_key_configured: false,
+  env_key_last4: null,
 };
 
 export const AZURE_CONNECTION: LlmProviderConnectionBody = {
@@ -242,6 +260,7 @@ export const AZURE_CONNECTION: LlmProviderConnectionBody = {
   updated_at: "2026-11-16T09:30:00Z",
   updated_by: "Platform Person",
   env_key_configured: false,
+  env_key_last4: null,
 };
 
 export const CUSTOM_CONNECTION: LlmProviderConnectionBody = {
@@ -254,6 +273,7 @@ export const CUSTOM_CONNECTION: LlmProviderConnectionBody = {
   updated_at: "2026-11-16T09:30:00Z",
   updated_by: "Platform Person",
   env_key_configured: false,
+  env_key_last4: null,
 };
 
 const KNOWN_PROVIDER_NAMES: Record<string, string> = {
@@ -282,6 +302,8 @@ export class PlatformLlmProviderDataSupport {
       listStatus?: number;
       saveStatus?: number;
       saveDetail?: string;
+      /** How long a key save takes to answer, as a real provider check does. */
+      saveDelayMs?: number;
       addStatus?: number;
       addDetail?: string;
       deleteStatus?: number;
@@ -331,6 +353,7 @@ export class PlatformLlmProviderDataSupport {
           updated_at: "2026-11-16T10:00:00Z",
           updated_by: "Platform Person",
           env_key_configured: false,
+          env_key_last4: null,
         };
         rows.push(added);
         return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(added) });
@@ -346,6 +369,7 @@ export class PlatformLlmProviderDataSupport {
       const slug = slugOf(route.request().url());
       const body = route.request().postDataJSON() as KeyBody;
       writes.push({ slug, body });
+      if (options.saveDelayMs) await new Promise((resolve) => setTimeout(resolve, options.saveDelayMs));
       if (saveStatus >= 400) return route.fulfill(refuse(saveStatus, saveDetail));
       const index = rows.findIndex((row) => row.slug === slug);
       rows[index] = {

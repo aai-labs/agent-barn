@@ -1,3 +1,4 @@
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -65,6 +66,7 @@ from api.infrastructure.litellm.client import (
 )
 from api.infrastructure.llm_provider_catalogue.catalogue import (
     LlmProviderCatalogue,
+    ProviderListBusy,
     ProviderListRefused,
     ProviderListUnreachable,
     ProviderListUnreadable,
@@ -76,6 +78,8 @@ from api.infrastructure.llm_provider_keys.checker import (
     LlmProviderUnreachable,
 )
 from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterError
+
+logger = logging.getLogger(__name__)
 
 SLUG_FORMAT = f"The slug must be at most {MAX_SLUG_LENGTH} lowercase letters, digits and single hyphens."
 SLUG_IS_A_PROVIDER = "The slug can't be a provider's name."
@@ -117,6 +121,7 @@ KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed
 ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 PROVIDER_TYPE_NAMES = frozenset(provider_type.value for provider_type in ProviderType)
 CHAT_MODE = "chat"
+MIN_KEY_LENGTH_FOR_LAST4 = 8
 PRICE_STEP = Decimal(1).scaleb(-PRICE_SCALE)
 MAX_PRICE = Decimal(10) ** (PRICE_PRECISION - PRICE_SCALE)
 
@@ -149,6 +154,11 @@ def _checked_base_url(value: str) -> str:
     if parts.username is not None or parts.password is not None or "?" in base_url or "#" in base_url:
         raise HTTPException(422, BASE_URL_EXTRAS)
     return base_url
+
+
+def _env_key_last4(key: str) -> str | None:
+    """The key's last four characters, or None for a key so short that they would show most of it."""
+    return key[-4:] if len(key) > MIN_KEY_LENGTH_FOR_LAST4 else None
 
 
 def _exact(price: Decimal) -> Decimal:
@@ -383,7 +393,7 @@ class PlatformLlmProviderService:
                 context.user.full_name or context.user.email,
                 seen_base_url=connection.base_url,
                 base_url=base_url,
-                apply=partial(self._route_key, api_key),
+                apply=partial(self._route_key, api_key, connection.base_url),
             )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
@@ -521,6 +531,8 @@ class PlatformLlmProviderService:
             raise HTTPException(
                 409, f"{name} did not accept the stored key. Replace the key, then try again."
             ) from None
+        except ProviderListBusy:
+            raise HTTPException(503, f"{name} is limiting requests. Try again in a minute.") from None
         except ProviderListUnreachable:
             raise HTTPException(503, f"{name} could not be reached to list its models.") from None
         except ProviderListUnreadable:
@@ -536,7 +548,15 @@ class PlatformLlmProviderService:
         if not accepted:
             raise HTTPException(422, "OpenRouter did not accept this key. Your key was not changed.")
 
-    def _route_key(self, api_key: str, connection: LlmProviderConnection, models: list[LlmProviderModel]) -> None:
+    def _route_key(
+        self,
+        api_key: str,
+        stored_base_url: str | None,
+        connection: LlmProviderConnection,
+        models: list[LlmProviderModel],
+    ) -> None:
+        """Route the new key; when that fails part way, put the stored key and base URL back on the
+        connection's routes, so no route keeps a key that was not saved."""
         try:
             if connection.provider_type == ProviderType.OPENROUTER:
                 self.litellm.upsert_model_deployment(
@@ -554,7 +574,26 @@ class PlatformLlmProviderService:
                     connection, [build_model_deployment(connection, model, api_key) for model in models]
                 )
         except LiteLLMError:
+            if connection.provider_type != ProviderType.OPENROUTER:
+                self._restore_routes(connection, models, stored_base_url)
             raise HTTPException(503, KEY_NOT_ROUTED) from None
+
+    def _restore_routes(
+        self, connection: LlmProviderConnection, models: list[LlmProviderModel], stored_base_url: str | None
+    ) -> None:
+        """Best effort: rewrite the routes with the stored key. `connection` is the locked row, which
+        still holds the stored key; its base URL is set back here, and the failed replacement rolls
+        the row back either way."""
+        if connection.api_key_encrypted is None:
+            return
+        connection.base_url = stored_base_url
+        stored_key = decrypt_token(connection.api_key_encrypted, self.config.agent_token_encryption_key)
+        try:
+            self._reconcile_routes(
+                connection, [build_model_deployment(connection, model, stored_key) for model in models]
+            )
+        except LiteLLMError:
+            logger.warning("Could not restore the stored key on the routes of connection %s", connection.id)
 
     def _remove_routes(self, connection: LlmProviderConnection) -> None:
         try:
@@ -594,6 +633,7 @@ class PlatformLlmProviderService:
 
     def _to_read(self, connection: LlmProviderConnection, updated_by: str | None) -> LlmProviderConnectionRead:
         has_api_key = connection.api_key_encrypted is not None
+        env_key_configured = bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG
         return LlmProviderConnectionRead(
             slug=connection.slug,
             name=connection.name,
@@ -603,5 +643,6 @@ class PlatformLlmProviderService:
             api_key_last4=connection.api_key_last4,
             updated_at=connection.updated_at if has_api_key else None,
             updated_by=updated_by if has_api_key else None,
-            env_key_configured=bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG,
+            env_key_configured=env_key_configured,
+            env_key_last4=_env_key_last4(self.config.openrouter_api_key) if env_key_configured else None,
         )

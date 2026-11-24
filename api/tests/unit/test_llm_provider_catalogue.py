@@ -2,6 +2,7 @@ import gzip
 import json
 import socket
 import threading
+import zlib
 from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,7 @@ from hamcrest import assert_that, equal_to, none
 from api.domains.llm_providers.models import ProviderType
 from api.infrastructure.llm_provider_catalogue.catalogue import (
     LlmProviderCatalogue,
+    ProviderListBusy,
     ProviderListRefused,
     ProviderListUnreachable,
     ProviderListUnreadable,
@@ -23,6 +25,7 @@ CUSTOM_BASE_URL = "https://models.example.com/v1"
 RESOLVE = "api.infrastructure.public_http.socket.getaddrinfo"
 HTTPX_CLIENT = "api.infrastructure.llm_provider_catalogue.catalogue.httpx.Client"
 DNS_TIMEOUT = "api.infrastructure.llm_provider_catalogue.catalogue.DNS_TIMEOUT_SECONDS"
+CLOCK = "api.infrastructure.llm_provider_catalogue.catalogue.time.monotonic"
 REAL_HTTPX_CLIENT = httpx.Client
 PROVIDER_LISTS = [
     (ProviderType.OPENAI, None, "https://api.openai.com/v1/models", "data"),
@@ -181,6 +184,50 @@ def test_a_small_compressed_body_that_decodes_over_2_mib_is_unreadable():
         _list(ProviderType.OPENAI)
 
 
+def test_the_list_is_asked_uncompressed():
+    provider = _Provider(body=_listing("gpt-4o"))
+
+    with _answering(provider):
+        _list(ProviderType.OPENAI)
+
+    assert_that(provider.requests[0].headers["Accept-Encoding"], equal_to("identity"))
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate"])
+def test_a_compressed_list_is_unreadable_even_when_it_would_be_a_valid_list(encoding):
+    headers = {"Content-Type": "application/json", "Content-Encoding": encoding}
+    body = gzip.compress(_listing("gpt-4o")) if encoding == "gzip" else zlib.compress(_listing("gpt-4o"))
+
+    with _answering(_Provider(body=body, headers=headers)), pytest.raises(ProviderListUnreadable):
+        _list(ProviderType.OPENAI)
+
+
+def test_a_list_still_arriving_after_30_seconds_is_unreachable():
+    started, late = 1000.0, 1000.0 + 31
+
+    with (
+        _answering(_Provider(body=_listing("gpt-4o"))),
+        patch(CLOCK, side_effect=[started, started, late]),
+        pytest.raises(ProviderListUnreachable),
+    ):
+        _list(ProviderType.OPENAI)
+
+
+def test_a_next_page_is_not_asked_after_30_seconds():
+    started, late = 1000.0, 1000.0 + 31
+    first = _page("data", [{"id": "claude-a"}], has_more=True, last_id="claude-a")
+    provider = _Provider(pages=[first, _page("data", [{"id": "claude-b"}], has_more=False)])
+
+    with (
+        _answering(provider),
+        patch(CLOCK, side_effect=[started, started, started, late]),
+        pytest.raises(ProviderListUnreachable),
+    ):
+        _list(ProviderType.ANTHROPIC)
+
+    assert_that(len(provider.requests), equal_to(1))
+
+
 @pytest.mark.parametrize(
     "body",
     [b"<html>not json</html>", b"[]", b'{"models": []}', b'{"data": {"id": "gpt-4o"}}', b'"data"'],
@@ -214,7 +261,13 @@ def test_any_other_anthropic_answer_is_unreachable(status_code):
         _list(ProviderType.ANTHROPIC)
 
 
-@pytest.mark.parametrize("status_code", [400, 404, 429, 500, 503])
+@pytest.mark.parametrize(("provider_type", "base_url"), PROVIDERS)
+def test_a_provider_limiting_requests_is_busy(provider_type, base_url):
+    with _answering(_Provider(429)), pytest.raises(ProviderListBusy):
+        _list(provider_type, base_url)
+
+
+@pytest.mark.parametrize("status_code", [400, 404, 500, 503])
 def test_an_answer_that_is_not_a_list_or_a_refusal_is_unreachable(status_code):
     with _answering(_Provider(status_code)), pytest.raises(ProviderListUnreachable):
         _list(ProviderType.OPENAI)
