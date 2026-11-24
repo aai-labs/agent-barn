@@ -369,6 +369,7 @@ test("Platform Admin deletes a connection only after confirming", async ({ page 
 
   await settings.deleteButton("Anthropic").click();
   await expect(settings.dialog().getByRole("heading", { name: "Delete Anthropic?" })).toBeVisible();
+  await expect(settings.dialog()).toContainText("Its key and models are removed.");
   await settings.cancelDialog();
   expect(mock.deletes).toEqual([]);
   await expect(settings.providerCard("Anthropic")).toHaveCount(1);
@@ -394,7 +395,7 @@ test("deleting an Azure connection warns that its slug can't be used again", asy
 
   await settings.deleteButton("Azure Europe").click();
 
-  await expect(settings.dialog()).toContainText("azure-eu can't be used again");
+  await expect(settings.dialog()).toContainText("Its key and models are removed, and azure-eu can't be used again");
 });
 
 test("a refused delete keeps the confirmation open with the API's message", async ({ page }) => {
