@@ -2833,6 +2833,7 @@ class AgentService:
                 max_turns=agent.max_turns,
                 slack_listen_in=native_slack[0].get("listen_in_channel_ids") if native_slack else None,
                 discord_listen_in=native_discord.settings.get("listen_in_channel_ids") if native_discord else None,
+                custom_slack=bool(native_slack and native_slack[0].get("api_url")),
             )
             if agent.parent_agent_id is not None:
                 hermes_cfg = bot_gateway_config(

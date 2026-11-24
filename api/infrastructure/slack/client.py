@@ -14,7 +14,7 @@ from api.infrastructure.slack.transport import request_json
 # surface, regardless of how the internals are split across modules.
 __all__ = ["SlackClient", "SlackFetchError", "clear_directory_cache"]
 
-_BASE = "https://slack.com/api"
+SLACK_API_URL = "https://slack.com/api"
 _PAGE_SIZE = 200
 
 
@@ -23,32 +23,38 @@ class SlackClient:
 
     The bot token authenticates directory and channel calls; the optional app
     token is only used by validate_app_token (apps.connections.open needs the
-    app-level token, not the bot token).
+    app-level token, not the bot token). ``api_url`` points the client at a
+    Slack-compatible server instead of Slack itself.
     """
 
-    def __init__(self, bot_token: str, app_token: str | None = None) -> None:
+    def __init__(self, bot_token: str, app_token: str | None = None, *, api_url: str | None = None) -> None:
         self._bot_token = bot_token
         self._app_token = app_token
+        self._base = (api_url or SLACK_API_URL).rstrip("/")
+        # A custom server is user-supplied and called from the API server.
+        self._public_only = api_url is not None
 
     # --- transport helpers -------------------------------------------------
 
     def _get(self, method: str, params: dict) -> dict:
         return request_json(
             "GET",
-            f"{_BASE}/{method}",
+            f"{self._base}/{method}",
             headers={"Authorization": f"Bearer {self._bot_token}"},
             params=params,
+            public_only=self._public_only,
         )
 
     def _post(self, method: str, payload: dict) -> dict:
         return request_json(
             "POST",
-            f"{_BASE}/{method}",
+            f"{self._base}/{method}",
             headers={
                 "Authorization": f"Bearer {self._bot_token}",
                 "Content-Type": "application/json",
             },
             content=json.dumps(payload).encode(),
+            public_only=self._public_only,
         )
 
     def _iter_pages(self, method: str, params: dict, items_key: str) -> Iterator[list[dict]]:
@@ -83,19 +89,19 @@ class SlackClient:
         """Validates the app-level token via apps.connections.open. Returns (ok, error_message)."""
         return self._validate(self._app_token, "apps.connections.open", APP_TOKEN_ERRORS, "app")
 
-    @staticmethod
-    def _validate(token: str | None, method: str, error_map: dict[str, str], label: str) -> tuple[bool, str]:
+    def _validate(self, token: str | None, method: str, error_map: dict[str, str], label: str) -> tuple[bool, str]:
         if not token:
             return False, error_map["not_authed"]
         try:
             body = request_json(
                 "POST",
-                f"{_BASE}/{method}",
+                f"{self._base}/{method}",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                 },
                 content=b"",
+                public_only=self._public_only,
             )
         except Exception as exc:
             return False, f"Could not reach Slack to validate {label} token: {exc}"
@@ -135,7 +141,7 @@ class SlackClient:
     # --- cached directory listings -----------------------------------------
 
     def _token_key(self, kind: str) -> str:
-        digest = hashlib.sha256(self._bot_token.encode()).hexdigest()
+        digest = hashlib.sha256(f"{self._base} {self._bot_token}".encode()).hexdigest()
         return f"{kind}:{digest}"
 
     def _fetch_all_channels(self) -> list[dict]:

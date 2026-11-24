@@ -189,6 +189,18 @@ no base-image rebuild is required. Existing empty channel allowlists become
 closed on restart; review them before rollout as described in the
 [Communications changelog](../features/communications/CHANGELOG.md).
 
+A Slack Connection with a **Custom Slack server** (`api_url`) adds the
+`agentbarn-slack-compat` runtime plugin on Hermes. Hermes' Slack adapter and
+SDK hard-code `https://slack.com/api/`, so the plugin wraps aiohttp's
+`ClientSession._request` and sends calls whose bearer token is the Connection's
+bot or app token to `AGENTBARN_SLACK_COMPAT_API_URL` instead. Socket Mode
+follows because the server's `apps.connections.open` returns its own `wss://`
+URL. Calls with other tokens stay on Slack. It also adds the server's host to
+the adapter's trusted file hosts and makes downloads from that host use the
+Connection's bot token. `hermes_slack_compat_driver.py` guards these private
+Hermes and aiohttp seams on the pinned image. OpenClaw Agents and Bots cannot
+use a Custom Slack server.
+
 `SLACK_ALLOW_ALL_USERS=true` delegates Hermes' native user gate to the mandatory
 Connection-policy plugin and suppresses the otherwise misleading startup warning
 about having no user allowlists. The plugin remains authoritative for Slack;
