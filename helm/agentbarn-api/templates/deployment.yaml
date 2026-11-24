@@ -135,11 +135,19 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 12
+          # Startup can take over a minute: api/start.sh starts three servers that
+          # each load the app, under the CPU limit. Liveness waits for this probe,
+          # so a slow start isn't restarted and a hung API still is.
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 36
           livenessProbe:
             httpGet:
               path: /api/v1/health
               port: 8000
-            initialDelaySeconds: 30
             periodSeconds: 15
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
