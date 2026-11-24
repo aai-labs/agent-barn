@@ -164,6 +164,7 @@ class McpServerService:
         url_changed = "url" in draft.changed
         clear: frozenset[str] = frozenset()
         reconfigured = False
+        release_hold: UUID | None = None
         if is_oauth(draft.config):
             submitted = data.auth.model_dump(exclude_none=True) if data.auth is not None else {"type": "oauth"}
             draft.config["auth"], reconfigured = self._oauth_auth(
@@ -190,7 +191,7 @@ class McpServerService:
             elif (
                 draft.reaches_server
                 and not reconfigured
-                and self.repository.credential(server.id, server.agent_id) is not None
+                and (held := self.repository.credential(server.id, server.agent_id))
             ):
                 # A signed-in OAuth server is checked with its own sign-in, so a tool filter
                 # change can't expose tools whose OpenClaw names collide. Before any sign-in
@@ -202,10 +203,15 @@ class McpServerService:
                     draft.fields["tool_include"],
                     draft.fields["tool_exclude"],
                 )
+                # The filter now passes with this sign-in, so a sign-in held back for colliding
+                # tool names becomes usable once the change is saved.
+                release_hold = held.id
             for name, value in draft.fields.items():
                 setattr(server, name, value)
             server.credentials_encrypted = self._encrypt(draft.config)
             self._save(server, "updated", draft.config, draft.changed, context, clear=clear)
+            if release_hold is not None:
+                self.repository.clear_tool_filter_hold(release_hold)
 
     def delete_server(self, organization_id: UUID, server_id: UUID, context: CurrentUserContext) -> None:
         """Deleting removes the server's attachments with it; Agents lose it at the gateway at once."""
@@ -377,7 +383,7 @@ class McpServerService:
                 else "Sign in for the Organization to test this server.",
             )
         try:
-            token = self.broker.access_token(held.id, config)
+            token = self.broker.access_token(held.id, config, for_management=True)
         except CredentialUnavailable as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         return {"auth": {"type": "bearer", "token": token}, "headers": config.get("headers", [])}
@@ -388,6 +394,8 @@ class McpServerService:
             return McpSignInRead(status="not_signed_in")
         if held.status == McpCredentialStatus.NEEDS_SIGN_IN.value:
             return McpSignInRead(status="needs_sign_in", signed_in_at=held.updated_at)
+        if held.status == McpCredentialStatus.NEEDS_TOOL_FILTER.value:
+            return McpSignInRead(status="needs_tool_filter", signed_in_at=held.updated_at)
         return McpSignInRead(status="signed_in", signed_in_at=held.updated_at)
 
     def check_connection(self, url: str, config: dict) -> ProbeResult:

@@ -165,6 +165,11 @@ class McpCredentialStatus(str, enum.Enum):
     ACTIVE = "active"
     #: The OAuth server refused to refresh the grant; someone has to sign in again.
     NEEDS_SIGN_IN = "needs_sign_in"
+    #: Signed in, but the tools this account sees include several whose OpenClaw names
+    #: collide under the server's tool filter. Kept for testing the server and editing its
+    #: filter; Agents can't use it until a filter that passes is saved, or the sign-in is
+    #: made again and passes.
+    NEEDS_TOOL_FILTER = "needs_tool_filter"
 
 
 class McpServerCredential(BaseModel, table=True):
@@ -197,7 +202,9 @@ class McpServerCredential(BaseModel, table=True):
             ondelete="CASCADE",
         ),
         sa.CheckConstraint("kind IN ('static', 'oauth')", name="ck_mcp_server_credential_kind"),
-        sa.CheckConstraint("status IN ('active', 'needs_sign_in')", name="ck_mcp_server_credential_status"),
+        sa.CheckConstraint(
+            "status IN ('active', 'needs_sign_in', 'needs_tool_filter')", name="ck_mcp_server_credential_status"
+        ),
         # The Organization's credential for a token-based server lives on the server row.
         sa.CheckConstraint("agent_id IS NOT NULL OR kind = 'oauth'", name="ck_mcp_server_credential_org_oauth"),
         sa.Index(
@@ -420,7 +427,9 @@ class McpServerRead(DTO):
 
 
 class McpSignInRead(DTO):
-    status: Literal["signed_in", "needs_sign_in", "not_signed_in"]
+    #: `needs_tool_filter`: signed in, but Agents can't use it until the tool filter hides all
+    #: but one of each group of tools whose OpenClaw names collide.
+    status: Literal["signed_in", "needs_sign_in", "needs_tool_filter", "not_signed_in"]
     signed_in_at: datetime.datetime | None = None
 
 
@@ -471,6 +480,9 @@ class AgentMcpServerRead(DTO):
     credential_source: Literal["agent", "organization", "missing"]
     #: The credential in use needs someone to sign in (again) before the Agent can use it.
     needs_sign_in: bool
+    #: The credential in use is signed in, but sees tools whose OpenClaw names collide under
+    #: the server's filter, so the Agent can't use it until that is resolved.
+    needs_tool_filter: bool = False
     has_agent_credential: bool
     #: The shape of the Agent's own token-based credential, so it can be edited: never the
     #: token or a secret header's value. Null without one, or for an Agent sign-in.
@@ -519,6 +531,9 @@ class McpSignInComplete(DTO):
 class McpSignInResult(DTO):
     mcp_server_id: UUID
     agent_id: UUID | None
+    #: OpenClaw names several visible tools would share. When not empty the sign-in is saved
+    #: but Agents can't use it yet (`needs_tool_filter`).
+    tool_collisions: list[str] = Field(default_factory=list)
 
 
 class AgentMcpCredentialUpdate(DTO):

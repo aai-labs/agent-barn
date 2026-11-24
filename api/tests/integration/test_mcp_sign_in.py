@@ -24,7 +24,9 @@ from hamcrest import assert_that, contains_string, empty, equal_to, has_entries,
 from api.domains.events.catalog import AGENT_UPDATED, ORGANIZATION_MCP_SERVER_UPDATED
 from api.domains.events.models import OutboxMessage
 from api.domains.mcp_servers import oauth
-from api.domains.mcp_servers.models import McpServerCredential
+from api.domains.mcp_servers.broker import CredentialUnavailable, McpCredentialBroker
+from api.domains.mcp_servers.models import McpServerCredential, OrganizationMcpServer
+from api.domains.mcp_servers.probe import McpProbeError
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token
@@ -429,6 +431,106 @@ def test_a_signed_in_oauth_servers_tool_filter_is_checked_for_collisions(authori
                 path, json={"tool_exclude": [f"{long}_two"]}, headers=_auth(context.access_token)
             )
             assert_that(hidden.status_code, equal_to(status.HTTP_200_OK), hidden.text)
+
+
+_LONG = "x" * 60
+#: Two tools whose OpenClaw names, `notion__` plus the name cut at 64 characters, are the same.
+_COLLIDING_TOOLS = [f"{_LONG}_one", f"{_LONG}_two", "search"]
+
+
+def _credential_row(context, agent_id: UUID | None = None) -> McpServerCredential:
+    return next(row for row in _credentials(context) if row.agent_id == agent_id)
+
+
+def test_a_first_sign_in_whose_tools_collide_is_kept_but_not_usable_until_one_is_hidden(authorization_server):
+    probe = FakeProbe()
+    probe.tools = list(_COLLIDING_TOOLS)
+    with given(_given(probe)) as context:
+        server = _oauth_server(context)
+        path = f"{_SERVERS}/{server['id']}"
+
+        with when("the first sign-in completes, with every tool visible"):
+            completed = _complete(context, _state(_start(context, server["id"]).json()["authorize_url"]))
+
+        with then("the tools were checked with the new token, and the collision is reported"):
+            assert_that(completed.status_code, equal_to(status.HTTP_200_OK), completed.text)
+            assert_that(probe.calls[-1][1]["auth"], has_entries(type="bearer", token="access-1"))
+            assert_that(completed.json()["tool_collisions"], has_length(1))
+
+        with then("the sign-in is kept for managing the server, but no Agent can use it"):
+            assert_that(_credential_row(context).status, equal_to("needs_tool_filter"))
+            listed = context.client.get(path, headers=_auth(context.access_token)).json()
+            assert_that(listed["sign_in"], has_entries(status="needs_tool_filter"))
+            row = context.injector.get(PostgresRepositoryDelegate).find_all(OrganizationMcpServer)[0]
+            with pytest.raises(CredentialUnavailable, match="share a name"):
+                context.injector.get(McpCredentialBroker).resolve(row, context.agent.id)
+
+        with then("Test connection still lists the tools, so the filter can be chosen"):
+            tested = context.client.post(f"{path}/probe", headers=_auth(context.access_token))
+            assert_that(tested.status_code, equal_to(status.HTTP_200_OK), tested.text)
+
+        with when("an Owner hides one of the colliding tools"):
+            hidden = context.client.patch(
+                path, json={"tool_exclude": [f"{_LONG}_two"]}, headers=_auth(context.access_token)
+            )
+
+        with then("the sign-in becomes usable"):
+            assert_that(hidden.status_code, equal_to(status.HTTP_200_OK), hidden.text)
+            assert_that(_credential_row(context).status, equal_to("active"))
+            assert_that(hidden.json()["sign_in"], has_entries(status="signed_in"))
+
+
+def test_a_first_sign_in_with_unique_tool_names_is_usable_at_once(authorization_server):
+    probe = FakeProbe()
+    with given(_given(probe)) as context:
+        server = _oauth_server(context)
+
+        completed = _complete(context, _state(_start(context, server["id"]).json()["authorize_url"]))
+
+        assert_that(completed.json(), has_entries(tool_collisions=[]))
+        assert_that(_credential_row(context).status, equal_to("active"))
+
+
+def test_signing_in_again_after_the_filter_is_fixed_passes_the_check(authorization_server):
+    probe = FakeProbe()
+    probe.tools = list(_COLLIDING_TOOLS)
+    with given(_given(probe)) as context:
+        server = _oauth_server(context)
+        _complete(context, _state(_start(context, server["id"]).json()["authorize_url"]))
+        probe.tools = [f"{_LONG}_one", "search"]
+
+        again = _complete(context, _state(_start(context, server["id"]).json()["authorize_url"]))
+
+        assert_that(again.json(), has_entries(tool_collisions=[]))
+        assert_that(_credential_row(context).status, equal_to("active"))
+
+
+def test_an_agents_own_sign_in_whose_tools_collide_is_held_back_too(authorization_server):
+    probe = FakeProbe()
+    probe.tools = list(_COLLIDING_TOOLS)
+    with given(_given(probe)) as context:
+        server = _oauth_server(context)
+
+        completed = _complete(
+            context, _state(_start(context, server["id"], agent_id=context.agent.id).json()["authorize_url"])
+        )
+
+        assert_that(completed.json()["tool_collisions"], has_length(1))
+        assert_that(_credential_row(context, context.agent.id).status, equal_to("needs_tool_filter"))
+        assert_that(_agent_servers(context)[0], has_entries(credential_source="agent", needs_tool_filter=True))
+
+
+def test_a_sign_in_whose_server_cannot_be_checked_saves_nothing(authorization_server):
+    probe = FakeProbe()
+    probe.failure = McpProbeError("the server did not answer")
+    with given(_given(probe)) as context:
+        server = _oauth_server(context)
+
+        completed = _complete(context, _state(_start(context, server["id"]).json()["authorize_url"]))
+
+        assert_that(completed.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(completed.json()["detail"], contains_string("could not be checked"))
+        assert_that(_credentials(context), empty())
 
 
 # --- what each Agent uses -----------------------------------------------------------------

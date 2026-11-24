@@ -8,7 +8,9 @@ export const McpStaticAuthTypeSchema = z.enum(["none", "bearer", "api_key"]);
 
 /** An OAuth server's Organization sign-in; every member sees it. */
 export const McpSignInSchema = z.object({
-  status: z.enum(["signed_in", "needs_sign_in", "not_signed_in"]),
+  // needs_tool_filter: signed in, but Agents can't use it until the tool filter hides all
+  // but one of each group of tools whose OpenClaw names collide.
+  status: z.enum(["signed_in", "needs_sign_in", "needs_tool_filter", "not_signed_in"]),
   signedInAt: z.string().nullable().optional(),
 });
 
@@ -87,6 +89,8 @@ export const AgentMcpServerSchema = z.object({
   // Which credential the gateway uses for this Agent: its own, the organization's, or none yet.
   credentialSource: z.enum(["agent", "organization", "missing"]).default("organization"),
   needsSignIn: z.boolean().default(false),
+  // The credential in use sees tools whose OpenClaw names collide, so the Agent can't use it yet.
+  needsToolFilter: z.boolean().default(false),
   hasAgentCredential: z.boolean().default(false),
   // The Agent's own token-based credential, never its token; secret header values come back null.
   agentCredential: z
@@ -152,6 +156,8 @@ export const McpSignInStartSchema = z.object({
 export const McpSignInResultSchema = z.object({
   mcpServerId: z.string().uuid(),
   agentId: z.string().uuid().nullable(),
+  // OpenClaw names several visible tools would share: the sign-in is kept but not usable yet.
+  toolCollisions: z.array(z.string()).default([]),
 });
 
 /** An Agent's own token and headers for a token-based server. */

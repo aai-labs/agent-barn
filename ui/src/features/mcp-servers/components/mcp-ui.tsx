@@ -165,6 +165,7 @@ export function McpServerIcon() {
 const SIGN_IN_VARIANT: Record<McpSignIn["status"], BadgeVariant> = {
   signed_in: "ok",
   needs_sign_in: "danger",
+  needs_tool_filter: "warn",
   not_signed_in: "warn",
 };
 
@@ -181,3 +182,7 @@ export function RestrictedBadge() {
 }
 
 export { Badge };
+
+/** Why a signed-in server is held back, and what fixes it. */
+export const TOOL_FILTER_HINT =
+  "Several of its tools would share a name in OpenClaw. Edit the server and hide all but one of each; Agents can't use it until then.";

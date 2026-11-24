@@ -42,5 +42,6 @@ export function toolFilterLabel(server: Pick<McpServer, "toolInclude" | "toolExc
 export function signInLabel(signIn: McpSignIn): string {
   if (signIn.status === "signed_in") return "Signed in";
   if (signIn.status === "needs_sign_in") return "Needs sign-in again";
+  if (signIn.status === "needs_tool_filter") return "Hide colliding tools";
   return "Not signed in";
 }

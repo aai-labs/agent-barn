@@ -82,10 +82,13 @@ export class McpServerDataSupport {
     role,
     servers,
     callback = "opener",
+    toolCollisions = [],
   }: {
     role: "OWNER" | "MEMBER";
     servers?: Record<string, unknown>[];
     callback?: SignInCallbackMode;
+    // OpenClaw names the signed-in account's tools would share: the sign-in is held back.
+    toolCollisions?: string[];
   }) {
     const data = new DataSupport(this.page);
     await data.auth.interceptRefreshRequest();
@@ -107,8 +110,8 @@ export class McpServerDataSupport {
       const body = request.postData() ? (request.postDataJSON() as Record<string, unknown>) : {};
       const path = new URL(request.url()).pathname;
       if (path.endsWith("/sign-in/complete")) {
-        if (signingIn) setSignIn(signingIn, "signed_in");
-        return route.fulfill({ json: { mcp_server_id: signingIn, agent_id: null } });
+        if (signingIn) setSignIn(signingIn, toolCollisions.length ? "needs_tool_filter" : "signed_in");
+        return route.fulfill({ json: { mcp_server_id: signingIn, agent_id: null, tool_collisions: toolCollisions } });
       }
       if (path.endsWith("/sign-in")) {
         const serverId = path.split("/").at(-2) ?? "";

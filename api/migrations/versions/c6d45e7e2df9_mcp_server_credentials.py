@@ -35,7 +35,9 @@ def upgrade() -> None:
         sa.Column("credentials_encrypted", sa.String(), nullable=False),
         sa.Column("created_by_user_id", sa.Uuid(), nullable=True),
         sa.CheckConstraint("kind IN ('static', 'oauth')", name="ck_mcp_server_credential_kind"),
-        sa.CheckConstraint("status IN ('active', 'needs_sign_in')", name="ck_mcp_server_credential_status"),
+        sa.CheckConstraint(
+            "status IN ('active', 'needs_sign_in', 'needs_tool_filter')", name="ck_mcp_server_credential_status"
+        ),
         sa.CheckConstraint("agent_id IS NOT NULL OR kind = 'oauth'", name="ck_mcp_server_credential_org_oauth"),
         sa.ForeignKeyConstraint(
             ["mcp_server_id", "organization_id"],

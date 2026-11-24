@@ -18,13 +18,18 @@ import type { AgentMcpServer, McpServer } from "../schemas";
 import { toolFilterLabel } from "../utils";
 import { AgentMcpCredentialDialog } from "./agent-mcp-credential-dialog";
 import { McpServerDialog } from "./mcp-server-dialog";
-import { Badge, McpServerIcon, McpSwitch, RestrictedBadge, SignInBadge } from "./mcp-ui";
+import { Badge, McpServerIcon, McpSwitch, RestrictedBadge, SignInBadge, TOOL_FILTER_HINT } from "./mcp-ui";
 
 const RESTRICTED_HINT = "Restricted: only organization Owners and Admins can change it for an Agent";
 
 /** Which account the Agent reaches the server as. */
 function credentialLabel(server: AgentMcpServer): string {
   const oauth = server.authType === "oauth";
+  if (server.needsToolFilter) {
+    return server.credentialSource === "agent"
+      ? "Several tools this Agent's account sees would share a name in OpenClaw: an Owner or Admin has to hide all but one of each, then sign the Agent in again"
+      : "Several of its tools would share a name in OpenClaw: an Owner or Admin has to hide all but one of each";
+  }
   if (server.credentialSource === "agent") {
     if (server.needsSignIn) return "This Agent's own sign-in has expired";
     return oauth ? "Signed in with this Agent's own account" : "Uses this Agent's own credential";
@@ -139,7 +144,13 @@ export function AgentMcpServersSettings({
   }
 
   const credentialTone = (server: AgentMcpServer) =>
-    server.needsSignIn ? "var(--err)" : server.credentialSource === "agent" ? "var(--accent-ink)" : "var(--ink-3)";
+    server.needsSignIn
+      ? "var(--err)"
+      : server.needsToolFilter
+        ? "var(--warn)"
+        : server.credentialSource === "agent"
+          ? "var(--accent-ink)"
+          : "var(--ink-3)";
 
   const ownServersList = (
     <section aria-label="This Agent's own MCP servers" className="flex flex-col gap-2.5">
@@ -164,24 +175,29 @@ export function AgentMcpServersSettings({
                 </div>
                 <div className="mt-1 text-xs text-[var(--ink-3)]">{toolFilterLabel(server)}</div>
                 {server.url && <div className="mt-1 truncate font-mono text-xs text-[var(--ink-4)]">{server.url}</div>}
+                {server.signIn?.status === "needs_tool_filter" && (
+                  <p className="mb-0 mt-1 text-xs text-[var(--warn)]">{TOOL_FILTER_HINT}</p>
+                )}
               </div>
               {canEdit && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {server.signIn && server.signIn.status !== "signed_in" && (
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm af-btn-primary"
-                      aria-label={`Sign in ${server.name} for this Agent`}
-                      disabled={signingIn !== null}
-                      onClick={() => void signInForAgent(server.id)}
-                    >
-                      {signingIn === server.id
-                        ? "Signing in…"
-                        : server.signIn.status === "needs_sign_in"
-                          ? "Sign in again"
-                          : "Sign in"}
-                    </button>
-                  )}
+                  {server.signIn &&
+                    server.signIn.status !== "signed_in" &&
+                    server.signIn.status !== "needs_tool_filter" && (
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm af-btn-primary"
+                        aria-label={`Sign in ${server.name} for this Agent`}
+                        disabled={signingIn !== null}
+                        onClick={() => void signInForAgent(server.id)}
+                      >
+                        {signingIn === server.id
+                          ? "Signing in…"
+                          : server.signIn.status === "needs_sign_in"
+                            ? "Sign in again"
+                            : "Sign in"}
+                      </button>
+                    )}
                   {signingIn === server.id && (
                     <button type="button" className="af-btn af-btn-sm af-btn-ghost" onClick={cancelSignIn}>
                       Cancel sign-in

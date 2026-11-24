@@ -99,7 +99,8 @@ export function McpServerDialog({
   const oauth = authType === "oauth";
   // An OAuth server is tested with its sign-in (the organization's, or for an Agent server the
   // Agent's), so only once it is signed in.
-  const canTest = !oauth || server?.signIn?.status === "signed_in";
+  // A sign-in held back for colliding tool names can still test, so the filter can be fixed.
+  const canTest = !oauth || server?.signIn?.status === "signed_in" || server?.signIn?.status === "needs_tool_filter";
   const redirectUri =
     typeof window === "undefined"
       ? "/api/v1/mcp-servers/oauth/callback"

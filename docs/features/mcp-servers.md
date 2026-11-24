@@ -44,7 +44,7 @@ The pieces:
 
 - **The Organization's sign-in**: one row per OAuth server with `agent_id` NULL. A token-based server keeps its Organization credential on the server row instead, so a database check refuses a static row without an Agent.
 - **An Agent's own credential**: at most one row per Agent and server. `static` holds `auth` and `headers` in the server row's shape; `oauth` holds the Agent's own sign-in.
-- **A grant**: the refresh token, the current access token and its expiry, encrypted. `status` is `active` or `needs_sign_in`, set when the authorization server refused a refresh.
+- **A grant**: the refresh token, the current access token and its expiry, encrypted. `status` is `active`; `needs_sign_in`, set when the authorization server refused a refresh; or `needs_tool_filter`, set when the sign-in's tools collide (see [OAuth sign-in](#oauth-sign-in)).
 - **When rows go**:
   - A URL or OAuth client change on an OAuth server removes all of that server's rows.
   - A URL change, or a switch from OAuth to a token, on a token-based server removes its OAuth rows.
@@ -143,11 +143,12 @@ All of these requests follow the server's own policy: public HTTPS, a pinned add
 3. **Complete**: `POST …/mcp-servers/sign-in/complete` with `{code, state}`.
    - It needs the user who started the sign-in (`403` otherwise), and rechecks their permissions.
    - The server's client must be unchanged (`409` otherwise).
-   - It redeems the code with the verifier, then stores the grant encrypted with its audit Event.
+   - It redeems the code with the verifier, then checks the server with the new access token: it probes the tools and runs the save-time collision analysis under the server's tool filter. This is the first point an OAuth server can be checked. A server that can't be probed is `400` and nothing is saved.
+   - It stores the grant encrypted with its audit Event. When visible tools would share an OpenClaw name, the grant is stored as `needs_tool_filter` and the answer lists the names in `tool_collisions`. Such a grant serves Test connection and the checks of a new filter, but the gateway refuses it to Agents ("This MCP server can't be used yet: several of its tools would share a name…"). Saving a filter that passes, or signing in again once the tools pass, makes it `active`.
    - A refused or expired code is `400`, and nothing is saved.
 4. **Sign out**: `DELETE …/mcp-servers/{id}/sign-in` removes the Organization's sign-in.
 
-**Reads**: every member sees an OAuth server's `sign_in` status (`signed_in`, `needs_sign_in`, `not_signed_in`). Managers also see the client ID and whether Agent Barn registered it, never its secret.
+**Reads**: every member sees an OAuth server's `sign_in` status (`signed_in`, `needs_sign_in`, `needs_tool_filter`, `not_signed_in`). The Agent read also gives `needs_tool_filter` for the credential an Agent uses. Managers also see the client ID and whether Agent Barn registered it, never its secret.
 
 **Test connection** on an OAuth server uses the Organization sign-in, and needs one.
 

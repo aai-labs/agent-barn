@@ -25,6 +25,10 @@ REFRESH_MARGIN_SECONDS = 60
 
 NEEDS_SIGN_IN = "This MCP server needs a sign-in before this Agent can use it."
 SIGN_IN_EXPIRED = "This MCP server's sign-in has expired; it needs to be signed in again."
+TOOLS_NEED_FILTER = (
+    "This MCP server can't be used yet: several of its tools would share a name, and an Owner or "
+    "Admin has to hide all but one of each."
+)
 SIGN_IN_UNAVAILABLE = "This MCP server's sign-in service could not be reached; try again shortly."
 
 
@@ -81,12 +85,19 @@ class McpCredentialBroker:
         headers, sensitive = credential_headers(config)
         return ResolvedCredential(headers, sensitive)
 
-    def access_token(self, credential_id: UUID, config: dict) -> str:
+    def access_token(self, credential_id: UUID, config: dict, *, for_management: bool = False) -> str:
+        """The grant's current access token, refreshed when it is about to expire.
+
+        A grant held back for colliding tool names (`needs_tool_filter`) serves only
+        `for_management`: testing the server and checking a new filter, never an Agent.
+        """
         with self.repository.locked_credential(credential_id) as row:
             if row is None:
                 raise CredentialUnavailable(NEEDS_SIGN_IN)
             if row.status == McpCredentialStatus.NEEDS_SIGN_IN.value:
                 raise CredentialUnavailable(SIGN_IN_EXPIRED)
+            if row.status == McpCredentialStatus.NEEDS_TOOL_FILTER.value and not for_management:
+                raise CredentialUnavailable(TOOLS_NEED_FILTER)
             grant = self._decrypt(row.credentials_encrypted)
             expires_at = grant.get("expires_at")
             # No lifetime means the server stated none: the token is used until the server

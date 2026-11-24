@@ -122,6 +122,23 @@ test.describe("Organization MCP servers", () => {
     await expect(ui.editButton("DeepWiki")).toHaveCount(0);
   });
 
+  test("a sign-in whose tools would collide is held back until a tool is hidden", async ({ page }) => {
+    const data = new McpServerDataSupport(page);
+    const ui = new McpServersPage(page);
+    const collision = `notion__${"x".repeat(56)}`;
+    await data.openOrganization({ role: "OWNER", servers: [mockOAuthMcpServer], toolCollisions: [collision] });
+
+    await ui.serverRow("Notion").getByRole("button", { name: "Sign in Notion for the organization" }).click();
+
+    await expect(page.getByText(`several tools would share these names in OpenClaw: ${collision}`)).toBeVisible();
+    await expect(ui.serverRow("Notion")).toContainText("Hide colliding tools");
+    await expect(ui.serverRow("Notion")).toContainText("Agents can't use it until then");
+    await expect(ui.serverRow("Notion").getByRole("button", { name: "Sign in Notion for the organization" })).toHaveCount(0);
+    await ui.editButton("Notion").click();
+    // Held back, but still signed in: the tools can be tested and a filter chosen.
+    await expect(ui.dialog.getByRole("button", { name: "Test connection" })).toBeEnabled();
+  });
+
   test("an Owner adds an OAuth server and signs it in for the organization", async ({ page }) => {
     const data = new McpServerDataSupport(page);
     const ui = new McpServersPage(page);

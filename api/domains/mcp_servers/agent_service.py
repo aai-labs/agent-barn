@@ -288,6 +288,7 @@ class AgentMcpServerService:
                     credential_source=source,
                     needs_sign_in=source == "missing"
                     or (row is not None and row.status == McpCredentialStatus.NEEDS_SIGN_IN.value),
+                    needs_tool_filter=row is not None and row.status == McpCredentialStatus.NEEDS_TOOL_FILTER.value,
                     has_agent_credential=server.id in own,
                     agent_credential=self._credential_shape(own.get(server.id)),
                 )

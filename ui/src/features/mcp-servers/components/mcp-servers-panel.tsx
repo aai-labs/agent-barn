@@ -14,7 +14,7 @@ import { useMcpServerSignIn, useMcpServerSignOut } from "../hooks/use-mcp-sign-i
 import type { McpServer } from "../schemas";
 import { agentCountLabel, scopeLabel, toolFilterLabel } from "../utils";
 import { McpServerDialog } from "./mcp-server-dialog";
-import { Badge, McpEmptyState, McpServerIcon, RestrictedBadge, SignInBadge } from "./mcp-ui";
+import { Badge, McpEmptyState, McpServerIcon, RestrictedBadge, SignInBadge, TOOL_FILTER_HINT } from "./mcp-ui";
 
 /**
  * Organization settings → MCP servers. Every member sees the list; Owners and Admins
@@ -108,30 +108,35 @@ export function McpServersPanel({ canManage }: { canManage: boolean }) {
                     .join(" · ")}
                 </div>
                 {server.url && <div className="mt-1 truncate font-mono text-xs text-[var(--ink-4)]">{server.url}</div>}
+                {server.signIn?.status === "needs_tool_filter" && (
+                  <p className="mb-0 mt-1 text-xs text-[var(--warn)]">{TOOL_FILTER_HINT}</p>
+                )}
               </div>
               {canManage && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {server.signIn && server.signIn.status !== "signed_in" && (
-                    <button
-                      type="button"
-                      className="af-btn af-btn-sm af-btn-primary"
-                      aria-label={`Sign in ${server.name} for the organization`}
-                      disabled={signingIn !== null}
-                      onClick={() => void startSignIn(server.id)}
-                    >
-                      {signingIn === server.id
-                        ? "Signing in…"
-                        : server.signIn.status === "needs_sign_in"
-                          ? "Sign in again"
-                          : "Sign in"}
-                    </button>
-                  )}
+                  {server.signIn &&
+                    server.signIn.status !== "signed_in" &&
+                    server.signIn.status !== "needs_tool_filter" && (
+                      <button
+                        type="button"
+                        className="af-btn af-btn-sm af-btn-primary"
+                        aria-label={`Sign in ${server.name} for the organization`}
+                        disabled={signingIn !== null}
+                        onClick={() => void startSignIn(server.id)}
+                      >
+                        {signingIn === server.id
+                          ? "Signing in…"
+                          : server.signIn.status === "needs_sign_in"
+                            ? "Sign in again"
+                            : "Sign in"}
+                      </button>
+                    )}
                   {signingIn === server.id && (
                     <button type="button" className="af-btn af-btn-sm af-btn-ghost" onClick={cancelSignIn}>
                       Cancel sign-in
                     </button>
                   )}
-                  {server.signIn?.status === "signed_in" && (
+                  {(server.signIn?.status === "signed_in" || server.signIn?.status === "needs_tool_filter") && (
                     <button
                       type="button"
                       className="af-btn af-btn-sm af-btn-ghost"

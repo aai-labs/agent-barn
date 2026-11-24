@@ -26,10 +26,18 @@ from api.domains.agents.microsoft_identity import pkce_pair
 from api.domains.agents.models import Agent
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
+from api.domains.custom_api.request import RequestRefused
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.mcp_servers import oauth
 from api.domains.mcp_servers.broker import McpCredentialBroker, is_oauth
-from api.domains.mcp_servers.models import McpCredentialKind, McpSignInResult, McpSignInStart, OrganizationMcpServer
+from api.domains.mcp_servers.models import (
+    McpCredentialKind,
+    McpCredentialStatus,
+    McpSignInResult,
+    McpSignInStart,
+    OrganizationMcpServer,
+)
+from api.domains.mcp_servers.probe import McpProbeError, McpServerProbe, analyse_tools
 from api.domains.mcp_servers.repository import McpServerRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -58,6 +66,7 @@ class McpSignInService:
     authorization: AgentAuthorization
     event_delivery_dispatcher: EventDeliveryDispatcher
     config: Config
+    probe_client: McpServerProbe
 
     # --- who may sign in ------------------------------------------------------------
 
@@ -157,6 +166,7 @@ class McpSignInService:
             )
         except oauth.OAuthError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"The sign-in could not be completed: {exc}") from None
+        collisions = self._tool_collisions(server, config, tokens.access_token)
         deliveries = self.repository.put_credential_with_event(
             server,
             agent,
@@ -165,9 +175,30 @@ class McpSignInService:
             user_id=context.user.id,
             actor=resolve_actor_identity(context, organization_id),
             actor_display=context.user.full_name or context.user.email,
+            status=(McpCredentialStatus.NEEDS_TOOL_FILTER if collisions else McpCredentialStatus.ACTIVE).value,
         )
         self.event_delivery_dispatcher.enqueue_immediate(deliveries)
-        return McpSignInResult(mcp_server_id=server.id, agent_id=agent_id)
+        return McpSignInResult(mcp_server_id=server.id, agent_id=agent_id, tool_collisions=collisions)
+
+    def _tool_collisions(self, server: OrganizationMcpServer, config: dict, access_token: str) -> list[str]:
+        """The OpenClaw names several tools visible under the server's filter would share.
+
+        The first point an OAuth server can be checked like a token-based one is when its
+        sign-in is made, so it is checked here with the new token, by the same analysis a save
+        uses. A sign-in that fails the check is still kept, so the server can be tested and its
+        filter edited, but Agents can't use it until the check passes.
+        """
+        probe_config = {"auth": {"type": "bearer", "token": access_token}, "headers": config.get("headers", [])}
+        try:
+            result = self.probe_client.probe(server.url, probe_config)
+        except (McpProbeError, RequestRefused) as exc:
+            # Nothing is saved: an unchecked sign-in would leave Agents a server whose tools
+            # nobody has seen. The code is spent, so the person signs in again.
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Signed in, but the MCP server could not be checked: {exc} Sign in again.",
+            ) from None
+        return analyse_tools(server.identifier, result, server.tool_include, server.tool_exclude).collisions
 
     def sign_out(
         self, organization_id: UUID, server_id: UUID, agent_id: UUID | None, context: CurrentUserContext

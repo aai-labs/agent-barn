@@ -74,8 +74,19 @@ export function useMcpServerSignIn() {
               }
             : undefined,
         );
-        await api.post(`${base}/mcp-servers/sign-in/complete`, { code, state }, { schema: McpSignInResultSchema });
+        const { data: result } = await api.post<{ toolCollisions: string[] }>(
+          `${base}/mcp-servers/sign-in/complete`,
+          { code, state },
+          { schema: McpSignInResultSchema },
+        );
         await queryClient.invalidateQueries({ queryKey: mcpServersKey.all });
+        if (result.toolCollisions.length > 0) {
+          // Saved, but held back: say why where the person is looking.
+          throw new Error(
+            `Signed in, but several tools would share these names in OpenClaw: ${result.toolCollisions.join(", ")}. ` +
+              "Hide all but one of each in the server's tool filter; Agents can't use it until then.",
+          );
+        }
       } catch (err) {
         if (err instanceof OAuthPopupCancelledError) return;
         throw err;

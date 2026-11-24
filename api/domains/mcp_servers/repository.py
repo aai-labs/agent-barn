@@ -23,6 +23,7 @@ from api.domains.integrations.models import AgentIntegrationRuntime
 from api.domains.mcp_servers.models import (
     AgentMcpGatewayToken,
     AgentMcpServerAttachment,
+    McpCredentialStatus,
     McpServerCredential,
     McpServerScope,
     OrganizationMcpServer,
@@ -404,10 +405,12 @@ class McpServerRepository:
         user_id: UUID | None,
         actor: ActorIdentity,
         actor_display: str,
+        status: str = McpCredentialStatus.ACTIVE.value,
     ) -> list[UUID]:
-        """Saves the Organization's sign-in (`agent` None) or an Agent's own credential, active."""
+        """Saves the Organization's sign-in (`agent` None) or an Agent's own credential, active
+        unless `status` says otherwise."""
         return self._change_credential(
-            server, agent, (kind, credentials_encrypted, user_id), actor=actor, actor_display=actor_display
+            server, agent, (kind, credentials_encrypted, user_id, status), actor=actor, actor_display=actor_display
         )
 
     def delete_credential_with_event(
@@ -419,7 +422,7 @@ class McpServerRepository:
         self,
         server: OrganizationMcpServer,
         agent: Agent | None,
-        replacement: tuple[str, str, UUID | None] | None,
+        replacement: tuple[str, str, UUID | None, str] | None,
         *,
         actor: ActorIdentity,
         actor_display: str,
@@ -441,7 +444,7 @@ class McpServerRepository:
                     return []
                 session.delete(row)
             else:
-                kind, encrypted, user_id = replacement
+                kind, encrypted, user_id, credential_status = replacement
                 if row is None:
                     row = McpServerCredential(
                         organization_id=server.organization_id,
@@ -452,7 +455,7 @@ class McpServerRepository:
                     )
                 row.kind = kind
                 row.credentials_encrypted = encrypted
-                row.status = "active"
+                row.status = credential_status
                 row.created_by_user_id = user_id
                 row.updated_at = datetime.now(UTC)
                 session.add(row)
@@ -540,6 +543,13 @@ class McpServerRepository:
                 "subject_display": server.name,
             },
         )
+
+    def clear_tool_filter_hold(self, credential_id: UUID) -> None:
+        """A credential held back for colliding tool names becomes usable (`active`)."""
+        with self.locked_credential(credential_id) as row:
+            if row is not None and row.status == McpCredentialStatus.NEEDS_TOOL_FILTER.value:
+                row.status = McpCredentialStatus.ACTIVE.value
+                row.updated_at = datetime.now(UTC)
 
     @contextmanager
     def locked_credential(self, credential_id: UUID) -> Iterator[McpServerCredential | None]:
