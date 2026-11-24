@@ -9,6 +9,7 @@ from sqlmodel import Session, col, select
 
 from api.core.config import Config
 from api.domains.events.models import OutboxMessage
+from api.domains.llm_providers.litellm_deployments import key_fingerprint
 from api.domains.llm_providers.models import (
     OPENROUTER_CONNECTION_ID,
     LlmProviderConnection,
@@ -1195,6 +1196,10 @@ def _route_id(connection: LlmProviderConnection, model: LlmProviderModel) -> str
     return f"agentbarn:model:{connection.id}:{model.id}"
 
 
+def _model_info(route_id: str, key: str) -> dict:
+    return {"id": route_id, "disable_background_health_check": True, "key_fingerprint": key_fingerprint(key)}
+
+
 def _other_routes() -> dict[str, dict]:
     return {"agentbarn:openrouter": OPENROUTER_ROUTE, OTHER_ROUTE_ID: OTHER_ROUTE}
 
@@ -1210,7 +1215,7 @@ def _azure_routes(context, key: str, base_url: str) -> dict[str, dict]:
                 "api_key": key,
                 **ROUTE_PRICES,
             },
-            "model_info": {"id": _route_id(context.connection, model), "disable_background_health_check": True},
+            "model_info": _model_info(_route_id(context.connection, model), key),
         }
         for model in context.models
     }
@@ -1751,7 +1756,7 @@ def _claude_route(context, model_id: str, row_id: UUID, prices: tuple[str, str, 
                 "cache_read_input_token_cost": float(prices[2]),
                 "cache_creation_input_token_cost": float(prices[3]),
             },
-            "model_info": {"id": route_id, "disable_background_health_check": True},
+            "model_info": _model_info(route_id, ANTHROPIC_KEY),
         }
     }
 
@@ -2045,6 +2050,26 @@ def test_a_save_that_changes_nothing_still_restores_a_missing_route():
         assert_that(_models_changed_events(context), has_length(0))
 
 
+def test_a_save_that_changes_nothing_rewrites_a_route_left_on_another_key():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        route_id = _route_id(context.connection, sonnet)
+        expected = dict(context.routes)
+        # As a key replacement that failed part way leaves it: the new key, which was never stored.
+        stale = context.routes[route_id]
+        context.routes[route_id] = {
+            **stale,
+            "litellm_params": {**stale["litellm_params"], "api_key": REPLACED_KEY},
+            "model_info": _model_info(route_id, REPLACED_KEY),
+        }
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(context.routes, equal_to(expected))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
 def test_the_audited_ids_are_cut_to_twenty_each():
     model_ids = [f"model-{number:02d}" for number in range(21)]
     with given(_setup(admin, anthropic_with_routes, provider_lists(model_ids), litellm_prices())) as context:
@@ -2323,7 +2348,7 @@ def test_a_custom_connection_saves_typed_prices_routed_at_its_base_url():
                         "cache_read_input_token_cost": 0.0,
                         "cache_creation_input_token_cost": 0.0,
                     },
-                    "model_info": {"id": route_id, "disable_background_health_check": True},
+                    "model_info": _model_info(route_id, CUSTOM_KEY),
                 }
             ),
         )
@@ -2374,7 +2399,7 @@ def _azure_route(context, deployment: str, row_id: UUID, prices: tuple[str, str,
                 "cache_read_input_token_cost": float(prices[2]),
                 "cache_creation_input_token_cost": float(prices[3]),
             },
-            "model_info": {"id": route_id, "disable_background_health_check": True},
+            "model_info": _model_info(route_id, AZURE_KEY),
         }
     }
 

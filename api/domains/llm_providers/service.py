@@ -289,8 +289,8 @@ def _checked_choices(
 
 
 def _route_matches(route: dict | None, deployment: LiteLLMDeployment) -> bool:
-    """Whether LiteLLM's listed route already has every field the deployment sends but the key,
-    which LiteLLM leaves out of its listing."""
+    """Whether LiteLLM's listed route already has every field the deployment sends. LiteLLM leaves
+    the key out of its listing, so the key is compared by the fingerprint in `model_info`."""
     if route is None or route.get("model_name") != deployment.model_name:
         return False
     params, info = route.get("litellm_params") or {}, route.get("model_info") or {}
