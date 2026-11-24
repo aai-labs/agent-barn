@@ -29,6 +29,8 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
     ORGANIZATION_UPDATED,
 )
+from api.domains.llm_providers.access import ProviderNotOpen
+from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
@@ -55,6 +57,7 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 logger = logging.getLogger(__name__)
 
 _TRACKED_ORGANIZATION_FIELDS = ("name", "description")
+NO_LLM_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 
 
 def _and_list(items: list[str]) -> str:
@@ -486,10 +489,23 @@ class OrganizationService:
                     # the model level, so never overwrite the stored list with NULL.
                     del dump["allowed_models"]
                 else:
+                    if dump["allowed_models"] and not self.agent_service.llm_provider_access.can_use(
+                        OPENROUTER_SLUG, organization_id
+                    ):
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
                     dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
                     self._ensure_default_model_still_allowed(organization_id, dump["allowed_models"])
                     self._ensure_no_agent_is_pinned_to_a_removed_model(organization_id, dump["allowed_models"])
+                    if dump["allowed_models"]:
+                        try:
+                            self.agent_service.llm_provider_access.require_open(
+                                session, OPENROUTER_SLUG, organization_id
+                            )
+                        except ProviderNotOpen:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER
+                            ) from None
                     previous_set = set(organization.allowed_models)
                     new_set = set(dump["allowed_models"])
                     added_models = sorted(new_set - previous_set)
