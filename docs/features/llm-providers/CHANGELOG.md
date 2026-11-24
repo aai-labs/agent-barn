@@ -23,7 +23,11 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Fixed: `env_key_last4` is `null` for an `OPENROUTER_API_KEY` of 8 characters or fewer, whose last four would show most of it.
 - Fixed: the Models dialog read the provider's list again on every page refresh after it closed, and once more after each save. It now reads only while open and marks its lists stale on save. Focus returns to the card's Manage button when it closes, which is now a non-modal menu named "Manage {title}". Unnamed Azure deployments are labelled by position ("new deployment 3"), and a model stored at typed prices says "LiteLLM has a price for it" instead of "LiteLLM's price has changed".
 - Restored: `test_llm_provider_connection_migration.py`, removed with the model schema though it still passed. It now also checks `llm_provider_model`'s constraints, its match with the model, and its downgrade.
-- Verification: new tests for each fix, and each guard mutated once to see its test fail. `test_platform_llm_provider_connections.py`, the catalogue unit tests, the migration tests and all 57 tests in `ui/tests/e2e/platform-llm-providers.spec.ts` pass.
+- Fixed (found on a local stack with a real OpenRouter key): a Custom endpoint whose `/models` answers without a key, as OpenRouter's does, accepted any key, and a bad one was then written to every model route, whose calls failed `401`. `LlmProviderKeyChecker` now sends such an endpoint an empty chat request with the key: `401`/`403` refuses it, `400`/`422` accepts it, and nothing is generated.
+- Fixed: the key dialog gave focus to the page after a real key check, which takes about a second with Save disabled; it now returns focus to Manage, as the Models dialog does.
+- Fixed: at phone width, model ids and deployment names wrapped a few letters a line; the tables now scroll sideways instead.
+- Documented: LiteLLM keeps serving a deleted route for about a second after the delete answers.
+- Verification: new tests for each fix, and each guard mutated once to see its test fail. `test_platform_llm_provider_connections.py`, the catalogue unit tests, the migration tests and all 59 tests in `ui/tests/e2e/platform-llm-providers.spec.ts` pass. A click-through on a local stack (this API, LiteLLM v1.108.6, Postgres, the Next UI, real OpenRouter) added a Custom endpoint, listed 230 models, saved one at typed prices and billed a real call at exactly those prices.
 
 ### 2026-11-23 — AF-447 — providers page layout, PR 4 follow-up
 
