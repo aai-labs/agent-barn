@@ -23,6 +23,7 @@ from api.domains.anomalies.classification import (
 )
 from api.domains.anomalies.detection import Sensitivity
 from api.domains.anomalies.models import AgentAnomaly, AnomalySignal
+from api.infrastructure.litellm.decisions import ChoiceQuestion
 
 STARTED = datetime(2026, 11, 16, 11, 0, tzinfo=UTC)
 
@@ -102,6 +103,16 @@ def test_the_questions_say_a_request_is_not_an_authorisation():
 
     assert_that(questions["a1_unusual"].question, contains_string("not that the activity was authorised"))
     assert_that(questions["a1_severity"].question, contains_string("stays risky even when someone asked for it"))
+
+
+def test_the_category_is_judged_against_the_role_and_requests():
+    _, questions = classification_request([_rate()], _context(), other_ongoing=[])
+
+    category = questions["a1_category"]
+    assert isinstance(category, ChoiceQuestion)
+    assert_that(category.question, contains_string("role and recent requests"))
+    assert "a bigger job it was asked to do" in (category.options["MORE_WORK"] or "")
+    assert "or was asked to use" in (category.options["NEW_CAPABILITY"] or "")
 
 
 @pytest.mark.parametrize(

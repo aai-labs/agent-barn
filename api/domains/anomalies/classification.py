@@ -40,8 +40,10 @@ from api.infrastructure.litellm.decisions import (
 CATEGORIES: dict[str, str | None] = {
     "RUNAWAY_LOOP": "The Agent repeats the same work far beyond what the job needs, burning calls or tokens.",
     "FAILING_DEPENDENCY": "A tool, integration or model the Agent relies on keeps failing.",
-    "MORE_WORK": "The Agent is legitimately doing more of its usual work than usual.",
-    "NEW_CAPABILITY": "The Agent starts using something new in a way that fits ordinary work.",
+    "MORE_WORK": (
+        "The Agent is legitimately doing more of its usual work than usual, such as a bigger job it was asked to do."
+    ),
+    "NEW_CAPABILITY": "The Agent starts using something new in a way that fits ordinary work or was asked to use.",
     "RISKY_ACTION": "The activity could cause harm or expose data, such as unusual writes, deletes or new destinations.",
     "OTHER": "None of the above.",
 }
@@ -187,7 +189,11 @@ def classification_request(
             no_means="Ordinary variation, or a change that explains itself.",
         )
         questions[f"{ref}_category"] = ChoiceQuestion(
-            question=f"What kind of activity is flagged item {ref}?", options=CATEGORIES
+            question=(
+                f"What kind of activity is flagged item {ref}? Use the Agent's role and recent requests to judge "
+                "whether the activity is work it was asked to do or that fits its job."
+            ),
+            options=CATEGORIES,
         )
         questions[f"{ref}_severity"] = ScoreQuestion(
             question=(

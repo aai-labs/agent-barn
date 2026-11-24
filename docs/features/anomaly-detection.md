@@ -212,6 +212,14 @@ state moves to `CLASSIFIED`.
   "deleting these is expected". The questions say so: the role and requests show what the
   Agent is for and was asked, not that the activity was authorised, and a risky action
   stays risky even when someone asked for it.
+- **What the context changes.** The category question points the model at the role and
+  requests, and the `MORE_WORK` and `NEW_CAPABILITY` options mention work the Agent was
+  asked to do. In a hand-labelled set of cases whose right answer depends on context (a
+  spike after "tag all 2,000 tickets" versus "summarise three tickets", a new integration
+  asked for versus not), jev with the context got the category right in all of them and
+  separated the two halves of each pair in its "really unusual" probability; without it,
+  both halves look the same. Severity is deliberately not softened by requests: a
+  wording that did so also lowered severity where nothing explained the activity.
 - **Which provider sees it.** The decision model's route (OpenRouter by default) may not be
   the provider the Agent's own model uses, so for some Organizations the cleaned requests
   reach a provider that has not seen them before.
