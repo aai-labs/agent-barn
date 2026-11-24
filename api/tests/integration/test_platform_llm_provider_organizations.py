@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from unittest.mock import Mock
 from uuid import UUID, uuid7
 
 import pytest
@@ -18,6 +19,7 @@ from api.domains.llm_providers.models import (
 from api.domains.organizations.models import Organization
 from api.domains.usage.models import SuspensionReason
 from api.infrastructure.crypto import encrypt_token
+from api.infrastructure.llm_provider_keys.checker import LlmProviderKeyChecker
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -35,6 +37,8 @@ ACCESS_CHOICE = 'Organization access is "all", "none", "all_except" or "only". N
 UNKNOWN_ORGANIZATION = "One of these organizations does not exist. Nothing was saved."
 TOO_MANY_ORGANIZATIONS = "A provider can list at most 1000 organizations. Nothing was saved."
 NOT_FOUND = "That connection does not exist."
+CREATED_EVENT = "platform.llm_provider.created"
+NEW_KEY = "sk-ant-new-key-g7h8"
 
 
 def _setup(*steps):
@@ -439,3 +443,121 @@ def test_changing_access_leaves_when_the_key_was_saved():
 
         listed = context.client.get(BASE, headers=auth(context)).json()
         assert_that(datetime.fromisoformat(listed[0]["updated_at"]), equal_to(saved_at))
+
+
+def key_accepted(context):
+    check = Mock(return_value=True)
+    context.injector.get(LlmProviderKeyChecker).check = check
+    context.check = check
+
+
+def _add(context, access: str | None = None, ids: list | None = None):
+    body: dict[str, object] = {"provider_type": "anthropic", "api_key": NEW_KEY}
+    if access is not None:
+        body["organization_access"] = access
+    if ids is not None:
+        body["organization_ids"] = [str(organization_id) for organization_id in ids]
+    return context.client.post(BASE, json=body, headers=auth(context))
+
+
+def _created_events(context) -> list[OutboxMessage]:
+    with _session(context) as session:
+        return list(session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name) == CREATED_EVENT)).all())
+
+
+def test_an_added_provider_is_open_to_all_organizations_unless_told_otherwise():
+    with given(_setup(admin, key_accepted)) as context:
+        response = _add(context)
+
+        assert_that(response.status_code, equal_to(201), response.text)
+        assert_that(response.json(), has_entries(organization_access="all", organization_count=0))
+        assert_that(_stored(context, "anthropic"), equal_to(("all", [])))
+        assert_that((len(_created_events(context)), len(_events(context))), equal_to((1, 0)))
+
+
+@pytest.mark.parametrize(("access", "listed"), [("none", 0), ("all_except", 1), ("only", 2)])
+def test_a_provider_is_added_with_the_access_it_is_given(access, listed):
+    with given(_setup(admin, key_accepted)) as context:
+        ids = [_organization(context, "Alpha Org"), _organization(context, "Beta Org")][:listed]
+
+        response = _add(context, access, ids)
+
+        assert_that(response.status_code, equal_to(201), response.text)
+        assert_that(response.json(), has_entries(organization_access=access, organization_count=listed))
+        assert_that(_stored(context, "anthropic"), equal_to((access, sorted(ids, key=str))))
+        assert_that(_created_events(context), has_length(1))
+        [event] = _events(context)
+        assert_that(
+            event.payload,
+            has_entries(
+                slug="anthropic",
+                previous_organization_access="all",
+                organization_access=access,
+                added_count=listed,
+                removed_count=0,
+                added_organization_ids=sorted(str(each) for each in ids),
+                actor_display=ADMIN_NAME,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("access", "ids", "message"),
+    [
+        ("all", "known", ORGANIZATIONS_NOT_TAKEN),
+        ("none", "known", ORGANIZATIONS_NOT_TAKEN),
+        ("only", "unknown", UNKNOWN_ORGANIZATION),
+        ("only", "malformed", UNKNOWN_ORGANIZATION),
+        ("only", "too_many", TOO_MANY_ORGANIZATIONS),
+        ("some", "none", ACCESS_CHOICE),
+    ],
+)
+def test_an_add_whose_access_breaks_a_rule_is_refused_before_the_key_is_checked(access, ids, message):
+    with given(_setup(admin, key_accepted)) as context:
+        known = _organization(context, "Alpha Org")
+        organization_ids = {
+            "known": [known],
+            "unknown": [known, uuid7()],
+            "malformed": ["acme"],
+            "too_many": [known] * 1001,
+            "none": [],
+        }[ids]
+
+        response = _add(context, access, organization_ids)
+
+        assert_that(response.status_code, equal_to(400))
+        assert_that(response.json()["detail"], equal_to(message))
+        context.check.assert_not_called()
+        with _session(context) as session:
+            rows = session.exec(select(LlmProviderConnection).where(LlmProviderConnection.slug == "anthropic")).all()
+        assert_that(rows, has_length(0))
+
+
+def test_deleting_a_connection_removes_its_listed_organizations_and_reviving_it_takes_the_new_access():
+    with given(_setup(admin, anthropic_connected, key_accepted)) as context:
+        alpha = _organization(context, "Alpha Org")
+        beta = _organization(context, "Beta Org")
+        _put(context, "anthropic", "only", [alpha])
+
+        deleted = context.client.delete(f"{BASE}/anthropic", headers=auth(context))
+        after_delete = _stored(context, "anthropic")[1]
+        revived = _add(context, "all_except", [beta])
+
+        assert_that((deleted.status_code, after_delete), equal_to((204, [])))
+        assert_that(revived.status_code, equal_to(201), revived.text)
+        assert_that(revived.json(), has_entries(organization_access="all_except", organization_count=1))
+        assert_that(_stored(context, "anthropic"), equal_to(("all_except", [beta])))
+        assert_that(_events(context)[-1].payload, has_entries(added_organization_ids=[str(beta)]))
+
+
+def test_the_connection_list_shows_each_connections_access_and_how_many_it_lists():
+    with given(_setup(admin, anthropic_connected)) as context:
+        ids = [_organization(context, "Alpha Org"), _organization(context, "Beta Org")]
+        _put(context, "anthropic", "all_except", ids)
+
+        listed = context.client.get(BASE, headers=auth(context)).json()
+
+        assert_that(
+            [(each["slug"], each["organization_access"], each["organization_count"]) for each in listed],
+            equal_to([("openrouter", "all", 0), ("anthropic", "all_except", 2)]),
+        )

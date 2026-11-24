@@ -132,6 +132,25 @@ class LlmProviderRepository:
                 is not None
             )
 
+    def organizations_known(self, organization_ids: frozenset[UUID]) -> bool:
+        """Whether every id names an Organization."""
+        with Session(self.delegate.engine) as session:
+            return self._organizations_known(session, organization_ids)
+
+    def organization_counts(self, connection_ids: list[UUID]) -> dict[UUID, int]:
+        """How many Organizations each connection lists, for connections that list any."""
+        with Session(self.delegate.engine) as session:
+            rows = (
+                session.connection()
+                .execute(
+                    sa.select(col(LlmProviderConnectionOrganization.connection_id), sa.func.count())
+                    .where(col(LlmProviderConnectionOrganization.connection_id).in_(connection_ids))
+                    .group_by(col(LlmProviderConnectionOrganization.connection_id))
+                )
+                .all()
+            )
+        return {connection_id: count for connection_id, count in rows}
+
     def access(self, slug: str, organization_id: UUID | None) -> tuple[OrganizationAccess, frozenset[UUID]] | None:
         """The live connection's Organization access and, of its listed Organizations, only this one
         if listed."""
@@ -174,12 +193,7 @@ class LlmProviderRepository:
             connection = self._live(session, slug)
             if connection is None:
                 raise ConnectionNotFound(slug)
-            known = (
-                set(session.exec(select(Organization.id).where(col(Organization.id).in_(organization_ids))).all())
-                if organization_ids
-                else set()
-            )
-            if known != organization_ids:
+            if not self._organizations_known(session, organization_ids):
                 raise UnknownOrganization
             previous_access = connection.organization_access
             previous = frozenset(
@@ -391,13 +405,18 @@ class LlmProviderRepository:
         base_url: str | None,
         api_key_encrypted: str,
         api_key_last4: str,
+        organization_access: OrganizationAccess,
+        organization_ids: frozenset[UUID],
         actor_id: UUID,
         actor_display: str,
     ) -> list[UUID]:
-        """Store a new connection with its key, or bring a deleted known provider's connection back.
+        """Store a new connection with its key and Provider Access, or bring a deleted known
+        provider's connection back with them. Access other than "all" is recorded as a change from
+        "all" after the creation.
 
         Raises ConnectionAlreadyExists when a connection with this slug is not deleted, or when an
-        Azure or Custom slug was used before, deleted or not.
+        Azure or Custom slug was used before, deleted or not, and UnknownOrganization when an id
+        names no Organization.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
@@ -406,6 +425,8 @@ class LlmProviderRepository:
             ).one_or_none()
             if existing is not None and (existing.deleted_at is None or provider_type in BASE_URL_PROVIDER_TYPES):
                 raise ConnectionAlreadyExists(slug)
+            if not self._organizations_known(session, organization_ids):
+                raise UnknownOrganization
             now = datetime.now(UTC)
             connection = existing or LlmProviderConnection(
                 slug=slug, name=name, provider_type=provider_type, base_url=base_url
@@ -416,8 +437,19 @@ class LlmProviderRepository:
             connection.updated_by = actor_id
             connection.updated_at = now
             connection.deleted_at = None
+            connection.organization_access = organization_access
             session.add(connection)
             session.flush()
+            session.exec(
+                sa.delete(LlmProviderConnectionOrganization).where(
+                    col(LlmProviderConnectionOrganization.connection_id) == connection.id
+                )
+            )
+            added = sorted(organization_ids, key=str)
+            session.add_all(
+                LlmProviderConnectionOrganization(connection_id=connection.id, organization_id=organization_id)
+                for organization_id in added
+            )
             ids = self._stage(
                 session,
                 PLATFORM_LLM_PROVIDER_CREATED,
@@ -431,6 +463,24 @@ class LlmProviderRepository:
                     "actor_display": actor_display,
                 },
             )
+            if organization_access != OrganizationAccess.ALL:
+                ids += self._stage(
+                    session,
+                    PLATFORM_LLM_PROVIDER_ORGANIZATIONS_CHANGED,
+                    connection,
+                    actor_id,
+                    now,
+                    {
+                        "previous_organization_access": OrganizationAccess.ALL.value,
+                        "organization_access": organization_access.value,
+                        "added_count": len(added),
+                        "removed_count": 0,
+                        "added_organization_ids": added[:MAX_LISTED_ORGANIZATION_IDS],
+                        "removed_organization_ids": [],
+                        "organization_ids_truncated": len(added) > MAX_LISTED_ORGANIZATION_IDS,
+                        "actor_display": actor_display,
+                    },
+                )
             session.commit()
             return ids
 
@@ -442,8 +492,8 @@ class LlmProviderRepository:
         *,
         apply: Callable[[LlmProviderConnection], None],
     ) -> list[UUID]:
-        """Delete the connection's models, soft-delete the connection and purge its key, calling
-        `apply` first under the connection's lock.
+        """Delete the connection's models and listed Organizations, soft-delete the connection and
+        purge its key, calling `apply` first under the connection's lock.
 
         `apply` removes the connection's routes from LiteLLM; if it raises, nothing is deleted.
         Raises ConnectionNotFound when no connection with this slug is live.
@@ -459,6 +509,11 @@ class LlmProviderRepository:
                 raise ConnectionNotFound(slug)
             apply(connection)
             session.exec(sa.delete(LlmProviderModel).where(col(LlmProviderModel.connection_id) == connection.id))
+            session.exec(
+                sa.delete(LlmProviderConnectionOrganization).where(
+                    col(LlmProviderConnectionOrganization.connection_id) == connection.id
+                )
+            )
             key_purged = connection.api_key_encrypted is not None
             now = datetime.now(UTC)
             connection.api_key_encrypted = None
@@ -488,6 +543,13 @@ class LlmProviderRepository:
                 LlmProviderConnection.slug == slug, col(LlmProviderConnection.deleted_at).is_(None)
             )
         ).first()
+
+    @staticmethod
+    def _organizations_known(session: Session, organization_ids: frozenset[UUID]) -> bool:
+        if not organization_ids:
+            return True
+        known = session.exec(select(Organization.id).where(col(Organization.id).in_(organization_ids))).all()
+        return set(known) == organization_ids
 
     @staticmethod
     def _listed_organizations(session: Session, connection_id: UUID) -> list[tuple[UUID, str]]:

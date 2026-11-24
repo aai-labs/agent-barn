@@ -215,6 +215,8 @@ class LlmProviderConnectionRead(PydanticBaseModel):
     updated_by: str | None = None
     env_key_configured: bool
     env_key_last4: str | None = None
+    organization_access: OrganizationAccess
+    organization_count: int
 
 
 class LlmProviderModelRead(PydanticBaseModel):
@@ -308,7 +310,8 @@ class LlmProviderModelsReplace(PydanticBaseModel):
 
 class LlmProviderConnectionCreate(PydanticBaseModel):
     """A known provider takes only its key. Azure and Custom take a slug, name and base URL too,
-    whose rules the service checks so that a refusal can say which one was broken."""
+    whose rules the service checks so that a refusal can say which one was broken. Every
+    connection may also name its Provider Access, which the service checks the same way."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -317,6 +320,8 @@ class LlmProviderConnectionCreate(PydanticBaseModel):
     slug: str | None = None
     name: str | None = None
     base_url: str | None = None
+    organization_access: str = OrganizationAccess.ALL.value
+    organization_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _fields_match_the_provider_type(self) -> Self:

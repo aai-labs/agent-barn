@@ -314,7 +314,9 @@ def _checked_choices(
     return checked
 
 
-def _checked_organizations(data: LlmProviderOrganizationsReplace) -> tuple[OrganizationAccess, frozenset[UUID]]:
+def _checked_organizations(
+    data: LlmProviderOrganizationsReplace | LlmProviderConnectionCreate,
+) -> tuple[OrganizationAccess, frozenset[UUID]]:
     try:
         organization_access = OrganizationAccess(data.organization_access)
     except ValueError:
@@ -381,7 +383,9 @@ class PlatformLlmProviderService:
 
     def list_connections(self, context: CurrentUserContext) -> list[LlmProviderConnectionRead]:
         self.authority.require_platform_admin(context.user)
-        return [self._to_read(connection, updated_by) for connection, updated_by in self.repository.list_active()]
+        found = self.repository.list_active()
+        counts = self.repository.organization_counts([connection.id for connection, _ in found])
+        return [self._to_read(connection, updated_by, counts.get(connection.id, 0)) for connection, updated_by in found]
 
     def add_connection(
         self, data: LlmProviderConnectionCreate, context: CurrentUserContext
@@ -401,6 +405,9 @@ class PlatformLlmProviderService:
             if provider_type == ProviderType.OPENROUTER or self.repository.find_active(slug) is not None:
                 raise HTTPException(409, already_used)
             check = partial(self.key_checker.check, provider_type, api_key)
+        organization_access, organization_ids = _checked_organizations(data)
+        if not self.repository.organizations_known(organization_ids):
+            raise HTTPException(400, UNKNOWN_ORGANIZATION)
         self._check_key(name, check)
         try:
             ids = self.repository.add(
@@ -410,16 +417,20 @@ class PlatformLlmProviderService:
                 base_url,
                 encrypt_token(api_key, self.config.agent_token_encryption_key),
                 api_key[-4:],
+                organization_access,
+                organization_ids,
                 context.user.id,
                 context.user.full_name or context.user.email,
             )
         except ConnectionAlreadyExists:
             raise HTTPException(409, already_used) from None
+        except UnknownOrganization:
+            raise HTTPException(400, UNKNOWN_ORGANIZATION) from None
         self.dispatcher.enqueue_immediate(ids)
         found = self.repository.find_active(slug)
         if found is None:
             raise HTTPException(404, f"The {name} connection does not exist.")
-        return self._to_read(*found)
+        return self._with_count(*found)
 
     def replace_key(
         self, slug: str, data: LlmProviderKeyReplace, context: CurrentUserContext
@@ -460,7 +471,7 @@ class PlatformLlmProviderService:
         found = self.repository.find_active(slug)
         if found is None:
             raise HTTPException(404, NOT_FOUND)
-        return self._to_read(*found)
+        return self._with_count(*found)
 
     def list_models(self, slug: str, context: CurrentUserContext) -> list[LlmProviderModelRead]:
         self.authority.require_platform_admin(context.user)
@@ -717,7 +728,13 @@ class PlatformLlmProviderService:
         for route_id in listed.keys() - wanted_ids:
             self.litellm.delete_model_deployment(route_id)
 
-    def _to_read(self, connection: LlmProviderConnection, updated_by: str | None) -> LlmProviderConnectionRead:
+    def _with_count(self, connection: LlmProviderConnection, updated_by: str | None) -> LlmProviderConnectionRead:
+        counts = self.repository.organization_counts([connection.id])
+        return self._to_read(connection, updated_by, counts.get(connection.id, 0))
+
+    def _to_read(
+        self, connection: LlmProviderConnection, updated_by: str | None, organization_count: int
+    ) -> LlmProviderConnectionRead:
         has_api_key = connection.api_key_encrypted is not None
         env_key_configured = bool(self.config.openrouter_api_key) and connection.slug == OPENROUTER_SLUG
         return LlmProviderConnectionRead(
@@ -731,4 +748,6 @@ class PlatformLlmProviderService:
             updated_by=updated_by if has_api_key else None,
             env_key_configured=env_key_configured,
             env_key_last4=_env_key_last4(self.config.openrouter_api_key) if env_key_configured else None,
+            organization_access=connection.organization_access,
+            organization_count=organization_count,
         )
