@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection` or `llm_provider_model` table, how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
+Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection`, `llm_provider_connection_organization` or `llm_provider_model` table, which Organizations a connection is open to, how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
 
 ## Role in the system
 
@@ -12,7 +12,8 @@ Agents never hold a provider key. They call LiteLLM with their own virtual keys,
 
 ## The connection
 
-- Stored in `llm_provider_connection`: a unique `slug`, `name`, `provider_type`, `api_key_encrypted`, `api_key_last4`, `base_url`, `updated_by`, `updated_at` and `deleted_at`.
+- Stored in `llm_provider_connection`: a unique `slug`, `name`, `provider_type`, `api_key_encrypted`, `api_key_last4`, `base_url`, `updated_by`, `updated_at`, `deleted_at` and `organization_access`.
+- `organization_access` is the connection's Provider Access: `all`, `none`, `all_except` or `only`, `all` unless set otherwise. Migration `7847fc32d19c` set every existing connection, OpenRouter included, to `all`. The Organizations ticked for `all_except` and `only` are rows of `llm_provider_connection_organization` (`connection_id`, `organization_id`), each pair once. The database removes a row when its connection row is hard-deleted or its Organization is deleted; soft-deleting a connection leaves its rows. Nothing reads them yet: the API and enforcement come in later AF-474 PRs ([change log](llm-providers/CHANGELOG.md)).
 - The provider types are `openrouter`, `anthropic`, `openai`, `gemini`, `xai`, `deepseek`, `fireworks`, `novita`, `azure` and `custom`. A known provider has at most one connection, whose slug is its provider type and which has no `base_url`. An Azure or Custom connection has a slug of its own, which can't be any provider type's name, and a `base_url`.
 - The key is Fernet-encrypted with `AGENT_TOKEN_ENCRYPTION_KEY`, as other stored secrets are. Its last four characters are kept apart, so listing the connections never decrypts it.
 - Deleting a connection removes its LiteLLM routes, then deletes its models, sets `deleted_at` and purges the key and its last four characters, all under the connection's lock; the row keeps its slug, name and `base_url`. OpenRouter can't be deleted.

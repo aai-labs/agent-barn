@@ -32,7 +32,11 @@ CONNECTIONS_REVISION = "22b93965859f"
 PROVIDERS_REVISION = "91ad0093c626"
 BEFORE_MODELS_REVISION = "3f9f88255e3b"
 MODELS_REVISION = "bc817a73bb6d"
+BEFORE_ACCESS_REVISION = "9a64534a1a2f"
+ACCESS_REVISION = "7847fc32d19c"
 MODEL_TABLE = "llm_provider_model"
+ACCESS_TABLE = "llm_provider_connection_organization"
+ORGANIZATION_ACCESS_MODES = ["all", "none", "all_except", "only"]
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 TABLE = LlmProviderConnection.__tablename__
 SEEDED_ROW = (OPENROUTER_CONNECTION_ID, OPENROUTER_SLUG, OPENROUTER_NAME, "openrouter", None, None, None, None)
@@ -244,17 +248,26 @@ def test_removing_providers_deletes_every_other_connection_and_keeps_openrouter(
 def test_a_clean_database_has_only_the_seeded_openrouter_connection():
     with given([prepare_injector(), database_repo_is_ready(), database_is_clean()]) as context:
         engine = context.postgres_delegate.engine
+        organization_id = uuid7()
         with engine.begin() as connection:
             connection.execute(
-                text(f"UPDATE {TABLE} SET api_key_encrypted = 'ciphertext', api_key_last4 = 'a1b2', deleted_at = now()")
+                text(
+                    f"UPDATE {TABLE} SET api_key_encrypted = 'ciphertext', api_key_last4 = 'a1b2', deleted_at = now(),"
+                    " organization_access = 'only'"
+                )
             )
             _insert(connection, slug="azure-eu", provider_type="azure", base_url=BASE_URL)
+            _insert_organization(connection, organization_id)
+            _list_organization(connection, OPENROUTER_CONNECTION_ID, organization_id)
 
         database_is_clean()(context)
 
         with engine.connect() as connection:
             rows = connection.execute(text(f"SELECT {ROW_COLUMNS} FROM {TABLE}")).all()
+            access = connection.execute(text(f"SELECT organization_access FROM {TABLE}")).scalar_one()
+            listed = connection.execute(text(f"SELECT count(*) FROM {ACCESS_TABLE}")).scalar_one()
         assert_that([tuple(row) for row in rows], equal_to([SEEDED_ROW]))
+        assert_that((access, listed), equal_to(("all", 0)))
 
 
 def _insert_model(connection, connection_id, **overrides):
@@ -373,3 +386,164 @@ def test_the_models_downgrade_removes_the_table_and_keeps_the_connections(databa
     with database.engine.connect() as connection:
         count = connection.execute(text(f"SELECT count(*) FROM {TABLE}")).scalar_one()
     assert_that(count, equal_to(1))
+
+
+def _insert_organization(connection, organization_id):
+    connection.execute(
+        text(
+            "INSERT INTO organization (id, created_at, updated_at, name, llm_budget_usd, llm_budget_duration)"
+            " VALUES (:id, now(), now(), 'Listed Org', 100, '30d')"
+        ),
+        {"id": organization_id},
+    )
+
+
+def _list_organization(connection, connection_id, organization_id):
+    connection.execute(
+        text(f"INSERT INTO {ACCESS_TABLE} (connection_id, organization_id) VALUES (:connection_id, :organization_id)"),
+        {"connection_id": connection_id, "organization_id": organization_id},
+    )
+
+
+def _listed(connection):
+    return connection.execute(text(f"SELECT connection_id, organization_id FROM {ACCESS_TABLE}")).all()
+
+
+def test_the_access_migration_opens_every_existing_connection_to_all_organizations(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, BEFORE_ACCESS_REVISION)
+    with database.engine.begin() as connection:
+        _insert(connection, slug="anthropic", provider_type="anthropic")
+        _insert(
+            connection, slug="azure-eu", provider_type="azure", base_url=BASE_URL, deleted_at="2026-11-17T00:00:00Z"
+        )
+
+    command.upgrade(database.config, ACCESS_REVISION)
+
+    with database.engine.connect() as connection:
+        rows = connection.execute(text(f"SELECT slug, organization_access FROM {TABLE} ORDER BY slug")).all()
+        listed = _listed(connection)
+    assert_that(
+        [tuple(row) for row in rows], equal_to([("anthropic", "all"), ("azure-eu", "all"), (OPENROUTER_SLUG, "all")])
+    )
+    assert_that(listed, equal_to([]))
+
+
+def test_a_new_connection_is_open_to_all_organizations_unless_told_otherwise(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+
+    with database.engine.begin() as connection:
+        _insert(connection, slug="anthropic", provider_type="anthropic")
+
+        access = connection.execute(
+            text(f"SELECT organization_access FROM {TABLE} WHERE slug = 'anthropic'")
+        ).scalar_one()
+    assert_that(access, equal_to("all"))
+
+
+@pytest.mark.parametrize("mode", ORGANIZATION_ACCESS_MODES)
+def test_each_organization_access_mode_is_accepted(database_before_connections, mode):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+
+    with database.engine.begin() as connection:
+        _insert(connection, slug="anthropic", provider_type="anthropic", organization_access=mode)
+
+        access = connection.execute(
+            text(f"SELECT organization_access FROM {TABLE} WHERE slug = 'anthropic'")
+        ).scalar_one()
+    assert_that(access, equal_to(mode))
+
+
+@pytest.mark.parametrize("mode", ["some", "ALL", ""])
+def test_the_database_refuses_an_unknown_organization_access(database_before_connections, mode):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+
+    with (
+        pytest.raises(IntegrityError, match="ck_llm_provider_connection_organization_access_known"),
+        database.engine.begin() as connection,
+    ):
+        _insert(connection, slug="anthropic", provider_type="anthropic", organization_access=mode)
+
+
+def test_a_connection_lists_each_organization_once(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+    organization_id = uuid7()
+    with database.engine.begin() as connection:
+        _insert_organization(connection, organization_id)
+        _list_organization(connection, OPENROUTER_CONNECTION_ID, organization_id)
+
+    with database.engine.connect() as connection:
+        listed = _listed(connection)
+    assert_that([tuple(row) for row in listed], equal_to([(OPENROUTER_CONNECTION_ID, organization_id)]))
+    with (
+        pytest.raises(IntegrityError, match=f"{ACCESS_TABLE}_pkey"),
+        database.engine.begin() as connection,
+    ):
+        _list_organization(connection, OPENROUTER_CONNECTION_ID, organization_id)
+
+
+def test_the_database_refuses_listing_an_unknown_connection_or_organization(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+    organization_id = uuid7()
+    with database.engine.begin() as connection:
+        _insert_organization(connection, organization_id)
+
+    with (
+        pytest.raises(IntegrityError, match=f"{ACCESS_TABLE}_connection_id_fkey"),
+        database.engine.begin() as connection,
+    ):
+        _list_organization(connection, uuid7(), organization_id)
+    with (
+        pytest.raises(IntegrityError, match=f"{ACCESS_TABLE}_organization_id_fkey"),
+        database.engine.begin() as connection,
+    ):
+        _list_organization(connection, OPENROUTER_CONNECTION_ID, uuid7())
+
+
+def test_deleting_a_connection_or_an_organization_removes_its_listings(database_before_connections):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+    kept, removed = uuid7(), uuid7()
+    anthropic_id = uuid7()
+    with database.engine.begin() as connection:
+        _insert(connection, id=anthropic_id, slug="anthropic", provider_type="anthropic")
+        _insert_organization(connection, kept)
+        _insert_organization(connection, removed)
+        for connection_id in (OPENROUTER_CONNECTION_ID, anthropic_id):
+            for organization_id in (kept, removed):
+                _list_organization(connection, connection_id, organization_id)
+
+    with database.engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM {TABLE} WHERE id = :id"), {"id": anthropic_id})
+        connection.execute(text("DELETE FROM organization WHERE id = :id"), {"id": removed})
+
+    with database.engine.connect() as connection:
+        listed = _listed(connection)
+    assert_that([tuple(row) for row in listed], equal_to([(OPENROUTER_CONNECTION_ID, kept)]))
+
+
+def test_the_access_downgrade_removes_the_mode_and_the_listings_and_keeps_the_connections(
+    database_before_connections,
+):
+    database = database_before_connections
+    command.upgrade(database.config, ACCESS_REVISION)
+    organization_id = uuid7()
+    with database.engine.begin() as connection:
+        _insert(connection, slug="anthropic", provider_type="anthropic", organization_access="only")
+        _insert_organization(connection, organization_id)
+        _list_organization(connection, OPENROUTER_CONNECTION_ID, organization_id)
+
+    command.downgrade(database.config, BEFORE_ACCESS_REVISION)
+
+    inspector = inspect(database.engine)
+    assert_that(inspector.has_table(ACCESS_TABLE), equal_to(False))
+    columns = [column["name"] for column in inspector.get_columns(TABLE)]
+    assert_that("organization_access" in columns, equal_to(False))
+    with database.engine.connect() as connection:
+        slugs = connection.execute(text(f"SELECT slug FROM {TABLE} ORDER BY slug")).scalars().all()
+    assert_that(slugs, equal_to(["anthropic", OPENROUTER_SLUG]))
