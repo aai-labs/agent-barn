@@ -44,7 +44,7 @@ export function PlatformLlmProviderSettings() {
   const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsDialogKey, setModelsDialogKey] = useState(0);
-  const [modelsTrigger, setModelsTrigger] = useState<HTMLElement | null>(null);
+  const [menuTrigger, setMenuTrigger] = useState<HTMLElement | null>(null);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
   if (connectionsError || !connections)
@@ -80,7 +80,8 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(saved)} added`);
   }
 
-  function openKeyDialog(connection: LlmProviderConnection) {
+  function openKeyDialog(connection: LlmProviderConnection, trigger: HTMLElement | null = null) {
+    setMenuTrigger(trigger);
     resetReplace();
     setKeyTarget(connection);
     setKeyDialogKey((current) => current + 1);
@@ -94,7 +95,7 @@ export function PlatformLlmProviderSettings() {
   }
 
   function openModels(connection: LlmProviderConnection, trigger: HTMLElement | null) {
-    setModelsTrigger(trigger);
+    setMenuTrigger(trigger);
     setModelsTarget(connection);
     setModelsDialogKey((current) => current + 1);
     setModelsOpen(true);
@@ -129,7 +130,7 @@ export function PlatformLlmProviderSettings() {
               <ManageProviderMenu
                 connection={connection}
                 onModels={(trigger) => openModels(connection, trigger)}
-                onReplaceKey={() => openKeyDialog(connection)}
+                onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
                 onDelete={() => openDelete(connection)}
               />
             )
@@ -198,6 +199,7 @@ export function PlatformLlmProviderSettings() {
           onSave={(replacement) => save(keyTarget.slug, replacement)}
           isSaving={isReplacing}
           saveError={replaceError}
+          returnFocusTo={menuTrigger}
         />
       )}
       {modelsTarget && (
@@ -207,7 +209,7 @@ export function PlatformLlmProviderSettings() {
           open={modelsOpen}
           onOpenChange={setModelsOpen}
           onSaved={() => modelsSaved(modelsTarget)}
-          returnFocusTo={modelsTrigger}
+          returnFocusTo={menuTrigger}
         />
       )}
       {deleting && (

@@ -302,6 +302,8 @@ export class PlatformLlmProviderDataSupport {
       listStatus?: number;
       saveStatus?: number;
       saveDetail?: string;
+      /** How long a key save takes to answer, as a real provider check does. */
+      saveDelayMs?: number;
       addStatus?: number;
       addDetail?: string;
       deleteStatus?: number;
@@ -367,6 +369,7 @@ export class PlatformLlmProviderDataSupport {
       const slug = slugOf(route.request().url());
       const body = route.request().postDataJSON() as KeyBody;
       writes.push({ slug, body });
+      if (options.saveDelayMs) await new Promise((resolve) => setTimeout(resolve, options.saveDelayMs));
       if (saveStatus >= 400) return route.fulfill(refuse(saveStatus, saveDetail));
       const index = rows.findIndex((row) => row.slug === slug);
       rows[index] = {

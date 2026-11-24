@@ -699,6 +699,19 @@ test("a model stored at typed prices is offered LiteLLM's price without saying i
   await expect(settings.useLiteLLMPriceButton("claude-opus-4-1")).toBeVisible();
 });
 
+test("a key saved from Manage gives focus back to Manage, even when the check takes a while", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION], saveDelayMs: 800 });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.replaceKey("Anthropic", { key: PROVIDER_KEY });
+
+  await expect(settings.toast("Anthropic key saved")).toBeVisible();
+  await expect(settings.manageButton("Anthropic")).toBeFocused();
+});
+
 test("unticking a stored model removes it on save", async ({ page }) => {
   const { mock, settings } = await openAnthropicModels(page);
 

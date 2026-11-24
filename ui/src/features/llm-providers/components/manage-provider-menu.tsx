@@ -21,7 +21,8 @@ export function ManageProviderMenu({
   connection: LlmProviderConnection;
   /** Gets the Manage button, for the Models dialog to give focus back to when it closes. */
   onModels: (trigger: HTMLElement | null) => void;
-  onReplaceKey: () => void;
+  /** Gets the Manage button, as `onModels` does. */
+  onReplaceKey: (trigger: HTMLElement | null) => void;
   onDelete: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
@@ -36,7 +37,9 @@ export function ManageProviderMenu({
         {connection.hasApiKey && (
           <DropdownMenuItem onSelect={() => onModels(trigger.current)}>Models</DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={onReplaceKey}>{connection.hasApiKey ? "Replace key" : "Save a key"}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onReplaceKey(trigger.current)}>
+          {connection.hasApiKey ? "Replace key" : "Save a key"}
+        </DropdownMenuItem>
         <DropdownMenuItem variant="destructive" onSelect={onDelete}>
           Delete
         </DropdownMenuItem>

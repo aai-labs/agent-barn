@@ -26,6 +26,17 @@ function normalized(value: string): string {
   return rest ? `${integer}.${rest}` : integer;
 }
 
+/** A dialog's `onCloseAutoFocus` that gives focus to `target`, the Manage button a dialog opened
+ * from. The menu item it opened from is gone by then, and Save is disabled while saving, so without
+ * it focus falls to the page. With no target, the dialog's own focus return applies. */
+export function returnFocusTo(target: HTMLElement | null | undefined) {
+  return (event: Event) => {
+    if (!target?.isConnected) return;
+    event.preventDefault();
+    target.focus();
+  };
+}
+
 export function perMillion(price: string): string {
   const [whole, fraction = ""] = price.split(".");
   const digits = fraction.padEnd(MILLION_DIGITS, "0");

@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 
 import { useLlmProviderModels } from "../hooks/use-llm-provider-models";
 import type { LlmProviderConnection } from "../schemas";
-import { failureMessage, providerTitle } from "../utils";
+import { failureMessage, providerTitle, returnFocusTo as focusOnClose } from "../utils";
 import { AzureDeploymentsEditor } from "./azure-deployments-editor";
 import { ListedModelsPicker } from "./listed-models-picker";
 
@@ -21,8 +21,7 @@ export function ProviderModelsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
-  /** Focused when the dialog closes. The dialog opens from a menu item that is gone by then, and
-   * Save is disabled while saving, so without it focus would fall to the page. */
+  /** Focused when the dialog closes; see `returnFocusTo` in utils. */
   returnFocusTo?: HTMLElement | null;
 }) {
   const { storedModels, catalogue, isLoadingModels, modelsError, reloadModels } = useLlmProviderModels(
@@ -36,11 +35,7 @@ export function ProviderModelsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-h-[85vh] sm:max-w-4xl"
-        onCloseAutoFocus={(event) => {
-          if (!returnFocusTo?.isConnected) return;
-          event.preventDefault();
-          returnFocusTo.focus();
-        }}
+        onCloseAutoFocus={focusOnClose(returnFocusTo)}
       >
         <DialogHeader>
           <DialogTitle>
