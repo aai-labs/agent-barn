@@ -266,8 +266,11 @@ def retry_communication_delivery(
 @communications_router.post(
     "/agents/{agent_id}/connections/{connection_id}/whatsapp-pairing",
     summary="Link a phone to a WhatsApp Connection",
-    description="Server-sent events from one pairing attempt in the running Agent: `qr` (render its payload as a QR "
-    "code; it rotates), `connected`, then `linked`, or `expired` or `error`. Restart the Agent after `linked`.",
+    description="Server-sent events from one pairing attempt in the running Agent. The QR code arrives as `qr` "
+    "(Hermes: render its payload) or `qr_image` (OpenClaw: a PNG data URL), and rotates; then `connected` and "
+    "`linked`, or `expired` or `error`. On OpenClaw, `already_linked` reports a phone that is linked now; ask again "
+    "with `replace=true` to log it out and link another. Restart a Hermes Agent after `linked`; OpenClaw starts "
+    "answering by itself. A new attempt ends any earlier one for the same Agent.",
     response_class=StreamingResponse,
 )
 def pair_whatsapp_connection(
@@ -275,8 +278,9 @@ def pair_whatsapp_connection(
     connection_id: UUID,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[WhatsAppPairingService, Injected(WhatsAppPairingService)],
+    replace: Annotated[bool, Query(description="Log out a phone that is already linked (OpenClaw).")] = False,
 ):
-    events = service.pair(agent_id, connection_id, context)
+    events = service.pair(agent_id, connection_id, context, replace=replace)
     return StreamingResponse(
         log_stream_events(events),
         media_type="text/event-stream",

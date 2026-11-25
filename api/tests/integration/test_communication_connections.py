@@ -2036,6 +2036,18 @@ def test_whatsapp_pairing_on_openclaw_drives_the_gateway_login_and_passes_its_qr
             command = k8s.stream_exec_lines.call_args.args[2]
             assert_that(command[2], contains_string("web.login.start"))
             assert_that(command[2], not_(contains_string("bridge.js")))
+            # A linked phone is logged out only when the person confirmed replacing it.
+            assert_that(command[3:], equal_to(["agentbarn-whatsapp-pairing"]))
+            assert_that(k8s.stream_exec_lines.call_args.kwargs["max_seconds"], equal_to(210))
+
+        with when("they confirm replacing the phone that is linked now"):
+            k8s.stream_exec_lines.return_value = iter(['{"event":"linked"}'])
+            client.post(f"{_pairing_url(context, connection['id'])}?replace=true", headers=_auth(context))
+
+        with then("the script is told to log it out"):
+            assert_that(
+                k8s.stream_exec_lines.call_args.args[2][3:], equal_to(["agentbarn-whatsapp-pairing", "replace"])
+            )
 
 
 def test_whatsapp_pairing_needs_a_running_agent_and_a_whatsapp_connection() -> None:

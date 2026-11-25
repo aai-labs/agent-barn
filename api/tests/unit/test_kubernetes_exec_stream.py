@@ -58,3 +58,25 @@ def test_closing_the_stream_early_closes_the_exec_session() -> None:
         lines.close()
 
     assert fake.closed
+
+
+def test_an_overlong_line_is_dropped_and_the_next_line_still_arrives() -> None:
+    fake = FakeExec(["x" * 6, "x" * 6, "x\nshort\n", "tail"])
+    with _NO_KUBECONFIG, patch("api.infrastructure.kubernetes.client.k8s_stream", return_value=fake):
+        lines = list(KubernetesClient(config=MagicMock()).stream_exec_lines("pod", "ns", ["true"], max_line_chars=10))
+
+    assert lines == ["short", "tail"]
+
+
+def test_the_stream_ends_at_max_seconds_even_if_the_command_keeps_running() -> None:
+    fake = FakeExec(["one\n", None, None, "late\n"])
+    clock = iter([0.0, 1.0, 2.0, 99.0, 99.0])
+    with (
+        _NO_KUBECONFIG,
+        patch("api.infrastructure.kubernetes.client.k8s_stream", return_value=fake),
+        patch("api.infrastructure.kubernetes.client.time.monotonic", side_effect=lambda: next(clock)),
+    ):
+        lines = list(KubernetesClient(config=MagicMock()).stream_exec_lines("pod", "ns", ["true"], max_seconds=10))
+
+    assert lines == ["one", None]
+    assert fake.closed

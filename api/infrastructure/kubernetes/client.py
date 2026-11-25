@@ -712,14 +712,19 @@ class KubernetesClient:
         *,
         container: str = "agent",
         idle_seconds: float = 5,
+        max_seconds: float | None = None,
+        max_line_chars: int = 1_000_000,
     ) -> Generator[str | None]:
         """Runs ``command`` in the pod and yields each stdout line as it is written.
 
         Yields ``None`` after ``idle_seconds`` without output, so the caller regains
         control from a quiet command and can drop a stream whose client has gone.
-        Closing the generator closes the exec session; the command must bound its
-        own lifetime, because closing does not reliably stop it.
+        Closing the generator closes the exec session, as does passing
+        ``max_seconds``; closing does not reliably stop the command, so it must bound
+        its own lifetime too. A line longer than ``max_line_chars`` is dropped, since
+        pod output is the Agent's to write.
         """
+        deadline = None if max_seconds is None else time.monotonic() + max_seconds
         ws = k8s_stream(
             self._stream_core_v1.connect_get_namespaced_pod_exec,
             pod_name,
@@ -733,17 +738,25 @@ class KubernetesClient:
             _preload_content=False,
         )
         buffer = ""
+        overlong = False  # dropping the rest of a line that passed max_line_chars
         try:
-            while ws.is_open():
+            while ws.is_open() and (deadline is None or time.monotonic() < deadline):
                 ws.update(timeout=idle_seconds)
                 if not ws.peek_stdout():
                     yield None
                     continue
                 buffer += ws.read_stdout()
                 *lines, buffer = buffer.split("\n")
-                yield from lines
+                for line in lines:
+                    if not overlong and len(line) <= max_line_chars:
+                        yield line
+                    overlong = False
+                if len(buffer) > max_line_chars:
+                    buffer, overlong = "", True
+            if ws.is_open():
+                return
             buffer += ws.read_stdout() if ws.peek_stdout() else ""
-            yield from (line for line in buffer.split("\n") if line)
+            yield from (line for line in buffer.split("\n") if line and not overlong and len(line) <= max_line_chars)
         finally:
             ws.close()
 
