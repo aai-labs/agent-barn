@@ -3233,6 +3233,50 @@ def test_start_agent_without_native_chat_connection_does_not_promise_file_delive
             assert_that(agents_md, is_not(contains_string("MEDIA:")))
 
 
+_WITH_ARTIFACT_STORAGE = set_env_variable({"ARTIFACT_S3_ENDPOINT_URL": "http://garage.invalid"})
+
+
+@pytest.mark.parametrize("agent_type", [AgentType.OPENCLAW, AgentType.HERMES])
+def test_start_agent_with_native_chat_connection_attaches_files_before_offering_links(agent_type) -> None:
+    with given(
+        [
+            _WITH_ARTIFACT_STORAGE,
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=agent_type),
+            _native_slack_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent with artifact storage and a native Slack Connection starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its file section attaches the file and keeps download links for when they are asked for"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, contains_string("MEDIA:<absolute path>"))
+            assert_that(agents_md, contains_string('attach it to your reply as "Sending Files" says'))
+            assert_that(agents_md, contains_string("only when someone asks for a download link"))
+
+
+def test_start_agent_without_native_chat_connection_delivers_files_as_links() -> None:
+    with given([_WITH_ARTIFACT_STORAGE, *_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent with artifact storage, reachable only through gateway-owned Connections, starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its file section publishes the file and replies with a download link"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(
+                agents_md, contains_string("publish it with `/usr/local/bin/agentbarn-artifacts upload <file>`.")
+            )
+            assert_that(agents_md, is_not(contains_string('"Sending Files"')))
+
+
 @pytest.mark.parametrize(
     "approval_mode,runtime_mode",
     [

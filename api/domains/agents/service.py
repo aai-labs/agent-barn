@@ -3193,16 +3193,15 @@ class AgentService:
         # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
         # being the only route to its integrations, neither of which is true of gog.
         workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
+        # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
+        chat_attachments = any(
+            c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram)
+        )
         agents_md = (
             rendered.agents_md
             + artifacts.policy_md
             + build_local_tools_policy_md(s.name for s in mounted_skills)
-            + build_file_delivery_policy_md(
-                # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
-                workspace_dir
-                if any(c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram))
-                else None
-            )
+            + build_file_delivery_policy_md(workspace_dir if chat_attachments else None)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
             + build_scheduled_runs_policy_md()
@@ -3260,6 +3259,7 @@ class AgentService:
                 agents_md=agents_md,
                 memory_enabled=agent.memory_enabled,
                 artifacts_enabled=bool(self.config.artifact_s3_endpoint_url),
+                chat_attachments=chat_attachments,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -3290,6 +3290,7 @@ class AgentService:
                 agents_md=agents_md,
                 memory_enabled=agent.memory_enabled,
                 artifacts_enabled=bool(self.config.artifact_s3_endpoint_url),
+                chat_attachments=chat_attachments,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
