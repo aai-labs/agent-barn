@@ -14,6 +14,7 @@ import {
   visibleOrganizationSettingsSections,
   type OrganizationSettingsSectionKey,
 } from "@/features/organizations/components/organization-settings-utils";
+import { McpServersPanel } from "@/features/mcp-servers/components/mcp-servers-panel";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
@@ -63,6 +64,8 @@ export default function SettingsPage() {
           {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
           {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
+          {/* mcp_server.manage belongs to Owner and Admin Memberships only, not platform administrators. */}
+          {section.key === "mcp-servers" && <McpServersPanel canManage={isMembershipAdmin} />}
           {section.key === "unusual-activity" && <UnusualActivityPanel />}
           {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
           {section.key === "tier" && selectedOrganization && (

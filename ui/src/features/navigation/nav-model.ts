@@ -228,7 +228,7 @@ export const AGENT_CONFIGURATION_GROUPS: {
   sections: AgentConfigurationSectionKey[];
 }[] = [
   { key: "identity", label: "Identity", sections: ["profile", "template"] },
-  { key: "connections", label: "Connections", sections: ["channels", "webhooks", "keys"] },
+  { key: "connections", label: "Connections", sections: ["channels", "webhooks", "keys", "mcp"] },
   { key: "behaviour", label: "Behaviour", sections: ["skills", "memory", "override"] },
   { key: "safety", label: "Safety", sections: ["restore", "spend", "danger"] },
 ];

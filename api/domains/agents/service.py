@@ -198,6 +198,8 @@ from api.domains.integrations.runtime import (
 from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
 from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import OPENROUTER_SLUG
+from api.domains.mcp_servers import runtime as mcp_runtime
+from api.domains.mcp_servers.repository import McpServerRepository
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.organizations.settings_service import OrganizationSettingsService
@@ -447,6 +449,7 @@ class AgentService:
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
     custom_api: CustomApiRepository
+    mcp_servers: McpServerRepository
     integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
@@ -3052,6 +3055,10 @@ class AgentService:
             by_id.update(custom_api_overrides)
             custom_connections = sorted((row for row in by_id.values() if row is not None), key=lambda row: row.slug)
         snapshot.update(connection_snapshot(custom_connections))
+        # Organization MCP Servers reach the runtime only as gateway URLs plus a reference
+        # to the generation's gateway token; their own credentials stay in the gateway.
+        mcp_servers = self.mcp_servers.effective_for_agent(agent.id)
+        snapshot.update(mcp_runtime.snapshot(mcp_servers))
         custom_artifacts = materialize_custom_api(
             custom_connections,
             self.config.agent_token_encryption_key,
@@ -3084,6 +3091,24 @@ class AgentService:
             )
         secret.string_data.update(custom_artifacts.env)
         secret.string_data.update(artifacts.env)
+        if overlay is not None:
+            # Always present, even empty: init-openclaw.js replaces mcp.servers wholesale, so a
+            # server removed since the last start does not survive on the volume.
+            overlay["mcp"] = {
+                "servers": mcp_runtime.openclaw_mcp_servers(mcp_servers, self.config.credential_gateway_base_url)
+            }
+        if mcp_servers:
+            mcp_token = secrets.token_urlsafe(32)
+            # A preflight builds the configuration without a runtime generation to bind a token to.
+            if runtime is not None:
+                self.mcp_servers.set_gateway_token(
+                    agent.id, agent.organization_id, hashlib.sha256(mcp_token.encode()).hexdigest(), runtime.generation
+                )
+            secret.string_data[mcp_runtime.GATEWAY_TOKEN_ENV] = mcp_token
+            if hermes_cfg is not None:
+                hermes_cfg["mcp_servers"] = mcp_runtime.hermes_mcp_servers(
+                    mcp_servers, self.config.credential_gateway_base_url
+                )
         aai_config_toml = artifacts.files.get("aai-cli-config.toml") or (
             f'secrets_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/aai-secrets.enc.json"\n'
             f'key_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/key"\n'
@@ -3314,7 +3339,7 @@ class AgentService:
                 bots_manifest=bots_manifest,
             )
 
-        config_map.data["AGENTS.md"] += custom_artifacts.policy_md
+        config_map.data["AGENTS.md"] += custom_artifacts.policy_md + mcp_runtime.policy_md(mcp_servers)
 
         return _AssembledAgent(
             previous_status=previous_status,

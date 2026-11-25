@@ -79,6 +79,8 @@ def test_organization_role_permission_matrix_is_exact():
         # Seeing Agents' Anomalies and changing what counts as unusual.
         PermissionKey.ANOMALY_READ,
         PermissionKey.ANOMALY_MANAGE,
+        # Registering an Organization MCP Server lends its credential to the Organization's Agents.
+        PermissionKey.MCP_SERVER_MANAGE,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

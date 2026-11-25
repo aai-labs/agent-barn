@@ -64,6 +64,7 @@ from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.llm_providers.lookup import OpenRouterKeyLookup
 from api.domains.llm_providers.routes import platform_llm_providers_router
+from api.domains.mcp_servers.routes import agent_mcp_servers_router, mcp_oauth_callback_router, mcp_servers_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
 from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
@@ -219,6 +220,9 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(member_router)
     subapi.include_router(platform_member_router)
     subapi.include_router(shared_credentials_router)
+    subapi.include_router(mcp_servers_router)
+    subapi.include_router(agent_mcp_servers_router)
+    subapi.include_router(mcp_oauth_callback_router)
     subapi.include_router(skills_router)
     subapi.include_router(agent_skills_router)
     subapi.include_router(platform_skills_router)
