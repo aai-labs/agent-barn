@@ -42,6 +42,8 @@ import {
 import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { TelegramAccountLinking } from "@/features/communication-connections/components/telegram-account-linking";
+import { WhatsAppPhoneLinking } from "@/features/communication-connections/components/whatsapp-phone-linking";
+import { offersWhatsApp } from "@/features/communication-connections/whatsapp";
 import {
   CUSTOM_SLACK_NAME,
   ServerAddressInput,
@@ -650,6 +652,7 @@ export function AgentChannelSettings({
   const platforms = useCommunicationPlatforms();
   const setupManifest = (platformKey: string) =>
     platformKey === "slack" ? createSlackAppManifest(agent.name, agentDescription) : null;
+  const whatsAppOffered = offersWhatsApp(agent);
   // Web Chat is provisioned lazily; the shared Telegram bot belongs to ready-made setup.
   const addablePlatforms = useMemo(
     () => {
@@ -662,10 +665,11 @@ export function AgentChannelSettings({
           platform.key !== WEB_PLATFORM_KEY &&
           platform.key !== "agentbarn_telegram" &&
           !connected.has(platform.key) &&
-          !(platform.key === "telegram" && hasTelegram),
+          !(platform.key === "telegram" && hasTelegram) &&
+          !(platform.key === "whatsapp" && !whatsAppOffered),
       );
     },
-    [connections.data, platforms.data],
+    [connections.data, platforms.data, whatsAppOffered],
   );
   const { previewConnectionDirectory, createConnection, updateConnection, retireConnection } =
     useCommunicationConnectionActions();
@@ -1206,6 +1210,23 @@ export function AgentChannelSettings({
                       connectionId={connection.id}
                       enabled={connection.enabled}
                       canManage={agent.allowedActions.includes("agent.update")}
+                    />
+                  )}
+                  {connection.platformKey === "whatsapp" && connection.enabled && (
+                    <WhatsAppPhoneLinking
+                      agentId={agent.id}
+                      connectionId={connection.id}
+                      notLinked={connection.lastErrorCode === "whatsapp_not_paired"}
+                      agentRunning={agent.status === "RUNNING"}
+                      canManage={
+                        agent.allowedActions.includes("agent.update") &&
+                        agent.allowedActions.includes("agent.secret.manage")
+                      }
+                      restarts={canRestart}
+                      onRestart={async () => {
+                        await applyAndRestart(async () => {});
+                        await connections.refetch();
+                      }}
                     />
                   )}
                   <div className="mt-3">
