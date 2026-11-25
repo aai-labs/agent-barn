@@ -311,7 +311,8 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        self._reject_web_chat_mutation(connection.platform_key)
+        if connection.platform_key == "web":
+            return self._release_held_web_chat(agent, connection, data)
         if data.enabled and not connection.enabled:
             self.usage.check(
                 agent.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=connection.platform_key)
@@ -610,6 +611,25 @@ class CommunicationsService:
             ) from exc
         except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    def _release_held_web_chat(
+        self, agent: Agent, connection: CommunicationConnection, data: CommunicationConnectionUpdate
+    ) -> CommunicationConnectionRead:
+        """The built-in Web Chat Connection is Agent Barn's: the only change it takes is being
+        enabled again after a Tier Hold switched it off, once the Tier covers Web Chat again."""
+        if connection.suspended_at is None or data.model_fields_set != {"revision", "enabled"} or not data.enabled:
+            self._reject_web_chat_mutation(connection.platform_key)
+        self.usage.check(
+            agent.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=connection.platform_key)
+        )
+        connection.enabled = True
+        connection.resume()
+        # Nothing reports Web Chat's status; it is connected whenever it is enabled.
+        connection.observed_status = ConnectionObservedStatus.CONNECTED
+        try:
+            return self._read(self.repository.update(connection, expected_revision=data.revision))
+        except CommunicationConnectionConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     @staticmethod
     def _reject_web_chat_mutation(platform_key: str) -> None:
