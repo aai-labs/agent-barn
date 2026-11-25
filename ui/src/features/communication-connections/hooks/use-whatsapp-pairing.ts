@@ -10,7 +10,8 @@ import { parsePairingEvent } from "../whatsapp";
 export type WhatsAppPairingState =
   | { phase: "idle" }
   | { phase: "starting" }
-  | { phase: "scan"; qr: string }
+  /** The QR code as its text payload (Hermes) or as a rendered PNG data URL (OpenClaw). */
+  | { phase: "scan"; qr: { text: string } | { image: string } }
   | { phase: "connecting"; phone: string | null }
   | { phase: "linked"; phone: string | null }
   | { phase: "expired" }
@@ -71,7 +72,8 @@ export function useWhatsAppPairing(agentId: string, connectionId: string) {
         for (const frame of frames) {
           if (!frame.startsWith("data: ")) continue;
           const event = parsePairingEvent(frame.slice(6));
-          if (event?.event === "qr") setState({ phase: "scan", qr: event.qr });
+          if (event?.event === "qr") setState({ phase: "scan", qr: { text: event.qr } });
+          else if (event?.event === "qr_image") setState({ phase: "scan", qr: { image: event.image } });
           else if (event?.event === "connected") {
             phone = event.phone;
             setState({ phase: "connecting", phone });

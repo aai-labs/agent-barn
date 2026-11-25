@@ -7,6 +7,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 import { useWhatsAppPairing, type WhatsAppPairingState } from "../hooks/use-whatsapp-pairing";
+import { whatsAppReach } from "../whatsapp";
 
 function PairingBody({ state }: { state: WhatsAppPairingState }) {
   switch (state.phase) {
@@ -14,7 +15,13 @@ function PairingBody({ state }: { state: WhatsAppPairingState }) {
       return (
         <div className="mt-4 flex flex-col items-center gap-3">
           <div className="rounded-xl bg-white p-3">
-            <QRCodeSVG value={state.qr} size={208} fgColor="#1a1815" aria-label="QR code that links the phone" />
+            {"image" in state.qr ? (
+              // A data URL from the Agent's own gateway; next/image adds nothing here.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={state.qr.image} width={208} height={208} alt="QR code that links the phone" />
+            ) : (
+              <QRCodeSVG value={state.qr.text} size={208} fgColor="#1a1815" aria-label="QR code that links the phone" />
+            )}
           </div>
           <p className="m-0 text-center text-xs" style={{ color: "var(--ink-3)" }}>
             The code refreshes every 20 seconds. Keep this open until the phone says it is linked.
@@ -57,6 +64,7 @@ export function WhatsAppPhoneLinking({
   agentId,
   connectionId,
   notLinked,
+  relinkNote,
   agentRunning,
   canManage,
   restarts,
@@ -66,6 +74,8 @@ export function WhatsAppPhoneLinking({
   connectionId: string;
   /** The runtime reported that no phone is linked yet. */
   notLinked: boolean;
+  /** What linking again does to the phone linked now, which differs by runtime. */
+  relinkNote: string;
   agentRunning: boolean;
   canManage: boolean;
   /** Whether this person can restart the Agent. */
@@ -110,7 +120,10 @@ export function WhatsAppPhoneLinking({
         }}
         icon={<Smartphone size={18} />}
         title="Link a WhatsApp phone"
-        description="On the phone with the Agent's number, open WhatsApp → Settings → Linked devices → Link a device, then scan this code."
+        description={
+          "On the phone with the Agent's number, open WhatsApp → Settings → Linked devices → Link a device, then scan this code." +
+          (notLinked ? "" : ` ${relinkNote}`)
+        }
         cancelLabel={state.phase === "linked" ? "Restart later" : "Cancel"}
         confirmLabel={state.phase === "linked" ? "Restart Agent" : retry ? "Try again" : "Waiting for scan…"}
         pendingLabel="Restarting…"
@@ -133,5 +146,26 @@ export function WhatsAppPhoneLinking({
         <PairingBody state={state} />
       </ConfirmationDialog>
     </div>
+  );
+}
+
+/** How to talk to the Agent on WhatsApp, in the Connection's current mode and access. */
+export function WhatsAppReach({ settings }: { settings: Record<string, unknown> }) {
+  const reach = whatsAppReach(settings);
+  return (
+    <section
+      aria-label={reach.title}
+      className="mt-2 rounded-lg px-3 py-2.5 text-xs"
+      style={{ background: "var(--bg-soft)", color: "var(--ink-2)" }}
+    >
+      <h4 className="m-0 text-xs font-semibold" style={{ color: "var(--ink)" }}>
+        {reach.title}
+      </h4>
+      <ul className="m-0 mt-1.5 flex list-disc flex-col gap-1 pl-4">
+        {reach.lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    </section>
   );
 }
