@@ -55,7 +55,8 @@ from api.domains.communications.models import (
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events.models import OutboxMessage
-from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
+from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PERMISSION_ID_BY_KEY, PermissionKey
+from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.crypto import decrypt_token
@@ -2050,6 +2051,56 @@ def test_whatsapp_pairing_needs_a_running_agent_and_a_whatsapp_connection() -> N
         with then("neither starts pairing"):
             assert_that(stopped.status_code, equal_to(status.HTTP_409_CONFLICT))
             assert_that(wrong_platform.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            context.injector.get(KubernetesClient).stream_exec_lines.assert_not_called()
+
+
+def test_whatsapp_pairing_needs_secret_management_as_well_as_agent_update() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.HERMES, status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        connection = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context)).json()
+        context.organization_user.role = OrganizationRole.MEMBER
+        context.injector.get(OrganizationUserRepository).save(context.organization_user)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        role = AgentAccessRole(organization_id=context.organization.id, name=f"Updater {uuid4()}", is_system=False)
+        delegate.save(role)
+        for key in (PermissionKey.AGENT_READ, PermissionKey.AGENT_UPDATE):
+            delegate.save(AgentAccessRolePermission(role_id=role.id, permission_id=PERMISSION_ID_BY_KEY[key]))
+        there_is_agent_access(access_role_id=role.id)(context)
+
+        with when("someone who may edit the Agent but not manage its secrets tries to link a phone"):
+            response = client.post(_pairing_url(context, connection["id"]), headers=_auth(context))
+
+        with then("it is refused: a linked phone grants the Agent that WhatsApp account"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            context.injector.get(KubernetesClient).stream_exec_lines.assert_not_called()
+
+
+def test_whatsapp_pairing_is_refused_for_a_bot() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        client: TestClient = context.client
+        there_is_an_agent(
+            name="Bot",
+            agent_type=AgentType.HERMES,
+            parent_agent_id=context.agent.id,
+            bot_slot=1,
+            status=AgentStatus.RUNNING,
+        )(context)
+        # The API refuses WhatsApp for a Bot, so this one is stored directly.
+        connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="whatsapp",
+            display_name="WhatsApp",
+            settings={},
+            credentials_encrypted="",
+        )
+        context.injector.get(PostgresRepositoryDelegate).save(connection)
+
+        with when("someone tries to link a phone to the Bot"):
+            response = client.post(_pairing_url(context, str(connection.id)), headers=_auth(context))
+
+        with then("it is refused, because the Bot shares its Parent Agent's pod"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             context.injector.get(KubernetesClient).stream_exec_lines.assert_not_called()
 
 
