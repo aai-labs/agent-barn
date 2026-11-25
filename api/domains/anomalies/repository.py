@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 
 from api.domains.anomalies.detection import Verdict
@@ -16,6 +17,7 @@ from api.domains.anomalies.models import (
     AgentAnomaly,
     AgentAnomalyOverride,
     AgentAnomalyState,
+    AnomalyAlertEmailReceipt,
     AnomalySignal,
     ClassificationState,
     OrganizationAnomalySettings,
@@ -350,6 +352,25 @@ class AnomalyRepository:
                 .order_by(col(AgentAnomaly.signal))
             ).all()
             return [AnomalySignal(signal) for signal in signals]
+
+    def find_notified_alert_recipients(self, delivery_id: UUID) -> set[str]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(AnomalyAlertEmailReceipt.recipient_email).where(
+                        col(AnomalyAlertEmailReceipt.delivery_id) == delivery_id
+                    )
+                ).all()
+            )
+
+    def record_alert_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(AnomalyAlertEmailReceipt(delivery_id=delivery_id, recipient_email=recipient_email))
+            try:
+                session.commit()
+            except IntegrityError:
+                # The receipt already exists, which is exactly the idempotency it records.
+                session.rollback()
 
     def set_classification(self, anomaly_id: UUID, category: str, severity: float, details: dict[str, Any]) -> None:
         with Session(self.delegate.engine) as session:

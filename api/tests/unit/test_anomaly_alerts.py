@@ -10,9 +10,16 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, equal_to, has_properties
 
-from api.domains.anomalies.alerts import CLASSIFICATION_GRACE, LIKELY_UNUSUAL, AlertDecision, alert_decision
+from api.domains.anomalies.alerts import (
+    CLASSIFICATION_GRACE,
+    LIKELY_UNUSUAL,
+    AlertDecision,
+    AlertItem,
+    alert_decision,
+    describe,
+)
 from api.domains.anomalies.models import AgentAnomaly, AnomalySignal, ClassificationState
 
 CREATED = datetime(2026, 11, 25, 11, 0, tzinfo=UTC)
@@ -64,3 +71,44 @@ def test_unclassified_activity_waits_while_it_may_still_be_classified():
 
 def test_unclassified_activity_alerts_once_classification_has_had_its_chance():
     assert_that(alert_decision(_anomaly(), CREATED + CLASSIFICATION_GRACE), equal_to(AlertDecision.ALERT))
+
+
+def test_a_rate_is_described_by_how_far_it_went_from_usual():
+    anomaly = _anomaly(2.0, probability=0.9)
+    anomaly.observed_value, anomaly.usual_value = 1234.4, 12.0
+
+    assert_that(
+        describe(anomaly),
+        equal_to(
+            AlertItem(
+                what="Tool calls per hour",
+                detail="1,234 at its highest, usually 12",
+                classification="Runaway loop, high severity",
+            )
+        ),
+    )
+
+
+def test_an_error_rate_is_described_in_percent():
+    anomaly = _anomaly(2.0)
+    anomaly.signal, anomaly.observed_value, anomaly.usual_value = AnomalySignal.TOOL_ERROR_RATE.value, 0.62, 0.05
+
+    assert_that(describe(anomaly).detail, equal_to("62% at its highest, usually 5%"))
+
+
+def test_a_cap_is_described_against_the_cap():
+    anomaly = _anomaly(2.0)
+    anomaly.signal, anomaly.observed_value, anomaly.threshold = AnomalySignal.LLM_CALLS_CAP.value, 900, 500
+
+    assert_that(describe(anomaly).detail, equal_to("900 at its highest, cap 500"))
+
+
+def test_a_first_use_is_described_by_what_was_used():
+    anomaly = _anomaly(1.0)
+    anomaly.signal, anomaly.subject = AnomalySignal.NEW_TOOL.value, "browser_exec"
+
+    assert_that(describe(anomaly), has_properties(what="New tool", detail="browser_exec"))
+
+
+def test_unclassified_activity_is_described_as_not_classified():
+    assert_that(describe(_anomaly()).classification, equal_to("Not classified"))

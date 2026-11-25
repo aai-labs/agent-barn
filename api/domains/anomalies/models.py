@@ -282,3 +282,19 @@ class AgentNormalBehaviourRead(PydanticBaseModel):
     destinations: list[str] = Field(default_factory=list)
     override: AgentAnomalyOverrideRead
     can_manage: bool
+
+
+class AnomalyAlertEmailReceipt(BaseModel, table=True):
+    """Idempotency record: a recipient was already emailed for an alert's Event Delivery.
+
+    Same shape and reasoning as the Agent lifecycle receipt: one delivery fans out to
+    several recipients, and a retry must only email the ones that were not reached.
+    """
+
+    __tablename__: str = "anomaly_alert_email_receipt"
+    __table_args__ = (
+        sa.UniqueConstraint("delivery_id", "recipient_email", name="uq_anomaly_alert_email_receipt_delivery_recipient"),
+    )
+
+    delivery_id: UUID = SqlField(foreign_key="event_delivery.id", nullable=False, ondelete="CASCADE", index=True)
+    recipient_email: str = SqlField(nullable=False, max_length=320)

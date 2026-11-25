@@ -44,6 +44,9 @@ AF453_TABLES = {
     "agent_anomaly_state",
     "agent_anomaly",
 }
+# AF-464: who was already emailed for an alert delivery.
+AF464_TABLES = {"anomaly_alert_email_receipt"}
+AF464_REVISION = "2180817c8927"
 AF453_PERMISSIONS = (PermissionKey.ANOMALY_READ, PermissionKey.ANOMALY_MANAGE)
 
 _GIVEN = [
@@ -115,7 +118,7 @@ def test_the_migrated_schema_matches_the_anomaly_models():
     engine = create_engine(str(get_config().db_connection_url))
     with engine.connect() as connection:
         differences = compare_metadata(MigrationContext.configure(connection), SQLModel.metadata)
-    ours = [diff for diff in differences if any(table in repr(diff) for table in AF453_TABLES)]
+    ours = [diff for diff in differences if any(table in repr(diff) for table in AF453_TABLES | AF464_TABLES)]
 
     assert_that(ours, equal_to([]))
 
@@ -186,3 +189,15 @@ def test_a_hard_cap_must_be_positive():
         )
 
         assert_that(calling(_insert).with_args(context, override), raises(IntegrityError))
+
+
+def test_the_alert_receipt_migration_creates_its_table_and_removes_it_on_downgrade(scratch_database):
+    def tables() -> set[str]:
+        scratch_database.engine.dispose()
+        return set(inspect(scratch_database.engine).get_table_names()) & AF464_TABLES
+
+    command.upgrade(scratch_database.config, AF464_REVISION)
+    assert_that(tables(), equal_to(AF464_TABLES))
+
+    command.downgrade(scratch_database.config, AF453_REVISION)
+    assert_that(tables(), equal_to(set()))

@@ -280,6 +280,53 @@ class EmailService:
 
         self.client.send(email)
 
+    def send_anomaly_alert_email(
+        self,
+        *,
+        receiver_email: str,
+        receiver_name: str | None,
+        agent_name: str,
+        items: list[dict[str, str]],
+        link: str,
+        reason: str,
+    ) -> None:
+        """Propagates EmailSendingException like the lifecycle send: the handler runs
+        under the delivery framework and needs the retryable/terminal distinction.
+        Each item has `what`, `detail` and `classification`."""
+        if not self._email_enabled_or_log(
+            action="send_anomaly_alert_email",
+            receiver_email=receiver_email,
+        ):
+            # Delivery disabled is a documented no-op, not a failure — raising would
+            # dead-letter every alert on mail-less environments.
+            return
+
+        headline = f"Unusual activity from {agent_name}"
+        email_template = EmailTemplate(
+            file_name="anomaly-alert-template.mjml",
+            subject=headline,
+            receiver_name=receiver_name,
+            receiver_email=receiver_email,
+            attributes=[
+                EmailTemplateAttribute(name="user_name", value=receiver_name or receiver_email),
+                EmailTemplateAttribute(name="headline", value=headline),
+                EmailTemplateAttribute(name="agent_name", value=agent_name),
+                EmailTemplateAttribute(name="items", value=items),
+                EmailTemplateAttribute(name="link", value=link),
+                EmailTemplateAttribute(name="reason", value=reason),
+            ],
+        )
+        try:
+            email = self.create_email(email_template)
+        except Exception as e:
+            logger.error(
+                f"Unable to build anomaly alert email for {receiver_email} "
+                f"from {email_template.file_name} : {traceback.format_exc()}"
+            )
+            raise TerminalEmailSendingException(str(e), email=receiver_email) from e
+
+        self.client.send(email)
+
     def send_user_deletion_email(
         self,
         receiver_email: str,
