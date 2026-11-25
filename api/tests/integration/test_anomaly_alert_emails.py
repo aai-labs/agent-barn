@@ -34,7 +34,12 @@ from api.domains.agents.models import Agent, AgentType
 from api.domains.anomalies.event_handlers import AnomalyAlertEmailHandler
 from api.domains.anomalies.models import AgentAnomaly
 from api.domains.events.catalog import AGENT_ANOMALY_ALERT_EMAIL_HANDLER, AGENT_ANOMALY_FLAGGED
-from api.domains.events.handlers import EventDeliveryContext, EventHandlerRegistry, RetryableEventHandlerError
+from api.domains.events.handlers import (
+    EventDeliveryContext,
+    EventHandlerRegistry,
+    RetryableEventHandlerError,
+    TerminalEventHandlerError,
+)
 from api.domains.events.models import (
     ActorIdentity,
     DomainEventEnvelope,
@@ -46,6 +51,7 @@ from api.domains.rbac.catalog import OrganizationRole
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.infrastructure.email.client import EmailClient
+from api.infrastructure.email.exceptions import RetryableEmailSendingException, TerminalEmailSendingException
 from api.infrastructure.email.models import Email
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
@@ -227,6 +233,24 @@ def test_a_failed_send_is_retried(monkeypatch):
         _flag_a_spike(context)
 
         assert_that(calling(_deliver).with_args(context), raises(RetryableEventHandlerError))
+
+
+@pytest.mark.parametrize(
+    ("failure", "outcome"),
+    [
+        pytest.param(RetryableEmailSendingException("429", email=ADMIN), RetryableEventHandlerError, id="retryable"),
+        pytest.param(TerminalEmailSendingException("400", email=ADMIN), TerminalEventHandlerError, id="refused"),
+    ],
+)
+def test_the_mail_providers_answer_decides_between_retrying_and_dead_lettering(monkeypatch, failure, outcome):
+    def send(self, email: Email) -> Email:
+        raise failure
+
+    monkeypatch.setattr(EmailClient, "send", send)
+    with given(_given(the_decision_model_classifies())) as context:
+        _flag_a_spike(context)
+
+        assert_that(calling(_deliver).with_args(context), raises(outcome))
 
 
 def test_nobody_is_emailed_about_an_agent_deleted_since(sent):
