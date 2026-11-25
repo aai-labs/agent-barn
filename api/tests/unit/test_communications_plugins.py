@@ -710,6 +710,7 @@ def test_whatsapp_plugin_needs_no_credentials_and_normalizes_numbers() -> None:
         validated.settings,
         equal_to(
             {
+                "mode": "bot",
                 "dm_policy": "allowlist",
                 "allowed_numbers": ["15551234567", "251911234567"],
                 "group_policy": "off",

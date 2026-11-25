@@ -471,6 +471,17 @@ def native_whatsapp_extra(settings: dict) -> dict:
     Config keys win over Hermes' WHATSAPP_* variables, and an explicit empty list stays
     an empty allowlist. Agent Barn never uses ``pairing``: unknown senders get no reply.
     """
+    if settings.get("mode") == "self_chat":
+        # The bridge passes on only the owner's own Message yourself chat, so nothing
+        # else reaches the adapter. The prefix tells the Agent's replies from the owner's.
+        return {
+            "dm_policy": "open",
+            "allow_from": [],
+            "group_policy": "disabled",
+            "group_allow_from": [],
+            "require_mention": True,
+            "reply_prefix": "🤖 ",
+        }
     return {
         "dm_policy": _WHATSAPP_POLICIES[settings.get("dm_policy", "allowlist")],
         "allow_from": list(settings.get("allowed_numbers") or []),
@@ -488,13 +499,15 @@ def native_whatsapp_env(settings: dict) -> dict[str, str]:
     number list only when Agent Barn allows nothing but those numbers' DMs; otherwise
     ``*``, and the adapter applies the Connection's DM and group policy. The adapter has
     already admitted a message by the time the gateway authorizes it, so the gateway
-    admits all, as for Slack.
+    admits all, as for Slack. In self-chat mode the bridge itself passes on only the
+    owner's Message yourself chat.
     """
+    self_chat = settings.get("mode") == "self_chat"
     dm_policy = settings.get("dm_policy", "allowlist")
-    numbers_only = dm_policy != "open" and settings.get("group_policy", "off") == "off"
+    numbers_only = not self_chat and dm_policy != "open" and settings.get("group_policy", "off") == "off"
     return {
         "WHATSAPP_ENABLED": "true",
-        "WHATSAPP_MODE": "bot",
+        "WHATSAPP_MODE": "self-chat" if self_chat else "bot",
         "WHATSAPP_ALLOWED_USERS": ",".join(settings.get("allowed_numbers") or []) if numbers_only else "*",
         "WHATSAPP_ALLOW_ALL_USERS": "true",
         "WHATSAPP_HOME_CHANNEL": _NO_HOME_CHANNEL,

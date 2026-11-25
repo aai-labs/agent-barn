@@ -14,6 +14,16 @@ _GROUP_JID = re.compile(r"^[0-9]+(-[0-9]+)?@g\.us$")
 
 
 class WhatsAppSettings(PlatformSettings):
+    mode: str = Field(
+        default="bot",
+        pattern="^(bot|self_chat)$",
+        title="Mode",
+        description=(
+            "Bot answers people who message the linked number. Self Chat answers only the linked number's owner, "
+            "in their own Message yourself chat, so you can use your own number; the access settings below are "
+            "then ignored."
+        ),
+    )
     dm_policy: str = Field(
         default="allowlist",
         pattern="^(off|open|allowlist)$",
@@ -84,8 +94,8 @@ class WhatsAppPlatformPlugin(PlatformPlugin):
     display_name = "WhatsApp"
     setup_hint = (
         "## Before you connect\n\n"
-        "1. Use a dedicated phone number with WhatsApp or WhatsApp Business installed. The Agent answers as that "
-        "number, and anything sent to it can reach the Agent.\n"
+        "1. In Bot mode, use a dedicated phone number with WhatsApp or WhatsApp Business installed. The Agent "
+        "answers as that number, and anything sent to it can reach the Agent.\n"
         "2. This links the Agent as a WhatsApp Web device, not through Meta's Business API. WhatsApp may restrict "
         "numbers that send bulk or unsolicited messages, so only answer people who message first.\n\n"
         "## Link the phone\n\n"
@@ -95,7 +105,10 @@ class WhatsAppPlatformPlugin(PlatformPlugin):
         "link again if that happens.\n\n"
         "## Set Connection access\n\n"
         "1. Direct messages default to Allowlist; add each number with its country code.\n"
-        "2. Groups default to Off. Group IDs end in `@g.us`."
+        "2. Groups default to Off. Group IDs end in `@g.us`.\n\n"
+        "## Use your own number\n\n"
+        "1. Set Mode to **Self Chat** to talk to the Agent from your own WhatsApp, in the **Message yourself** chat. "
+        "It answers no one else, and its replies start with 🤖."
     )
     capabilities = frozenset({PlatformCapability.ATTACHMENTS, PlatformCapability.MENTIONS})
     settings_model = WhatsAppSettings
