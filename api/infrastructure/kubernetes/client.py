@@ -704,6 +704,49 @@ class KubernetesClient:
             raise RuntimeError(stderr.strip() or f"exec failed with code {rc}")
         return stdout
 
+    def stream_exec_lines(
+        self,
+        pod_name: str,
+        namespace: str,
+        command: list[str],
+        *,
+        container: str = "agent",
+        idle_seconds: float = 5,
+    ) -> Generator[str | None]:
+        """Runs ``command`` in the pod and yields each stdout line as it is written.
+
+        Yields ``None`` after ``idle_seconds`` without output, so the caller regains
+        control from a quiet command and can drop a stream whose client has gone.
+        Closing the generator closes the exec session; the command must bound its
+        own lifetime, because closing does not reliably stop it.
+        """
+        ws = k8s_stream(
+            self._stream_core_v1.connect_get_namespaced_pod_exec,
+            pod_name,
+            namespace,
+            command=command,
+            container=container,
+            stdout=True,
+            stderr=False,
+            stdin=False,
+            tty=False,
+            _preload_content=False,
+        )
+        buffer = ""
+        try:
+            while ws.is_open():
+                ws.update(timeout=idle_seconds)
+                if not ws.peek_stdout():
+                    yield None
+                    continue
+                buffer += ws.read_stdout()
+                *lines, buffer = buffer.split("\n")
+                yield from lines
+            buffer += ws.read_stdout() if ws.peek_stdout() else ""
+            yield from (line for line in buffer.split("\n") if line)
+        finally:
+            ws.close()
+
     def fetch_agent_healthz(self, service_name: str, namespace: str) -> dict:
         host = f"{service_name}.{namespace}"
         try:

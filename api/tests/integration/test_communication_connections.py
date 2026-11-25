@@ -59,6 +59,7 @@ from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.slack.errors import SlackFetchError
 from api.tests.core.givenpy import given, then, when
@@ -194,9 +195,9 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             catalogue = response.json()
             assert_that(
                 [item["key"] for item in catalogue],
-                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web"),
+                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web", "whatsapp"),
             )
-            for platform in ("discord", "telegram", "slack", "teams"):
+            for platform in ("discord", "telegram", "slack", "teams", "whatsapp"):
                 native = next(item for item in catalogue if item["key"] == platform)
                 assert_that(native["transport"], equal_to("native"))
                 assert_that("supervised_ingress" in native["capabilities"], equal_to(False))
@@ -1929,3 +1930,106 @@ def test_custom_slack_server_is_accepted_only_on_a_hermes_agent() -> None:
                 assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
                 assert_that(refused.json()["detail"], contains_string("Custom Slack server"))
             assert_that(openclaw_slack.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def _whatsapp_payload() -> dict:
+    return {
+        "platform_key": "whatsapp",
+        "display_name": "WhatsApp",
+        "settings": {"allowed_numbers": ["+1 555 123 4567"]},
+        "credentials": {},
+    }
+
+
+def _pairing_url(context, connection_id: str) -> str:
+    return f"{_base(context)}/{connection_id}/whatsapp-pairing"
+
+
+def test_whatsapp_is_accepted_only_on_a_hermes_agent() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        client: TestClient = context.client
+        hermes_id = context.agent.id
+
+        with when("I add WhatsApp to a Hermes Agent, a Bot, and an OpenClaw Agent"):
+            hermes = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context))
+            there_is_an_agent(name="Bot", agent_type=AgentType.HERMES, parent_agent_id=hermes_id, bot_slot=1)(context)
+            bot = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context))
+            there_is_an_agent(name="OpenClaw Agent", agent_type=AgentType.OPENCLAW)(context)
+            openclaw = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context))
+
+        with then("only the Hermes Agent keeps it, with its numbers normalized and no credentials"):
+            assert_that(hermes.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(hermes.json()["settings"]["allowed_numbers"], equal_to(["15551234567"]))
+            assert_that(bot.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(bot.json()["detail"], contains_string("not available for a Bot"))
+            assert_that(openclaw.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(openclaw.json()["detail"], contains_string("only for Hermes Agents"))
+
+
+def test_whatsapp_pairing_streams_only_the_pairing_events_from_the_agent_pod() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.HERMES, status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
+        k8s.stream_exec_lines.return_value = iter(
+            [
+                '{"ts":1,"event":"started","session":"/opt/data/platforms/whatsapp/pairing"}',
+                '{"level":40,"msg":"stream errored out"}',
+                '{"ts":2,"event":"qr","qr":"https://wa.me/settings/linked_devices#2@abc"}',
+                None,
+                '{"ts":3,"event":"connected","user":{"id":"15551234567:12@s.whatsapp.net","name":"Front desk"}}',
+                '{"event":"linked"}',
+            ]
+        )
+        connection = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context)).json()
+
+        with when("I link a phone"):
+            response = client.post(_pairing_url(context, connection["id"]), headers=_auth(context))
+
+        with then("the QR payload, linked number and outcome stream back, run in the Agent's own pod"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                response.text,
+                equal_to(
+                    'data: {"event": "qr", "qr": "https://wa.me/settings/linked_devices#2@abc"}\n\n'
+                    ": keepalive\n\n"
+                    'data: {"event": "connected", "phone": "+15551234567"}\n\n'
+                    'data: {"event": "linked"}\n\n'
+                ),
+            )
+            pod, _namespace, command = k8s.stream_exec_lines.call_args.args
+            assert_that(pod, equal_to("agent-pod"))
+            assert_that(command[:2], equal_to(["sh", "-c"]))
+            assert_that(command[2], contains_string("--pair-only --pair-json"))
+
+
+def test_whatsapp_pairing_needs_a_running_agent_and_a_whatsapp_connection() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        client: TestClient = context.client
+        whatsapp = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context)).json()
+        telegram = client.post(_base(context), json=_telegram_payload(), headers=_auth(context)).json()
+
+        with when("I try to link a phone to a stopped Agent, and to a Telegram Connection"):
+            stopped = client.post(_pairing_url(context, whatsapp["id"]), headers=_auth(context))
+            wrong_platform = client.post(_pairing_url(context, telegram["id"]), headers=_auth(context))
+
+        with then("neither starts pairing"):
+            assert_that(stopped.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(wrong_platform.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            context.injector.get(KubernetesClient).stream_exec_lines.assert_not_called()
+
+
+def test_whatsapp_pairing_is_refused_to_a_viewer() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.HERMES, status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        connection = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context)).json()
+        context.organization_user.role = OrganizationRole.MEMBER
+        context.injector.get(OrganizationUserRepository).save(context.organization_user)
+        there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        with when("an Agent Viewer tries to link a phone"):
+            response = client.post(_pairing_url(context, connection["id"]), headers=_auth(context))
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            context.injector.get(KubernetesClient).stream_exec_lines.assert_not_called()

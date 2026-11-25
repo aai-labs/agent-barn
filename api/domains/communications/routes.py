@@ -3,8 +3,10 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.agents.log_stream import log_stream_events
 from api.domains.agents.sharepoint_service import SharePointService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
@@ -28,6 +30,7 @@ from api.domains.communications.models import (
     TelegramLinkTokenRead,
 )
 from api.domains.communications.service import MAX_DIAGNOSTICS_WINDOW_DAYS, CommunicationsService
+from api.domains.communications.whatsapp_pairing import WhatsAppPairingService
 from api.infrastructure.shared.models import PaginatedItems
 
 communications_router = APIRouter(
@@ -258,6 +261,27 @@ def retry_communication_delivery(
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
 ):
     return service.retry_delivery(agent_id, connection_id, delivery_id, context)
+
+
+@communications_router.post(
+    "/agents/{agent_id}/connections/{connection_id}/whatsapp-pairing",
+    summary="Link a phone to a WhatsApp Connection",
+    description="Server-sent events from one pairing attempt in the running Agent: `qr` (render its payload as a QR "
+    "code; it rotates), `connected`, then `linked`, or `expired` or `error`. Restart the Agent after `linked`.",
+    response_class=StreamingResponse,
+)
+def pair_whatsapp_connection(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[WhatsAppPairingService, Injected(WhatsAppPairingService)],
+):
+    events = service.pair(agent_id, connection_id, context)
+    return StreamingResponse(
+        log_stream_events(events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @communications_router.post(
