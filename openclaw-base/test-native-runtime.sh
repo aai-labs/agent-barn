@@ -11,4 +11,7 @@ docker run --rm --network none \
     -v "$repo_root/api/tests/fixtures/openclaw_observer_driver.mjs:/observer-driver.mjs:ro" \
     --entrypoint node "$image" /observer-driver.mjs
 
+# WhatsApp Connection access through OpenClaw's pinned sender, group and mention rules.
+(cd "$repo_root/api" && uv run --frozen python tests/fixtures/openclaw_whatsapp_access_driver.py "$image")
+
 sh "$repo_root/api/tests/fixtures/test-messaging-retirement.sh" "$image" openclaw
