@@ -21,7 +21,7 @@ export async function POST(
   }
 
   const upstream = await fetch(
-    `${BACKEND_URL}/api/v1/organizations/${organizationId}/agents/${agentId}/connections/${connectionId}/whatsapp-pairing`,
+    `${BACKEND_URL}/api/v1/organizations/${organizationId}/agents/${agentId}/connections/${connectionId}/whatsapp-pairing${new URL(request.url).search}`,
     {
       method: "POST",
       headers: {

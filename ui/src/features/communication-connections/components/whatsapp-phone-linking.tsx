@@ -9,7 +9,7 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useWhatsAppPairing, type WhatsAppPairingState } from "../hooks/use-whatsapp-pairing";
 import { whatsAppReach } from "../whatsapp";
 
-function PairingBody({ state }: { state: WhatsAppPairingState }) {
+function PairingBody({ state, restartAfterLink }: { state: WhatsAppPairingState; restartAfterLink: boolean }) {
   switch (state.phase) {
     case "scan":
       return (
@@ -28,11 +28,18 @@ function PairingBody({ state }: { state: WhatsAppPairingState }) {
           </p>
         </div>
       );
+    case "replace":
+      return (
+        <p className="mt-4 mb-0 text-sm" role="status" style={{ color: "var(--ink-2)" }}>
+          {state.phone ?? "A phone"} is linked to this Agent now. Linking a new phone unlinks it straight away, and
+          the Agent stops answering on WhatsApp until the new one is scanned.
+        </p>
+      );
     case "linked":
       return (
         <p className="mt-4 mb-0 text-sm" role="status" style={{ color: "var(--ink-2)" }}>
-          {state.phone ? `${state.phone} is linked.` : "The phone is linked."} Restart the Agent to start answering on
-          WhatsApp.
+          {state.phone ? `${state.phone} is linked.` : "The phone is linked."}{" "}
+          {restartAfterLink ? "Restart the Agent to start answering on WhatsApp." : "The Agent answers on WhatsApp now."}
         </p>
       );
     case "expired":
@@ -65,6 +72,7 @@ export function WhatsAppPhoneLinking({
   connectionId,
   linked,
   relinkNote,
+  restartAfterLink,
   agentRunning,
   canManage,
   restarts,
@@ -74,8 +82,10 @@ export function WhatsAppPhoneLinking({
   connectionId: string;
   /** Whether a phone is linked, or null when the runtime doesn't report it (OpenClaw). */
   linked: boolean | null;
-  /** What linking again does to the phone linked now, which differs by runtime. */
-  relinkNote: string;
+  /** What linking again does to the phone linked now, where the runtime doesn't ask first. */
+  relinkNote: string | null;
+  /** Whether the Agent must restart to answer on a newly linked phone. */
+  restartAfterLink: boolean;
   agentRunning: boolean;
   canManage: boolean;
   /** Whether this person can restart the Agent. */
@@ -86,6 +96,17 @@ export function WhatsAppPhoneLinking({
   const [restarting, setRestarting] = useState(false);
   const { state, start, cancel } = useWhatsAppPairing(agentId, connectionId);
   const retry = state.phase === "expired" || state.phase === "failed";
+  const linkedPhase = state.phase === "linked";
+  const confirmLabel =
+    state.phase === "replace"
+      ? "Unlink it and link a new phone"
+      : linkedPhase
+        ? restartAfterLink
+          ? "Restart Agent"
+          : "Done"
+        : retry
+          ? "Try again"
+          : "Waiting for scan…";
 
   function close() {
     cancel();
@@ -126,16 +147,23 @@ export function WhatsAppPhoneLinking({
         title="Link a WhatsApp phone"
         description={
           "On the phone with the Agent's number, open WhatsApp → Settings → Linked devices → Link a device, then scan this code." +
-          (linked === false ? "" : ` ${relinkNote}`)
+          (linked === false || !relinkNote ? "" : ` ${relinkNote}`)
         }
-        cancelLabel={state.phase === "linked" ? "Restart later" : "Cancel"}
-        confirmLabel={state.phase === "linked" ? "Restart Agent" : retry ? "Try again" : "Waiting for scan…"}
+        cancelLabel={
+          state.phase === "replace" ? "Keep it" : linkedPhase ? (restartAfterLink ? "Restart later" : "Close") : "Cancel"
+        }
+        confirmLabel={confirmLabel}
+        variant={state.phase === "replace" ? "destructive" : "default"}
         pendingLabel="Restarting…"
         isPending={restarting}
-        confirmDisabled={state.phase === "linked" ? !restarts : !retry}
+        confirmDisabled={linkedPhase ? restartAfterLink && !restarts : !retry && state.phase !== "replace"}
         onConfirm={async () => {
-          if (retry) {
-            void start();
+          if (retry || state.phase === "replace") {
+            void start(state.phase === "replace");
+            return;
+          }
+          if (!restartAfterLink) {
+            close();
             return;
           }
           setRestarting(true);
@@ -147,7 +175,7 @@ export function WhatsAppPhoneLinking({
           }
         }}
       >
-        <PairingBody state={state} />
+        <PairingBody state={state} restartAfterLink={restartAfterLink} />
       </ConfirmationDialog>
     </div>
   );

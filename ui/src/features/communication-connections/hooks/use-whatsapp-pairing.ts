@@ -13,6 +13,8 @@ export type WhatsAppPairingState =
   /** The QR code as its text payload (Hermes) or as a rendered PNG data URL (OpenClaw). */
   | { phase: "scan"; qr: { text: string } | { image: string } }
   | { phase: "connecting"; phone: string | null }
+  /** A phone is linked now; linking another logs it out, so the person confirms first. */
+  | { phase: "replace"; phone: string | null }
   | { phase: "linked"; phone: string | null }
   | { phase: "expired" }
   | { phase: "failed"; message: string };
@@ -44,7 +46,7 @@ export function useWhatsAppPairing(agentId: string, connectionId: string) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (replace = false) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -52,7 +54,8 @@ export function useWhatsAppPairing(agentId: string, connectionId: string) {
     let phone: string | null = null;
     let finished = false;
     try {
-      const response = await fetch(`${orgApiBase}/agents/${agentId}/connections/${connectionId}/whatsapp-pairing`, {
+      const url = `${orgApiBase}/agents/${agentId}/connections/${connectionId}/whatsapp-pairing`;
+      const response = await fetch(replace ? `${url}?replace=true` : url, {
         method: "POST",
         headers: { ...(await api.getAuthHeaders()), Accept: "text/event-stream" },
         signal: controller.signal,
@@ -77,6 +80,9 @@ export function useWhatsAppPairing(agentId: string, connectionId: string) {
           else if (event?.event === "connected") {
             phone = event.phone;
             setState({ phase: "connecting", phone });
+          } else if (event?.event === "already_linked") {
+            finished = true;
+            setState({ phase: "replace", phone: event.phone });
           } else if (event?.event === "linked") {
             finished = true;
             setState({ phase: "linked", phone });

@@ -49,6 +49,7 @@ import {
 import {
   whatsAppLinked,
   whatsAppRelinkNote,
+  whatsAppRestartsAfterLink,
   whatsAppUnavailableReason,
 } from "@/features/communication-connections/whatsapp";
 import {
@@ -1231,6 +1232,7 @@ export function AgentChannelSettings({
                       connectionId={connection.id}
                       linked={whatsAppLinked(agent.agentType, connection)}
                       relinkNote={whatsAppRelinkNote(agent.agentType)}
+                      restartAfterLink={whatsAppRestartsAfterLink(agent.agentType)}
                       agentRunning={agent.status === "RUNNING"}
                       canManage={
                         agent.allowedActions.includes("agent.update") &&

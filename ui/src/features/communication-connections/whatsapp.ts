@@ -6,11 +6,17 @@ export function whatsAppUnavailableReason(agent: { parentAgentId: string | null 
   return agent.parentAgentId ? "Bots share their Parent Agent's phone. Add WhatsApp to the Parent Agent." : null;
 }
 
-/** What happens to the linked phone when someone links again, per runtime. */
-export function whatsAppRelinkNote(agentType: string): string {
-  return agentType === "openclaw"
-    ? "Linking again unlinks the current phone straight away, even if you cancel."
-    : "The current phone stays linked until the new one is.";
+/**
+ * What linking again does to the phone linked now, where it helps to say so up front.
+ * OpenClaw asks first instead, once it reports which phone is linked.
+ */
+export function whatsAppRelinkNote(agentType: string): string | null {
+  return agentType === "hermes" ? "The current phone stays linked until the new one is." : null;
+}
+
+/** Hermes starts its bridge on a new link only when the Agent restarts; OpenClaw starts the channel itself. */
+export function whatsAppRestartsAfterLink(agentType: string): boolean {
+  return agentType === "hermes";
 }
 
 /**
@@ -30,6 +36,7 @@ export function whatsAppLinked(
 export type WhatsAppPairingEvent =
   | { event: "qr"; qr: string }
   | { event: "qr_image"; image: string }
+  | { event: "already_linked"; phone: string | null }
   | { event: "connected"; phone: string | null }
   | { event: "linked" }
   | { event: "expired" }

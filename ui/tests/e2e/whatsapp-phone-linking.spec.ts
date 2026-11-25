@@ -187,20 +187,51 @@ test.describe("WhatsApp phone linking", () => {
     });
   }
 
-  test("warns that linking an OpenClaw Agent unlinks any current phone at once", async ({ page }) => {
-    // OpenClaw doesn't report whether a phone is linked, so the warning always shows.
+  test("asks before replacing a phone an OpenClaw Agent has linked, and needs no restart", async ({ page }) => {
     await openMessaging(page, { agent_type: "openclaw", status: "RUNNING" }, [
       { ...whatsAppConnection, observed_status: "CONNECTED", last_error_code: null },
     ]);
-    await page.route(PAIRING, (route) =>
-      route.fulfill({ contentType: "text/event-stream", body: sse({ event: "expired" }) }),
-    );
+    const requests: string[] = [];
+    await page.route(`${PAIRING}*`, (route) => {
+      requests.push(route.request().url());
+      const replace = new URL(route.request().url()).searchParams.get("replace") === "true";
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: replace
+          ? sse({ event: "connected", phone: "+15559990000" }, { event: "linked" })
+          : sse({ event: "already_linked", phone: "+15551234567" }),
+      });
+    });
 
-    await expect(page.getByText("Link the phone this Agent answers as, or link again to change it.")).toBeVisible();
     await page.getByRole("button", { name: "Link phone" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Link a WhatsApp phone" });
-    await expect(dialog.getByText(/unlinks the current phone straight away/)).toBeVisible();
+    await expect(dialog.getByText(/\+15551234567 is linked to this Agent now/)).toBeVisible();
+    expect(requests.map((url) => new URL(url).search)).toEqual([""]);
+
+    await dialog.getByRole("button", { name: "Unlink it and link a new phone" }).click();
+    await expect(dialog.getByText("+15559990000 is linked. The Agent answers on WhatsApp now.")).toBeVisible();
+    expect(new URL(requests[1]).searchParams.get("replace")).toBe("true");
+    await expect(dialog.getByRole("button", { name: "Restart Agent" })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("keeps the linked OpenClaw phone when the person declines", async ({ page }) => {
+    await openMessaging(page, { agent_type: "openclaw", status: "RUNNING" }, [whatsAppConnection]);
+    let attempts = 0;
+    await page.route(`${PAIRING}*`, (route) => {
+      attempts += 1;
+      return route.fulfill({ contentType: "text/event-stream", body: sse({ event: "already_linked", phone: null }) });
+    });
+
+    await page.getByRole("button", { name: "Link phone" }).click();
+    const dialog = page.getByRole("dialog", { name: "Link a WhatsApp phone" });
+    await expect(dialog.getByText(/A phone is linked to this Agent now/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep it" }).click();
+
+    await expect(dialog).toBeHidden();
+    expect(attempts).toBe(1);
   });
 
   test("offers another try when the QR code expires", async ({ page }) => {
