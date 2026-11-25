@@ -21,8 +21,15 @@ from api.domains.anomalies.models import (
     OrganizationAnomalySettings,
     SeenKind,
 )
-from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events import (
+    ActorIdentity,
+    ActorIdentityType,
+    EventDelivery,
+    SubjectIdentity,
+    SubjectIdentityType,
+)
 from api.domains.events.catalog import (
+    AGENT_ANOMALY_FLAGGED,
     AGENT_ANOMALY_OVERRIDE_CHANGED,
     EVENT_REGISTRY,
     ORGANIZATION_ANOMALY_DETECTION_CHANGED,
@@ -222,6 +229,7 @@ class AnomalyRepository:
     """
 
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     def enabled_organization_ids(self) -> list[UUID]:
         with Session(self.delegate.engine) as session:
@@ -260,7 +268,7 @@ class AnomalyRepository:
             if settings is None or not settings.enabled or settings.updated_at != version:
                 yield None
                 return
-            yield CheckWrites(session, organization_id, agent_id)
+            yield CheckWrites(session, organization_id, agent_id, self.outbox_repository)
             session.commit()
 
     def get_state(self, agent_id: UUID) -> AgentAnomalyState | None:
@@ -368,6 +376,27 @@ class CheckWrites:
     session: Session
     organization_id: UUID
     agent_id: UUID
+    outbox_repository: OutboxMessageRepository
+
+    def record_flagged(self, anomaly_ids: list[UUID]) -> list[UUID]:
+        """The alert Event for the Anomalies this check started, recorded with them so a
+        crash after the commit cannot lose it. Returns its delivery ids, which the check
+        enqueues once it has classified them; until then the deliveries wait, and
+        reconciliation sends them if the check never gets that far."""
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_ANOMALY_FLAGGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=self.organization_id,
+            actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="anomaly-checks"),
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT, id=self.agent_id, organization_id=self.organization_id
+            ),
+            correlation_id=uuid4(),
+            payload={"organization_id": self.organization_id, "agent_id": self.agent_id, "anomaly_ids": anomaly_ids},
+        )
+        self.outbox_repository.stage(session=self.session, registry=EVENT_REGISTRY, event=event)
+        return self.outbox_repository.delivery_ids_for_event(self.session, event.event_id)
 
     def open_or_update(self, signal: AnomalySignal, verdict: Verdict, at: datetime) -> UUID | None:
         """Start an Anomaly for `signal`, or bring the ongoing one up to date. Returns

@@ -230,6 +230,7 @@ class AnomalyCheckService:
     business_value_service: BusinessValueService
     decision_service: DecisionService
     conversation_service: ConversationService
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def windows(self, now: datetime) -> tuple[datetime, datetime | None]:
         """Where the checked hour ends for tool and Business Action figures, and for LLM
@@ -261,13 +262,17 @@ class AnomalyCheckService:
     def _check_agent(self, organization_id: UUID, agent_id: UUID, until: datetime, cost_until: datetime | None) -> None:
         """Work out everything first, then record it in one transaction, and only if
         detection has not been turned off (or off and on again) meanwhile. What started
-        is classified after the transaction, so a slow provider never holds it open."""
+        is classified after the transaction, so a slow provider never holds it open.
+
+        Its alert Event is recorded in the transaction but sent only after classifying,
+        so the alert can say how each was classified."""
         version = self.repository.detection_version(organization_id)
         if version is None:
             return
         rates, enough, context = self._rate_findings(agent_id, until, cost_until)
         found = self._first_use_findings(agent_id, until, enough)
         started: list[UUID] = []
+        alert_deliveries: list[UUID] = []
         with self.repository.check_writes(organization_id, agent_id, version) as writes:
             if writes is None:
                 logger.info("Detection changed while agent %s was checked; nothing was recorded", agent_id)
@@ -280,12 +285,15 @@ class AnomalyCheckService:
                     writes.end_ongoing(signal, at)
             for use in found.first_uses:
                 started.append(writes.record_first_use(use.signal, use.subject, use.at, use.uses))
+            if started:
+                alert_deliveries = writes.record_flagged(started)
             writes.mark_seen(found.seen)
             writes.save_state(
                 tool_calls_read_through=found.tool_calls_read_through,
                 business_actions_read_through=found.business_actions_read_through,
             )
         self._classify(agent_id, started, context, until)
+        self.event_delivery_dispatcher.enqueue_immediate(alert_deliveries)
 
     def _classify(self, agent_id: UUID, anomaly_ids: list[UUID], context: AgentContext, until: datetime) -> None:
         """Ask the decision model about Anomalies that started in this check, once.

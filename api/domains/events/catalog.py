@@ -104,12 +104,14 @@ AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
 ORGANIZATION_MCP_SERVER_CREATED = "organization.mcp_server.created"
 ORGANIZATION_MCP_SERVER_UPDATED = "organization.mcp_server.updated"
 ORGANIZATION_MCP_SERVER_DELETED = "organization.mcp_server.deleted"
+AGENT_ANOMALY_FLAGGED = "agent.anomaly.flagged"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 ORGANIZATION_TRIAL_EXPIRY_HANDLER = "organization.trial_expiry.projection"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
+AGENT_ANOMALY_ALERT_EMAIL_HANDLER = "agent.anomaly_alert_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 WORKFLOW_RUN_CHANGED = "workflow.run.changed"
 WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
@@ -506,6 +508,18 @@ class OrganizationLlmBudgetPayload(BaseModel):
     limit_usd: float
     renews_at: str | None = None
     subject_display: str
+
+
+class AgentAnomalyFlaggedPayload(BaseModel):
+    """The Anomalies one check of one Agent started. Identifiers only: the handler reads
+    what was flagged and how it was classified when it delivers, since classification
+    finishes after the Event is recorded."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    anomaly_ids: list[UUID]
 
 
 class AgentLlmBudgetPayload(BaseModel):
@@ -1267,6 +1281,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_ANOMALY_FLAGGED,
+            schema_version=1,
+            payload_model=AgentAnomalyFlaggedPayload,
+            handler_names=(AGENT_ANOMALY_ALERT_EMAIL_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
     for event_name in (AGENT_LLM_BUDGET_THRESHOLD_REACHED, AGENT_LLM_BUDGET_EXHAUSTED):
         registry.register(
             DomainEventDefinition(
