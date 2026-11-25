@@ -438,6 +438,13 @@ _LONG = "x" * 60
 _COLLIDING_TOOLS = [f"{_LONG}_one", f"{_LONG}_two", "search"]
 
 
+def _gateway_headers(context, agent_id: UUID, server_id: str | None = None) -> dict[str, str]:
+    """The headers the gateway would send upstream for this Agent: what makes a sign-in usable."""
+    servers = context.injector.get(PostgresRepositoryDelegate).find_all(OrganizationMcpServer)
+    server = next(s for s in servers if server_id is None or str(s.id) == server_id)
+    return context.injector.get(McpCredentialBroker).resolve(server, agent_id).headers
+
+
 def _credential_row(context, agent_id: UUID | None = None) -> McpServerCredential:
     return next(row for row in _credentials(context) if row.agent_id == agent_id)
 
@@ -474,10 +481,11 @@ def test_a_first_sign_in_whose_tools_collide_is_kept_but_not_usable_until_one_is
                 path, json={"tool_exclude": [f"{_LONG}_two"]}, headers=_auth(context.access_token)
             )
 
-        with then("the sign-in becomes usable"):
+        with then("the sign-in becomes usable, and the gateway sends it for an Agent"):
             assert_that(hidden.status_code, equal_to(status.HTTP_200_OK), hidden.text)
             assert_that(_credential_row(context).status, equal_to("active"))
             assert_that(hidden.json()["sign_in"], has_entries(status="signed_in"))
+            assert_that(_gateway_headers(context, context.agent.id), has_entries(authorization="Bearer access-1"))
 
 
 def test_a_first_sign_in_with_unique_tool_names_is_usable_at_once(authorization_server):
@@ -518,6 +526,78 @@ def test_an_agents_own_sign_in_whose_tools_collide_is_held_back_too(authorizatio
         assert_that(completed.json()["tool_collisions"], has_length(1))
         assert_that(_credential_row(context, context.agent.id).status, equal_to("needs_tool_filter"))
         assert_that(_agent_servers(context)[0], has_entries(credential_source="agent", needs_tool_filter=True))
+
+
+def test_an_agents_held_sign_in_recovers_by_signing_in_again_once_the_filter_is_fixed(authorization_server):
+    probe = FakeProbe()
+    probe.tools = list(_COLLIDING_TOOLS)
+    with given(_given(probe)) as context:
+        server = _oauth_server(context)
+        _complete(context, _state(_start(context, server["id"], agent_id=context.agent.id).json()["authorize_url"]))
+        with pytest.raises(CredentialUnavailable, match="share a name"):
+            _gateway_headers(context, context.agent.id)
+
+        with when("an Owner hides one of the colliding tools on the Organization's server"):
+            hidden = context.client.patch(
+                f"{_SERVERS}/{server['id']}",
+                json={"tool_exclude": [f"{_LONG}_two"]},
+                headers=_auth(context.access_token),
+            )
+
+        with then("the Agent's own sign-in is still held: it was checked with that account, not the Organization's"):
+            assert_that(hidden.status_code, equal_to(status.HTTP_200_OK), hidden.text)
+            assert_that(_agent_servers(context)[0], has_entries(needs_tool_filter=True, has_agent_credential=True))
+
+        with when("the Agent signs in again"):
+            again = _complete(
+                context, _state(_start(context, server["id"], agent_id=context.agent.id).json()["authorize_url"])
+            )
+
+        with then("the tools pass, and the gateway sends the Agent's own token"):
+            assert_that(again.json(), has_entries(tool_collisions=[]))
+            assert_that(_credential_row(context, context.agent.id).status, equal_to("active"))
+            assert_that(_agent_servers(context)[0], has_entries(needs_tool_filter=False))
+            assert_that(_gateway_headers(context, context.agent.id), has_entries(authorization="Bearer access-1"))
+
+
+def test_an_agent_servers_held_sign_in_recovers_when_its_filter_is_fixed(authorization_server):
+    probe = FakeProbe()
+    probe.tools = list(_COLLIDING_TOOLS)
+    with given(_given(probe)) as context:
+        agent_servers = f"/api/v1/organizations/{{organization_id}}/agents/{context.agent.id}/mcp-servers"
+        created = context.client.post(
+            agent_servers,
+            json={"name": "Notion", "url": URL, "auth": {"type": "oauth"}},
+            headers=_auth(context.access_token),
+        )
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED), created.text)
+        server_id = created.json()["id"]
+
+        with when("the Agent's own server is signed in, and its tools collide"):
+            completed = _complete(
+                context, _state(_start(context, server_id, agent_id=context.agent.id).json()["authorize_url"])
+            )
+
+        with then("the sign-in is held, and no request uses it"):
+            assert_that(completed.json()["tool_collisions"], has_length(1))
+            assert_that(_credential_row(context, context.agent.id).status, equal_to("needs_tool_filter"))
+            with pytest.raises(CredentialUnavailable, match="share a name"):
+                _gateway_headers(context, context.agent.id, server_id)
+
+        with when("the Agent's editor hides one of the colliding tools"):
+            hidden = context.client.patch(
+                f"{agent_servers}/{server_id}",
+                json={"tool_exclude": [f"{_LONG}_two"]},
+                headers=_auth(context.access_token),
+            )
+
+        with then("the filter is checked with the held sign-in, which becomes usable"):
+            assert_that(hidden.status_code, equal_to(status.HTTP_200_OK), hidden.text)
+            assert_that(probe.calls[-1][1]["auth"], has_entries(type="bearer", token="access-1"))
+            assert_that(_credential_row(context, context.agent.id).status, equal_to("active"))
+            assert_that(
+                _gateway_headers(context, context.agent.id, server_id), has_entries(authorization="Bearer access-1")
+            )
 
 
 def test_a_sign_in_whose_server_cannot_be_checked_saves_nothing(authorization_server):

@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../../constants";
 import {
+  MCP_OAUTH_ID,
   MCP_SERVER_ID,
   agentMcpServers,
   membershipContext,
@@ -159,6 +160,7 @@ export class McpServerDataSupport {
     restricted = false,
     canManageRestricted = false,
     linearRestartPending = false,
+    notionHeldForToolFilter = false,
     agentServers = [],
   }: {
     running?: boolean;
@@ -171,6 +173,8 @@ export class McpServerDataSupport {
     restricted?: boolean;
     canManageRestricted?: boolean;
     linearRestartPending?: boolean;
+    // Notion signed in with the Agent's own account, held back for colliding tool names.
+    notionHeldForToolFilter?: boolean;
     agentServers?: Record<string, unknown>[];
   } = {}) {
     const data = new DataSupport(this.page);
@@ -197,12 +201,24 @@ export class McpServerDataSupport {
                 has_agent_credential: own,
                 credential_source: own ? "agent" : server.auth_type === "oauth" ? "missing" : "organization",
                 needs_sign_in: !own && server.auth_type === "oauth",
+                // A completed sign-in passed the tool check; none here is held back.
+                needs_tool_filter: false,
                 agent_credential: credential,
               },
         ),
       };
     };
     if (agentCredential) setSource(MCP_SERVER_ID, true, agentCredential);
+    if (notionHeldForToolFilter) {
+      current = {
+        ...current,
+        servers: current.servers.map((server) =>
+          server.id === MCP_OAUTH_ID
+            ? { ...server, has_agent_credential: true, credential_source: "agent", needs_sign_in: false, needs_tool_filter: true }
+            : server,
+        ),
+      };
+    }
     await interceptSignInCallback(this.page);
     await this.page.route(`**/api/v1/organizations/*/mcp-servers/sign-in/complete`, async (route) => {
       this.record(route);

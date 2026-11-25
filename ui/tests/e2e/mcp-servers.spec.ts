@@ -294,6 +294,20 @@ test.describe("Agent MCP servers", () => {
     await expect(ui.agentSwitch("DeepWiki")).toHaveAttribute("aria-checked", "true");
   });
 
+  test("an Agent's sign-in held back for colliding tools is signed in again once they are fixed", async ({ page }) => {
+    const data = new McpServerDataSupport(page);
+    const ui = new McpServersPage(page);
+    await data.openAgent({ notionHeldForToolFilter: true });
+
+    await expect(ui.agentRow("Notion")).toContainText("then sign the Agent in again");
+    await ui.agentRow("Notion").getByRole("button", { name: "Sign in again" }).click();
+
+    await expect(ui.agentRow("Notion")).toContainText("Signed in with this Agent's own account");
+    await expect(ui.agentRow("Notion")).not.toContainText("would share a name");
+    const complete = data.requests.find((request) => request.url.endsWith("/mcp-servers/sign-in/complete"));
+    expect(complete?.body).toEqual({ code: "agent-code", state: "signed-state" });
+  });
+
   test("a server the running Agent started without reads as needing a restart", async ({ page }) => {
     const data = new McpServerDataSupport(page);
     const ui = new McpServersPage(page);

@@ -119,6 +119,11 @@ Both pinned runtimes, Hermes v2026.8.19 (`hermes-base` 0.2.10) and OpenClaw 2026
 
 ## Changes
 
+### 2026-11-25 — recovering an Agent's held sign-in
+
+- **Fixed**: an Agent's own sign-in held back for colliding tool names now offers "Sign in again". Fixing the Organization server's filter doesn't release it, because it was checked with that Agent's account. Signing in again re-checks the tools.
+- **Tested**: the whole recovery, through to the gateway using the credential, for an Organization sign-in, an Agent's own sign-in on an Organization server, and an Agent server.
+
 ### 2026-11-24 — collision check at sign-in
 
 - **Fixed**: completing an OAuth sign-in now probes the server with the new token and runs the collision analysis. A first sign-in whose visible tools would share an OpenClaw name is kept as `needs_tool_filter`: it can test the server and check a new filter, but Agents can't use it until a filter that passes is saved or a later sign-in passes. This applies to Organization and Agent sign-ins. A server that can't be checked at sign-in saves nothing.

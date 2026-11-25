@@ -294,20 +294,23 @@ export function AgentMcpServersSettings({
                   )}
                   {canEdit && mayChange(server) && (
                     <div className="mt-2.5 flex flex-wrap gap-1.5">
-                      {server.authType === "oauth" && (!server.hasAgentCredential || server.needsSignIn) && (
-                        <button
-                          type="button"
-                          className="af-btn af-btn-sm"
-                          disabled={signingIn !== null}
-                          onClick={() => void signInForAgent(server.id)}
-                        >
-                          {signingIn === server.id
-                            ? "Signing in…"
-                            : server.hasAgentCredential
-                              ? "Sign in again"
-                              : "Sign in with this Agent's own account"}
-                        </button>
-                      )}
+                      {/* Also for a sign-in held back for colliding tool names: once the filter is
+                          fixed, signing in again re-checks the tools and makes it usable. */}
+                      {server.authType === "oauth" &&
+                        (!server.hasAgentCredential || server.needsSignIn || server.needsToolFilter) && (
+                          <button
+                            type="button"
+                            className="af-btn af-btn-sm"
+                            disabled={signingIn !== null}
+                            onClick={() => void signInForAgent(server.id)}
+                          >
+                            {signingIn === server.id
+                              ? "Signing in…"
+                              : server.hasAgentCredential
+                                ? "Sign in again"
+                                : "Sign in with this Agent's own account"}
+                          </button>
+                        )}
                       {signingIn === server.id && (
                         <button type="button" className="af-btn af-btn-sm af-btn-ghost" onClick={cancelSignIn}>
                           Cancel sign-in
