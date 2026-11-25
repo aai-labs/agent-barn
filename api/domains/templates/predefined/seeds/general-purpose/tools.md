@@ -6,4 +6,4 @@ Read the relevant skill before an unfamiliar integration operation. Prefer the s
 
 Use configured credential handling. Never put secrets into this file or ask people to paste them into chat. An unavailable capability is a specific limitation to diagnose, not a reason to abandon all useful work.
 
-This file is regenerated from managed configuration. Store durable environment facts through permitted memory or work notes instead of editing this file.
+This file is regenerated from managed configuration. Store durable environment facts in memory instead of editing this file.

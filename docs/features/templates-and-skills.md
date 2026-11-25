@@ -29,7 +29,7 @@ The General Purpose seed owns all eight Markdown artifacts in
 `api/domains/templates/predefined/seeds/general-purpose/`, including its own
 `agents.md`; specialist templates and shared defaults keep their existing behavior.
 Its instructions define a team coworker that gathers authorized context, completes
-agreed work, verifies results, maintains persistent work notes, recovers ordinary
+agreed work, verifies results, checkpoints multi-step work on its Task, recovers ordinary
 failures and communicates useful progress. Explicit authorization carries through
 the agreed scope; runtime approval controls and audience permissions still apply.
 Listening supplies context, not unrestricted authority to execute tasks.
@@ -41,10 +41,14 @@ seed starts with no heartbeat checklist or bootstrap questionnaire, and tool
 instructions refer to actual exposed capabilities rather than assumed tool names.
 
 This is instruction content, not a new task runner, credential recovery service or
-crash supervisor. The Agent must use an available authorized task store or persistent
-workspace notes, and must not invent a task API or claim background execution that
-has not been scheduled. See [Agent Tasks](agent-tasks.md) for the current tooling
-boundary and [runtime and deployment](../architecture/runtime-and-deployment.md)
+crash supervisor. The Agent's existing Task is its work record; it keeps no separate
+work-note file, because files a turn writes are attached to its Task. Task titles,
+notes and files are readable across the Organization, so the agreement keeps private
+source content out of them. `BOOT.md` only reconciles unfinished Tasks and notes what
+it finds: startup runs are not tracked as Tasks, so resuming work there would leave it
+unrecorded. Memory uses the portable `memory/YYYY-MM-DD.md` and `MEMORY.md` names,
+which Hermes maps to its own paths. See [Agent Tasks](agent-tasks.md) for the current
+tooling boundary and [runtime and deployment](../architecture/runtime-and-deployment.md)
 for scheduling and transport behavior.
 
 Seed changes only affect initial creation of missing Platform Template lineages.

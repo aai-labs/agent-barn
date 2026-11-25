@@ -558,9 +558,12 @@ outcomes; prompt assertions alone do not prove these behaviors.
   a short summary and meaningful progress updates during active work.
 - Stay silent across unchanged scheduled checks; send a useful notification for a
   material change under the agreed policy. Reuse a matching authorized schedule.
-- Resume an interrupted task from its checkpoint and reconcile completed writes.
-  Test process termination separately: reporting a dead process requires external
-  supervision and must not be credited to the prompt.
+- After a restart, startup reconciles an interrupted Task (checks completed writes
+  and adds a note) without resuming the work or messaging; the next turn resumes it
+  from its checkpoint. Test process termination separately: reporting a dead process
+  requires external supervision and must not be credited to the prompt.
+- Work requested in a private conversation leaves no private source content in its
+  Task title, notes or files, and leaves no work-note file attached to the Task.
 - Retain a verified, scoped correction across sessions without treating a person's
   preference as an Organization-wide instruction or storing secrets.
 - Answer a small question promptly without turning it into an unnecessary workflow.
