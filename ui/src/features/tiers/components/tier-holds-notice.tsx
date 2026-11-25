@@ -15,22 +15,36 @@ function joined(parts: string[]) {
 }
 
 /**
- * Said on the team page while the organization's tier has put something on hold, so the owner
- * finds where to choose what to keep. Members see what is held; owners and admins get the link.
+ * Said on the team page while something is on hold, so the owner finds where to choose what to
+ * keep. Members see what is held; owners and admins get the link. A hold outlives the tier that
+ * made it, so the notice only blames the current tier for what it really leaves out: when it
+ * covers everything held, it says so and offers to turn it back on.
  */
 export function TierHoldsNotice({ organizationId, heldAgents }: { organizationId: string; heldAgents: number }) {
   const { role } = useActiveOrgRole();
   const canChoose = role === "OWNER" || role === "ADMIN";
   const { holds } = useTierHolds(organizationId, canChoose);
-  const { tier } = useTierEntitlements();
+  const { tier, hasFeature, allowsPlatform } = useTierEntitlements();
 
+  const connections = holds?.connections ?? [];
+  const webhooks = holds?.webhooks ?? [];
+  const memory = holds?.memory ?? [];
   const parts = [
     heldAgents > 0 && count(heldAgents, "agent", "agents"),
-    holds && holds.connections.length > 0 && count(holds.connections.length, "channel", "channels"),
-    holds && holds.webhooks.length > 0 && count(holds.webhooks.length, "webhook", "webhooks"),
-    holds && holds.memory.length > 0 && `memory on ${count(holds.memory.length, "agent", "agents")}`,
+    connections.length > 0 && count(connections.length, "channel", "channels"),
+    webhooks.length > 0 && count(webhooks.length, "webhook", "webhooks"),
+    memory.length > 0 && `memory on ${count(memory.length, "agent", "agents")}`,
   ].filter((part): part is string => Boolean(part));
   if (parts.length === 0) return null;
+
+  const tierName = tier?.name ?? "Your tier";
+  const leftOut =
+    connections.some((connection) => !allowsPlatform(connection.platformKey ?? "")) ||
+    (webhooks.length > 0 && !hasFeature("agent_webhooks")) ||
+    (memory.length > 0 && !hasFeature("agent_memory"));
+  // Only switched-off items the tier now includes: nothing to choose, just turn them back on.
+  const releasable = heldAgents === 0 && !leftOut;
+  const them = connections.length + webhooks.length + memory.length === 1 ? "it" : "them";
 
   return (
     <div
@@ -40,15 +54,22 @@ export function TierHoldsNotice({ organizationId, heldAgents }: { organizationId
     >
       <span className="flex items-start gap-2">
         <PauseCircle size={16} aria-hidden className="mt-[2px] shrink-0" style={{ color: "var(--warn)" }} />
-        <span>
-          {tier ? `${tier.name} doesn't cover everything your organization had.` : "Your tier doesn't cover everything."}{" "}
-          On hold: {joined(parts)}. Nothing has been deleted.
-          {!canChoose && " An owner or admin can choose what to keep."}
-        </span>
+        {releasable ? (
+          <span>
+            On hold from an earlier tier: {joined(parts)}. {tierName} includes {them}, so you can turn {them} back on.
+            Nothing has been deleted.
+          </span>
+        ) : (
+          <span>
+            {leftOut && `${tierName} doesn't cover everything your organization had. `}
+            On hold: {joined(parts)}. Nothing has been deleted.
+            {!canChoose && " An owner or admin can choose what to keep."}
+          </span>
+        )}
       </span>
       {canChoose && (
         <Link href={`/dashboard/${organizationId}/settings?tab=tier`} className="af-btn af-btn-sm">
-          Choose what to keep
+          {releasable ? "Turn back on" : "Choose what to keep"}
         </Link>
       )}
     </div>

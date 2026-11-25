@@ -155,6 +155,48 @@ test.describe("Organization · what its tier allows", () => {
     );
   });
 
+  test("a channel held under an earlier tier that the current one includes can be turned back on", async ({ page }) => {
+    const data = await signIn(page);
+    await data.organizations.interceptGetOrganizationLlmBudget();
+    const cloud = { id: "00000000-0000-7000-8000-0000000071c2", key: "cloud_2", name: "Cloud Tier 2", activation: "paid" };
+    await data.organizations.interceptGetOrganization({
+      organization: org({ tier: cloud, entitlements: { features: ["team"], allowed_platform_keys: null }, over_tier: false }),
+    });
+    await data.agents.interceptGetAgentsRequest({ body: { page: 1, page_size: 50, total: 1, items: [mockAgent] } });
+    const held = (id: string, name: string, platform_key: string) => ({
+      id,
+      agent_id: mockAgent.id,
+      agent_name: mockAgent.name,
+      name,
+      platform_key,
+      revision: 2,
+      suspended_at: "2026-11-08T10:00:00Z",
+    });
+    await page.route(`**/api/v1/organizations/*/tier-holds`, (route) =>
+      route.fulfill({
+        json: {
+          agents: [],
+          connections: [held("bbbbbbbb-0000-4000-8000-000000000009", "Slack", "slack"), held("bbbbbbbb-0000-4000-8000-00000000000a", "Web Chat", "web")],
+          webhooks: [],
+          memory: [],
+        },
+      }),
+    );
+    const dashboard = new DashboardPage(page);
+
+    await dashboard.goto();
+
+    const notice = page.getByRole("status").filter({ hasText: "On hold" });
+    await expect(notice).toContainText(
+      "On hold from an earlier tier: 2 channels. Cloud Tier 2 includes them, so you can turn them back on. Nothing has been deleted.",
+    );
+    await expect(notice).not.toContainText("doesn't cover");
+    await expect(notice.getByRole("link", { name: "Turn back on" })).toHaveAttribute(
+      "href",
+      /\/dashboard\/[^/]+\/settings\?tab=tier$/,
+    );
+  });
+
   test("with no tier yet, the team page points to choosing one instead of hiring", async ({ page }) => {
     const data = await signIn(page);
     // Created on credit from $0, so the budget reads as spent.
