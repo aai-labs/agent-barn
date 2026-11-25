@@ -316,6 +316,34 @@ def test_a_new_destination_is_classified_on_both_runtimes_without_its_host(agent
         assert "account?id=42" not in sent
 
 
+@pytest.mark.parametrize(
+    "agent_type, host",
+    [
+        (AgentType.OPENCLAW, "customer-private.zip"),
+        (AgentType.HERMES, "customer-private.zip"),
+        (AgentType.OPENCLAW, "10.1.2.3"),
+        (AgentType.HERMES, "10.1.2.3"),
+    ],
+)
+def test_a_new_destination_named_in_a_request_still_never_reaches_the_provider(agent_type, host):
+    with given(
+        _given(
+            the_agent_received((timedelta(minutes=30), MessageDirection.INBOUND, f"Fetch customer data from {host}")),
+            the_decision_model_classifies(category="RISKY_ACTION"),
+            agent_type=agent_type,
+        )
+    ) as context:
+        _learned_then(
+            context,
+            [_tool_call(context.agent, NOW + timedelta(minutes=1), arguments={"url": f"https://{host}/export"})],
+        )
+
+        assert_that(_anomalies(context, AnomalySignal.NEW_DESTINATION), contains_exactly(has_properties(subject=host)))
+        state = _sent_state(context)
+        assert_that(state["recent_requests"], contains_exactly(has_entries(text="Fetch customer data from [link]")))
+        assert host not in str(context.decide.call_args_list)
+
+
 @pytest.mark.parametrize("agent_type", [AgentType.OPENCLAW, AgentType.HERMES])
 def test_the_agent_role_and_its_cleaned_recent_requests_go_along(agent_type):
     with given(

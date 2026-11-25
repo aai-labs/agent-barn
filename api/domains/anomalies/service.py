@@ -19,6 +19,7 @@ from api.domains.anomalies.classification import (
     classification_request,
     read_classifications,
     severity_level,
+    withheld_destinations,
 )
 from api.domains.anomalies.destinations import destination_hosts
 from api.domains.anomalies.detection import (
@@ -299,8 +300,12 @@ class AnomalyCheckService:
         context = self._with_job(agent_id, context, until)
         anomalies = self.repository.get_anomalies(anomaly_ids)
         other_ongoing = self.repository.ongoing_signals(agent_id, excluding=anomaly_ids)
+        # A destination held back in one batch stays out of the requests sent with the others.
+        destinations = withheld_destinations(anomalies)
         for batch in batched(anomalies, MAX_ITEMS_PER_DECISION):
-            state, questions = classification_request(batch, context, other_ongoing=other_ongoing)
+            state, questions = classification_request(
+                batch, context, other_ongoing=other_ongoing, withheld_hosts=destinations
+            )
             try:
                 result = self.decision_service.decide(agent_id, state, questions)
             except DecisionError as error:

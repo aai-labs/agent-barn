@@ -7,11 +7,20 @@ never with who sent them or where.
 """
 
 import json
+import time
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_entries, has_length
+from hamcrest import (
+    assert_that,
+    contains_exactly,
+    contains_string,
+    equal_to,
+    has_entries,
+    has_length,
+    less_than,
+)
 
 from api.domains.anomalies.classification import (
     MAX_REQUEST_CHARACTERS,
@@ -36,6 +45,18 @@ def _rate():
         observed_value=40.0,
         usual_value=4.0,
         threshold=10.0,
+        started_at=STARTED,
+        last_observed_at=STARTED,
+    )
+
+
+def _destination(host: str):
+    return AgentAnomaly(
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+        signal=AnomalySignal.NEW_DESTINATION.value,
+        subject=host,
+        observed_value=2,
         started_at=STARTED,
         last_observed_at=STARTED,
     )
@@ -132,6 +153,10 @@ def test_the_category_is_judged_against_the_role_and_requests():
         ("aws AKIAIOSFODNN7EXAMPLE", "aws [secret]"),
         ("pass Zx81kQ0pLm4Rt7Yw2Vb9Nc3Hs6", "pass [secret]"),
         ("  lots \n\n of   space  ", "lots of space"),
+        ("call 10.1.2.3 now", "call [link] now"),
+        ("proxy at 10.1.2.3:8080", "proxy at [link]:8080"),
+        ("ping 2001:db8::1 and fe80::1ff:fe23:4567:890a", "ping [link] and [link]"),
+        ("Fetch customer data from customer-private.zip", "Fetch customer data from [link]"),
     ],
 )
 def test_cleaning_removes_what_could_identify_or_unlock(raw, cleaned):
@@ -145,7 +170,80 @@ def test_cleaning_removes_what_could_identify_or_unlock(raw, cleaned):
         "Meeting on 2026-11-24 at 14:30, budget 12,500",
         "Reply e.g. with a short thank-you",
         "Summarise the onboarding_checklist_for_new_hires",
+        "Standup moved to 09:15:00 sharp",
     ],
 )
 def test_cleaning_keeps_ordinary_words_dates_and_file_names(kept):
     assert_that(clean_text(kept), equal_to(kept))
+
+
+@pytest.mark.parametrize(
+    "host, mention",
+    [
+        ("customer-private.zip", "Fetch customer data from customer-private.zip"),
+        ("10.1.2.3", "Fetch customer data from 10.1.2.3"),
+        ("crm.acme.example", "Sync the CRM.ACME.example contacts"),
+        ("intranet", "Pull the list from intranet/reports"),
+    ],
+)
+def test_a_withheld_destination_never_arrives_through_a_request_or_the_role(host, mention):
+    role = AgentRole(name="Support", description=mention)
+    context = _context(role=role, requests=(RecentRequest(minutes_ago=5, text=mention),))
+
+    state, _ = classification_request([_destination(host)], context, other_ongoing=[])
+
+    assert host.lower() not in json.dumps(state).lower()
+
+
+def test_destinations_withheld_from_another_decision_are_kept_out_too():
+    context = _context(requests=(RecentRequest(minutes_ago=5, text="Fetch it from intranet/reports"),))
+
+    state, _ = classification_request([_rate()], context, other_ongoing=[], withheld_hosts=["intranet"])
+
+    assert "intranet" not in json.dumps(state)
+
+
+def test_a_secret_cut_off_by_the_length_bound_does_not_leak_in_part():
+    text = " " * 1190 + "sk-proj-AbCdEf1234567890xyz"
+
+    sent = _state(_context(requests=(RecentRequest(minutes_ago=1, text=text),)))["recent_requests"][0]["text"]
+
+    assert "sk-proj" not in sent
+    assert "AbCd" not in sent
+
+
+def test_a_request_cut_by_the_length_bound_says_so():
+    text = "Hi" + " " * 2000 + "and the rest of the plan"
+
+    sent = _state(_context(requests=(RecentRequest(minutes_ago=1, text=text),)))["recent_requests"][0]["text"]
+
+    assert sent.endswith("…")
+    assert "plan" not in sent
+
+
+HOSTILE_TEXTS = [
+    "a" * 100_000,
+    "a." * 50_000,
+    "a-" * 50_000,
+    "1 " * 50_000,
+    "a" * 100_000 + "@",
+    "a@" * 50_000,
+    "Bearer " * 14_000,
+]
+
+
+@pytest.mark.parametrize("text", HOSTILE_TEXTS, ids=lambda text: text[:2])
+def test_cleaning_takes_linear_time_on_hostile_text(text):
+    started = time.perf_counter()
+    clean_text(text)
+
+    assert_that(time.perf_counter() - started, less_than(0.5))
+
+
+def test_long_requests_do_not_stall_the_check():
+    requests = tuple(RecentRequest(minutes_ago=1, text=text) for text in HOSTILE_TEXTS)
+
+    started = time.perf_counter()
+    _state(_context(role=AgentRole(name="x", description="a" * 100_000), requests=requests))
+
+    assert_that(time.perf_counter() - started, less_than(0.5))

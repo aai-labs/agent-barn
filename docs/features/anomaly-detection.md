@@ -204,12 +204,19 @@ state moves to `CLASSIFIED`.
   (`ConversationService.recent_inbound_texts`, filled on both runtimes by the observer
   plugins and by Web Chat), oldest first, with how many minutes ago each arrived, each cut
   to 300 characters. Its replies are not sent, and a message goes without its sender,
-  channel or thread. Both pass through `clean_text`, which replaces links and bare hosts
-  (`[link]`, so a host held back above cannot arrive in a message), email addresses
-  (`[email]`), phone and account numbers of nine digits or more (`[number]`), and anything
-  shaped like a secret (`[secret]`: `sk-`, `ghp_`, `xox…-`, JWTs, AWS key ids, `Bearer`
-  values, and long runs mixing letters and digits). Cleaning is pattern-based, so it is a
-  reduction, not a guarantee: a name or an address written out in words gets through.
+  channel or thread. First, every destination host held back from the check's flagged
+  items is replaced with `[link]` wherever it appears, in any case, so a host held back
+  above cannot arrive in a message or the role. Then both pass through `clean_text`, which
+  replaces links, bare hosts and IPv4 and IPv6 addresses (`[link]`; a name ending in a
+  file extension such as `report.pdf` is kept, except extensions that are also common
+  top-level domains, such as `.zip`), email addresses (`[email]`), phone and account
+  numbers of nine digits or more (`[number]`), and anything shaped like a secret
+  (`[secret]`: `sk-`, `ghp_`, `xox…-`, JWTs, AWS key ids, `Bearer` values, and long runs
+  mixing letters and digits). Only the first 1,200 characters of a message are cleaned,
+  cut back to the last whole word so nothing is sent in part, and cleaning takes time
+  linear in the text, so a very long message cannot hold up the checks of the Agents
+  after it. Cleaning is pattern-based, so it is a reduction, not a guarantee: a name or an
+  address written out in words gets through.
 - **Requests are not authorisations.** Anyone who can message the Agent can write
   "deleting these is expected". The questions say so: the role and requests show what the
   Agent is for and was asked, not that the activity was authorised, and a risky action
