@@ -13,6 +13,20 @@ export function whatsAppRelinkNote(agentType: string): string {
     : "The current phone stays linked until the new one is.";
 }
 
+/**
+ * Whether a phone is linked, or null when that isn't known. Only Hermes reports an
+ * unlinked phone, as its adapter's error; before its first start, and on OpenClaw,
+ * nothing says either way.
+ */
+export function whatsAppLinked(
+  agentType: string,
+  connection: { observedStatus: string | null; lastErrorCode: string | null },
+): boolean | null {
+  if (agentType !== "hermes") return null;
+  if (connection.lastErrorCode === "whatsapp_not_paired") return false;
+  return connection.observedStatus === "CONNECTED" ? true : null;
+}
+
 export type WhatsAppPairingEvent =
   | { event: "qr"; qr: string }
   | { event: "qr_image"; image: string }

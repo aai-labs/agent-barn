@@ -218,6 +218,19 @@ test.describe("WhatsApp phone linking", () => {
     await expect.poll(() => attempts).toBe(2);
   });
 
+  test("says whether a Hermes phone is linked only once the runtime reports it", async ({ page }) => {
+    await openMessaging(page, { agent_type: "hermes", status: "RUNNING" }, [
+      { ...whatsAppConnection, observed_status: "PENDING", last_error_code: null },
+    ]);
+    await expect(page.getByText("Link the phone this Agent answers as, or link again to change it.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Link phone" })).toBeVisible();
+
+    await openMessaging(page, { agent_type: "hermes", status: "RUNNING" }, [
+      { ...whatsAppConnection, observed_status: "CONNECTED", last_error_code: null },
+    ]);
+    await expect(page.getByRole("button", { name: "Link again" })).toBeVisible();
+  });
+
   test("asks to start a stopped Agent before linking", async ({ page }) => {
     await openMessaging(page, { agent_type: "hermes", status: "STOPPED" }, [whatsAppConnection]);
 

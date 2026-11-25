@@ -46,7 +46,11 @@ import {
   WhatsAppPhoneLinking,
   WhatsAppReach,
 } from "@/features/communication-connections/components/whatsapp-phone-linking";
-import { whatsAppRelinkNote, whatsAppUnavailableReason } from "@/features/communication-connections/whatsapp";
+import {
+  whatsAppLinked,
+  whatsAppRelinkNote,
+  whatsAppUnavailableReason,
+} from "@/features/communication-connections/whatsapp";
 import {
   CUSTOM_SLACK_NAME,
   ServerAddressInput,
@@ -1225,10 +1229,7 @@ export function AgentChannelSettings({
                     <WhatsAppPhoneLinking
                       agentId={agent.id}
                       connectionId={connection.id}
-                      // Only Hermes reports an unlinked phone, as its adapter's error.
-                      linked={
-                        agent.agentType === "hermes" ? connection.lastErrorCode !== "whatsapp_not_paired" : null
-                      }
+                      linked={whatsAppLinked(agent.agentType, connection)}
                       relinkNote={whatsAppRelinkNote(agent.agentType)}
                       agentRunning={agent.status === "RUNNING"}
                       canManage={
