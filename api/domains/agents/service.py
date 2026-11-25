@@ -56,6 +56,7 @@ from api.domains.agents.builders import (
     native_slack_env,
     native_telegram_channel,
     native_telegram_env,
+    native_whatsapp_channel,
     native_whatsapp_env,
     runtime_teams_channel,
     runtime_teams_env,
@@ -2889,6 +2890,10 @@ class AgentService:
             if native_telegram := self._native_connection_configuration(agent.id, "telegram"):
                 native_credentials["telegram"] = native_telegram.credentials
                 native_channels["telegram"] = native_telegram_channel(native_telegram.settings)
+            if native_whatsapp := self._native_connection_configuration(agent.id, "whatsapp"):
+                # No credentials: listing it installs @openclaw/whatsapp at start.
+                native_credentials["whatsapp"] = {}
+                native_channels["whatsapp"] = native_whatsapp_channel(native_whatsapp.settings)
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)

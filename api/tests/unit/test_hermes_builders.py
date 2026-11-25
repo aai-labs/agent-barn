@@ -354,6 +354,21 @@ def test_native_whatsapp_env_lets_group_and_open_dm_senders_through_the_bridge()
     assert native_whatsapp_env({**_WHATSAPP_DEFAULTS, "dm_policy": "open"})["WHATSAPP_ALLOWED_USERS"] == "*"
 
 
+def test_native_whatsapp_self_chat_answers_only_the_owner_and_marks_replies() -> None:
+    settings = {**_WHATSAPP_DEFAULTS, "mode": "self_chat", "dm_policy": "open", "group_policy": "open"}
+
+    extra = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", whatsapp_settings=settings)[
+        "platforms"
+    ]["whatsapp"]["extra"]
+    env = native_whatsapp_env(settings)
+
+    # The bridge passes only the owner's Message yourself chat, so the access settings are ignored.
+    assert env["WHATSAPP_MODE"] == "self-chat"
+    assert env["WHATSAPP_ALLOWED_USERS"] == "*"
+    assert extra["group_policy"] == "disabled"
+    assert extra["reply_prefix"] == "🤖 "
+
+
 def test_native_telegram_env_sets_the_home_chat() -> None:
     env = native_telegram_env({"home_channel_id": "-1009"}, _TELEGRAM_TOKEN)
 

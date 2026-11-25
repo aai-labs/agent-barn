@@ -39,6 +39,7 @@ from .openclaw import (
     native_discord_channel,
     native_slack_channel,
     native_telegram_channel,
+    native_whatsapp_channel,
     runtime_teams_channel,
 )
 
@@ -65,6 +66,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "native_discord_channel",
     "native_slack_channel",
     "native_telegram_channel",
+    "native_whatsapp_channel",
     "runtime_teams_channel",
     # hermes
     "HERMES_DEFAULT_MAX_TURNS",

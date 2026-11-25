@@ -1945,7 +1945,7 @@ def _pairing_url(context, connection_id: str) -> str:
     return f"{_base(context)}/{connection_id}/whatsapp-pairing"
 
 
-def test_whatsapp_is_accepted_only_on_a_hermes_agent() -> None:
+def test_whatsapp_is_accepted_on_hermes_and_openclaw_agents_but_not_on_a_bot() -> None:
     with given(_GIVEN_WITH_HERMES_AGENT) as context:
         client: TestClient = context.client
         hermes_id = context.agent.id
@@ -1957,13 +1957,14 @@ def test_whatsapp_is_accepted_only_on_a_hermes_agent() -> None:
             there_is_an_agent(name="OpenClaw Agent", agent_type=AgentType.OPENCLAW)(context)
             openclaw = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context))
 
-        with then("only the Hermes Agent keeps it, with its numbers normalized and no credentials"):
-            assert_that(hermes.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(hermes.json()["settings"]["allowed_numbers"], equal_to(["15551234567"]))
+        with then("both runtimes keep it, numbers normalized; the Bot is told to use its Parent Agent"):
+            for created in (hermes, openclaw):
+                assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+                assert_that(created.json()["settings"]["allowed_numbers"], equal_to(["15551234567"]))
+                assert_that(created.json()["settings"]["mode"], equal_to("bot"))
             assert_that(bot.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(bot.json()["detail"], contains_string("not available for a Bot"))
-            assert_that(openclaw.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-            assert_that(openclaw.json()["detail"], contains_string("only for Hermes Agents"))
+            assert_that(bot.json()["detail"], contains_string("Add WhatsApp to the Parent Agent instead"))
 
 
 def test_whatsapp_pairing_streams_only_the_pairing_events_from_the_agent_pod() -> None:
@@ -2001,6 +2002,39 @@ def test_whatsapp_pairing_streams_only_the_pairing_events_from_the_agent_pod() -
             assert_that(pod, equal_to("agent-pod"))
             assert_that(command[:2], equal_to(["sh", "-c"]))
             assert_that(command[2], contains_string("--pair-only --pair-json"))
+
+
+def test_whatsapp_pairing_on_openclaw_drives_the_gateway_login_and_passes_its_qr_image() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType.OPENCLAW, status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_name_for_deployment.return_value = "agent-pod"
+        k8s.stream_exec_lines.return_value = iter(
+            [
+                '{"event":"qr_image","image":"data:image/png;base64,AAAA"}',
+                '{"event":"qr_image","image":"javascript:alert(1)"}',
+                '{"event":"connected"}',
+                '{"event":"linked"}',
+            ]
+        )
+        connection = client.post(_base(context), json=_whatsapp_payload(), headers=_auth(context)).json()
+
+        with when("I link a phone to an OpenClaw Agent"):
+            response = client.post(_pairing_url(context, connection["id"]), headers=_auth(context))
+
+        with then("the gateway's own login runs in the pod, and only its PNG QR code comes back"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                response.text,
+                equal_to(
+                    'data: {"event": "qr_image", "image": "data:image/png;base64,AAAA"}\n\n'
+                    'data: {"event": "connected", "phone": null}\n\n'
+                    'data: {"event": "linked"}\n\n'
+                ),
+            )
+            command = k8s.stream_exec_lines.call_args.args[2]
+            assert_that(command[2], contains_string("web.login.start"))
+            assert_that(command[2], not_(contains_string("bridge.js")))
 
 
 def test_whatsapp_pairing_needs_a_running_agent_and_a_whatsapp_connection() -> None:

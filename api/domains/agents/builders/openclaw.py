@@ -589,6 +589,47 @@ def native_telegram_channel(settings: dict) -> dict:
     return channel
 
 
+def native_whatsapp_channel(settings: dict) -> dict:
+    """Map a WhatsApp Connection onto the ``@openclaw/whatsapp`` channel (WhatsApp Web).
+
+    Bot mode answers allowed senders on the linked number and ignores the owner's own
+    messages. Self-chat mode answers only the owner's Message yourself chat: OpenClaw
+    adds the linked number to an allowlist that is otherwise empty, so other DMs are
+    dropped without a pairing reply. ``groups`` is the group allowlist; any member of
+    an allowed group may talk to the Agent.
+    """
+    if settings.get("mode") == "self_chat":
+        # The prefix marks the Agent's replies apart from the owner's own messages in
+        # the shared chat. OpenClaw also puts it before inbound lines, in place of its
+        # default "[openclaw]".
+        return {
+            "enabled": True,
+            "selfChatMode": True,
+            "dmPolicy": "allowlist",
+            "allowFrom": [],
+            "groupPolicy": "disabled",
+            "responsePrefix": "🤖",
+        }
+    channel: dict = {"enabled": True, "selfChatMode": False, "dmPolicy": "disabled", "groupPolicy": "disabled"}
+    numbers = [f"+{number}" for number in settings.get("allowed_numbers") or []]
+    dm_policy = settings.get("dm_policy", "allowlist")
+    if dm_policy == "open":
+        channel.update(dmPolicy="open", allowFrom=["*"])
+    elif dm_policy == "allowlist" and numbers:
+        # An empty allowlist drops every DM anyway and OpenClaw warns about it.
+        channel.update(dmPolicy="allowlist", allowFrom=numbers)
+    group_policy = settings.get("group_policy", "off")
+    group_ids = ["*"] if group_policy == "open" else list(settings.get("allowed_group_ids") or [])
+    if group_policy != "off" and group_ids:
+        require_mention = bool(settings.get("require_mention", True))
+        channel.update(
+            groupPolicy="open",
+            groupAllowFrom=["*"],
+            groups={group_id: {"requireMention": require_mention} for group_id in group_ids},
+        )
+    return channel
+
+
 def runtime_teams_channel(settings: dict) -> dict:
     """Configure OpenClaw's runtime-owned Microsoft Teams webhook adapter.
 

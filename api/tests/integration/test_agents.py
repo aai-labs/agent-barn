@@ -3196,6 +3196,62 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that([port.name for port in service.spec.ports], has_item("webhook"))
 
 
+def _whatsapp_connection(mode: str):
+    def step(context) -> None:
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        delegate.save(
+            CommunicationConnection(
+                organization_id=context.agent.organization_id,
+                agent_id=context.agent.id,
+                platform_key="whatsapp",
+                display_name="WhatsApp",
+                settings={"mode": mode, "dm_policy": "allowlist", "allowed_numbers": ["15551234567"]},
+                credentials_encrypted=encrypt_token(json.dumps({}), TEST_ENCRYPTION_KEY),
+            )
+        )
+
+    return step
+
+
+def test_start_openclaw_agent_installs_whatsapp_and_maps_the_connection() -> None:
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(), _whatsapp_connection("bot")]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an OpenClaw Agent with a WhatsApp Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the gateway installs the WhatsApp plugin and answers only the allowed number"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            overlay = json.loads(k8s.create_config_map.call_args.args[1].data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"]["whatsapp"]["dmPolicy"], equal_to("allowlist"))
+            assert_that(overlay["channels"]["whatsapp"]["allowFrom"], equal_to(["+15551234567"]))
+            assert_that(overlay["channels"]["whatsapp"]["selfChatMode"], equal_to(False))
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["AGENTBARN_NATIVE_CHANNELS"].split(","), has_item("whatsapp"))
+
+
+def test_start_hermes_agent_runs_whatsapp_in_self_chat_mode() -> None:
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES), _whatsapp_connection("self_chat")]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a Self Chat WhatsApp Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the bridge runs in self-chat mode and replies carry the robot marker"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            import yaml
+
+            cfg = yaml.safe_load(k8s.create_config_map.call_args.args[1].data["hermes-config.yaml"])
+            assert_that(cfg["platforms"]["whatsapp"]["extra"]["reply_prefix"], equal_to("🤖 "))
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["WHATSAPP_MODE"], equal_to("self-chat"))
+            assert_that(secret["WHATSAPP_ENABLED"], equal_to("true"))
+
+
 @pytest.mark.parametrize(
     "agent_type,workspace",
     [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
