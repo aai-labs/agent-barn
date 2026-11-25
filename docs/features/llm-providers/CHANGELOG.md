@@ -14,10 +14,22 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: providers page layout, PRs 1 to 4. `GET .../llm-providers` reports `env_key_last4`, the last four characters of `OPENROUTER_API_KEY`, on OpenRouter while the variable is set. While it is set, the settings page shows OpenRouter's card under "Set by this deployment", with the variable's last four, any saved key, and "In use" or "Fallback". Below it, "Providers · X of Y connected" is a grid with a card per provider, connected or not, one per Azure or Custom connection, and cards to add Azure and Custom connections; providers are named by their titles, Gemini as "Google". Every connection's card has only "Manage": OpenRouter's menu leads to Organizations and Replace key, every other connection's to Models, Organizations, Replace key and Delete (AF-474, PRs 12 and 13). The providers page layout is complete.
 - Delivered: AF-474, Provider Access per Organization, PRs 1 to 14 ([feature doc](../llm-providers.md#provider-access)). Each connection is open to all Organizations, none, all except the listed ones, or only the listed ones; every existing connection is `all`. Platform Administrators set it when adding a connection and change it from Manage, and each card shows it. Only OpenRouter's access is enforced yet: an Organization without it is offered no models, can't save an allowlist with entries, set its own default, hire an Agent or add a Bot, and one created without it starts with an empty allowlist. OpenRouter can't be withdrawn from an Organization that still uses it. The check runs under the connection's lock, which Organization-side writes take shared, and only in Agent Barn's API, since Agent keys carry no model list.
 - Not yet verified: the staging check in the AF-474 plan. Set OpenRouter to all except an Organization with Agents and expect a refusal naming them. Under only another Organization, a new Organization's picker is empty and a hire is refused. Back on all, it can pick and hire.
-- Next: AF-474's later slices: LiteLLM enforces each Organization's allowlist; runtimes ready for any provider; the Organization pool, which brings other connections' access into effect.
+- In progress: AF-476, LiteLLM refuses with `403` any model an Agent's own key doesn't list, PRs 1 to 7. Delivered: PR 1, `LiteLLMClient` can create a key with a model list and set an existing key's list. Nothing calls either yet, so Agent keys still carry no model list.
+- Next: AF-476 PR 2, the key model service. Then AF-474's later slices: runtimes ready for any provider; the Organization pool, which brings other connections' access into effect.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-25 — AF-476 — PR 1
+
+- Delivered: `LiteLLMClient.generate_key` takes `models` and sends it to `/key/generate` only when given; without it the request is as before.
+- Delivered: `LiteLLMClient.set_key_models(key, models)` reads the key's `models` from `/key/info`. When the sorted lists match, it writes nothing and returns `False`. Otherwise it posts `{"key", "models"}` to `/key/update`, reads the key again, and returns `True` once LiteLLM lists the new models. A failed or unapplied write raises `LiteLLMError` with no exception chain, so the key never reaches a traceback or log.
+- Unchanged: no caller passes `models` or calls `set_key_models` yet.
+- Verification:
+  - New unit tests in `tests/unit/test_litellm_client.py`: `generate_key` with and without `models`, no write for the same list in another order, a write of only `key` and `models` read back, and a failed and an unapplied write raising without the key. Five failed before the change; the one without `models` passed, as it should.
+  - New `tests/integration/test_agent_key_models_litellm_contract.py` against the pinned LiteLLM v1.108.6: a key created with `models=["openrouter/contract/other"]` gets `403` for `openrouter/contract/model`; after `set_key_models(key, ["openrouter/contract/model"])` returns `True`, the next request answers `200`; setting the same list again returns `False`. It failed before the change and passes after it.
+  - Locally on Windows, the contract test ran with a pytest plugin outside the repository that publishes LiteLLM's port and points its database at `host.docker.internal`, because Docker Desktop's `--network host` can't reach the test database. The repository's harness is unchanged.
+  - The `generate_key` tests in `tests/unit/test_organization_llm.py`, ruff, ruff format and `ty` pass.
 
 ### 2026-11-25 — AF-474 — provider access, review fixes for PR #413
 
