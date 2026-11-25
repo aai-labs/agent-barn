@@ -11,10 +11,242 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: slice 2, connections to other providers ([feature doc](../llm-providers.md)). In Platform Admin settings and through the API, a Platform Administrator can add one connection each to Anthropic, OpenAI, Gemini, xAI, DeepSeek, Fireworks and Novita, and any number of Azure and Custom connections. Any connection's key can be replaced, with a new base URL for Azure or Custom, and any connection but OpenRouter deleted. Each key is checked with its provider before it is stored, and every addition, replacement and deletion is audited. OpenRouter's key is read from the connection list and replaced through `PUT .../openrouter/key`; the OpenRouter-only routes are gone.
 - Delivered: slice 3, PRs 1 to 16. LiteLLM uses the price list bundled in its image, so it changes only on a LiteLLM upgrade. The `llm_provider_model` table holds each connection's models with their prices. `GET .../{slug}/models` lists them with exact prices, and `PUT .../{slug}/models` saves them for every provider but OpenRouter, Azure's as deployments priced from the model each runs, writing each model's LiteLLM route under the connection's lock and recording `platform.llm_provider.models_changed`. `GET .../{slug}/model-catalogue` lists the models the provider lists for the stored key, read by `LlmProviderCatalogue`, with LiteLLM's chat prices from `LiteLLMClient.get_model_prices()`, and marks which are stored and whose stored prices differ. Under the connection's lock, replacing a key rewrites the LiteLLM route of each of the connection's models before the key is stored, and deleting a connection removes its routes before its models and key. A contract test checks how a real LiteLLM serves and bills these routes. In the UI, every connection but OpenRouter has a Models dialog: it ticks a provider's models, priced by LiteLLM or by typed prices, edits Azure deployments with the model each runs or typed prices, and takes a changed LiteLLM price once accepted.
 - Next: slice 3, PR 17, the feature doc for slice 3 delivered and its known limits.
-- Delivered: providers page layout, PRs 1 to 4. `GET .../llm-providers` reports `env_key_last4`, the last four characters of `OPENROUTER_API_KEY`, on OpenRouter while the variable is set. While it is set, the settings page shows OpenRouter's card under "Set by this deployment", with the variable's last four, any saved key, and "In use" or "Fallback". Below it, "Providers · X of Y connected" is a grid with a card per provider, connected or not, one per Azure or Custom connection, and cards to add Azure and Custom connections; providers are named by their titles, Gemini as "Google". OpenRouter's card has only its key button; every other connection's card has only "Manage", whose menu leads to Models, Replace key and Delete. The providers page layout is complete.
+- Delivered: providers page layout, PRs 1 to 4. `GET .../llm-providers` reports `env_key_last4`, the last four characters of `OPENROUTER_API_KEY`, on OpenRouter while the variable is set. While it is set, the settings page shows OpenRouter's card under "Set by this deployment", with the variable's last four, any saved key, and "In use" or "Fallback". Below it, "Providers · X of Y connected" is a grid with a card per provider, connected or not, one per Azure or Custom connection, and cards to add Azure and Custom connections; providers are named by their titles, Gemini as "Google". Every connection's card has only "Manage": OpenRouter's menu leads to Organizations and Replace key, every other connection's to Models, Organizations, Replace key and Delete (AF-474, PRs 12 and 13). The providers page layout is complete.
+- Delivered: AF-474, Provider Access per Organization, PRs 1 to 14 ([feature doc](../llm-providers.md#provider-access)). Each connection is open to all Organizations, none, all except the listed ones, or only the listed ones; every existing connection is `all`. Platform Administrators set it when adding a connection and change it from Manage, and each card shows it. Only OpenRouter's access is enforced yet: an Organization without it is offered no models, can't save an allowlist with entries, set its own default, hire an Agent or add a Bot, and one created without it starts with an empty allowlist. OpenRouter can't be withdrawn from an Organization that still uses it. The check runs under the connection's lock, which Organization-side writes take shared, and only in Agent Barn's API, since Agent keys carry no model list.
+- Not yet verified: the staging check in the AF-474 plan. Set OpenRouter to all except an Organization with Agents and expect a refusal naming them. Under only another Organization, a new Organization's picker is empty and a hire is refused. Back on all, it can pick and hire.
+- Next: AF-474's later slices: LiteLLM enforces each Organization's allowlist; runtimes ready for any provider; the Organization pool, which brings other connections' access into effect.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-25 — AF-474 — provider access, review fixes for PR #413
+
+- Fixed: the e2e mock's `intercept()` copied the connection list but not the connections in it. A saved Organizations change wrote its access onto the shared fixture, such as `ANTHROPIC_CONNECTION`. A later test in the same worker then read "Only 3" instead of "All organizations". `intercept()` now clones each connection it is given.
+- Changed: the [domain events](../domain-events.md) invariant for Platform-scoped events contradicted `platform.llm_provider.organizations_changed`, which lists added and removed Organization ids. The invariant now spells out what the registry rejects: an Organization ID, an Actor or Subject with an Organization, a Membership Actor, a Subject other than a User or System, and a payload object with an `organization_id`. It names that event's bounded lists of plain ids as the one exception.
+- Verification: the reviewer's command, with `--workers=1`, failed before the fix (1 passed, 1 failed, "Only 3"). After the fix, it and the other two tests that save Organizations pass, 4 of 4, in one worker. No API code changed.
+
+### 2026-11-25 — AF-474 — provider access, PR 14
+
+- Delivered: [`llm-providers.md`](../llm-providers.md) has a Provider Access section:
+  - the four modes and where the rule lives;
+  - that only OpenRouter's access is enforced yet, what an Organization without it can't do, and that it can't run Agents until Organizations can use other providers;
+  - the in-use rule, for OpenRouter only;
+  - the exclusive and shared lock, and that OpenRouter key saves and access changes make Organization-side writes wait;
+  - that enforcement is in Agent Barn's API only, since Agent keys carry no model list.
+  The connection section links to it. The UI section gains the card label, the Organizations dialog, the Add dialog's section, focus return and the toast.
+- Changed, differing from the plan: the plan said OpenRouter key and model saves make writes wait. OpenRouter's models aren't saved (`PUT .../openrouter/models` answers `409`, `LlmProviderService._model_connection`). So the doc names key saves and access changes, the two writes that hold OpenRouter's lock exclusive.
+- Changed: Current state marks AF-474 delivered, with the staging check still to do.
+- Verification: each statement was checked against the source:
+  - `llm_providers/access.py` and `lookup.py`;
+  - `LlmProviderRepository.replace_organizations`, `_openrouter_uses`, `replace_key` and `_lock`;
+  - the callers of `can_use`, `require_open` and `initial_allowed_models` in `agents`, `agent_settings`, `organizations`, `auth` and `users`;
+  - `LiteLLMClient` key generation;
+  - `_apply_organization_read_filters`.
+  No code changed, so no tests ran.
+
+### 2026-11-25 — AF-474 — provider access, PR 13
+
+- Delivered: OpenRouter's key button is now a Manage menu with "Organizations" and "Replace key" (or "Save a key"), on both of its cards: in the grid, and under "Set by this deployment". It has no Models or Delete. The "Set by this deployment" card now shows the access label too.
+- Delivered: the Add dialog has an Organizations section with the same four options and list as the Organizations dialog, starting on All organizations. A new connection is sent with `organization_access` and `organization_ids` only when another option is chosen, so the API's default `all` applies otherwise. The dialog scrolls when the list makes it taller than the window.
+- Changed:
+  - `ProviderCard` and `DeploymentProviderCard` take only `manage`; `onReplaceKey` is gone. `organizationsLabel` is exported from `provider-card.tsx` for the deployment card.
+  - With your approval, outside the plan's file list:
+    - `manage-provider-menu.tsx`: `onModels` and `onDelete` are optional, and their items are left out without them;
+    - `provider-organizations-dialog.tsx` exports `useOrganizationAccess` and `OrganizationAccessFields`, which it and the Add dialog share.
+  - [`llm-providers.md`](../llm-providers.md) says every card, OpenRouter's included, has only Manage, and lists each menu's items, as you asked.
+  - The page object replaces `openDialogButton` and `deploymentKeyButton` with `openKeyDialog`, `openDeploymentKeyDialog`, `deploymentManageButton` and `keyAction`. The seven OpenRouter key tests go through Manage, and "OpenRouter has no Manage, only its key button" became the grid-card test below.
+- Verification:
+  - New e2e tests, which failed before the change:
+    - OpenRouter's grid card has only Manage, offering Organizations and Replace key, whose dialog opens and gives focus back;
+    - the "Set by this deployment" card has Manage too, shows "All organizations", and after saving No organizations shows "No organizations", with focus back on its Manage;
+    - adding OpenAI open only to two ticked Organizations sends `only` and their ids, and its card shows "Only 2".
+  - After the change, 21 tests of `platform-llm-providers.spec.ts` pass: the new ones, the OpenRouter key, Add, Manage and Organizations tests. `tsc --noEmit` and eslint on the touched files pass too.
+
+### 2026-11-25 — AF-474 — provider access, PR 12
+
+- Delivered: the Manage menu of every connection but OpenRouter has "Organizations", between Models and Replace key. It opens the new `provider-organizations-dialog.tsx`:
+  - four options: All organizations, No organizations, All organizations except the ticked ones, and Only the ticked organizations;
+  - for the last two, a list of Organizations to tick. It is searched (after a 300 ms pause in typing) and paged 12 at a time with "Show more", through `useInfiniteOrganizations`, and starts from the Organizations `GET .../{slug}/organizations` lists. A count says how many are ticked, including ones outside the current search;
+  - Save sends `PUT .../{slug}/organizations`, with no Organizations for All or None. It shows the server's refusal, such as a `409` naming the Organizations still using the provider, as is, and keeps the dialog open;
+  - on save, a toast says "{provider} organizations saved" and the card's label follows. Focus goes back to Manage whether the dialog is saved or closed, as with Models and Replace key.
+- Changed, with your approval, outside the plan's file list: `ui/tests/pages/data-support/platform-llm-provider-data-support.po.ts` gains `interceptOrganizations` and `platformOrganizations`. They mock the connection's Organizations and a searchable, paged `GET /platform/organizations`. The new tests are in `ui/tests/e2e/platform-llm-providers.spec.ts`.
+- Changed: three existing Manage menu tests expect "Organizations" in the menu.
+- Verification:
+  - New e2e tests, which failed before the change because the menu had no Organizations item:
+    - limiting Anthropic to three ticked Organizations, with paging and search, then the save body, the toast, the card label and focus;
+    - opening on a stored `all_except` with its ticked Organization, then saving No organizations;
+    - a `409` shown as is, with focus back on Manage after Cancel.
+  - After the change, these pass: those three tests, every Manage test, and the focus and Escape tests of `platform-llm-providers.spec.ts`. `tsc --noEmit` and eslint on the touched files pass too.
+
+### 2026-11-24 — AF-474 — provider access, PR 11
+
+- Delivered: in `ui/src/features/llm-providers/`:
+  - `schemas.ts` reads `organizationAccess` and `organizationCount` on every connection, and adds `LlmProviderOrganizationsSchema` (`GET`/`PUT .../{slug}/organizations`), `OrganizationsReplacement`, and `organizationAccess` and `organizationIds` on `NewLlmProviderConnection`;
+  - the new `hooks/use-llm-provider-organizations.ts` reads a connection's access while `enabled` and replaces it, refreshing every provider query, so the card counts follow. Nothing calls it until PR 12;
+  - `provider-card.tsx` shows "All organizations", "No organizations", "All except N" or "Only N" under the key. OpenRouter's "Set by this deployment" card (`deployment-provider-card.tsx`) doesn't show it yet; PR 13 changes that card.
+- Changed: `useModels` (`ui/src/features/agents/hooks/use-models.ts`) shows GLM 5.2 and GPT-5 mini only while the list loads or after a failed fetch, so an Organization with no models is offered none, as you asked after PR 6. With no models, the "Choose a specific model" option in the hire dialog and the Agent profile can't be selected, since it starts from the Organization default and there is none.
+- Changed, differing from the plan:
+  - The query key is feature-local (`[...llmProvidersKey.detail(slug), "organizations"]`), like `modelsKey`, and `ui/src/shared/query-keys.ts` is unchanged, per `docs/guidelines/webapp.md`.
+  - The fixtures are in `ui/tests/pages/data-support/platform-llm-provider-data-support.po.ts`, not `data-support.po.ts`, as you approved: the providers spec mocks its routes there.
+  - With your approval, `ui/tests/e2e/settings-agent-defaults.spec.ts` gives three tests a model list: "naming the blast radius before changing the default" and "a saved default becomes the organization's own", which you approved, and "shows the reason when an allowed model cannot be removed", which has the same cause. They picked or removed "GPT-5 mini" from an empty models mock, which worked only through the old fallback.
+- Verification:
+  - New e2e tests: "each provider card says which Organizations may use it" in `platform-llm-providers.spec.ts`, and "offers no models when the Organization has none" in `hire-dialog.spec.ts`. Both failed before the change.
+  - "hires on a specific model picked from the model menu" now mocks its own model list and passed before and after.
+  - After the change, these pass: the targeted provider and hire-dialog tests, the card-grid and key-replacement provider tests, all 7 of `settings-agent-defaults.spec.ts`, `tsc --noEmit` and eslint on the touched files.
+
+### 2026-11-24 — AF-474 — provider access, PR 10
+
+- Delivered: every way an Organization is created seeds its allowlist with `LlmProviderAccessLookup.initial_allowed_models`: the platform default model while OpenRouter is `all` or `all_except`, and `[]` while it is `none` or `only`. The lookup runs in the creator's own session under the connection's shared lock, so a withdrawal can't commit in between. The five creators are:
+  - `AuthService._create_signup_user_and_organization` (password sign-up), which gains the lookup as a field;
+  - `GoogleSignInService._sign_up` and `_sign_up_without_free`, which gain it as a field;
+  - `UserService.create_platform_user`, which reaches it through `auth_service.llm_provider_access`, so `tests/unit/test_service_edge_cases.py` and `test_user_service_more.py`, which build `UserService` by hand, are unchanged;
+  - `OrganizationService.create_organization_for_current_user`, whose `in_transaction` callback now admits the trial (when it is one) and then seeds the allowlist. `organizations/repository.py` is unchanged.
+- Changed: [`llm-providers.md`](../llm-providers.md) says what a new Organization starts with.
+- Verification: the new `test_new_organization_provider_access.py` has 12 tests. Each creator is checked under `only` another Organization (empty allowlist) and `all_except` another Organization (seeded), and Organization creation both on and off a trial. `none` and `all` are left to `test_the_lookup_answers_from_the_stored_mode_and_list` from PR 2, which checks `initial_allowed_models` in all four modes; each creator's test shows only that it uses the lookup. The password sign-up is called through `AuthService.signup`, since `POST /auth/signup` answers `410`. The platform-user test relies on the suite's email guards in `api/tests/conftest.py`, as `test_platform_admin_operations.py` does.
+  - Before the change, the 6 password and Google closed-mode tests failed (seeded where empty was expected).
+  - After it, all 12 pass, as do `test_service_edge_cases.py`, `test_user_service_more.py`, ruff, ruff format and `ty`.
+  - The runs took about 7 minutes, over the 5-minute budget: the first red run hit the 115-second limit, and each Google or tier setup takes about 15 seconds.
+
+### 2026-11-24 — AF-474 — provider access, PR 9
+
+- Delivered: `POST /api/v1/organizations/{organization_id}/agents` and `POST .../agents/{parent_id}/bots` answer `400` "This organization has no LLM provider. Ask a Platform Administrator." while OpenRouter is not open to the Organization.
+- Delivered, the two checks in `AgentService._create_agent`, the path both take:
+  - a pre-check with `LlmProviderAccessLookup.can_use`. It runs right after `agent.create` is checked, and for a Bot after `agent.update` on the Parent too. It runs before the model, template and Agent-limit checks and before any LiteLLM key is allocated, so a request that names a model gets this message, not the allowlist one;
+  - `require_open`, through the new `in_transaction` callback of `AgentRepository.create_with_creator_access`. It runs in the insert's transaction after the Agent-limit check, so the shared lock holds until the commit. `ProviderNotOpen` becomes the same `400`, and the existing handler deletes the allocated key.
+- Changed: the message is one constant, `NO_LLM_PROVIDER` in `llm_providers/access.py`, imported by `organizations/service.py`, `agent_settings/service.py` and `agents/service.py`, as you asked.
+- Changed: the RBAC brief needs no change. Provider Access is not a Permission, and the refusal comes after authorization, as the brief's Tier rule asks of a refusal.
+- Changed: [`llm-providers.md`](../llm-providers.md) says hiring enforces access too.
+- Verification: the new `test_agent_hire_provider_access.py` has 11 tests:
+  - `none`, `only` another Organization and `all_except` this one each refuse a hire, with and without a model, before a key is made and without storing an Agent;
+  - `none` refuses a Bot the same way;
+  - access withdrawn while the key is made refuses the hire under the lock, deletes that key and stores nothing;
+  - `all`, `only` this Organization and `all_except` another each hire an Agent and add a Bot.
+  The 8 refusals failed before the change; the other 3 passed. After it, all 11 pass. So do the hire key-release and allowlist tests in `test_agents.py`, the size race in `test_organization_agent_sizes.py`, one refusal each from PRs 7 and 8 and `test_openrouter_client.py`, as do ruff, ruff format and `ty`.
+
+### 2026-11-24 — AF-474 — provider access, PR 8
+
+- Delivered: `PUT /api/v1/organizations/{organization_id}/agent-settings` refuses a `default_model` with `400` "This organization has no LLM provider. Ask a Platform Administrator." while OpenRouter is not open to the Organization. Clearing the default (`null`), resaving the same default and the spend-limit setting are unchanged.
+- Delivered, the two checks in `AgentSettingsService._update_default_model`:
+  - a pre-check with `LlmProviderAccessLookup.can_use`, before the allowlist and catalogue checks;
+  - `require_open`, run through the new `in_transaction` callback of `AgentSettingsRepository.set_default_model_with_event` and `_set_with_event`. It runs first in the write's session, so the shared lock holds until the commit; if it raises, nothing is written. A default whose access is withdrawn between the two checks is refused.
+- Changed: `AgentSettingsService` takes `LlmProviderAccessLookup`; nothing builds it by hand. The message is defined again in `agent_settings/service.py`, next to the one in `organizations/service.py`.
+- Changed: [`llm-providers.md`](../llm-providers.md) says the default save enforces access too.
+- Changed: `agent_settings/repository.py` and `test_agent_settings.py` were checked out with CRLF line endings while the index holds LF. Saving them rewrote them as LF, so their diffs show only the changes.
+- Verification: `test_agent_settings.py` gains 8 tests:
+  - `none`, `only` another Organization and `all_except` this one each refuse a default without reading the catalogue, storing it or recording `organization.agent_settings.changed`;
+  - without access, an Organization can clear its own default;
+  - access withdrawn in the database while the catalogue is read still refuses the default;
+  - `all`, `only` this Organization and `all_except` another each set the default as before, with one event.
+  The 4 refusals failed before the change; the other 4 passed. After it, the 8 and four existing default tests (set, revert, the event, an unchanged resave) pass, as do ruff, ruff format and `ty`.
+
+### 2026-11-24 — AF-474 — provider access, PR 7
+
+- Delivered: `PATCH /api/v1/organizations/{organization_id}` refuses an `allowed_models` with entries with `400` "This organization has no LLM provider. Ask a Platform Administrator." while OpenRouter is not open to the Organization. The wording is mine, the hire wording the plan chose, so PRs 8 and 9 can say the same. An empty list, an explicit `null` and saves without `allowed_models` are unchanged.
+- Delivered, the two checks in `OrganizationService.update_organization`:
+  - a pre-check with `LlmProviderAccessLookup.can_use`, before the OpenRouter catalogue is read;
+  - `require_open` in the save's own session after the allowlist checks, so the shared lock is held from just before the write until the commit, and not during the catalogue call. An Organization that loses access between the two checks is refused and nothing is stored.
+- Changed: `OrganizationService` reaches the lookup through `agent_service.llm_provider_access`, as it already reaches OpenRouter through `agent_service.openrouter`. It gains no field, so `tests/unit/test_service_edge_cases.py`, which builds it by hand, is unchanged.
+- Changed: [`llm-providers.md`](../llm-providers.md) says the allowlist save enforces access too. Each of PRs 7 to 10 updates that sentence, as you asked.
+- Changed: `test_organization_update_models.py` was checked out with CRLF line endings while the index holds LF. Saving it rewrote it as LF, so its diff shows only the new tests.
+- Verification: `test_organization_update_models.py` gains 8 tests:
+  - `none`, `only` another Organization and `all_except` this one each refuse a save with an entry, without reading the catalogue, storing anything or recording `organization.model_allowlist.changed`;
+  - without access, an Organization can empty its allowlist;
+  - access withdrawn in the database while the catalogue is read still refuses the save;
+  - `all`, `only` this Organization and `all_except` another each save as before, with one event.
+  The 4 refusals failed before the change; the other 4 passed. After it, the 8, the orphaned-model and event tests, `test_service_edge_cases.py`, ruff, ruff format and `ty` pass.
+
+### 2026-11-24 — AF-474 — provider access, PR 6
+
+- Delivered: `GET /api/v1/organizations/{organization_id}/agents/models` answers `[]` while OpenRouter is not open to the Organization, with or without `catalog=true`, and with no default appended. `AgentService.list_models` asks `LlmProviderAccessLookup.can_use` without a lock, since it only reads, after the permission checks and before OpenRouter's catalogue is fetched, so a refused `catalog=true` is still `403`. With access, the answer is unchanged.
+- Changed: `AgentService` takes `LlmProviderAccessLookup`, so `tests/unit/test_openrouter_client.py`, which builds it by hand, passes one too, as you asked. [`llm-providers.md`](../llm-providers.md) says only the model list enforces access so far, as you asked.
+- Verification: `test_agents_models_catalog.py` gains 9 tests:
+  - `none`, `only` another Organization and `all_except` this one each give `[]` in both modes, and the catalogue isn't fetched;
+  - `all`, `only` this Organization and `all_except` another each give the allowlisted model with the default first, and the full catalogue with `catalog=true`.
+  The 6 no-access cases failed before the change and the 3 with-access cases passed. All 11 tests in the file pass after it, as do `test_openrouter_client.py`, ruff, ruff format and `ty`.
+
+### 2026-11-24 — AF-474 — provider access, PR 5
+
+- Delivered: `POST /api/v1/platform/settings/llm-providers` takes `organization_access` (`all` unless sent) and `organization_ids`, for known providers and for Azure and Custom.
+  - They follow the `PUT .../{slug}/organizations` rules, with the same `400` messages. A breach is refused after the slug and own-field checks and before the key is checked, so nothing is stored.
+  - Unknown ids are checked before the key check and again under the connection's lock.
+  - A deleted known provider brought back takes the access sent, and any rows it had are replaced.
+  - Access other than `all` records `platform.llm_provider.organizations_changed` after `platform.llm_provider.created`, in the same transaction, as a change from `all` that adds every listed id. Access `all` records only `created`.
+- Delivered: each connection in `GET .../llm-providers`, and the connection answered by `POST` and `PUT .../{slug}/key`, carries `organization_access` and `organization_count`, the number of Organizations it lists. The counts come from one grouped query (`LlmProviderRepository.organization_counts`).
+- Changed: `DELETE .../{slug}` removes the connection's listed Organizations in the same transaction as its models.
+- Changed: [`llm-providers.md`](../llm-providers.md) describes the `POST` fields, the list fields, the delete and the event on Add, and [`domain-events.md`](../domain-events.md) says an Add records the event, as you asked. `api/developer_docs/operations-v1.json` lists only methods, paths and operation ids, so it is unchanged.
+- Verification:
+  - `test_platform_llm_provider_organizations.py` gains 12 tests:
+    - a default Add, with no access event;
+    - an Add with `none`, `all_except` and `only`, each with its event;
+    - each `400` on Add, with the key not checked and nothing stored;
+    - a delete that removes the rows, then a revival with new access;
+    - the list's access and count.
+  - The whole-body list assertions in `test_platform_llm_providers.py` and `test_platform_llm_provider_connections.py` gain the two fields.
+  - The new tests failed before the change and pass after it. A short regression of the two whole-body tests, a revival, the Add audit, the `PUT` refusals and `test_public_api_contract.py` passes, as do ruff, ruff format and `ty`.
+
+### 2026-11-24 — AF-474 — provider access, PR 4
+
+- Delivered: `GET` and `PUT /api/v1/platform/settings/llm-providers/{slug}/organizations`, for Platform Administrators only. A read-only Personal API Key may read but not replace.
+  - `GET` answers `{organization_access, organizations: [{id, name}]}`, sorted by name.
+  - `PUT` takes `{organization_access, organization_ids}` and answers the same body.
+- Delivered, the `PUT` refusals:
+  - `400`, each with a fixed message: an unknown mode, more than 1000 ids (`MAX_LISTED_ORGANIZATIONS`), ids with `all` or `none`, and an id that is malformed or names no Organization;
+  - `404` for an unknown or deleted slug;
+  - `409` for OpenRouter when an Organization that would lose access still uses it: a non-empty allowlist, its own default model, or any Agent with `deleted_at` unset (Bots and suspended Agents included). The message names up to 10 such Organizations by name, with what each uses, and counts the rest, for example "OpenRouter is still used by Beta Org (allowed models, its default model, 2 Agents) and 3 more organizations. Nothing was saved.". The wording and the order (by name) are mine.
+- Delivered, the write: `LlmProviderRepository.replace_organizations` checks the ids, works out who loses access with `can_use` on the old and new access, and writes under the connection's exclusive lock in one transaction. `all` and `none` clear the listed rows. A change records the event, with each id list sorted, then cut to 20. A save that changes nothing records none, and a repeated id counts once.
+- Changed: the connection row's `organization_access` is updated with `updated_at` set to itself. `BaseModel.updated_at` has an `onupdate` (`api/infrastructure/postgres/models.py`), and a column named in the `SET` clause doesn't get it, so the key's "Saved" time in the list doesn't move when access changes.
+- Changed: [`llm-providers.md`](../llm-providers.md) lists both routes and the event. `api/developer_docs/operations-v1.json` lists both operations. [`domain-events.md`](../domain-events.md) now says the event is recorded, and the [RBAC brief](../rbac/IMPLEMENTATION-BRIEF.md) lists both routes, as you asked.
+- Verification: the new `test_platform_llm_provider_organizations.py` (28 tests) covers:
+  - an Organization owner and a read-only key;
+  - the starting state;
+  - a missing and a deleted slug;
+  - `only` with two Organizations, with the body and the event;
+  - `all`/`none` clearing the list;
+  - added and removed ids;
+  - no event when nothing changes;
+  - 21 ids cut to 20;
+  - each `400`;
+  - each in-use rule, plus an Organization with only deleted Agents;
+  - the 10-name cap;
+  - widening access, and an unchanged Organization staying unchecked;
+  - another connection never being in use;
+  - the key's save time kept.
+  A red run of four of them failed before the change; all 28 pass in two serial `-k` halves. `test_public_api_contract.py`, ruff, ruff format and `ty` pass.
+
+### 2026-11-24 — AF-474 — provider access, PR 3
+
+- Delivered: the Platform-scoped `platform.llm_provider.organizations_changed` event, version 1, projected by `security_audit.projection` and by no other handler. Its payload is:
+  - the connection id and slug;
+  - `previous_organization_access` and `organization_access`, each validated as an `OrganizationAccess`;
+  - `added_count` and `removed_count`;
+  - `added_organization_ids` and `removed_organization_ids`, Organization ids only, at most 20 each (`MAX_LISTED_ORGANIZATION_IDS`, the plan's number);
+  - `organization_ids_truncated`;
+  - the display names.
+  It refuses any other field, so it can't carry an Organization's name or a key. Nothing emits it yet. [`domain-events.md`](../domain-events.md) describes it.
+- Changed: the wiring test for the LLM provider events is renamed `test_the_llm_provider_events_reach_only_the_security_audit` and covers the new event.
+- Verification: `test_domain_events.py` covers:
+  - the fields;
+  - another field;
+  - each missing field;
+  - an unknown mode;
+  - a list over 20;
+  - a non-UUID id;
+  - a payload at its limits.
+  `test_event_handler_registry_wiring.py` checks that the event reaches only the security audit. The 20 new cases failed before the change. Both files pass (106 tests), as do ruff, ruff format and `ty`.
+
+### 2026-11-24 — AF-474 — provider access, PR 2
+
+- Delivered: `can_use(mode, listed, organization_id)` in the new `api/domains/llm_providers/access.py`: `all` admits every Organization, `none` none, `all_except` those not listed and `only` those listed. An Organization not created yet (`None`) is in no list, so `all` and `all_except` admit it with no write. `ProviderNotOpen` is raised when access is refused.
+- Delivered: `LlmProviderAccessLookup` in `lookup.py`, for the Organization-side PRs 6 to 10. `can_use(slug, organization_id)` reads without a lock, for pre-checks and model lists. `require_open(session, slug, organization_id)` raises `ProviderNotOpen`, and `initial_allowed_models(session, default)` returns `[default]` while OpenRouter is open to a new Organization, else `[]`. Both read in the caller's transaction after taking the connection's lock shared. A deleted or unknown connection is open to nobody.
+- Changed: `LlmProviderRepository._lock(session, slug, *, shared=False)` takes `pg_advisory_xact_lock_shared` on the same key when `shared`, so the key is spelled once. A shared lock is held alongside other shared locks and conflicts only with the exclusive lock on that key (https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS). So Organization-side writes don't wait for each other but do wait for a withdrawal, and a withdrawal waits for them. Existing callers still take it exclusive. New `access` and `access_held` read the mode and whether the one Organization is listed.
+- Verification: `tests/unit/test_llm_provider_access.py` covers the four modes × listed, unlisted and new. `tests/integration/test_llm_provider_access.py` covers the lookup for each mode, a deleted and an unknown connection, and the lock: two shared holders don't block, a shared request under `SET LOCAL lock_timeout` times out while the exclusive lock is held, and succeeds once it is released. Before the change both files failed to import; all 10 tests pass now. A regression run of the 5 exclusive-lock race and delete tests in `test_platform_llm_provider_connections.py` passes. ruff, ruff format and `ty` pass.
+
+### 2026-11-24 — AF-474 — provider access, PR 1
+
+- Delivered: migration `7847fc32d19c` adds `llm_provider_connection.organization_access`, a non-native string enum of `all`, `none`, `all_except` or `only` with the CHECK `ck_llm_provider_connection_organization_access_known` and `server_default` `all`, so every existing connection, OpenRouter included, stays open to all Organizations. It adds `llm_provider_connection_organization` (`connection_id`, `organization_id`), whose primary key is both columns and whose foreign keys both cascade, as `organization_agent_sizes` does, with an index on `organization_id` for the cascade from an Organization delete, since PostgreSQL does not index referencing columns itself (https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-FK). `OrganizationAccess` and `LlmProviderConnectionOrganization` are in `api/domains/llm_providers/models.py`. [`llm-providers.md`](../llm-providers.md) describes both; `CONTEXT.md` defines Provider Access.
+- Unchanged: `database_is_clean` (`api/tests/steps/database.py`). Its connection delete cascades to the listed Organizations, and its OpenRouter insert gets `all` from the server default.
+- Release impact: the upgrade only adds; the downgrade drops the mode and every listed Organization.
+- Verification: `test_llm_provider_connection_migration.py` covers existing connections (a live, a deleted and OpenRouter) becoming `all` with nothing listed, the default, each mode, unknown modes refused by the CHECK, a pair listed twice, an unknown connection or Organization, both cascades, the downgrade, and a reset that leaves OpenRouter at `all` with nothing listed. 13 of the 14 new or changed tests were run before the change and failed; the default test was not in that run. All 61 tests in the file pass in four `-k` batches. ruff, ruff format, `ty` and `make check-migrations` pass.
 
 ### 2026-11-24 — AF-447 — review follow-ups for slice 3 and the providers page
 

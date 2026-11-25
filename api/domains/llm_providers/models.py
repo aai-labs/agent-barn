@@ -5,6 +5,8 @@ A slug stays unique among deleted connections too, so it is never reused.
 A known provider has one connection, whose slug is its provider type. An Azure or Custom
 connection has a slug of its own, never a provider type, and a base URL.
 A connection's models each carry an input and output price above zero, per token.
+A connection is open to all, no, all but the listed, or only the listed Organizations; its
+listed Organizations count only for the last two.
 """
 
 from dataclasses import dataclass
@@ -16,8 +18,8 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, PlainSerializer, SecretStr, field_validator, model_validator
-from sqlmodel import Column
+from pydantic import ConfigDict, Field, PlainSerializer, SecretStr, field_validator, model_validator
+from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -35,6 +37,7 @@ PRICE_SCALE = 18
 MAX_MODELS_PER_CONNECTION = 50
 MAX_AZURE_DEPLOYMENT_LENGTH = 64
 AZURE_DEPLOYMENT_PATTERN = "^[A-Za-z0-9._-]+$"
+MAX_LISTED_ORGANIZATIONS = 1000
 
 # The connection the migration seeds. Kept here for tests that reset the table to it; the
 # migration carries its own copy, as migrations do.
@@ -70,6 +73,13 @@ class PriceSource(StrEnum):
     MANUAL = "manual"
 
 
+class OrganizationAccess(StrEnum):
+    ALL = "all"
+    NONE = "none"
+    ALL_EXCEPT = "all_except"
+    ONLY = "only"
+
+
 BASE_URL_PROVIDER_TYPES = (ProviderType.AZURE, ProviderType.CUSTOM)
 KNOWN_PROVIDER_NAMES = {
     ProviderType.OPENROUTER: OPENROUTER_NAME,
@@ -90,6 +100,7 @@ def _sql_values(members: tuple[StrEnum, ...]) -> str:
 _ALL_TYPES_SQL = _sql_values(tuple(ProviderType))
 _BASE_URL_TYPES_SQL = _sql_values(BASE_URL_PROVIDER_TYPES)
 _PRICE_SOURCES_SQL = _sql_values(tuple(PriceSource))
+_ORGANIZATION_ACCESS_SQL = _sql_values(tuple(OrganizationAccess))
 
 
 def _string_enum(enum: type[StrEnum], length: int) -> sa.Enum:
@@ -124,6 +135,10 @@ class LlmProviderConnection(BaseModel, table=True):
             f"provider_type NOT IN ({_BASE_URL_TYPES_SQL}) OR slug NOT IN ({_ALL_TYPES_SQL})",
             name="ck_llm_provider_connection_own_slug_not_a_type",
         ),
+        sa.CheckConstraint(
+            f"organization_access IN ({_ORGANIZATION_ACCESS_SQL})",
+            name="ck_llm_provider_connection_organization_access_known",
+        ),
     )
 
     slug: str = SqlField(max_length=MAX_SLUG_LENGTH, sa_column_kwargs={"unique": True})
@@ -134,6 +149,23 @@ class LlmProviderConnection(BaseModel, table=True):
     base_url: str | None = SqlField(default=None, max_length=MAX_BASE_URL_LENGTH)
     updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
     deleted_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    organization_access: OrganizationAccess = SqlField(
+        default=OrganizationAccess.ALL,
+        sa_column=Column(
+            _string_enum(OrganizationAccess, 16), nullable=False, server_default=OrganizationAccess.ALL.value
+        ),
+    )
+
+
+class LlmProviderConnectionOrganization(SQLModel, table=True):
+    __tablename__: str = "llm_provider_connection_organization"
+
+    connection_id: UUID = SqlField(
+        foreign_key="llm_provider_connection.id", primary_key=True, nullable=False, ondelete="CASCADE"
+    )
+    organization_id: UUID = SqlField(
+        foreign_key="organization.id", primary_key=True, nullable=False, ondelete="CASCADE", index=True
+    )
 
 
 def _price_column() -> Column:
@@ -183,6 +215,8 @@ class LlmProviderConnectionRead(PydanticBaseModel):
     updated_by: str | None = None
     env_key_configured: bool
     env_key_last4: str | None = None
+    organization_access: OrganizationAccess
+    organization_count: int
 
 
 class LlmProviderModelRead(PydanticBaseModel):
@@ -276,7 +310,8 @@ class LlmProviderModelsReplace(PydanticBaseModel):
 
 class LlmProviderConnectionCreate(PydanticBaseModel):
     """A known provider takes only its key. Azure and Custom take a slug, name and base URL too,
-    whose rules the service checks so that a refusal can say which one was broken."""
+    whose rules the service checks so that a refusal can say which one was broken. Every
+    connection may also name its Provider Access, which the service checks the same way."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -285,6 +320,8 @@ class LlmProviderConnectionCreate(PydanticBaseModel):
     slug: str | None = None
     name: str | None = None
     base_url: str | None = None
+    organization_access: str = OrganizationAccess.ALL.value
+    organization_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _fields_match_the_provider_type(self) -> Self:
@@ -303,6 +340,28 @@ class LlmProviderConnectionCreate(PydanticBaseModel):
         if not trimmed or len(trimmed) > MAX_API_KEY_LENGTH:
             raise ValueError("Enter a key.")
         return SecretStr(trimmed)
+
+
+class LlmProviderOrganizationRead(PydanticBaseModel):
+    id: UUID
+    name: str
+
+
+class LlmProviderOrganizationsRead(PydanticBaseModel):
+    """A connection's Provider Access and its listed Organizations, by name."""
+
+    organization_access: OrganizationAccess
+    organizations: list[LlmProviderOrganizationRead]
+
+
+class LlmProviderOrganizationsReplace(PydanticBaseModel):
+    """A connection's new Provider Access and the Organizations it lists, whose rules the service
+    checks so that a refusal can say which one was broken."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_access: str
+    organization_ids: list[str] = Field(default_factory=list)
 
 
 class LlmProviderKeyReplace(PydanticBaseModel):

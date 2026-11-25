@@ -1,7 +1,7 @@
 """organization mcp servers
 
 Revision ID: f52dc88eb90b
-Revises: 9a64534a1a2f
+Revises: 7847fc32d19c
 Create Date: 2026-11-10 18:00:00.000000
 
 Organization MCP Servers: the remote MCP servers an Organization registers for its
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "f52dc88eb90b"
-down_revision: str | Sequence[str] | None = "9a64534a1a2f"
+down_revision: str | Sequence[str] | None = "7847fc32d19c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

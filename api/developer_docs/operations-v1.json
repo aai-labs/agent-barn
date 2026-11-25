@@ -1006,6 +1006,11 @@
   ],
   [
     "GET",
+    "/platform/settings/llm-providers/{slug}/organizations",
+    "read_organizations_platform_settings_llm_providers__slug__organizations_get"
+  ],
+  [
+    "GET",
     "/platform/settings/organizations",
     "read_organization_settings_platform_settings_organizations_get"
   ],
@@ -1888,6 +1893,11 @@
     "PUT",
     "/platform/settings/llm-providers/{slug}/models",
     "replace_models_platform_settings_llm_providers__slug__models_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/llm-providers/{slug}/organizations",
+    "replace_organizations_platform_settings_llm_providers__slug__organizations_put"
   ],
   [
     "PUT",

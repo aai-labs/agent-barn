@@ -176,6 +176,10 @@ _Avoid_: provider key, LLM credential, model provider setting
 A model kept for an LLM Provider Connection, with the per-token prices recorded for it. A connection holds each model once.
 _Avoid_: model route, deployment, model price
 
+**Provider Access**:
+The Organizations an LLM Provider Connection is open to: all, none, all except the listed ones, or only the listed ones. "All" and "all except" also cover Organizations created later.
+_Avoid_: provider permission, provider allowlist
+
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend

@@ -15,7 +15,7 @@ Agent Barn uses internal Domain Events to record immutable, typed business facts
 - Event envelopes include event ID, event name, schema version, occurred-at time, explicit Event Scope, optional Organization ID, typed Actor Identity, typed Subject Identity, required correlation ID, optional causation ID, and bounded Event Payload.
 - Event Payloads are JSON objects validated by their event schema and by recursive safety checks. Secrets, credentials, unsupported values, oversized content, and sensitive key names are rejected.
 - Organization-scoped events require exactly one Organization ID. Known actor, subject, and validated payload references that belong to a different Organization are rejected before commit.
-- Platform-scoped events prohibit an Organization ID and prohibit Organization references in Actor, Subject, and payload data. User is a valid Platform event subject.
+- Platform-scoped events prohibit an Organization ID and prohibit Organization references in Actor, Subject, and payload data: no Actor or Subject with an Organization, no Membership Actor, a Subject that is a User or System, and no payload object with an `organization_id`. User is a valid Platform event subject. The one exception is a bounded list of Organization ids in the payload of an event about a Platform setting that targets Organizations: `platform.llm_provider.organizations_changed` lists the Organizations added and removed, at most 20 per list. Such a list is plain ids, never an `organization_id` reference.
 - A domain-specific repository operation that produces an event owns the transaction boundary. It writes business state, the Outbox Message, and intended Event Deliveries with one SQLModel session and one commit.
 - The session-aware outbox staging interface stages rows in an existing repository-owned session. It does not commit, open another session, or belong in routes.
 - `PostgresRepositoryDelegate` remains the default session-per-operation helper for ordinary persistence and does not accept optional event parameters.
@@ -120,6 +120,15 @@ They also add the Platform-scoped `platform.llm_provider.created` event, project
 The Platform-scoped `platform.llm_provider.deleted` event is projected by `security_audit.projection` and emitted atomically when a Platform Administrator deletes a connection. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug, provider type, base URL (null for a known provider), whether a stored key was purged (`key_purged`), and actor/subject display snapshots, never the key or any part of it.
 
 The Platform-scoped `platform.llm_provider.models_changed` event is projected by `security_audit.projection` and emitted atomically when a Platform Administrator saves a connection's models and any is added, removed or repriced (a price, its price source or its LiteLLM price key changed). Its Subject is the connection (`SYSTEM`, the connection id). The payload carries the connection id, slug and provider type, how many models were added, removed and repriced, the ids of each (`added_model_ids`, `removed_model_ids`, `repriced_model_ids`, at most 20 per list and 200 characters per id, so full lists take about 12 KB of the 16 KB cap), `model_ids_truncated` when a list was cut, and actor/subject display snapshots, never a key or a price. Each list is sorted before it is cut.
+
+The Platform-scoped `platform.llm_provider.organizations_changed` event, version 1, is projected by `security_audit.projection`. Its Subject is the connection (`SYSTEM`, the connection id). The payload carries:
+- the connection id and slug;
+- the [Provider Access](../../CONTEXT.md) mode before and after (`previous_organization_access`, `organization_access`, each `all`, `none`, `all_except` or `only`);
+- how many listed Organizations were added and removed, with their ids (`added_organization_ids`, `removed_organization_ids`, at most 20 per list);
+- `organization_ids_truncated` when a list was cut;
+- actor/subject display snapshots.
+
+It carries no Organization names. It is recorded atomically when a Platform Administrator changes a connection's Provider Access (`PUT .../llm-providers/{slug}/organizations`); a save that changes nothing records none. An added connection whose access isn't `all` records it in the same transaction, after `platform.llm_provider.created`, as a change from `all` that adds every listed Organization.
 
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 

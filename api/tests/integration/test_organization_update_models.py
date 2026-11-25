@@ -1,8 +1,10 @@
 from unittest.mock import patch
 from uuid import uuid7
 
+import pytest
 from fastapi import status
-from hamcrest import assert_that, contains_string, equal_to, is_not, none
+from hamcrest import assert_that, contains_string, equal_to, has_length, is_not, none
+from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.domains.events.catalog import ORGANIZATION_MODEL_ALLOWLIST_CHANGED
@@ -10,6 +12,13 @@ from api.domains.events.models import OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    LlmProviderConnection,
+    LlmProviderConnectionOrganization,
+    OrganizationAccess,
+)
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -22,6 +31,23 @@ from api.tests.core.modules import (
 from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+
+LIST_MODELS = "api.infrastructure.openrouter.client.OpenRouterClient.list_models"
+MODEL = "openai/gpt-4o"
+OTHER_MODEL = "openai/gpt-5-mini"
+ALLOWLIST_EVENT = ORGANIZATION_MODEL_ALLOWLIST_CHANGED
+NO_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
+
+
+def _setup(*steps):
+    return [
+        prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+        prepare_api_server(),
+        create_test_client(),
+        database_repo_is_ready(),
+        database_is_clean(),
+        *steps,
+    ]
 
 
 def _outbox_messages(context) -> list[OutboxMessage]:
@@ -328,3 +354,113 @@ def test_model_allowlist_changed_event_projects_to_durable_security_audit_record
         assert_that(audit_record, is_not(none()))
         assert audit_record is not None
         assert_that(audit_record.action, equal_to(ORGANIZATION_MODEL_ALLOWLIST_CHANGED))
+
+
+def _engine(context):
+    return context.injector.get(PostgresRepositoryDelegate).engine
+
+
+def _owner_with_allowlist(allowed_models: list[str]):
+    def step(context):
+        there_is_a_user(email="owner-access@example.com", organization_id=uuid7(), role=OrganizationRole.OWNER)(context)
+        there_is_an_access_token_for_user(user_id=context.user.id)(context)
+        with Session(_engine(context)) as session:
+            organization = session.get_one(Organization, context.organization.id)
+            organization.allowed_models = allowed_models
+            session.add(organization)
+            session.commit()
+
+    return step
+
+
+def _set_openrouter_access(context, access: OrganizationAccess, listed: str | None = None) -> None:
+    with Session(_engine(context)) as session:
+        if listed == "other":
+            other = Organization(name="Other Org")
+            session.add(other)
+            session.flush()
+            listed_id = other.id
+        else:
+            listed_id = context.organization.id
+        connection = session.get_one(LlmProviderConnection, OPENROUTER_CONNECTION_ID)
+        connection.organization_access = access
+        session.add(connection)
+        if listed is not None:
+            session.add(LlmProviderConnectionOrganization(connection_id=connection.id, organization_id=listed_id))
+        session.commit()
+
+
+def openrouter_access(access: OrganizationAccess, listed: str | None = None):
+    def step(context):
+        _set_openrouter_access(context, access, listed)
+
+    return step
+
+
+def _save_allowlist(context, allowed_models: list[str], catalogue=None):
+    with patch(LIST_MODELS, side_effect=catalogue or (lambda: [{"id": MODEL}, {"id": OTHER_MODEL}])) as listed:
+        response = context.client.patch(
+            f"/api/v1/organizations/{context.organization.id}",
+            headers={"Authorization": f"Bearer {context.access_token}"},
+            json={"allowed_models": allowed_models},
+        )
+    return response, listed
+
+
+def _stored_allowlist(context) -> list[str]:
+    with Session(_engine(context)) as session:
+        return session.get_one(Organization, context.organization.id).allowed_models
+
+
+def _allowlist_events(context) -> list[OutboxMessage]:
+    return [message for message in _outbox_messages(context) if message.event_name == ALLOWLIST_EVENT]
+
+
+@pytest.mark.parametrize(
+    ("access", "listed"),
+    [(OrganizationAccess.NONE, None), (OrganizationAccess.ONLY, "other"), (OrganizationAccess.ALL_EXCEPT, "self")],
+)
+def test_an_organization_without_openrouter_access_cannot_allow_models(access, listed):
+    with given(_setup(_owner_with_allowlist([]), openrouter_access(access, listed))) as context:
+        response, catalogue = _save_allowlist(context, [MODEL])
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(NO_PROVIDER))
+        catalogue.assert_not_called()
+        assert_that((_stored_allowlist(context), _allowlist_events(context)), equal_to(([], [])))
+
+
+def test_an_organization_without_openrouter_access_can_empty_its_allowlist():
+    with given(_setup(_owner_with_allowlist([MODEL]), openrouter_access(OrganizationAccess.NONE))) as context:
+        response, _ = _save_allowlist(context, [])
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored_allowlist(context), equal_to([]))
+
+
+def test_access_withdrawn_after_the_first_check_still_refuses_the_save():
+    with given(_setup(_owner_with_allowlist([]))) as context:
+
+        def withdraw_while_the_catalogue_is_read():
+            _set_openrouter_access(context, OrganizationAccess.NONE)
+            return [{"id": MODEL}]
+
+        response, catalogue = _save_allowlist(context, [MODEL], catalogue=withdraw_while_the_catalogue_is_read)
+
+        catalogue.assert_called_once()
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(NO_PROVIDER))
+        assert_that((_stored_allowlist(context), _allowlist_events(context)), equal_to(([], [])))
+
+
+@pytest.mark.parametrize(
+    ("access", "listed"),
+    [(OrganizationAccess.ALL, None), (OrganizationAccess.ONLY, "self"), (OrganizationAccess.ALL_EXCEPT, "other")],
+)
+def test_an_organization_with_openrouter_access_saves_its_allowlist(access, listed):
+    with given(_setup(_owner_with_allowlist([MODEL]), openrouter_access(access, listed))) as context:
+        response, _ = _save_allowlist(context, [MODEL, OTHER_MODEL])
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored_allowlist(context), equal_to([MODEL, OTHER_MODEL]))
+        assert_that(_allowlist_events(context), has_length(1))

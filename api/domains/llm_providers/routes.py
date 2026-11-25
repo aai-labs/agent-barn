@@ -15,6 +15,8 @@ from api.domains.llm_providers.models import (
     LlmProviderKeyReplace,
     LlmProviderModelRead,
     LlmProviderModelsReplace,
+    LlmProviderOrganizationsRead,
+    LlmProviderOrganizationsReplace,
 )
 from api.domains.llm_providers.service import PlatformLlmProviderService
 
@@ -90,6 +92,25 @@ def read_model_catalogue(
     service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
 ):
     return service.read_model_catalogue(slug, context)
+
+
+@platform_llm_providers_router.get("/{slug}/organizations", response_model=LlmProviderOrganizationsRead)
+def read_organizations(
+    slug: str,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.read_organizations(slug, context)
+
+
+@platform_llm_providers_router.put("/{slug}/organizations", response_model=LlmProviderOrganizationsRead)
+def replace_organizations(
+    slug: str,
+    data: LlmProviderOrganizationsReplace,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformLlmProviderService, Injected(PlatformLlmProviderService)],
+):
+    return service.replace_organizations(slug, data, context)
 
 
 @platform_llm_providers_router.delete("/{slug}", status_code=204)

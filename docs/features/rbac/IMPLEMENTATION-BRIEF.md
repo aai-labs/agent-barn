@@ -48,7 +48,9 @@ deletes a connection other than OpenRouter and purges its key. `GET .../{slug}/m
 lists a live connection's stored models and their prices, and `GET .../{slug}/model-catalogue`
 the models its provider lists for the stored key, which never leaves the API (for Azure, LiteLLM's Azure
 chat models). `PUT .../{slug}/models`
-replaces a live connection's models. Every write refuses a
+replaces a live connection's models. `GET .../{slug}/organizations` reads a live connection's
+Provider Access with its listed Organizations' ids and names, and `PUT .../{slug}/organizations`
+replaces it. Every write refuses a
 read-only Personal API Key, and a malformed request gets a fixed `422` that does not echo
 the body.
 

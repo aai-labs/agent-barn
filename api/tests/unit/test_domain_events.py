@@ -24,6 +24,7 @@ from api.domains.events.catalog import (
 )
 
 MODEL_ID_LISTS = ["added_model_ids", "removed_model_ids", "repriced_model_ids"]
+ORGANIZATION_ID_LISTS = ["added_organization_ids", "removed_organization_ids"]
 
 
 class SamplePayload(BaseModel):
@@ -719,5 +720,121 @@ def test_the_llm_provider_models_changed_event_at_its_limits_fits_the_payload_ca
     )
 
     event = _build_llm_provider_models_changed_event(payload)
+
+    assert_that(event.payload, equal_to(payload))
+
+
+def _llm_provider_organizations_changed_payload(**extra) -> dict[str, object]:
+    return {
+        "connection_id": str(uuid4()),
+        "slug": "openrouter",
+        "previous_organization_access": "all",
+        "organization_access": "all_except",
+        "added_count": 2,
+        "removed_count": 0,
+        "added_organization_ids": [str(uuid4()), str(uuid4())],
+        "removed_organization_ids": [],
+        "organization_ids_truncated": False,
+        "actor_display": "Platform Person",
+        "subject_display": "OpenRouter",
+        **extra,
+    }
+
+
+def _build_llm_provider_organizations_changed_event(payload: dict[str, object]):
+    return EVENT_REGISTRY.build_event(
+        event_name="platform.llm_provider.organizations_changed",
+        schema_version=1,
+        occurred_at=datetime.now(UTC),
+        organization_id=None,
+        actor=ActorIdentity(type=ActorIdentityType.USER, id=uuid4()),
+        subject=SubjectIdentity(type=SubjectIdentityType.SYSTEM, id=str(uuid4())),
+        correlation_id=uuid4(),
+        payload=payload,
+    )
+
+
+def test_the_llm_provider_organizations_changed_event_carries_the_modes_counts_and_ids():
+    payload = _llm_provider_organizations_changed_payload()
+
+    event = _build_llm_provider_organizations_changed_event(payload)
+
+    assert_that(event.event_scope, equal_to(EventScope.PLATFORM))
+    assert_that(event.payload, equal_to(payload))
+
+
+@pytest.mark.parametrize("extra", [{"organization_names": ["Acme"]}, {"api_key_last4": "a1b2"}])
+def test_the_llm_provider_organizations_changed_event_refuses_any_other_field(extra):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_organizations_changed_event(_llm_provider_organizations_changed_payload(**extra))
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "connection_id",
+        "slug",
+        "previous_organization_access",
+        "organization_access",
+        "added_count",
+        "removed_count",
+        *ORGANIZATION_ID_LISTS,
+        "organization_ids_truncated",
+    ],
+)
+def test_the_llm_provider_organizations_changed_event_needs_the_connection_its_modes_counts_and_lists(missing):
+    payload = _llm_provider_organizations_changed_payload()
+    del payload[missing]
+
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_organizations_changed_event(payload)
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize("field", ["previous_organization_access", "organization_access"])
+def test_the_llm_provider_organizations_changed_event_refuses_an_unknown_mode(field):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_organizations_changed_event(_llm_provider_organizations_changed_payload(**{field: "some"}))
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize("field", ORGANIZATION_ID_LISTS)
+def test_the_llm_provider_organizations_changed_event_lists_at_most_20_ids_each(field):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_organizations_changed_event(
+            _llm_provider_organizations_changed_payload(**{field: [str(uuid4()) for _ in range(21)]})
+        )
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+@pytest.mark.parametrize("field", ORGANIZATION_ID_LISTS)
+def test_the_llm_provider_organizations_changed_event_lists_only_organization_ids(field):
+    with pytest.raises(DomainEventValidationError) as raised:
+        _build_llm_provider_organizations_changed_event(
+            _llm_provider_organizations_changed_payload(**{field: ["Acme"]})
+        )
+
+    assert_that(type(raised.value), equal_to(DomainEventValidationError))
+
+
+def test_the_llm_provider_organizations_changed_event_at_its_limits_fits_the_payload_cap():
+    payload = _llm_provider_organizations_changed_payload(
+        slug="s" * 32,
+        subject_display="n" * 64,
+        previous_organization_access="all_except",
+        organization_access="only",
+        added_count=1000,
+        removed_count=1000,
+        added_organization_ids=[str(uuid4()) for _ in range(20)],
+        removed_organization_ids=[str(uuid4()) for _ in range(20)],
+        organization_ids_truncated=True,
+    )
+
+    event = _build_llm_provider_organizations_changed_event(payload)
 
     assert_that(event.payload, equal_to(payload))

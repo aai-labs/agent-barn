@@ -16,6 +16,7 @@ import { ManageProviderMenu } from "./manage-provider-menu";
 import { AddProviderCard, ProviderCard } from "./provider-card";
 import { ProviderKeyDialog } from "./provider-key-dialog";
 import { ProviderModelsDialog } from "./provider-models-dialog";
+import { ProviderOrganizationsDialog } from "./provider-organizations-dialog";
 
 export function PlatformLlmProviderSettings() {
   const { connections, isLoadingConnections, connectionsError, reloadConnections } = useLlmProviderConnections();
@@ -44,6 +45,9 @@ export function PlatformLlmProviderSettings() {
   const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsDialogKey, setModelsDialogKey] = useState(0);
+  const [organizationsTarget, setOrganizationsTarget] = useState<LlmProviderConnection | null>(null);
+  const [organizationsOpen, setOrganizationsOpen] = useState(false);
+  const [organizationsDialogKey, setOrganizationsDialogKey] = useState(0);
   const [menuTrigger, setMenuTrigger] = useState<HTMLElement | null>(null);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
@@ -80,7 +84,7 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(saved)} added`);
   }
 
-  function openKeyDialog(connection: LlmProviderConnection, trigger: HTMLElement | null = null) {
+  function openKeyDialog(connection: LlmProviderConnection, trigger: HTMLElement | null) {
     setMenuTrigger(trigger);
     resetReplace();
     setKeyTarget(connection);
@@ -106,6 +110,18 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(connection)} models saved`);
   }
 
+  function openOrganizations(connection: LlmProviderConnection, trigger: HTMLElement | null) {
+    setMenuTrigger(trigger);
+    setOrganizationsTarget(connection);
+    setOrganizationsDialogKey((current) => current + 1);
+    setOrganizationsOpen(true);
+  }
+
+  function organizationsSaved(connection: LlmProviderConnection) {
+    setOrganizationsOpen(false);
+    toast.success(`${providerTitle(connection)} organizations saved`);
+  }
+
   function openDelete(connection: LlmProviderConnection) {
     resetDelete();
     setDeleting(connection);
@@ -118,24 +134,23 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(connection)} deleted`);
   }
 
-  function connectionCard(connection: LlmProviderConnection) {
+  function manageMenu(connection: LlmProviderConnection) {
     const isOpenRouter = connection.providerType === "openrouter";
     return (
+      <ManageProviderMenu
+        connection={connection}
+        onModels={isOpenRouter ? undefined : (trigger) => openModels(connection, trigger)}
+        onOrganizations={(trigger) => openOrganizations(connection, trigger)}
+        onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
+        onDelete={isOpenRouter ? undefined : () => openDelete(connection)}
+      />
+    );
+  }
+
+  function connectionCard(connection: LlmProviderConnection) {
+    return (
       <li key={connection.slug}>
-        <ProviderCard
-          connection={connection}
-          onReplaceKey={isOpenRouter ? () => openKeyDialog(connection) : undefined}
-          manage={
-            isOpenRouter ? undefined : (
-              <ManageProviderMenu
-                connection={connection}
-                onModels={(trigger) => openModels(connection, trigger)}
-                onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
-                onDelete={() => openDelete(connection)}
-              />
-            )
-          }
-        />
+        <ProviderCard connection={connection} manage={manageMenu(connection)} />
       </li>
     );
   }
@@ -147,7 +162,7 @@ export function PlatformLlmProviderSettings() {
           <h2 id="llm-providers-deployment-heading" className="mb-3 mt-0 text-[0.95rem] font-semibold">
             Set by this deployment
           </h2>
-          <DeploymentProviderCard connection={deployment} onReplaceKey={() => openKeyDialog(deployment)} />
+          <DeploymentProviderCard connection={deployment} manage={manageMenu(deployment)} />
         </section>
       )}
 
@@ -209,6 +224,16 @@ export function PlatformLlmProviderSettings() {
           open={modelsOpen}
           onOpenChange={setModelsOpen}
           onSaved={() => modelsSaved(modelsTarget)}
+          returnFocusTo={menuTrigger}
+        />
+      )}
+      {organizationsTarget && (
+        <ProviderOrganizationsDialog
+          key={`organizations-${organizationsDialogKey}`}
+          connection={organizationsTarget}
+          open={organizationsOpen}
+          onOpenChange={setOrganizationsOpen}
+          onSaved={() => organizationsSaved(organizationsTarget)}
           returnFocusTo={menuTrigger}
         />
       )}

@@ -27,16 +27,30 @@ export class PlatformLlmProvidersPage {
     return this.deploymentSection().getByRole("region", { name: "OpenRouter", exact: true });
   }
 
-  deploymentKeyButton() {
-    return this.deploymentCard().getByRole("button", { name: /^(Replace key|Save a key)$/ });
+  deploymentManageButton() {
+    return this.deploymentCard().getByRole("button", { name: "Manage OpenRouter", exact: true });
+  }
+
+  deploymentCardButtons() {
+    return this.deploymentCard().getByRole("button");
+  }
+
+  keyAction() {
+    return this.manageMenu().getByRole("menuitem", { name: /^(Replace key|Save a key)$/ });
+  }
+
+  async openKeyDialog() {
+    await this.manageButton("OpenRouter").click();
+    await this.keyAction().click();
+  }
+
+  async openDeploymentKeyDialog() {
+    await this.deploymentManageButton().click();
+    await this.keyAction().click();
   }
 
   toast(text: string) {
     return this.page.locator("[data-sonner-toast]").filter({ hasText: text });
-  }
-
-  openDialogButton() {
-    return this.card().getByRole("button", { name: /^(Replace key|Save a key)$/ });
   }
 
   dialog() {
@@ -48,7 +62,7 @@ export class PlatformLlmProvidersPage {
   }
 
   async submitKey(key: string) {
-    await this.openDialogButton().click();
+    await this.openKeyDialog();
     await this.keyInput().fill(key);
     await this.dialog().getByRole("button", { name: "Save key" }).click();
   }
@@ -81,11 +95,11 @@ export class PlatformLlmProvidersPage {
     return this.manageMenu().getByRole("menuitem");
   }
 
-  manageAction(action: "Models" | "Replace key" | "Save a key" | "Delete") {
+  manageAction(action: "Models" | "Organizations" | "Replace key" | "Save a key" | "Delete") {
     return this.manageMenu().getByRole("menuitem", { name: action, exact: true });
   }
 
-  async manage(name: string, action: "Models" | "Replace key" | "Delete") {
+  async manage(name: string, action: "Models" | "Organizations" | "Replace key" | "Delete") {
     await this.manageButton(name).click();
     await this.manageAction(action).click();
     await expect(this.manageMenu()).toHaveCount(0);
@@ -101,6 +115,38 @@ export class PlatformLlmProvidersPage {
 
   async openModels(name: string) {
     await this.manage(name, "Models");
+  }
+
+  async openOrganizations(name: string) {
+    await this.manage(name, "Organizations");
+  }
+
+  accessOption(label: string) {
+    return this.dialog().getByRole("radio", { name: label, exact: true });
+  }
+
+  organizationSearch() {
+    return this.dialog().getByLabel("Search organizations", { exact: true });
+  }
+
+  organizationCheckbox(name: string) {
+    return this.dialog().getByRole("checkbox", { name, exact: true });
+  }
+
+  organizationCheckboxes() {
+    return this.dialog().getByRole("checkbox");
+  }
+
+  showMoreOrganizations() {
+    return this.dialog().getByRole("button", { name: "Show more", exact: true });
+  }
+
+  tickedOrganizations() {
+    return this.dialog().getByText(/^\d+ ticked$/);
+  }
+
+  saveOrganizationsButton() {
+    return this.dialog().getByRole("button", { name: "Save organizations" });
   }
 
   addProviderButton() {
