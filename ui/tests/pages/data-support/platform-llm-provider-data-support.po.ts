@@ -356,7 +356,7 @@ export class PlatformLlmProviderDataSupport {
         organization_count: 0,
         ...(options.connection ?? SAVED_KEY),
       },
-      ...(options.connections ?? []),
+      ...(options.connections ?? []).map((connection) => ({ ...connection })),
     ];
     this.rows = rows;
     let listStatus = options.listStatus ?? 200;

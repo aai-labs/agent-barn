@@ -19,6 +19,12 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 
 ## Changes
 
+### 2026-11-25 — AF-474 — provider access, review fixes for PR #413
+
+- Fixed: the e2e mock's `intercept()` copied the connection list but not the connections in it. A saved Organizations change wrote its access onto the shared fixture, such as `ANTHROPIC_CONNECTION`. A later test in the same worker then read "Only 3" instead of "All organizations". `intercept()` now clones each connection it is given.
+- Changed: the [domain events](../domain-events.md) invariant for Platform-scoped events contradicted `platform.llm_provider.organizations_changed`, which lists added and removed Organization ids. The invariant now spells out what the registry rejects: an Organization ID, an Actor or Subject with an Organization, a Membership Actor, a Subject other than a User or System, and a payload object with an `organization_id`. It names that event's bounded lists of plain ids as the one exception.
+- Verification: the reviewer's command, with `--workers=1`, failed before the fix (1 passed, 1 failed, "Only 3"). After the fix, it and the other two tests that save Organizations pass, 4 of 4, in one worker. No API code changed.
+
 ### 2026-11-25 — AF-474 — provider access, PR 14
 
 - Delivered: [`llm-providers.md`](../llm-providers.md) has a Provider Access section:
