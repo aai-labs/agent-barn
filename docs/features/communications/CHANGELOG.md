@@ -15,6 +15,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-11-26 — AF-479 — Replace one Connection credential at a time — PR pending
+
+- Fixed: editing a Connection with only some credential fields filled in, such as a new Slack bot token alone, replaced the stored credentials as a whole and failed because the other fields were missing. Blank fields now keep their stored values, as the edit form says. Credentials that can no longer be decrypted can still be replaced by filling in every field.
+- Fixed: a configuration validation error returned Pydantic's full text, which echoed the submitted values, including credentials. Errors now name the field and the problem only.
+
 ### 2026-11-23 — Custom Slack server for Hermes Slack Connections — PR pending
 
 - Added: the Connection picker offers **Custom Slack** beside Slack on Hermes Agents that are not Bots. It opens a short form (server address, the administrator-issued tokens, and Slack's settings folded under one row) without the Slack-app steps or manifest, and saved Connections show a Custom Slack label with the server's host. It is the same Slack Connection, so an Agent has Slack or Custom Slack, and the plain Slack form never shows the server address.

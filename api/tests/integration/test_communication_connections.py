@@ -847,6 +847,51 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
             assert_that(response.json(), not_(has_key("credentials")))
 
 
+def _stored_credentials(context, connection_id: str) -> dict:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        connection = session.exec(
+            select(CommunicationConnection).where(CommunicationConnection.id == UUID(connection_id))
+        ).one()
+        return json.loads(decrypt_token(connection.credentials_encrypted, TEST_ENCRYPTION_KEY))
+
+
+def test_a_credential_left_blank_keeps_its_stored_value() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_slack_payload(), headers=_auth(context)).json()
+
+        with when("I replace only the bot token"):
+            response = client.patch(
+                f"{_base(context)}/{created['id']}",
+                json={"revision": created["revision"], "credentials": {"bot_token": "xoxb-rotated", "app_token": ""}},
+                headers=_auth(context),
+            )
+
+        with then("the app-level token stays as it was stored"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                _stored_credentials(context, created["id"]),
+                equal_to({"bot_token": "xoxb-rotated", "app_token": TEST_SLACK_APP_TOKEN}),
+            )
+
+
+def test_a_configuration_error_names_the_field_without_echoing_the_credentials() -> None:
+    with given(_GIVEN) as context:
+        secret = "xoxb-must-never-come-back"
+        with when("I submit a Slack Connection without its app-level token"):
+            response = context.client.post(
+                _base(context),
+                json={"platform_key": "slack", "display_name": "Slack", "credentials": {"bot_token": secret}},
+                headers=_auth(context),
+            )
+
+        with then("the error names the missing field and leaves the bot token out"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("App-level token: Field required"))
+            assert_that(response.text, not_(contains_string(secret)))
+
+
 def _discord_with(**settings) -> dict:
     return {**_discord_payload(), "settings": {"allowed_channel_ids": ["channel-one"], **settings}}
 

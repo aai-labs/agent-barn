@@ -65,6 +65,22 @@ _OPENCLAW_MENTION_CONFLICT = (
     "Turn it on, or remove the listen-in channels."
 )
 
+
+def _problem(exc: Exception, plugin) -> str:
+    """What was wrong with a configuration, naming fields but never echoing values: they can be credentials."""
+    if not isinstance(exc, ValidationError):
+        return str(exc)
+    fields = {**plugin.settings_model.model_fields, **plugin.credentials_model.model_fields}
+    problems = []
+    for error in exc.errors(include_url=False, include_input=False, include_context=False):
+        loc = error["loc"]
+        message = error["msg"].removeprefix("Value error, ")
+        field = fields.get(str(loc[0])) if loc else None
+        name = (field.title if field and field.title else None) or ".".join(str(part) for part in loc)
+        problems.append(f"{name}: {message}" if name else message)
+    return "; ".join(problems)
+
+
 # A directory read talks to the provider, so a failure is usually the operator's
 # credentials or scopes rather than a bug. 401/403 are deliberately never used:
 # the web client treats them as its own session expiring and would sign the user
@@ -180,7 +196,7 @@ class CommunicationsService:
                 guild_id=guild_id,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -208,7 +224,7 @@ class CommunicationsService:
             credentials = plugin.credentials_model.model_validate(data.credentials)
             entries = plugin.list_directory_entries(settings, credentials, kind=data.kind, guild_id=data.guild_id)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -320,7 +336,7 @@ class CommunicationsService:
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(connection.platform_key)
-        credentials = data.credentials or self._decrypt_credentials(plugin, connection.credentials_encrypted)
+        credentials = self._replaced_credentials(plugin, connection.credentials_encrypted, data.credentials)
         settings = data.settings if data.settings is not None else connection.settings
         validated = self._validate(
             plugin,
@@ -560,7 +576,7 @@ class CommunicationsService:
                 detail=f"{plugin.display_name} does not provide a bot install link",
             ) from exc
         except (ValidationError, ValueError, PermissionError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
 
     def build_app_package(
         self,
@@ -609,7 +625,7 @@ class CommunicationsService:
                 detail=f"{plugin.display_name} does not provide an installable app package",
             ) from exc
         except (ValidationError, ValueError, PermissionError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
 
     @staticmethod
     def _reject_web_chat_mutation(platform_key: str) -> None:
@@ -673,7 +689,7 @@ class CommunicationsService:
                 agent_id=agent_id,
             )
         except (ValidationError, ValueError, PermissionError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
 
     def _encrypt_credentials(self, credentials: dict) -> str:
         return encrypt_token(
@@ -725,6 +741,19 @@ class CommunicationsService:
             )
         plugin = self._require_plugin(connection.platform_key)
         return self._decrypt_credentials(plugin, connection.credentials_encrypted)
+
+    def _replaced_credentials(self, plugin, ciphertext: str, submitted: dict | None) -> dict:
+        """The stored credentials with the submitted fields replaced; a blank field keeps its stored value."""
+        supplied = {key: value for key, value in (submitted or {}).items() if value not in ("", None)}
+        try:
+            stored = self._decrypt_credentials(plugin, ciphertext)
+        except HTTPException:
+            # Credentials that can no longer be read can still be replaced as a whole.
+            required = {name for name, field in plugin.credentials_model.model_fields.items() if field.is_required()}
+            if not required <= supplied.keys():
+                raise
+            return supplied
+        return stored | supplied
 
     def _decrypt_credentials(self, plugin, ciphertext: str) -> dict:
         try:
