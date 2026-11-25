@@ -231,11 +231,15 @@ Self Chat sets `selfChatMode`, an empty `allowFrom` (OpenClaw adds the owner),
 closed groups and `responsePrefix: "🤖"`, which OpenClaw also puts before inbound
 lines in place of its default `[openclaw]`. The running gateway owns the login,
 so Link phone calls its `web.login.start` and `web.login.wait` methods through
-`openclaw gateway call` and streams the PNG QR code it renders. Because the
-gateway refuses a new QR while a phone is linked, linking again logs the
-current phone out first (`force`), while on Hermes the old session stays until
-the new one is linked. Bots cannot use WhatsApp on either runtime: one phone
-links the whole Agent pod.
+`openclaw gateway call` and streams the PNG QR code it renders. While a phone
+is linked the gateway offers no QR and names the phone instead; only a request
+with `replace=true`, sent after the person confirms, passes `force` and logs it
+out. On Hermes the old session stays until the new one is linked. The gateway
+starts the channel once the phone links, so OpenClaw needs no restart. Each
+attempt runs as `sh -c SCRIPT agentbarn-whatsapp-pairing`; a new one kills the
+process tree of an attempt still holding the lock, identified by that marker in
+its command line. Bots cannot use WhatsApp on either runtime: one phone links
+the whole Agent pod.
 
 `SLACK_ALLOW_ALL_USERS=true` delegates Hermes' native user gate to the mandatory
 Connection-policy plugin and suppresses the otherwise misleading startup warning
