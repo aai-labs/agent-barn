@@ -1,11 +1,13 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { formatDate } from "@/shared/date";
 
 import { OPENROUTER_MASKED_KEY_PREFIX, PROVIDER_SUBTITLES } from "../constants";
 import type { LlmProviderConnection } from "../schemas";
 import { providerTitle } from "../utils";
-import { ProviderInitials } from "./provider-card";
+import { organizationsLabel, ProviderInitials } from "./provider-card";
 
 const ENVIRONMENT_VARIABLE = "OPENROUTER_API_KEY";
 const IN_USE = { label: "In use", color: "var(--ok)" };
@@ -14,10 +16,10 @@ const MUTED = { color: "var(--ink-3)" };
 
 export function DeploymentProviderCard({
   connection,
-  onReplaceKey,
+  manage,
 }: {
   connection: LlmProviderConnection;
-  onReplaceKey: () => void;
+  manage: ReactNode;
 }) {
   const headingId = `llm-provider-${connection.slug}-deployment-heading`;
   const changed = connection.hasApiKey && connection.updatedAt ? formatDate(connection.updatedAt) : null;
@@ -67,6 +69,9 @@ export function DeploymentProviderCard({
           {connection.updatedBy ? `Changed by ${connection.updatedBy} on ${changed}` : `Changed on ${changed}`}
         </p>
       )}
+      <p className="mb-0 mt-1 text-sm" style={MUTED}>
+        {organizationsLabel(connection)}
+      </p>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <span className="flex items-center gap-2 text-sm">
           <span
@@ -76,9 +81,7 @@ export function DeploymentProviderCard({
           />
           {status.label}
         </span>
-        <button type="button" className="af-btn" onClick={onReplaceKey}>
-          {connection.hasApiKey ? "Replace key" : "Save a key"}
-        </button>
+        {manage}
       </div>
     </section>
   );

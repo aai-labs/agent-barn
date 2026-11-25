@@ -34,6 +34,72 @@ const LISTING_ACCESS: OrganizationAccess[] = ["all_except", "only"];
 
 type Organization = { id: string; name: string };
 
+export type OrganizationAccessState = ReturnType<typeof useOrganizationAccess>;
+
+export function useOrganizationAccess(initialAccess: OrganizationAccess, initialOrganizations: Organization[]) {
+  const [access, setAccess] = useState<OrganizationAccess>(initialAccess);
+  const [ticked, setTicked] = useState(
+    () => new Map(initialOrganizations.map((organization) => [organization.id, organization.name])),
+  );
+  const listsOrganizations = LISTING_ACCESS.includes(access);
+
+  function toggle(organization: Organization) {
+    setTicked((current) => {
+      const next = new Map(current);
+      if (next.has(organization.id)) next.delete(organization.id);
+      else next.set(organization.id, organization.name);
+      return next;
+    });
+  }
+
+  return {
+    access,
+    setAccess,
+    ticked,
+    toggle,
+    listsOrganizations,
+    organizationIds: listsOrganizations ? [...ticked.keys()] : [],
+  };
+}
+
+export function OrganizationAccessFields({
+  state,
+  legend,
+  showLegend = false,
+}: {
+  state: OrganizationAccessState;
+  legend: string;
+  showLegend?: boolean;
+}) {
+  const groupName = useId();
+
+  return (
+    <>
+      <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+        <legend
+          className={showLegend ? "mb-1 p-0 text-[0.8rem] font-medium" : "sr-only"}
+          style={showLegend ? { color: "var(--ink-2)" } : undefined}
+        >
+          {legend}
+        </legend>
+        {ACCESS_OPTIONS.map((option) => (
+          <label key={option.value} className="flex items-center gap-2.5 text-sm">
+            <input
+              type="radio"
+              name={groupName}
+              style={{ accentColor: "var(--ink)" }}
+              checked={state.access === option.value}
+              onChange={() => state.setAccess(option.value)}
+            />
+            {option.label}
+          </label>
+        ))}
+      </fieldset>
+      {state.listsOrganizations && <OrganizationChecklist ticked={state.ticked} onToggle={state.toggle} />}
+    </>
+  );
+}
+
 export function ProviderOrganizationsDialog({
   connection,
   open,
@@ -106,27 +172,10 @@ function OrganizationsForm({
   const { saveOrganizations, isSavingOrganizations, saveOrganizationsError } = useLlmProviderOrganizationActions(
     connection.slug,
   );
-  const groupName = useId();
-  const [access, setAccess] = useState<OrganizationAccess>(initial.organizationAccess);
-  const [ticked, setTicked] = useState(
-    () => new Map(initial.organizations.map((organization) => [organization.id, organization.name])),
-  );
-  const listsOrganizations = LISTING_ACCESS.includes(access);
-
-  function toggle(organization: Organization) {
-    setTicked((current) => {
-      const next = new Map(current);
-      if (next.has(organization.id)) next.delete(organization.id);
-      else next.set(organization.id, organization.name);
-      return next;
-    });
-  }
+  const state = useOrganizationAccess(initial.organizationAccess, initial.organizations);
 
   async function save() {
-    await saveOrganizations({
-      organizationAccess: access,
-      organizationIds: listsOrganizations ? [...ticked.keys()] : [],
-    })
+    await saveOrganizations({ organizationAccess: state.access, organizationIds: state.organizationIds })
       .then(onSaved)
       .catch(() => undefined);
   }
@@ -139,22 +188,7 @@ function OrganizationsForm({
         void save();
       }}
     >
-      <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-        <legend className="sr-only">Who may use {providerTitle(connection)}</legend>
-        {ACCESS_OPTIONS.map((option) => (
-          <label key={option.value} className="flex items-center gap-2.5 text-sm">
-            <input
-              type="radio"
-              name={groupName}
-              style={{ accentColor: "var(--ink)" }}
-              checked={access === option.value}
-              onChange={() => setAccess(option.value)}
-            />
-            {option.label}
-          </label>
-        ))}
-      </fieldset>
-      {listsOrganizations && <OrganizationChecklist ticked={ticked} onToggle={toggle} />}
+      <OrganizationAccessFields state={state} legend={`Who may use ${providerTitle(connection)}`} />
       {saveOrganizationsError ? (
         <p className="m-0 text-[0.8rem]" style={ERROR} role="alert">
           {failureMessage(saveOrganizationsError)}

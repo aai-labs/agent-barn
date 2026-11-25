@@ -15,6 +15,7 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { BASE_URL_HINTS, BASE_URL_PROVIDER_TYPES, PROVIDER_TYPE_LABELS } from "../constants";
 import type { NewLlmProviderConnection, ProviderType } from "../schemas";
+import { OrganizationAccessFields, useOrganizationAccess } from "./provider-organizations-dialog";
 
 const EMPTY_KEY_MESSAGE = "Paste the provider's API key.";
 const LABEL_CLASS = "text-[0.8rem] font-medium";
@@ -40,15 +41,20 @@ export function AddLlmProviderDialog({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const organizationAccess = useOrganizationAccess("all", []);
   const takesBaseUrl = BASE_URL_PROVIDER_TYPES.includes(providerType);
 
   async function add() {
     const trimmedKey = apiKey.trim();
     if (!trimmedKey) return setProblem(EMPTY_KEY_MESSAGE);
     setProblem(null);
+    const access =
+      organizationAccess.access === "all"
+        ? {}
+        : { organizationAccess: organizationAccess.access, organizationIds: organizationAccess.organizationIds };
     const connection: NewLlmProviderConnection = takesBaseUrl
-      ? { providerType, name: name.trim(), slug: slug.trim(), baseUrl: baseUrl.trim(), apiKey: trimmedKey }
-      : { providerType, apiKey: trimmedKey };
+      ? { providerType, name: name.trim(), slug: slug.trim(), baseUrl: baseUrl.trim(), apiKey: trimmedKey, ...access }
+      : { providerType, apiKey: trimmedKey, ...access };
     await onAdd(connection).catch(() => undefined);
   }
 
@@ -56,7 +62,7 @@ export function AddLlmProviderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add {PROVIDER_TYPE_LABELS[providerType]}</DialogTitle>
           <DialogDescription>
@@ -111,6 +117,7 @@ export function AddLlmProviderDialog({
               aria-invalid={!!failure}
             />
           </div>
+          <OrganizationAccessFields state={organizationAccess} legend="Organizations" showLegend />
           {failure && (
             <p className="m-0 text-[0.8rem]" style={{ color: "var(--err)" }} role="alert">
               {failure}

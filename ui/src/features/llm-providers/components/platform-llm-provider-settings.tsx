@@ -84,7 +84,7 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(saved)} added`);
   }
 
-  function openKeyDialog(connection: LlmProviderConnection, trigger: HTMLElement | null = null) {
+  function openKeyDialog(connection: LlmProviderConnection, trigger: HTMLElement | null) {
     setMenuTrigger(trigger);
     resetReplace();
     setKeyTarget(connection);
@@ -134,25 +134,23 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(connection)} deleted`);
   }
 
-  function connectionCard(connection: LlmProviderConnection) {
+  function manageMenu(connection: LlmProviderConnection) {
     const isOpenRouter = connection.providerType === "openrouter";
     return (
+      <ManageProviderMenu
+        connection={connection}
+        onModels={isOpenRouter ? undefined : (trigger) => openModels(connection, trigger)}
+        onOrganizations={(trigger) => openOrganizations(connection, trigger)}
+        onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
+        onDelete={isOpenRouter ? undefined : () => openDelete(connection)}
+      />
+    );
+  }
+
+  function connectionCard(connection: LlmProviderConnection) {
+    return (
       <li key={connection.slug}>
-        <ProviderCard
-          connection={connection}
-          onReplaceKey={isOpenRouter ? () => openKeyDialog(connection) : undefined}
-          manage={
-            isOpenRouter ? undefined : (
-              <ManageProviderMenu
-                connection={connection}
-                onModels={(trigger) => openModels(connection, trigger)}
-                onOrganizations={(trigger) => openOrganizations(connection, trigger)}
-                onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
-                onDelete={() => openDelete(connection)}
-              />
-            )
-          }
-        />
+        <ProviderCard connection={connection} manage={manageMenu(connection)} />
       </li>
     );
   }
@@ -164,7 +162,7 @@ export function PlatformLlmProviderSettings() {
           <h2 id="llm-providers-deployment-heading" className="mb-3 mt-0 text-[0.95rem] font-semibold">
             Set by this deployment
           </h2>
-          <DeploymentProviderCard connection={deployment} onReplaceKey={() => openKeyDialog(deployment)} />
+          <DeploymentProviderCard connection={deployment} manage={manageMenu(deployment)} />
         </section>
       )}
 

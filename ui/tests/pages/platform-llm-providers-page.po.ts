@@ -27,16 +27,30 @@ export class PlatformLlmProvidersPage {
     return this.deploymentSection().getByRole("region", { name: "OpenRouter", exact: true });
   }
 
-  deploymentKeyButton() {
-    return this.deploymentCard().getByRole("button", { name: /^(Replace key|Save a key)$/ });
+  deploymentManageButton() {
+    return this.deploymentCard().getByRole("button", { name: "Manage OpenRouter", exact: true });
+  }
+
+  deploymentCardButtons() {
+    return this.deploymentCard().getByRole("button");
+  }
+
+  keyAction() {
+    return this.manageMenu().getByRole("menuitem", { name: /^(Replace key|Save a key)$/ });
+  }
+
+  async openKeyDialog() {
+    await this.manageButton("OpenRouter").click();
+    await this.keyAction().click();
+  }
+
+  async openDeploymentKeyDialog() {
+    await this.deploymentManageButton().click();
+    await this.keyAction().click();
   }
 
   toast(text: string) {
     return this.page.locator("[data-sonner-toast]").filter({ hasText: text });
-  }
-
-  openDialogButton() {
-    return this.card().getByRole("button", { name: /^(Replace key|Save a key)$/ });
   }
 
   dialog() {
@@ -48,7 +62,7 @@ export class PlatformLlmProvidersPage {
   }
 
   async submitKey(key: string) {
-    await this.openDialogButton().click();
+    await this.openKeyDialog();
     await this.keyInput().fill(key);
     await this.dialog().getByRole("button", { name: "Save key" }).click();
   }
