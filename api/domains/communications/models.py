@@ -34,6 +34,7 @@ class CommunicationPlatform(str, enum.Enum):
     DISCORD = "discord"
     WEB = "web"
     EMAIL = "email"
+    WHATSAPP = "whatsapp"
 
 
 class PlatformCapability(str, enum.Enum):

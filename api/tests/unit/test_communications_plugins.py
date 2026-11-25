@@ -26,6 +26,7 @@ from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin, TeamsSettings
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 from api.domains.communications.plugins.web import WebPlatformPlugin
+from api.domains.communications.plugins.whatsapp import WhatsAppPlatformPlugin
 from api.infrastructure.msteams.client import TeamsAuthError
 
 _TEAMS_BOT_ID = "28:c9e8c047-2a74-40a2-b28a-b162d5f5327c"
@@ -693,3 +694,46 @@ def test_slack_custom_server_must_be_a_plain_https_url_other_than_slack(url: str
             organization_id=uuid4(),
             agent_id=uuid4(),
         )
+
+
+def test_whatsapp_plugin_needs_no_credentials_and_normalizes_numbers() -> None:
+    validated = WhatsAppPlatformPlugin().validate_configuration(
+        {"allowed_numbers": ["+1 (555) 123-4567", "15551234567", "+251 911 234567"]},
+        {},
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+    )
+
+    assert_that(validated.credentials, equal_to({}))
+    assert_that(validated.credential_fingerprint, equal_to(None))
+    assert_that(
+        validated.settings,
+        equal_to(
+            {
+                "dm_policy": "allowlist",
+                "allowed_numbers": ["15551234567", "251911234567"],
+                "group_policy": "off",
+                "allowed_group_ids": [],
+                "require_mention": True,
+            }
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"allowed_numbers": ["0911234567"]},
+        {"allowed_numbers": ["alice"]},
+        {"allowed_group_ids": ["120363001234567890"]},
+        {"allowed_group_ids": ["15551234567@s.whatsapp.net"]},
+        {"dm_policy": "pairing"},
+    ],
+)
+def test_whatsapp_plugin_rejects_malformed_settings(settings: dict) -> None:
+    with pytest.raises(ValueError):
+        WhatsAppPlatformPlugin().validate_configuration(settings, {}, organization_id=uuid4(), agent_id=uuid4())
+
+
+def test_whatsapp_plugin_is_runtime_owned() -> None:
+    assert_that(WhatsAppPlatformPlugin().descriptor.transport, equal_to("native"))

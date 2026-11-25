@@ -53,13 +53,14 @@ from api.domains.usage.guard import UsageAction, UsageGuard, UsageSubject
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-BOT_UNSUPPORTED_PLATFORMS = frozenset({"teams", "agentbarn_telegram"})
+BOT_UNSUPPORTED_PLATFORMS = frozenset({"teams", "agentbarn_telegram", "whatsapp"})
 BOT_PLATFORM_CONFLICTS = {"telegram": "agentbarn_telegram", "agentbarn_telegram": "telegram"}
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 
 # OpenClaw has one rule per Agent for untagged messages, so it can't answer them in
 # some channels while only listening in others.
 _CUSTOM_SLACK_UNSUPPORTED = "A Custom Slack server is available only for Hermes Agents, not OpenClaw Agents or Bots"
+_WHATSAPP_UNSUPPORTED = "WhatsApp is available only for Hermes Agents for now, not OpenClaw Agents"
 _OPENCLAW_MENTION_CONFLICT = (
     "On OpenClaw, Require @mention can't be off while the Agent has listen-in channels. "
     "Turn it on, or remove the listen-in channels."
@@ -243,6 +244,7 @@ class CommunicationsService:
         )
         self._require_openclaw_mention_rule(agent, context, plugin.key, validated.settings, data.enabled)
         self._require_custom_slack_runtime(agent, plugin.key, validated.settings)
+        self._require_whatsapp_runtime(agent, plugin.key)
         connection = CommunicationConnection(
             organization_id=agent.organization_id,
             agent_id=agent.id,
@@ -636,6 +638,12 @@ class CommunicationsService:
             return
         if agent.agent_type != AgentType.HERMES or agent.parent_agent_id is not None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CUSTOM_SLACK_UNSUPPORTED)
+
+    @staticmethod
+    def _require_whatsapp_runtime(agent: Agent, platform_key: str) -> None:
+        """Only Hermes images carry the WhatsApp bridge and its pairing flow so far."""
+        if platform_key == "whatsapp" and agent.agent_type != AgentType.HERMES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_WHATSAPP_UNSUPPORTED)
 
     def _require_openclaw_mention_rule(
         self,
