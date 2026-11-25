@@ -187,7 +187,8 @@ test.describe("WhatsApp phone linking", () => {
     });
   }
 
-  test("warns that linking an OpenClaw Agent again unlinks the current phone at once", async ({ page }) => {
+  test("warns that linking an OpenClaw Agent unlinks any current phone at once", async ({ page }) => {
+    // OpenClaw doesn't report whether a phone is linked, so the warning always shows.
     await openMessaging(page, { agent_type: "openclaw", status: "RUNNING" }, [
       { ...whatsAppConnection, observed_status: "CONNECTED", last_error_code: null },
     ]);
@@ -195,7 +196,8 @@ test.describe("WhatsApp phone linking", () => {
       route.fulfill({ contentType: "text/event-stream", body: sse({ event: "expired" }) }),
     );
 
-    await page.getByRole("button", { name: "Link again" }).click();
+    await expect(page.getByText("Link the phone this Agent answers as, or link again to change it.")).toBeVisible();
+    await page.getByRole("button", { name: "Link phone" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Link a WhatsApp phone" });
     await expect(dialog.getByText(/unlinks the current phone straight away/)).toBeVisible();

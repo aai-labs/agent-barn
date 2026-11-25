@@ -63,7 +63,7 @@ function PairingBody({ state }: { state: WhatsAppPairingState }) {
 export function WhatsAppPhoneLinking({
   agentId,
   connectionId,
-  notLinked,
+  linked,
   relinkNote,
   agentRunning,
   canManage,
@@ -72,8 +72,8 @@ export function WhatsAppPhoneLinking({
 }: {
   agentId: string;
   connectionId: string;
-  /** The runtime reported that no phone is linked yet. */
-  notLinked: boolean;
+  /** Whether a phone is linked, or null when the runtime doesn't report it (OpenClaw). */
+  linked: boolean | null;
   /** What linking again does to the phone linked now, which differs by runtime. */
   relinkNote: string;
   agentRunning: boolean;
@@ -95,7 +95,11 @@ export function WhatsAppPhoneLinking({
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--ink-3)" }}>
       <span>
-        {notLinked ? "No phone is linked yet." : "Link a phone again if WhatsApp unlinked it or you changed numbers."}
+        {linked === false
+          ? "No phone is linked yet."
+          : linked
+            ? "Link a phone again if WhatsApp unlinked it or you changed numbers."
+            : "Link the phone this Agent answers as, or link again to change it."}
       </span>
       {canManage && (
         <button
@@ -108,7 +112,7 @@ export function WhatsAppPhoneLinking({
             void start();
           }}
         >
-          {notLinked ? "Link phone" : "Link again"}
+          {linked ? "Link again" : "Link phone"}
         </button>
       )}
       {canManage && !agentRunning && <span>Start the Agent to link a phone.</span>}
@@ -122,7 +126,7 @@ export function WhatsAppPhoneLinking({
         title="Link a WhatsApp phone"
         description={
           "On the phone with the Agent's number, open WhatsApp → Settings → Linked devices → Link a device, then scan this code." +
-          (notLinked ? "" : ` ${relinkNote}`)
+          (linked === false ? "" : ` ${relinkNote}`)
         }
         cancelLabel={state.phase === "linked" ? "Restart later" : "Cancel"}
         confirmLabel={state.phase === "linked" ? "Restart Agent" : retry ? "Try again" : "Waiting for scan…"}

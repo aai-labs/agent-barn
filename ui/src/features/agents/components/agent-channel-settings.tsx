@@ -1225,7 +1225,10 @@ export function AgentChannelSettings({
                     <WhatsAppPhoneLinking
                       agentId={agent.id}
                       connectionId={connection.id}
-                      notLinked={connection.lastErrorCode === "whatsapp_not_paired"}
+                      // Only Hermes reports an unlinked phone, as its adapter's error.
+                      linked={
+                        agent.agentType === "hermes" ? connection.lastErrorCode !== "whatsapp_not_paired" : null
+                      }
                       relinkNote={whatsAppRelinkNote(agent.agentType)}
                       agentRunning={agent.status === "RUNNING"}
                       canManage={
