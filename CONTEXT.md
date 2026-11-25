@@ -511,6 +511,7 @@ _Avoid_: webhook
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
 - An **Agent** holds at most one non-retired Telegram-type **Communication Connection**, on `telegram` or **Agent Barn Telegram** but not both, because a Runtime runs one Telegram adapter. A disabled Connection still counts; it must be removed before the Agent can take the other type.
+- A WhatsApp **Communication Connection** belongs only to a Hermes **Agent** that is not a **Bot**, and holds no credentials: the phone is linked from the running Agent, and the session stays on the Agent's PVC.
 - A Telegram account has at most one active **Telegram Account Linking** to an **Agent Barn Telegram** Connection, and each link records the Membership that issued it.
 - Each **Agent Webhook** belongs to one **Agent** and owns zero or more **Webhook Invocations**.
 - Each **Webhook Invocation** may submit one **Agent Trigger Job** per dispatch generation.
