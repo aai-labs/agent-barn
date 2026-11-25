@@ -50,6 +50,12 @@ CASES = [
         {"dm_policy": "off", "group_policy": "open", "require_mention": False},
         {"group A mention", "group A no mention", "group B mention by listed"},
     ),
+    # Self Chat ignores the access settings and never answers in groups. The bridge's
+    # self-chat mode then passes only the owner's own chat, so these DMs never arrive.
+    (
+        {"mode": "self_chat", "dm_policy": "off", "allowed_numbers": [], "group_policy": "open"},
+        {"dm listed", "dm other"},
+    ),
 ]
 
 
