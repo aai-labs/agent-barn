@@ -195,6 +195,9 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
+from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
+from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.organizations.settings_service import OrganizationSettingsService
@@ -455,6 +458,7 @@ class AgentService:
     agent_sizes: AgentSizeLookupService
     artifact_buckets: ArtifactBucketRepository
     usage: UsageGuard
+    llm_provider_access: LlmProviderAccessLookup
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1077,6 +1081,8 @@ class AgentService:
     ) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
@@ -1271,10 +1277,15 @@ class AgentService:
                         if self.config.artifact_s3_endpoint_url
                         else None
                     ),
+                    in_transaction=lambda session: self.llm_provider_access.require_open(
+                        session, OPENROUTER_SLUG, org_id
+                    ),
                 )
             except AgentSizeUnavailable:
                 # Disabled or withdrawn since the check above.
                 raise _size_unavailable() from None
+            except ProviderNotOpen:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:
@@ -4122,7 +4133,8 @@ class AgentService:
                     logger.warning("Could not block LiteLLM key for agent %s", target.id)
 
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
-        """Returns the allowlisted OpenRouter models as picker options.
+        """Returns the allowlisted OpenRouter models as picker options, or none while OpenRouter is
+        not open to the Organization.
 
         The Organization's resolved default model is guaranteed present, flagged
         is_default, and listed first, so the frontend and backend agree on which
@@ -4133,8 +4145,6 @@ class AgentService:
         """
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        raw_catalog = self.openrouter.list_models()
-
         if catalog:
             self.authorization.policy.require(
                 context,
@@ -4142,6 +4152,11 @@ class AgentService:
                 PermissionKey.ORGANIZATION_UPDATE,
                 detail="You don't have permission to view the full model catalog.",
             )
+        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+            return []
+        raw_catalog = self.openrouter.list_models()
+
+        if catalog:
             allowed = raw_catalog
         else:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)

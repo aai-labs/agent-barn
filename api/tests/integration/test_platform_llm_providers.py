@@ -118,6 +118,8 @@ def test_a_platform_admin_sees_that_no_key_is_set():
                     "updated_by": None,
                     "env_key_configured": False,
                     "env_key_last4": None,
+                    "organization_access": "all",
+                    "organization_count": 0,
                 }
             ),
         )

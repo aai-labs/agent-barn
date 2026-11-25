@@ -29,6 +29,8 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
     ORGANIZATION_UPDATED,
 )
+from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
@@ -236,13 +238,11 @@ class OrganizationService:
                 detail="Trial accounts can't create more organizations.",
             )
         config = get_config()
-        allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
         organization = Organization(
             name=data.name,
             description=data.description,
             created_by_user_id=actor.user.id,
-            allowed_models=allowed_models,
         )
         # With self-signup on, only accounts a Platform Administrator set up spend the
         # platform's budget. Everyone else (signed up themselves, or invited by an
@@ -289,6 +289,13 @@ class OrganizationService:
                 )
             self.trial_settings.record_trial(email, session)
 
+        def prepare(session: Session) -> None:
+            if trial:
+                admit_trial(session)
+            organization.allowed_models = self.agent_service.llm_provider_access.initial_allowed_models(
+                session, config.agent_default_model.removeprefix("litellm/openrouter/")
+            )
+
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
@@ -299,7 +306,7 @@ class OrganizationService:
                 ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
                 opening_credit_usd=opening_credit if on_credit else None,
                 opening_credit_kind=CreditGrantKind.TRIAL if trial else CreditGrantKind.ADJUSTMENT,
-                in_transaction=admit_trial if trial else None,
+                in_transaction=prepare,
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
@@ -486,10 +493,23 @@ class OrganizationService:
                     # the model level, so never overwrite the stored list with NULL.
                     del dump["allowed_models"]
                 else:
+                    if dump["allowed_models"] and not self.agent_service.llm_provider_access.can_use(
+                        OPENROUTER_SLUG, organization_id
+                    ):
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
                     dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
                     self._ensure_default_model_still_allowed(organization_id, dump["allowed_models"])
                     self._ensure_no_agent_is_pinned_to_a_removed_model(organization_id, dump["allowed_models"])
+                    if dump["allowed_models"]:
+                        try:
+                            self.agent_service.llm_provider_access.require_open(
+                                session, OPENROUTER_SLUG, organization_id
+                            )
+                        except ProviderNotOpen:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER
+                            ) from None
                     previous_set = set(organization.allowed_models)
                     new_set = set(dump["allowed_models"])
                     added_models = sorted(new_set - previous_set)

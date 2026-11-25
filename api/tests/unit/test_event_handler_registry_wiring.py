@@ -170,9 +170,14 @@ def test_file_sync_switch_events_reach_only_the_security_audit(event_name):
 
 @pytest.mark.parametrize(
     "event_name",
-    ["platform.llm_provider.created", "platform.llm_provider.deleted", "platform.llm_provider.models_changed"],
+    [
+        "platform.llm_provider.created",
+        "platform.llm_provider.deleted",
+        "platform.llm_provider.models_changed",
+        "platform.llm_provider.organizations_changed",
+    ],
 )
-def test_the_llm_provider_created_deleted_and_models_changed_events_reach_only_the_security_audit(event_name):
+def test_the_llm_provider_events_reach_only_the_security_audit(event_name):
     handler_names = {
         definition.event_name: definition.handler_names
         for definition in EVENT_REGISTRY.list_definitions()

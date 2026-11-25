@@ -233,6 +233,8 @@ def test_a_fresh_platform_lists_openrouter_alone_without_a_key():
                         "updated_by": None,
                         "env_key_configured": False,
                         "env_key_last4": None,
+                        "organization_access": "all",
+                        "organization_count": 0,
                     }
                 ]
             ),

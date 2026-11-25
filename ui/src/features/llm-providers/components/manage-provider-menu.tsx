@@ -15,15 +15,18 @@ import { providerTitle } from "../utils";
 export function ManageProviderMenu({
   connection,
   onModels,
+  onOrganizations,
   onReplaceKey,
   onDelete,
 }: {
   connection: LlmProviderConnection;
   /** Gets the Manage button, for the Models dialog to give focus back to when it closes. */
-  onModels: (trigger: HTMLElement | null) => void;
+  onModels?: (trigger: HTMLElement | null) => void;
+  /** Gets the Manage button, as `onModels` does. */
+  onOrganizations: (trigger: HTMLElement | null) => void;
   /** Gets the Manage button, as `onModels` does. */
   onReplaceKey: (trigger: HTMLElement | null) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   return (
@@ -34,15 +37,18 @@ export function ManageProviderMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        {connection.hasApiKey && (
+        {onModels && connection.hasApiKey && (
           <DropdownMenuItem onSelect={() => onModels(trigger.current)}>Models</DropdownMenuItem>
         )}
+        <DropdownMenuItem onSelect={() => onOrganizations(trigger.current)}>Organizations</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onReplaceKey(trigger.current)}>
           {connection.hasApiKey ? "Replace key" : "Save a key"}
         </DropdownMenuItem>
-        <DropdownMenuItem variant="destructive" onSelect={onDelete}>
-          Delete
-        </DropdownMenuItem>
+        {onDelete && (
+          <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            Delete
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

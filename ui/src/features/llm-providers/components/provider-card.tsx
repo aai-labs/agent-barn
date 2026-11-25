@@ -76,21 +76,26 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
   );
 }
 
+export function organizationsLabel({ organizationAccess, organizationCount }: LlmProviderConnection): string {
+  switch (organizationAccess) {
+    case "all":
+      return "All organizations";
+    case "none":
+      return "No organizations";
+    case "all_except":
+      return `All except ${organizationCount}`;
+    case "only":
+      return `Only ${organizationCount}`;
+  }
+}
+
 function connectionSubtitle(connection: LlmProviderConnection): string {
   return BASE_URL_PROVIDER_TYPES.includes(connection.providerType)
     ? `${PROVIDER_TYPE_LABELS[connection.providerType]} · ${connection.baseUrl}`
     : PROVIDER_SUBTITLES[connection.providerType];
 }
 
-export function ProviderCard({
-  connection,
-  onReplaceKey,
-  manage,
-}: {
-  connection: LlmProviderConnection;
-  onReplaceKey?: () => void;
-  manage?: ReactNode;
-}) {
+export function ProviderCard({ connection, manage }: { connection: LlmProviderConnection; manage: ReactNode }) {
   const isOpenRouter = connection.providerType === "openrouter";
   const saved = connection.hasApiKey && connection.updatedAt ? formatDate(connection.updatedAt) : null;
 
@@ -107,19 +112,15 @@ export function ProviderCard({
           {connection.apiKeyLast4}
         </p>
       )}
+      <p className="mb-0 mt-1 text-sm" style={MUTED}>
+        {organizationsLabel(connection)}
+      </p>
       {saved && (
         <p className="mb-0 mt-1 text-sm" style={MUTED}>
           Saved {saved}
         </p>
       )}
-      <div className="mt-auto flex flex-wrap gap-2 pt-4">
-        {manage}
-        {onReplaceKey && (
-          <button type="button" className="af-btn" onClick={onReplaceKey}>
-            {connection.hasApiKey ? "Replace key" : "Save a key"}
-          </button>
-        )}
-      </div>
+      <div className="mt-auto flex flex-wrap gap-2 pt-4">{manage}</div>
     </CardShell>
   );
 }

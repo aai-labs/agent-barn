@@ -105,7 +105,9 @@ class UserService:
                 Organization(
                     name=self._initial_organization_name(data),
                     created_by_user_id=prepared.user.id,
-                    allowed_models=[self.config.agent_default_model.removeprefix("litellm/openrouter/")],
+                    allowed_models=self.auth_service.llm_provider_access.initial_allowed_models(
+                        session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+                    ),
                 ),
                 session,
             )
