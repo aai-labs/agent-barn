@@ -34,7 +34,7 @@ from api.domains.agents.models import Agent, AgentType
 from api.domains.anomalies.event_handlers import AnomalyAlertEmailHandler
 from api.domains.anomalies.models import AgentAnomaly
 from api.domains.events.catalog import AGENT_ANOMALY_ALERT_EMAIL_HANDLER, AGENT_ANOMALY_FLAGGED
-from api.domains.events.handlers import EventDeliveryContext, RetryableEventHandlerError
+from api.domains.events.handlers import EventDeliveryContext, EventHandlerRegistry, RetryableEventHandlerError
 from api.domains.events.models import (
     ActorIdentity,
     DomainEventEnvelope,
@@ -242,3 +242,11 @@ def test_nobody_is_emailed_about_an_agent_deleted_since(sent):
         _deliver(context)
 
         assert_that(sent, equal_to([]))
+
+
+def test_the_workers_registry_delivers_alert_events_to_the_handler():
+    """Without it, a worker dead-letters every alert as an unknown handler."""
+    with given(_given()) as context:
+        registry = context.injector.get(EventHandlerRegistry)
+
+        assert_that(registry.supports(AGENT_ANOMALY_ALERT_EMAIL_HANDLER, AGENT_ANOMALY_FLAGGED, 1), equal_to(True))
