@@ -56,6 +56,7 @@ from api.domains.agents.builders import (
     native_slack_env,
     native_telegram_channel,
     native_telegram_env,
+    native_whatsapp_env,
     runtime_teams_channel,
     runtime_teams_env,
     with_passthrough_placeholders,
@@ -2816,6 +2817,7 @@ class AgentService:
             native_slack = self._native_slack_connection(agent.id)
             native_discord = self._native_connection_configuration(agent.id, "discord")
             native_telegram = self._native_connection_configuration(agent.id, "telegram")
+            native_whatsapp = self._native_connection_configuration(agent.id, "whatsapp")
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
@@ -2834,6 +2836,7 @@ class AgentService:
                 slack_listen_in=native_slack[0].get("listen_in_channel_ids") if native_slack else None,
                 discord_listen_in=native_discord.settings.get("listen_in_channel_ids") if native_discord else None,
                 custom_slack=bool(native_slack and native_slack[0].get("api_url")),
+                whatsapp_settings=native_whatsapp.settings if native_whatsapp else None,
             )
             if agent.parent_agent_id is not None:
                 hermes_cfg = bot_gateway_config(
@@ -2863,6 +2866,8 @@ class AgentService:
                 secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
             if agentbarn_telegram is not None:
                 secret.string_data.update(agentbarn_telegram_env(agentbarn_telegram))
+            if native_whatsapp is not None:
+                secret.string_data.update(native_whatsapp_env(native_whatsapp.settings))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,

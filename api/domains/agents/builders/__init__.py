@@ -17,6 +17,7 @@ from .hermes import (
     native_discord_env,
     native_slack_env,
     native_telegram_env,
+    native_whatsapp_env,
     runtime_teams_env,
     with_passthrough_placeholders,
 )
@@ -77,6 +78,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "native_discord_env",
     "native_slack_env",
     "native_telegram_env",
+    "native_whatsapp_env",
     "agentbarn_telegram_env",
     "runtime_teams_env",
     "build_hermes_config_map",

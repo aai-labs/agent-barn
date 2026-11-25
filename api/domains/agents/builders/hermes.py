@@ -240,9 +240,17 @@ def build_hermes_gateway_config(
     slack_listen_in: list[str] | None = None,
     discord_listen_in: list[str] | None = None,
     custom_slack: bool = False,
+    whatsapp_settings: dict | None = None,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-tasks"]
-    if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
+    if (
+        native_slack
+        or native_discord
+        or telegram_settings is not None
+        or runtime_teams
+        or agentbarn_telegram
+        or whatsapp_settings is not None
+    ):
         plugins.append("agentbarn-observer")
     if native_slack:
         plugins.append("agentbarn-slack-access")
@@ -311,6 +319,13 @@ def build_hermes_gateway_config(
             }
         }
         config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if whatsapp_settings is not None:
+        config.setdefault("platforms", {})["whatsapp"] = {"extra": native_whatsapp_extra(whatsapp_settings)}
+        config["display"]["platforms"]["whatsapp"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
             "interim_assistant_messages": verbose_mode,
@@ -445,6 +460,45 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
     else:
         env["DISCORD_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
+
+
+_WHATSAPP_POLICIES = {"off": "disabled", "allowlist": "allowlist", "open": "open"}
+
+
+def native_whatsapp_extra(settings: dict) -> dict:
+    """The WhatsApp Connection's access policy, which the Hermes adapter enforces at intake.
+
+    Config keys win over Hermes' WHATSAPP_* variables, and an explicit empty list stays
+    an empty allowlist. Agent Barn never uses ``pairing``: unknown senders get no reply.
+    """
+    return {
+        "dm_policy": _WHATSAPP_POLICIES[settings.get("dm_policy", "allowlist")],
+        "allow_from": list(settings.get("allowed_numbers") or []),
+        "group_policy": _WHATSAPP_POLICIES[settings.get("group_policy", "off")],
+        "group_allow_from": list(settings.get("allowed_group_ids") or []),
+        "require_mention": bool(settings.get("require_mention", True)),
+    }
+
+
+def native_whatsapp_env(settings: dict) -> dict[str, str]:
+    """Enable the native Hermes WhatsApp bridge in bot mode for a WhatsApp Connection.
+
+    The bridge drops every non-owner message whose sender is not in
+    WHATSAPP_ALLOWED_USERS, groups included, before the adapter sees it. It gets the
+    number list only when Agent Barn allows nothing but those numbers' DMs; otherwise
+    ``*``, and the adapter applies the Connection's DM and group policy. The adapter has
+    already admitted a message by the time the gateway authorizes it, so the gateway
+    admits all, as for Slack.
+    """
+    dm_policy = settings.get("dm_policy", "allowlist")
+    numbers_only = dm_policy != "open" and settings.get("group_policy", "off") == "off"
+    return {
+        "WHATSAPP_ENABLED": "true",
+        "WHATSAPP_MODE": "bot",
+        "WHATSAPP_ALLOWED_USERS": ",".join(settings.get("allowed_numbers") or []) if numbers_only else "*",
+        "WHATSAPP_ALLOW_ALL_USERS": "true",
+        "WHATSAPP_HOME_CHANNEL": _NO_HOME_CHANNEL,
+    }
 
 
 def agentbarn_telegram_env(runtime: AgentBarnTelegramRuntime) -> dict[str, str]:
