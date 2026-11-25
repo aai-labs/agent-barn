@@ -14,6 +14,7 @@ import {
   DROPPED_MODEL,
   ENVIRONMENT_KEY_ONLY,
   PlatformLlmProviderDataSupport,
+  platformOrganizations,
   pricedCatalogue,
   SAVED_AND_ENVIRONMENT_KEYS,
   SAVED_KEY,
@@ -24,6 +25,10 @@ const NEW_KEY = "sk-or-v1-replacement-key-c3d4";
 const PROVIDER_KEY = "sk-proj-new-provider-key-g7h8";
 const KNOWN_PROVIDER_TITLES = ["Google", "Anthropic", "OpenAI", "xAI", "DeepSeek", "Fireworks", "Novita"];
 const ADD_CARD_TITLES = ["Azure OpenAI", "Custom endpoint"];
+const MANAGE_ACTIONS = ["Models", "Organizations", "Replace key", "Delete"];
+const ORGANIZATIONS = platformOrganizations(15);
+const BETA_LABS = { id: "00000000-0000-4000-8000-0000000000be", name: "Beta Labs" };
+const IN_USE_DETAIL = "Anthropic is still used by 1 Organization: Org 03 (allowed models). Change that first.";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -272,6 +277,93 @@ test("each provider card says which Organizations may use it", async ({ page }) 
   await expect(settings.providerCard("Anthropic")).toContainText("No organizations");
   await expect(settings.providerCard("Azure Europe")).toContainText("All except 3");
   await expect(settings.providerCard("Aardvark lab")).toContainText("Only 1");
+});
+
+test("Platform Admin limits a provider to ticked Organizations, searching and paging the list", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  const mock = await data.interceptOrganizations({ organizations: [...ORGANIZATIONS, BETA_LABS] });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.openOrganizations("Anthropic");
+  await expect(settings.dialog().getByRole("heading", { name: "Anthropic organizations" })).toBeVisible();
+  await expect(settings.accessOption("All organizations")).toBeChecked();
+  await expect(settings.organizationCheckboxes()).toHaveCount(0);
+
+  await settings.accessOption("Only the ticked organizations").check();
+  await expect(settings.organizationCheckboxes()).toHaveCount(12);
+  await settings.showMoreOrganizations().click();
+  await expect(settings.organizationCheckboxes()).toHaveCount(16);
+  await expect(settings.showMoreOrganizations()).toHaveCount(0);
+  await settings.organizationCheckbox("Org 01").check();
+  await settings.organizationCheckbox("Org 14").check();
+  await settings.organizationSearch().fill("beta");
+  await expect(settings.organizationCheckboxes()).toHaveCount(1);
+  await settings.organizationCheckbox("Beta Labs").check();
+  await expect(settings.tickedOrganizations()).toHaveText("3 ticked");
+  await settings.saveOrganizationsButton().click();
+
+  await expect(settings.dialog()).toHaveCount(0);
+  await expect(settings.toast("Anthropic organizations saved")).toBeVisible();
+  await expect(settings.providerCard("Anthropic")).toContainText("Only 3");
+  await expect(settings.manageButton("Anthropic")).toBeFocused();
+  expect(mock.saves).toEqual([
+    {
+      slug: "anthropic",
+      body: { organization_access: "only", organization_ids: [ORGANIZATIONS[0].id, ORGANIZATIONS[13].id, BETA_LABS.id] },
+    },
+  ]);
+});
+
+test("the Organizations dialog opens on the stored access and its ticked Organizations", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({
+    connections: [{ ...AZURE_CONNECTION, organization_access: "all_except", organization_count: 1 }],
+  });
+  const mock = await data.interceptOrganizations({
+    organizations: ORGANIZATIONS,
+    access: "all_except",
+    listed: [ORGANIZATIONS[1].id],
+  });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.openOrganizations("Azure Europe");
+  await expect(settings.accessOption("All organizations except the ticked ones")).toBeChecked();
+  await expect(settings.organizationCheckbox("Org 02")).toBeChecked();
+  await expect(settings.organizationCheckbox("Org 01")).not.toBeChecked();
+  await expect(settings.tickedOrganizations()).toHaveText("1 ticked");
+
+  await settings.accessOption("No organizations").check();
+  await expect(settings.organizationCheckboxes()).toHaveCount(0);
+  await settings.saveOrganizationsButton().click();
+
+  await expect(settings.dialog()).toHaveCount(0);
+  await expect(settings.providerCard("Azure Europe")).toContainText("No organizations");
+  expect(mock.saves).toEqual([{ slug: "azure-eu", body: { organization_access: "none", organization_ids: [] } }]);
+});
+
+test("a refused Organizations change shows the server's reason and keeps the dialog open", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  await data.interceptOrganizations({ organizations: ORGANIZATIONS, saveStatus: 409, saveDetail: IN_USE_DETAIL });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.openOrganizations("Anthropic");
+  await settings.accessOption("No organizations").check();
+  await settings.saveOrganizationsButton().click();
+
+  await expect(settings.dialog().getByRole("alert")).toHaveText(IN_USE_DETAIL);
+  await expect(settings.dialog()).toHaveCount(1);
+  await settings.cancelDialog();
+  await expect(settings.dialog()).toHaveCount(0);
+  await expect(settings.manageButton("Anthropic")).toBeFocused();
+  await expect(settings.providerCard("Anthropic")).toContainText("All organizations");
 });
 
 test("a platform with only OpenRouter shows every provider as not connected, with no Add provider button", async ({
@@ -574,7 +666,7 @@ test("OpenRouter has no Manage, only its key button", async ({ page }) => {
   await expect(settings.cardButtons("OpenRouter")).toHaveText(["Replace key"]);
 });
 
-test("Manage on a connected card opens a menu of Models, Replace key and Delete, and the card has no other button", async ({
+test("Manage on a connected card opens a menu of Models, Organizations, Replace key and Delete, and the card has no other button", async ({
   page,
 }) => {
   await signIn(page);
@@ -587,7 +679,7 @@ test("Manage on a connected card opens a menu of Models, Replace key and Delete,
   await settings.manageButton("Anthropic").click();
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
+  await expect(settings.manageActions()).toHaveText(MANAGE_ACTIONS);
   await expect(settings.manageAction("Delete")).toHaveAttribute("data-variant", "destructive");
 });
 
@@ -620,7 +712,7 @@ test("each Manage action closes the menu and opens its own dialog, and Manage st
   await expect(settings.dialog()).toHaveCount(0);
 
   await settings.manageButton("Anthropic").click();
-  await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
+  await expect(settings.manageActions()).toHaveText(MANAGE_ACTIONS);
 });
 
 type ModelsOptions = Parameters<PlatformLlmProviderDataSupport["interceptModels"]>[0];
@@ -965,7 +1057,7 @@ test("Manage on every connection but OpenRouter offers Models", async ({ page })
 
   for (const name of ["Anthropic", "Azure Europe", "Aardvark lab"]) {
     await settings.manageButton(name).click();
-    await expect(settings.manageActions()).toHaveText(["Models", "Replace key", "Delete"]);
+    await expect(settings.manageActions()).toHaveText(MANAGE_ACTIONS);
     await page.keyboard.press("Escape");
     await expect(settings.manageMenu()).toHaveCount(0);
   }

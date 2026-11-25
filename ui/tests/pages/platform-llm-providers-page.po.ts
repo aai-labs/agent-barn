@@ -81,11 +81,11 @@ export class PlatformLlmProvidersPage {
     return this.manageMenu().getByRole("menuitem");
   }
 
-  manageAction(action: "Models" | "Replace key" | "Save a key" | "Delete") {
+  manageAction(action: "Models" | "Organizations" | "Replace key" | "Save a key" | "Delete") {
     return this.manageMenu().getByRole("menuitem", { name: action, exact: true });
   }
 
-  async manage(name: string, action: "Models" | "Replace key" | "Delete") {
+  async manage(name: string, action: "Models" | "Organizations" | "Replace key" | "Delete") {
     await this.manageButton(name).click();
     await this.manageAction(action).click();
     await expect(this.manageMenu()).toHaveCount(0);
@@ -101,6 +101,38 @@ export class PlatformLlmProvidersPage {
 
   async openModels(name: string) {
     await this.manage(name, "Models");
+  }
+
+  async openOrganizations(name: string) {
+    await this.manage(name, "Organizations");
+  }
+
+  accessOption(label: string) {
+    return this.dialog().getByRole("radio", { name: label, exact: true });
+  }
+
+  organizationSearch() {
+    return this.dialog().getByLabel("Search organizations", { exact: true });
+  }
+
+  organizationCheckbox(name: string) {
+    return this.dialog().getByRole("checkbox", { name, exact: true });
+  }
+
+  organizationCheckboxes() {
+    return this.dialog().getByRole("checkbox");
+  }
+
+  showMoreOrganizations() {
+    return this.dialog().getByRole("button", { name: "Show more", exact: true });
+  }
+
+  tickedOrganizations() {
+    return this.dialog().getByText(/^\d+ ticked$/);
+  }
+
+  saveOrganizationsButton() {
+    return this.dialog().getByRole("button", { name: "Save organizations" });
   }
 
   addProviderButton() {

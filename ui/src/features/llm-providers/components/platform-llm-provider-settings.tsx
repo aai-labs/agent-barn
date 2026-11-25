@@ -16,6 +16,7 @@ import { ManageProviderMenu } from "./manage-provider-menu";
 import { AddProviderCard, ProviderCard } from "./provider-card";
 import { ProviderKeyDialog } from "./provider-key-dialog";
 import { ProviderModelsDialog } from "./provider-models-dialog";
+import { ProviderOrganizationsDialog } from "./provider-organizations-dialog";
 
 export function PlatformLlmProviderSettings() {
   const { connections, isLoadingConnections, connectionsError, reloadConnections } = useLlmProviderConnections();
@@ -44,6 +45,9 @@ export function PlatformLlmProviderSettings() {
   const [modelsTarget, setModelsTarget] = useState<LlmProviderConnection | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsDialogKey, setModelsDialogKey] = useState(0);
+  const [organizationsTarget, setOrganizationsTarget] = useState<LlmProviderConnection | null>(null);
+  const [organizationsOpen, setOrganizationsOpen] = useState(false);
+  const [organizationsDialogKey, setOrganizationsDialogKey] = useState(0);
   const [menuTrigger, setMenuTrigger] = useState<HTMLElement | null>(null);
 
   if (isLoadingConnections) return <p role="status">Loading LLM provider settings…</p>;
@@ -106,6 +110,18 @@ export function PlatformLlmProviderSettings() {
     toast.success(`${providerTitle(connection)} models saved`);
   }
 
+  function openOrganizations(connection: LlmProviderConnection, trigger: HTMLElement | null) {
+    setMenuTrigger(trigger);
+    setOrganizationsTarget(connection);
+    setOrganizationsDialogKey((current) => current + 1);
+    setOrganizationsOpen(true);
+  }
+
+  function organizationsSaved(connection: LlmProviderConnection) {
+    setOrganizationsOpen(false);
+    toast.success(`${providerTitle(connection)} organizations saved`);
+  }
+
   function openDelete(connection: LlmProviderConnection) {
     resetDelete();
     setDeleting(connection);
@@ -130,6 +146,7 @@ export function PlatformLlmProviderSettings() {
               <ManageProviderMenu
                 connection={connection}
                 onModels={(trigger) => openModels(connection, trigger)}
+                onOrganizations={(trigger) => openOrganizations(connection, trigger)}
                 onReplaceKey={(trigger) => openKeyDialog(connection, trigger)}
                 onDelete={() => openDelete(connection)}
               />
@@ -209,6 +226,16 @@ export function PlatformLlmProviderSettings() {
           open={modelsOpen}
           onOpenChange={setModelsOpen}
           onSaved={() => modelsSaved(modelsTarget)}
+          returnFocusTo={menuTrigger}
+        />
+      )}
+      {organizationsTarget && (
+        <ProviderOrganizationsDialog
+          key={`organizations-${organizationsDialogKey}`}
+          connection={organizationsTarget}
+          open={organizationsOpen}
+          onOpenChange={setOrganizationsOpen}
+          onSaved={() => organizationsSaved(organizationsTarget)}
           returnFocusTo={menuTrigger}
         />
       )}

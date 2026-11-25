@@ -32,6 +32,12 @@ type AddBody = {
   organization_ids?: string[];
 };
 type KeyBody = { api_key: string; base_url?: string };
+type OrganizationsBody = {
+  organization_access: ProviderAccessBody["organization_access"];
+  organization_ids: string[];
+};
+
+export type ProviderOrganizationBody = { id: string; name: string };
 
 export type ModelPricesBody = {
   input_cost_per_token: string;
@@ -307,12 +313,22 @@ const KNOWN_PROVIDER_NAMES: Record<string, string> = {
 };
 
 const BASE = "/api/v1/platform/settings/llm-providers";
+const ORGANIZATION_TIMESTAMP = "2026-11-01T00:00:00Z";
+
+export function platformOrganizations(count: number): ProviderOrganizationBody[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    name: `Org ${String(index + 1).padStart(2, "0")}`,
+  }));
+}
 
 function trimmedBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
 export class PlatformLlmProviderDataSupport {
+  private rows: LlmProviderConnectionBody[] = [];
+
   constructor(private page: Page) {}
 
   async intercept(
@@ -342,6 +358,7 @@ export class PlatformLlmProviderDataSupport {
       },
       ...(options.connections ?? []),
     ];
+    this.rows = rows;
     let listStatus = options.listStatus ?? 200;
     let saveStatus = options.saveStatus ?? 200;
     let addStatus = options.addStatus ?? 201;
@@ -431,6 +448,59 @@ export class PlatformLlmProviderDataSupport {
         deleteStatus = 204;
       },
     };
+  }
+
+  async interceptOrganizations(
+    options: {
+      organizations?: ProviderOrganizationBody[];
+      access?: ProviderAccessBody["organization_access"];
+      listed?: string[];
+      saveStatus?: number;
+      saveDetail?: string;
+    } = {},
+  ) {
+    const organizations = options.organizations ?? [];
+    let access = options.access ?? "all";
+    let listed = options.listed ?? [];
+    const saveStatus = options.saveStatus ?? 200;
+    const saveDetail = options.saveDetail ?? "Those Organizations can't be saved.";
+    const saves: { slug: string; body: OrganizationsBody }[] = [];
+    const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
+    const read = () => ({
+      organization_access: access,
+      organizations: organizations.filter((organization) => listed.includes(organization.id)),
+    });
+
+    await this.page.route("**/api/v1/platform/organizations?*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const params = new URL(route.request().url()).searchParams;
+      const search = (params.get("search") ?? "").toLowerCase();
+      const page = Number(params.get("page") ?? "1");
+      const pageSize = Number(params.get("page_size") ?? "12");
+      const matching = organizations.filter((organization) => organization.name.toLowerCase().includes(search));
+      const items = matching
+        .slice((page - 1) * pageSize, page * pageSize)
+        .map((organization) => ({ ...organization, created_at: ORGANIZATION_TIMESTAMP, updated_at: ORGANIZATION_TIMESTAMP }));
+      return route.fulfill(json({ page, page_size: pageSize, total: matching.length, items }));
+    });
+
+    await this.page.route(`**${BASE}/*/organizations`, async (route) => {
+      const slug = decodeURIComponent(new URL(route.request().url()).pathname.slice(BASE.length + 1).split("/")[0]);
+      if (route.request().method() === "GET") return route.fulfill(json(read()));
+      const body = route.request().postDataJSON() as OrganizationsBody;
+      saves.push({ slug, body });
+      if (saveStatus >= 400) return route.fulfill(json({ detail: saveDetail }, saveStatus));
+      access = body.organization_access;
+      listed = body.organization_ids;
+      const row = this.rows.find((candidate) => candidate.slug === slug);
+      if (row) {
+        row.organization_access = access;
+        row.organization_count = listed.length;
+      }
+      return route.fulfill(json(read()));
+    });
+
+    return { saves };
   }
 
   async interceptModels(
