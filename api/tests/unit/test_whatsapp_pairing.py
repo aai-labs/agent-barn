@@ -55,7 +55,9 @@ printf '%s\\n' "$reply"
 """
 
 
-def _run_openclaw_pairing(tmp_path: Path, start: list[str], wait: list[str]) -> tuple[list[dict], list[str]]:
+def _run_openclaw_pairing(
+    tmp_path: Path, start: list[str], wait: list[str], health: tuple[str, ...] = ("{}",)
+) -> tuple[list[dict], list[str]]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "openclaw"
@@ -63,6 +65,7 @@ def _run_openclaw_pairing(tmp_path: Path, start: list[str], wait: list[str]) -> 
     fake.chmod(0o755)
     (tmp_path / "web.login.start.replies").write_text("\n".join(start) + "\n")
     (tmp_path / "web.login.wait.replies").write_text("\n".join(wait) + "\n")
+    (tmp_path / "health.replies").write_text("\n".join(health) + "\n")
     result = subprocess.run(
         ["sh", "-c", _OPENCLAW_PAIRING_SCRIPT],
         env={"HOME": str(tmp_path), "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"},
@@ -119,6 +122,19 @@ def test_openclaw_pairing_ends_with_one_outcome(tmp_path: Path, start: list[str]
 
     assert events[-1] == expected
     assert [event["event"] for event in events[:-1]] in ([], ["qr_image"])
+
+
+@needs_shell_tools
+def test_openclaw_pairing_says_the_agent_is_starting_while_its_gateway_is_down(tmp_path: Path) -> None:
+    events, _ = _run_openclaw_pairing(tmp_path, start=["FAIL"], wait=[], health=("FAIL",))
+
+    assert events == [
+        {
+            "event": "error",
+            "message": "The Agent is still starting. On its first start with WhatsApp this takes a few minutes; "
+            "try again then.",
+        }
+    ]
 
 
 @needs_shell_tools

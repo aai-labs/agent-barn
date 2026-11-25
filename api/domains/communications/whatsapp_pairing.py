@@ -62,7 +62,12 @@ exec 9>"$HOME/.openclaw/whatsapp-pairing.lock"
 if ! flock -n 9; then echo '{{"event":"error","error":"busy"}}'; exit 0; fi
 call() {{ openclaw gateway call "$1" --json --params "$2" --timeout "$3" 2>/dev/null; }}
 deadline=$(( $(date +%s) + {PAIRING_SECONDS} ))
-reply=$(call web.login.start '{{"timeoutMs":30000,"force":true}}' 45000) || {{ echo '{{"event":"error"}}'; exit 0; }}
+# The gateway starts only after start.sh installs @openclaw/whatsapp, which takes
+# minutes on an Agent's first start with WhatsApp.
+reply=$(call web.login.start '{{"timeoutMs":30000,"force":true}}' 45000) || {{
+  if call health '{{}}' 10000 >/dev/null; then echo '{{"event":"error"}}'; else echo '{{"event":"error","error":"starting"}}'; fi
+  exit 0
+}}
 qr=$(printf '%s' "$reply" | jq -r '.qrDataUrl // empty')
 if [ -z "$qr" ]; then echo '{{"event":"error"}}'; exit 0; fi
 jq -cn --arg image "$qr" '{{event:"qr_image",image:$image}}'
@@ -92,6 +97,7 @@ _QR_IMAGE_PREFIX = "data:image/png;base64,"
 _ERRORS = {
     "busy": "Another Link phone attempt is already running for this Agent.",
     "logged_out": "WhatsApp refused the link. Try again from Linked devices on the phone.",
+    "starting": "The Agent is still starting. On its first start with WhatsApp this takes a few minutes; try again then.",
 }
 
 
