@@ -82,9 +82,6 @@ AGENT_COMPONENT = "agent"
 WARN_RATIO = 0.75
 CRITICAL_RATIO = 0.9
 
-# A pod that has restarted this often since it was created, the last time within the window,
-# is restarting repeatedly. Restart counts never reset, so a pod that restarted many times when
-# its node rebooted last week and has run cleanly since is not flagged.
 # The pod-template annotation the charts set to the commit each image was built from.
 BUILD_SHA_ANNOTATION = "build-sha"
 _BUILD_SHA = re.compile(r"[0-9a-f]{7,40}")
@@ -97,6 +94,9 @@ _CRON_SCHEDULE = re.compile(
     rf"{_CRON_FIELD}(?: {_CRON_FIELD}){{4}}|@(?:yearly|annually|monthly|weekly|daily|midnight|hourly)"
 )
 
+# A pod that has restarted this often since it was created, the last time within the window,
+# is restarting repeatedly. Restart counts never reset, so a pod that restarted many times when
+# its node rebooted last week and has run cleanly since is not flagged.
 REPEATED_RESTARTS = 3
 RECENT_RESTART_WINDOW = timedelta(hours=1)
 # How far back the restart history (kube-state-metrics, via Prometheus) is read. A container
