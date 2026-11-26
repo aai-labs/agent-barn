@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection`, `llm_provider_connection_organization` or `llm_provider_model` table, which Organizations a connection is open to, how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
+Read before changing where provider keys come from, the LLM providers section of Platform Admin settings, the `llm_provider_connection`, `llm_provider_connection_organization` or `llm_provider_model` table, which Organizations a connection is open to, an Agent key's model list (`AgentKeyModelService`), how a provider's key is checked (`LlmProviderKeyChecker`), the LiteLLM routes the API registers, `OpenRouterKeyLookup`, or anything that calls OpenRouter with the platform's key (credits, cost repair, the credits metric).
 
 ## Role in the system
 
@@ -32,7 +32,7 @@ Each connection says which Organizations may use it, in `organization_access`:
 
 `can_use` in `api/domains/llm_providers/access.py` is the rule, and `LlmProviderAccessLookup` in `lookup.py` answers it for the domains that use a connection for an Organization. A deleted connection is open to no Organization.
 
-**Only OpenRouter's access is enforced yet.** Organizations use only OpenRouter today, so the Organization side checks OpenRouter's access alone. Every other connection's access is stored, shown and edited, and takes effect once Organizations can use other providers, a later slice of AF-474. An Organization without OpenRouter access:
+**Only OpenRouter's access is enforced yet.** Organizations use only OpenRouter today, so the Organization side checks OpenRouter's access alone. Every other connection's access is stored, shown and edited, and takes effect once Organizations can use other providers, which AF-474's later slices bring: runtimes ready for any provider, then the Organization pool. An Organization without OpenRouter access:
 
 - is offered no models: `GET .../agents/models` answers `[]`, with or without `catalog`, and appends no default;
 - can't save an allowlist with entries, can't set its own default model, and can't hire an Agent or add a Bot. Each answers `400` "This organization has no LLM provider. Ask a Platform Administrator." (`NO_LLM_PROVIDER`). Saving an empty allowlist and clearing its own default are allowed;
@@ -46,7 +46,20 @@ So until Organizations can use other providers, an Organization without OpenRout
 
 **Waits.** Saving OpenRouter's key writes its LiteLLM route while holding the exclusive lock, and a change of OpenRouter's access holds it while it checks use. While either runs, those Organization-side writes wait for it. OpenRouter's models aren't saved, so no models save holds it.
 
-**Enforced in Agent Barn's API only.** An Agent's LiteLLM key carries no model list: `LiteLLMClient` creates it with an alias, team, metadata and budget only. So LiteLLM doesn't enforce an Organization's allowlist or Provider Access; the API does, when it offers models and when an allowlist, a default or an Agent is saved. Making LiteLLM enforce each Organization's allowlist is a later slice of AF-474.
+**Enforced by LiteLLM.** Each Agent's LiteLLM key, a Bot's included, carries a model list, and LiteLLM answers `403` (`key_model_access_denied`) to any model the key doesn't list. The list holds the names the runtimes ask for, which drop the first segment (`litellm/openrouter/<id>` is asked for as `openrouter/<id>`):
+
+- the Agent's own model, or its Organization's or the platform's default when it has none;
+- the model its running pod started on (`running_model`), until that pod stops;
+- every `DECISION_MODELS` value and the Platform Playbook model, sent as they are.
+
+It lists none of the rest of the Organization's allowlist, so switching model in chat to anything else is refused. `AgentKeyModelService` (`api/domains/agents/key_models.py`) works the list out and sets it under a per-Agent advisory lock, reading the Agent as stored:
+
+- a new Agent's or Bot's key is created with it;
+- every start sets it before the pod is created. A start whose list can't be set fails with `500 PROVISIONING_FAILED`; a Bot whose list can't be set fails alone, and its parent and the other Bots start;
+- a decision that LiteLLM rejects sets it and asks once more if that changed it ([Decisions](decisions.md#calls-billing-and-failures)); a Playbook Extraction sets it before its first model call and goes on if that fails ([Playbooks](playbooks.md#model-and-billing));
+- the 15-minute LLM budget reconciliation sets the list of every live Agent key ([Operations](../guidelines/operations.md#organization-llm-budgets)).
+
+Saving an allowlist, an Organization default, a decision model or the Playbook model doesn't touch keys. A changed default reaches an inheriting Agent's key at its next start, or at the next reconciliation. The allowlist and Provider Access are still checked in Agent Barn's API, when it offers models and when an allowlist, a default or an Agent is saved.
 
 ## Models
 
@@ -158,7 +171,7 @@ Each LLM Provider Model of a connection other than OpenRouter gets a route of it
 - A save that changes nothing writes no route, so the routes `/model/info` lists compare equal to the ones the API builds.
 - A replaced key serves the next request.
 - A name with no route, whether never ticked, unknown or removed, is refused with `400` and never reaches the provider.
-- Two connections can save the same model, and `<slug>/<model_id>` reaches only that connection's route. A request for the raw LiteLLM model string, such as `openai/gpt-4o`, is matched against each route's `model` (`router.py:13641-13645`) and served by one of the routes that have it, with that route's key and price. The API gives Agent keys and their teams no model list (`LiteLLMClient.generate_key` and `_create_team`), so an Agent can reach a connection's model this way without its `<slug>/` name.
+- Two connections can save the same model, and `<slug>/<model_id>` reaches only that connection's route. A request for the raw LiteLLM model string, such as `openai/gpt-4o`, is matched against each route's `model` (`router.py:13641-13645`) and served by one of the routes that have it, with that route's key and price. Teams carry no model list (`LiteLLMClient._create_team`), but an Agent key lists only its own models and the platform's ([Provider Access](#provider-access)), so an Agent reaches a connection's model this way only when that string is on its key.
 - Routes leave LiteLLM's price list as it was, so `model-catalogue` still shows LiteLLM's own price for a model a route prices differently.
 - LiteLLM copies onto a route, from its own list, the rates the route doesn't set: the priority and flex tier rates, the 1-hour cache-write rate, and the cache rates for prompts over 200k tokens (`router.py:9541-9567,9594-9617,10834-10849`). A response served at the priority tier is billed at LiteLLM's priority rates instead of the stored prices; the test checks this. A prompt over 200k tokens has its cached tokens billed at LiteLLM's rate for that size (`litellm_core_utils/llm_cost_calc/utils.py:657-799`). In v1.108.6's bundled list, 279 chat models have a priority input rate, 213 a 1-hour cache-write rate and 78 a cache-read rate above 200k tokens.
 
