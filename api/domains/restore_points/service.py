@@ -67,6 +67,7 @@ from api.domains.restore_points.models import (
     AgentRestorePointRestore,
     RestorePointConfigManifest,
     RestorePointSkill,
+    ScheduledBackupHealth,
     selection_from_manifest,
 )
 from api.domains.restore_points.repository import RestorePointRepository
@@ -171,6 +172,10 @@ def _ran_safety_copy(job: V1Job) -> bool:
     return any(env.name == ENV_BACKUP for container in containers or [] for env in container.env or [])
 
 
+# Missed turns before a running Agent's scheduled backup counts as overdue.
+SCHEDULED_BACKUP_OVERDUE_INTERVALS = 2
+
+
 @inject
 @singleton
 @dataclass
@@ -185,6 +190,28 @@ class RestorePointService:
     selection: SelectionValidator
     k8s: KubernetesClient
     event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def scheduled_backup_health(self, now: datetime, *, failure_window: timedelta) -> ScheduledBackupHealth:
+        """Scheduled backups that failed within `failure_window`, and running Agents left without one.
+
+        An Agent is overdue once its newest successful scheduled backup is older than
+        `SCHEDULED_BACKUP_OVERDUE_INTERVALS` intervals: one missed turn can be a busy schedule,
+        two is a backup that is not happening. For Platform Administrators: nothing here is
+        scoped to a Membership, and only ids, counts and times are returned.
+        """
+        interval = self.config.restore_point_schedule_interval_minutes
+        if interval == 0:
+            return ScheduledBackupHealth(interval_minutes=0, failures=[], overdue=[])
+        overdue_before = now - timedelta(minutes=interval * SCHEDULED_BACKUP_OVERDUE_INTERVALS)
+        return ScheduledBackupHealth(
+            interval_minutes=interval,
+            failures=self.repository.find_scheduled_failures_since(now - failure_window),
+            overdue=self.repository.find_overdue_scheduled_backups(last_ready_before=overdue_before),
+        )
+
+    def ready_totals_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, tuple[int, int]]:
+        """(count, archive bytes) of each Agent's READY restore points. For `require_platform_admin` routes only."""
+        return self.repository.ready_totals_for_agents(agent_ids)
 
     def _event_payload(
         self,

@@ -2,7 +2,7 @@ import { formatBytes } from "@/features/resource-usage/format";
 
 import type { SourceState, VolumeAllocation, VolumeGroup } from "../schemas";
 import { VOLUME_GROUP_LABELS } from "../utils";
-import { AgentLabel, EmptyRow, Section } from "./section";
+import { AgentLabel, EmptyRow, Section, ExpandableList } from "./section";
 
 const GROUP_COLOR: Record<VolumeGroup, string> = {
   infrastructure: "var(--ink-3)",
@@ -17,7 +17,15 @@ const GROUP_COLOR: Record<VolumeGroup, string> = {
  * volume, and an orphaned one is left behind by an agent that no longer exists; both count
  * against the storage quota.
  */
-export function VolumesPanel({ volumes, state }: { volumes: VolumeAllocation; state: SourceState | undefined }) {
+export function VolumesPanel({
+  volumes,
+  attentionTotal,
+  state,
+}: {
+  volumes: VolumeAllocation;
+  attentionTotal: number;
+  state: SourceState | undefined;
+}) {
   const total = volumes.totalRequestedBytes;
   const groups = volumes.groups.filter((group) => group.claims > 0);
   return (
@@ -69,7 +77,7 @@ export function VolumesPanel({ volumes, state }: { volumes: VolumeAllocation; st
       )}
 
       {volumes.attention.length > 0 && (
-        <ul className="af-card m-0 mt-3 list-none divide-y p-0" data-testid="volume-attention">
+        <ExpandableList total={attentionTotal} className="mt-3" testId="volume-attention">
           {volumes.attention.map((claim) => (
             <li key={claim.name} className="px-4 py-2.5 text-[13px]">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -91,7 +99,7 @@ export function VolumesPanel({ volumes, state }: { volumes: VolumeAllocation; st
               )}
             </li>
           ))}
-        </ul>
+        </ExpandableList>
       )}
     </Section>
   );

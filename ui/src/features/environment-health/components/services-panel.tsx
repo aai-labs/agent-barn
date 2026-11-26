@@ -1,17 +1,49 @@
-import type { CoreService, FiringAlert, SourceState } from "../schemas";
-import { healthTone, type Tone } from "../utils";
+import type { CoreService, DeployedVersion, FiringAlert, SourceState } from "../schemas";
+import { formatAge, healthTone, shortSha, TONE_COLOR, type Tone } from "../utils";
 import { AgentLabel, EmptyRow, Section, StatusDot } from "./section";
 
 const SEVERITY_TONE: Record<string, Tone> = { critical: "err", warning: "warn", info: "muted" };
 
+const ROLLOUT_TEXT: Record<NonNullable<CoreService["rollout"]>, string | null> = {
+  complete: null,
+  in_progress: "Rolling out",
+  stuck: "Rollout stuck",
+};
+
+/** Which build is running and how long ago it went out, so a deploy that stopped landing is visible. */
+function DeployedLine({ deployed }: { deployed: DeployedVersion | null }) {
+  if (!deployed) return null;
+  const others = deployed.behind.join(", ");
+  return (
+    <div className="mb-3 text-[13px] leading-relaxed" data-testid="environment-deployed">
+      <p className="m-0" style={{ color: "var(--ink-2)" }}>
+        Build <span className="font-mono">{shortSha(deployed.buildSha)}</span>
+        {deployed.rolledOutAt && (
+          <span title={new Date(deployed.rolledOutAt).toLocaleString()}>
+            , rolled out {formatAge(deployed.rolledOutAt)}
+          </span>
+        )}
+        .
+      </p>
+      {deployed.mixed && (
+        <p className="m-0 mt-1" style={{ color: TONE_COLOR.warn }}>
+          {others} {deployed.behind.length === 1 ? "is" : "are"} on another build.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** The platform's own services, by ready replicas, and the monitoring rules that are firing. */
 export function ServicesPanel({
   services,
+  deployed,
   alerts,
   workloadsState,
   monitoringState,
 }: {
   services: CoreService[];
+  deployed: DeployedVersion | null;
   alerts: FiringAlert[];
   workloadsState: SourceState | undefined;
   monitoringState: SourceState | undefined;
@@ -22,6 +54,7 @@ export function ServicesPanel({
       testId="environment-services"
       description="The API, UI, workers, databases and the other services agents depend on."
     >
+      <DeployedLine deployed={deployed} />
       {services.length === 0 ? (
         <EmptyRow state={workloadsState}>No platform services found.</EmptyRow>
       ) : (
@@ -37,6 +70,16 @@ export function ServicesPanel({
               <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--ink)" }}>
                 {service.name}
               </span>
+              {service.rollout && ROLLOUT_TEXT[service.rollout] && (
+                <span className="text-[12px]" style={{ color: TONE_COLOR[service.rollout === "stuck" ? "warn" : "muted"] }}>
+                  {ROLLOUT_TEXT[service.rollout]}
+                </span>
+              )}
+              {service.buildSha && (
+                <span className="hidden font-mono text-[12px] sm:inline" style={{ color: "var(--ink-4)" }}>
+                  {shortSha(service.buildSha)}
+                </span>
+              )}
               <span className="hidden text-[12px] sm:inline" style={{ color: "var(--ink-4)" }}>
                 {service.kind}
               </span>

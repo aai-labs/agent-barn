@@ -19,6 +19,8 @@ from api.domains.restore_points.models import (
     MANUAL_GROUP_ORIGINS,
     NON_TERMINAL_STATUSES,
     AgentRestorePointRead,
+    OverdueScheduledBackup,
+    ScheduledBackupFailures,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -175,6 +177,106 @@ class RestorePointRepository:
                 .order_by(newest.c.taken_at.asc().nulls_first())
             )
             return list(session.exec(query).all())
+
+    def find_scheduled_failures_since(self, since: datetime) -> list[ScheduledBackupFailures]:
+        """Per running Agent, the scheduled backups that failed since `since` and since its last good one.
+
+        Only Agents still running and not deleted, as `find_overdue_scheduled_backups` reads
+        them, and only while failing: a failure older than the Agent's newest READY scheduled
+        backup is over, so an Agent that has recovered is left out, and one that failed again
+        since counts only the failures after it recovered. Most failures first.
+        """
+        newest_ready = (
+            select(
+                col(AgentRestorePoint.agent_id).label("agent_id"),
+                func.max(AgentRestorePoint.created_at).label("taken_at"),
+            )
+            .where(
+                col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED,
+                col(AgentRestorePoint.status) == RestorePointStatus.READY,
+            )
+            .group_by(col(AgentRestorePoint.agent_id))
+            .subquery()
+        )
+        last_failed = func.max(AgentRestorePoint.created_at)
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(AgentRestorePoint.agent_id), func.count(), last_failed)
+                .join(Agent, col(Agent.id) == col(AgentRestorePoint.agent_id))
+                .outerjoin(newest_ready, newest_ready.c.agent_id == col(AgentRestorePoint.agent_id))
+                .where(
+                    col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED,
+                    col(AgentRestorePoint.status) == RestorePointStatus.FAILED,
+                    col(AgentRestorePoint.created_at) >= since,
+                    col(Agent.status) == AgentStatus.RUNNING,
+                    col(Agent.deleted_at).is_(None),
+                    or_(
+                        newest_ready.c.taken_at.is_(None),
+                        col(AgentRestorePoint.created_at) > newest_ready.c.taken_at,
+                    ),
+                )
+                .group_by(col(AgentRestorePoint.agent_id))
+                .order_by(func.count().desc(), last_failed.desc())
+            )
+            return [
+                ScheduledBackupFailures(agent_id=agent_id, failures=failures, last_failed_at=last_failed_at)
+                for agent_id, failures, last_failed_at in session.exec(query).all()
+            ]
+
+    def find_overdue_scheduled_backups(self, *, last_ready_before: datetime) -> list[OverdueScheduledBackup]:
+        """Running Agents whose newest READY scheduled backup is older than the cutoff, or missing.
+
+        Only READY counts, unlike `find_agent_ids_due_a_snapshot`: a failed attempt is not a
+        backup. An Agent created after the cutoff has not had its turn yet, so it is left out.
+        The longest without one first.
+        """
+        newest = (
+            select(
+                col(AgentRestorePoint.agent_id).label("agent_id"),
+                func.max(AgentRestorePoint.created_at).label("taken_at"),
+            )
+            .where(
+                col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED,
+                col(AgentRestorePoint.status) == RestorePointStatus.READY,
+            )
+            .group_by(col(AgentRestorePoint.agent_id))
+            .subquery()
+        )
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(Agent.id), newest.c.taken_at)
+                .outerjoin(newest, newest.c.agent_id == col(Agent.id))
+                .where(
+                    col(Agent.status) == AgentStatus.RUNNING,
+                    col(Agent.deleted_at).is_(None),
+                    col(Agent.created_at) < last_ready_before,
+                    or_(newest.c.taken_at.is_(None), newest.c.taken_at < last_ready_before),
+                )
+                .order_by(newest.c.taken_at.asc().nulls_first())
+            )
+            return [
+                OverdueScheduledBackup(agent_id=agent_id, last_backup_at=taken_at)
+                for agent_id, taken_at in session.exec(query).all()
+            ]
+
+    def ready_totals_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, tuple[int, int]]:
+        """Per Agent, how many READY restore points it keeps and their archive bytes. Platform-wide."""
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(
+                    col(AgentRestorePoint.agent_id),
+                    func.count(),
+                    func.coalesce(func.sum(AgentRestorePoint.archive_bytes), 0),
+                )
+                .where(
+                    col(AgentRestorePoint.agent_id).in_(agent_ids),
+                    col(AgentRestorePoint.status) == RestorePointStatus.READY,
+                )
+                .group_by(col(AgentRestorePoint.agent_id))
+            )
+            return {agent_id: (count, int(total or 0)) for agent_id, count, total in session.exec(query).all()}
 
     def find_agent_ids_over_retention(self, *, scheduled_cap: int, manual_cap: int) -> list[UUID]:
         """Agents retention would remove a restore point from, by the rules of `enforce_retention`.

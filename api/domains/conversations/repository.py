@@ -93,6 +93,30 @@ class ConversationRepository:
             ).all()
         return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
 
+    def latest_inbound_times_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, datetime]:
+        """The newest message a person sent each Agent, platform-wide. Agents never written to are absent.
+
+        For Platform oversight behind `require_platform_admin` only: there is no Organization
+        scope. Only the time is read, never the content.
+        """
+        if not agent_ids:
+            return {}
+        # One read per Agent on the (agent_id, direction, occurred_at) index.
+        latest_inbound = (
+            select(AgentChatMessage.occurred_at)
+            .where(
+                col(AgentChatMessage.agent_id) == col(Agent.id),
+                col(AgentChatMessage.direction) == MessageDirection.INBOUND,
+            )
+            .order_by(col(AgentChatMessage.occurred_at).desc())
+            .limit(1)
+            .correlate(Agent)
+            .scalar_subquery()
+        )
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(select(Agent.id, latest_inbound).where(col(Agent.id).in_(agent_ids))).all()
+        return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
+
     def upsert_messages(self, messages: list[AgentChatMessage]) -> None:
         if not messages:
             return

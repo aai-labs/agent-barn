@@ -11,11 +11,12 @@ import { formatTime, healthTone, SOURCE_LABELS, SOURCE_STATE_TEXT, TONE_COLOR } 
 import { AgentProblemsPanel } from "./agent-problems-panel";
 import { CapacityPanel } from "./capacity-panel";
 import { EventsPanel } from "./events-panel";
+import { IdleAgentsPanel } from "./idle-agents-panel";
+import { ScheduledPanel } from "./scheduled-panel";
 import { ServicesPanel } from "./services-panel";
 import { VolumesPanel } from "./volumes-panel";
 import { WorkloadsPanel } from "./workloads-panel";
 
-const TWO_COLUMNS = { gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))" };
 
 const LEVEL_COPY: Record<EnvironmentHealth["level"], { title: string; body: string }> = {
   ok: { title: "Everything is running", body: "Platform services are up and the namespace has room for new agents." },
@@ -100,29 +101,47 @@ function HealthBody({ health }: { health: EnvironmentHealth }) {
   const workloadsState =
     states.deployments === "available" || states.stateful_sets === "available" ? "available" : states.deployments;
 
+  // One column, most urgent first. Side by side, a full list next to an empty one left a gap
+  // as tall as the difference, and on a healthy platform that is most of the time.
   return (
     <>
       <LevelBanner level={health.level} />
       <SourcesNotice sources={health.sources} />
-      <CapacityPanel lines={health.capacity} ceilings={health.ceilings} quotaState={states.resource_quotas} />
-      <div className="grid gap-x-6" style={TWO_COLUMNS}>
-        <ServicesPanel
-          services={health.services}
-          alerts={health.alerts}
-          workloadsState={workloadsState}
-          monitoringState={states.prometheus}
-        />
-        <AgentProblemsPanel
-          failed={health.failedAgents}
-          unhealthy={health.unhealthyRuntimes}
-          monitoringState={states.prometheus}
-        />
-      </div>
-      <WorkloadsPanel workloads={health.workloads} podsState={states.pods} />
-      <div className="grid gap-x-6" style={TWO_COLUMNS}>
-        <VolumesPanel volumes={health.volumes} state={states.volume_claims} />
-        <EventsPanel events={health.events} state={states.events} />
-      </div>
+      <CapacityPanel
+        lines={health.capacity}
+        ceilings={health.ceilings}
+        quotaState={states.resource_quotas}
+        peakWindowHours={health.peakWindowHours}
+      />
+      <ServicesPanel
+        services={health.services}
+        deployed={health.deployed}
+        alerts={health.alerts}
+        workloadsState={workloadsState}
+        monitoringState={states.prometheus}
+      />
+      <AgentProblemsPanel
+        failed={health.failedAgents}
+        unhealthy={health.unhealthyRuntimes}
+        failedTotal={health.totals.failedAgents}
+        unhealthyTotal={health.totals.unhealthyRuntimes}
+        monitoringState={states.prometheus}
+      />
+      <ScheduledPanel
+        cronJobs={health.cronJobs}
+        backups={health.backups}
+        state={states.cron_jobs}
+        runsState={states.jobs}
+      />
+      <WorkloadsPanel
+        workloads={health.workloads}
+        issuesTotal={health.totals.podIssues}
+        podsState={states.pods}
+        restartWindowDays={health.restartWindowDays}
+      />
+      <IdleAgentsPanel idle={health.idleAgents} total={health.totals.idleAgents} idleAfterDays={health.idleAfterDays} />
+      <VolumesPanel volumes={health.volumes} attentionTotal={health.totals.volumeClaims} state={states.volume_claims} />
+      <EventsPanel events={health.events} total={health.totals.events} state={states.events} />
     </>
   );
 }
@@ -174,8 +193,8 @@ function HealthSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-busy="true">
       <Skeleton className="h-[76px] w-full rounded-xl" />
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}>
-        {Array.from({ length: 6 }, (_, index) => (
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {Array.from({ length: 8 }, (_, index) => (
           <Skeleton key={index} className="h-[98px] rounded-xl" />
         ))}
       </div>

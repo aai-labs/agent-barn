@@ -11,6 +11,7 @@ Needs Docker, like the rest of the integration suite. The image pin matches
 helm/monitoring/tests/run.sh.
 """
 
+import itertools
 import os
 import socket
 import subprocess
@@ -32,6 +33,8 @@ import pytest
 from testcontainers.core.container import DockerContainer
 
 from api.core.config import get_config
+from api.domains.environment_health.cluster import PodRestarts, pod_restarts
+from api.domains.environment_health.repository import restart_history_query
 from api.domains.resource_usage.models import ResourceUsageRange, UsageWindow
 from api.domains.resource_usage.repository import ResourceUsageRepository
 from api.infrastructure.prometheus.client import PrometheusClient, PrometheusError
@@ -147,9 +150,38 @@ _AGENT_REQUESTS = {
 }
 
 
+# Restart history: `crashing` restarts on every scrape and its container was last OOM-killed;
+# `steady` restarted long ago and not since, so its counter never moves; `oomed-long-ago` was
+# OOM-killed before the window and has not restarted since, so the gauge still reads OOMKilled.
+# `postgres-0` was replaced: the pod that kept restarting is gone and the new one, with the
+# same name and another uid, is steady.
+_RESTART_SCRAPES = itertools.count(1)
+CRASHING_UID = "11111111-1111-4111-8111-111111111111"
+REPLACED_UID = "22222222-2222-4222-8222-222222222222"
+REPLACEMENT_UID = "33333333-3333-4333-8333-333333333333"
+
+
+def _restart_metrics() -> str:
+    scrape = next(_RESTART_SCRAPES)
+    restarts = "kube_pod_container_status_restarts_total"
+    reason = "kube_pod_container_status_last_terminated_reason"
+    return (
+        f"# TYPE {restarts} counter\n"
+        f'{restarts}{{namespace="ns",pod="crashing",uid="{CRASHING_UID}",container="app"}} {scrape}\n'
+        f'{restarts}{{namespace="ns",pod="steady",container="app"}} 28\n'
+        f'{restarts}{{namespace="ns",pod="oomed-long-ago",container="app"}} 5\n'
+        f'{restarts}{{namespace="ns",pod="postgres-0",uid="{REPLACED_UID}",container="db"}} {scrape}\n'
+        f'{restarts}{{namespace="ns",pod="postgres-0",uid="{REPLACEMENT_UID}",container="db"}} 0\n'
+        f"# TYPE {reason} gauge\n"
+        f'{reason}{{namespace="ns",pod="crashing",uid="{CRASHING_UID}",container="app",reason="OOMKilled"}} 1\n'
+        f'{reason}{{namespace="ns",pod="steady",container="app",reason="Error"}} 1\n'
+        f'{reason}{{namespace="ns",pod="oomed-long-ago",container="app",reason="OOMKilled"}} 1\n'
+    )
+
+
 class _KsmHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = _KSM_METRICS.encode()
+        body = (_KSM_METRICS + _restart_metrics()).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
@@ -314,14 +346,17 @@ scrape_configs:
             repository = ResourceUsageRepository(prometheus=_client(url))
             result = Scraped(url, repository, org_id, agent_id, other_org_id, other_agent_id)
             ticker.start()
-            # Ready once both a gauge and a rate (which needs two scrapes) have arrived.
-            _wait_until(
-                lambda: (
-                    {"cpu_cores", "memory_working_set_bytes", "cpu_throttled_ratio"}
-                    <= _current(result, org_id, [agent_id]).get(agent_id, {}).keys()
-                ),
-                "the first scrapes",
-            )
+
+            # Ready once both a gauge and a rate have arrived, and the rate has seen the counter
+            # move. Two scrapes that land between ticks read the same counter, so the rate is
+            # there but 0 until a later scrape sees a tick, as on a slow CI runner.
+            def ready() -> bool:
+                fields = _current(result, org_id, [agent_id]).get(agent_id, {})
+                return {"memory_working_set_bytes", "cpu_throttled_ratio"} <= fields.keys() and (
+                    fields.get("cpu_cores", 0) > 0
+                )
+
+            _wait_until(ready, "the first scrapes to see the CPU counter move")
             yield result
     finally:
         ksm.shutdown()
@@ -445,6 +480,41 @@ def test_the_namespace_commitment_charges_each_live_pod_as_a_quota_does(scraped:
     # not add to them), and a resource other than memory and CPU is left out.
     assert figures["limits"] == pytest.approx(_COMMITTED["limits"])
     assert figures["requests"] == pytest.approx(_COMMITTED["requests"])
+
+
+def test_the_namespace_peaks_parse_and_hold_the_highest_commitment_and_pod_count(scraped: Scraped):
+    def peaks() -> tuple[dict[str, dict[str, float]], float] | None:
+        committed = scraped.repository.peak_committed(at=_now(), window_seconds=600, step_seconds=5)
+        pods = scraped.repository.peak_pods(at=_now(), window_seconds=600, step_seconds=5)
+        return (committed, pods) if committed and pods is not None else None
+
+    committed, pods = _wait_until(peaks, "kube-state-metrics to be scraped")
+
+    # The scrape never changes here, so the highest point is the steady figure, and the
+    # subquery the page relies on is one Prometheus accepts.
+    assert committed["limits"] == pytest.approx(_COMMITTED["limits"])
+    assert committed["requests"] == pytest.approx(_COMMITTED["requests"])
+    # Running and Pending pods, never Succeeded ones: agent-a, two, waiting, both of agent
+    # one's, agent two's and the restore job's.
+    assert pods == 7
+
+
+def test_the_restart_history_keeps_the_pod_that_keeps_restarting_and_its_oom_kill(scraped: Scraped):
+    def history() -> dict[str, PodRestarts] | None:
+        found = pod_restarts(scraped.repository.prometheus.query(restart_history_query(7), _now()))
+        return found if found.get(CRASHING_UID, PodRestarts(0, False)).restarts >= 3 else None
+
+    found = _wait_until(history, "a few scrapes of the restart counter")
+
+    # The pod whose counter moves is there with its OOM kill, by its uid; the one whose counter
+    # stood still all along is not, however high its count, and an Error is not an OOM kill.
+    assert found[CRASHING_UID].oom_killed
+    assert "steady" not in found
+    # An OOM kill from before the window, with no restart since, is not this week's.
+    assert "oomed-long-ago" not in found
+    # A replaced pod's restarts stay with it, not with the new pod of the same name.
+    assert found[REPLACED_UID].restarts >= 3 and not found[REPLACED_UID].oom_killed
+    assert REPLACEMENT_UID not in found and "postgres-0" not in found
 
 
 def test_each_agents_requests_are_found_by_its_pod_name_and_counted_once(scraped: Scraped):

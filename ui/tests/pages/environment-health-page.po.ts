@@ -20,12 +20,18 @@ export class EnvironmentHealthPage {
     return this.page.getByTestId("environment-sources");
   }
 
-  section(name: "capacity" | "services" | "agents" | "workloads" | "volumes" | "events"): Locator {
+  section(
+    name: "capacity" | "services" | "agents" | "workloads" | "volumes" | "events" | "scheduled" | "idle",
+  ): Locator {
     return this.page.getByTestId(`environment-${name}`);
   }
 
   capacityLine(resource: string): Locator {
     return this.page.getByTestId(`capacity-line-${resource}`);
+  }
+
+  capacityPeak(resource: string): Locator {
+    return this.page.getByTestId(`capacity-peak-${resource}`);
   }
 
   capacityWarning(): Locator {
@@ -42,6 +48,18 @@ export class EnvironmentHealthPage {
 
   unhealthyRuntimes(): Locator {
     return this.page.getByTestId("unhealthy-runtime");
+  }
+
+  idleAgents(): Locator {
+    return this.page.getByTestId("idle-agent");
+  }
+
+  backups(): Locator {
+    return this.page.getByTestId("environment-backups");
+  }
+
+  cronJob(name: string): Locator {
+    return this.page.getByTestId(`cron-job-${name}`);
   }
 
   podIssues(): Locator {

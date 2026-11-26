@@ -7,6 +7,7 @@ import { formatPercent } from "@/features/costs/format";
 import { ALL_CEILINGS, CapacityLimitsDialog } from "@/features/resource-usage/components/capacity-limits-dialog";
 import { UsageMeter } from "@/features/resource-usage/components/usage-meter";
 import type { ResourceLimits } from "@/features/resource-usage/schemas";
+import { METER_CRITICAL_RATIO, METER_WARN_RATIO } from "@/features/resource-usage/utils";
 
 import type { CapacityLine, SourceState } from "../schemas";
 import { capacityTone, formatQuantity, TONE_COLOR } from "../utils";
@@ -17,6 +18,7 @@ const BLOCKS: Record<string, string> = {
   "requests.storage": "New agents can't get a volume",
   persistentvolumeclaims: "New agents can't get a volume",
   pods: "New pods are refused",
+  services: "New agents can't start",
 };
 
 function lineText(line: CapacityLine): string {
@@ -30,8 +32,27 @@ function lineText(line: CapacityLine): string {
   return `${formatPercent(line.ratio)} of ${hard}`;
 }
 
-function warningText(line: CapacityLine): string {
+/** A warning raised by the peak alone: quiet now, but it touched its limit inside the window. */
+function spikedOnly(line: CapacityLine): boolean {
+  return (
+    line.level === "warning" &&
+    line.peakRatio !== null &&
+    line.peakRatio >= METER_CRITICAL_RATIO &&
+    (line.ratio === null || line.ratio < METER_WARN_RATIO)
+  );
+}
+
+function peakText(line: CapacityLine, windowHours: number): string | null {
+  if (line.peak === null) return null;
+  const share = line.peakRatio === null ? "" : ` (${formatPercent(line.peakRatio)})`;
+  return `${windowHours}h peak: ${formatQuantity(line.peak, line.unit)}${share}`;
+}
+
+function warningText(line: CapacityLine, windowHours: number): string {
   const blocks = BLOCKS[line.resource] ?? "New pods may be refused";
+  if (spikedOnly(line) && line.peakRatio !== null) {
+    return `${line.resource} reached ${formatPercent(line.peakRatio)} of its quota in the last ${windowHours} hours. Pods starting then may have been refused.`;
+  }
   if (line.level === "ceiling_out_of_date") {
     return `${line.resource} is above the quota you entered. Check the namespace quota and update it.`;
   }
@@ -50,10 +71,12 @@ export function CapacityPanel({
   lines,
   ceilings,
   quotaState,
+  peakWindowHours,
 }: {
   lines: CapacityLine[];
   ceilings: ResourceLimits;
   quotaState: SourceState | undefined;
+  peakWindowHours: number;
 }) {
   const [open, setOpen] = useState(false);
   // Bumped on each opening, so the dialog starts from what is saved.
@@ -71,7 +94,7 @@ export function CapacityPanel({
     ? "Read from the namespace's ResourceQuota."
     : quotaState === "forbidden"
       ? "The service account can't read the namespace's ResourceQuota, so these compare the quota you entered with what the platform counts itself."
-      : "Compared with the quota you entered. Storage is every volume claim's request, and pods are every pod still running or starting.";
+      : "Compared with the quota you entered. Storage is every volume claim's request, pods are every pod still running or starting, and volume claims and services are every one in the namespace.";
 
   return (
     <Section
@@ -102,7 +125,7 @@ export function CapacityPanel({
             </p>
             {warnings.map((line) => (
               <p key={line.resource} className="m-0 mt-1 text-[13px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-                {warningText(line)}
+                {warningText(line, peakWindowHours)}
               </p>
             ))}
           </div>
@@ -112,31 +135,46 @@ export function CapacityPanel({
       {lines.length === 0 ? (
         <EmptyRow>No quota lines to show.</EmptyRow>
       ) : (
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}>
-          {lines.map((line) => (
-            <div
-              key={line.resource}
-              className="af-card min-w-0 px-4 py-3.5"
-              data-testid={`capacity-line-${line.resource}`}
-              data-level={line.level}
-            >
-              <p className="m-0 mb-1 truncate font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
-                {line.resource}
-              </p>
-              <p
-                className="m-0 truncate text-[20px] font-semibold"
-                style={{ color: line.level === "ok" || line.level === "unknown" ? "var(--ink)" : TONE_COLOR[capacityTone(line.level)] }}
+        // Two rows of four, or four rows of two where the section is narrow: never a short last row.
+        <div className="@container">
+          <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4">
+            {lines.map((line) => (
+              <div
+                key={line.resource}
+                className="af-card flex min-w-0 flex-col px-4 py-3.5"
+                data-testid={`capacity-line-${line.resource}`}
+                data-level={line.level}
               >
-                {line.used === null ? "—" : formatQuantity(line.used, line.unit)}
-              </p>
-              <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }}>
-                {lineText(line)}
-              </p>
-              {line.ratio !== null && line.level !== "ceiling_out_of_date" && (
-                <UsageMeter ratio={line.ratio} label={`${line.resource} against its quota`} className="mt-2" />
-              )}
-            </div>
-          ))}
+                <p className="m-0 mb-1 truncate font-mono text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  {line.resource}
+                </p>
+                <p
+                  className="m-0 truncate text-[20px] font-semibold"
+                  style={{ color: line.level === "ok" || line.level === "unknown" ? "var(--ink)" : TONE_COLOR[capacityTone(line.level)] }}
+                >
+                  {line.used === null ? "—" : formatQuantity(line.used, line.unit)}
+                </p>
+                <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  {lineText(line)}
+                </p>
+                {line.peak !== null && (
+                  <p
+                    className="m-0 mt-0.5 text-[12px]"
+                    style={{ color: "var(--ink-4)" }}
+                    data-testid={`capacity-peak-${line.resource}`}
+                  >
+                    {peakText(line, peakWindowHours)}
+                  </p>
+                )}
+                {/* Pushed to the bottom, so the bars line up whether or not a card has a peak line. */}
+                {line.ratio !== null && line.level !== "ceiling_out_of_date" && (
+                  <div className="mt-auto pt-2">
+                    <UsageMeter ratio={line.ratio} label={`${line.resource} against its quota`} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

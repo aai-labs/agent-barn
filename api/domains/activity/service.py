@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -31,6 +32,10 @@ class ActivityService:
 
     repository: ActivityRepository
     agent_authorization: AgentAuthorization
+
+    def latest_call_times_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, datetime]:
+        """Each Agent's latest model call, platform-wide. For `require_platform_admin` routes only."""
+        return self.repository.latest_call_times_for_platform(agent_ids)
 
     def _require_agent(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
         """Both permissions, because the answer mixes both kinds of fact.
