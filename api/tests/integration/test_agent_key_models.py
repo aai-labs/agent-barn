@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -12,6 +13,7 @@ from api.domains.agent_settings.models import OrganizationAgentSettings
 from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
+from api.domains.playbooks.models import PlaybookExtraction, PlaybookExtractionStatus
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
@@ -37,6 +39,7 @@ LOCK_TIMEOUT = "SET LOCAL lock_timeout = '200ms'"
 DELETED_MODEL = "litellm/openrouter/deleted/model"
 KEYLESS_MODEL = "litellm/openrouter/keyless/model"
 FAILING_MODEL = "litellm/openrouter/failing/model"
+EXTRACTION_MODEL = "openrouter/anthropic/claude-sonnet"
 
 
 def _setup(model: str = "", *steps):
@@ -97,6 +100,22 @@ def _refuse_failing_model(_key: str, models: list[str]) -> bool:
     return True
 
 
+def _extraction_for(context, agent: Agent, status: PlaybookExtractionStatus, model: str | None) -> None:
+    now = datetime.now(UTC)
+    context.postgres_delegate.save(
+        PlaybookExtraction(
+            organization_id=agent.organization_id,
+            source_agent_id=agent.id,
+            skill_name="Billing playbook",
+            window_start=now - timedelta(days=30),
+            window_end=now,
+            max_sessions=20,
+            status=status,
+            model=model,
+        )
+    )
+
+
 def _try_lock(context, agent_id: UUID) -> None:
     with Session(context.postgres_delegate.engine) as other:
         other.connection().execute(text(LOCK_TIMEOUT))
@@ -131,6 +150,40 @@ def test_a_starting_model_is_listed_too():
             _models_for(context, STARTING_MODEL),
             equal_to(_with("openrouter/openai/gpt-5-nano", "openrouter/anthropic/claude-sonnet-4.5")),
         )
+
+
+def test_a_running_playbook_extraction_keeps_its_model_listed_after_the_platform_model_changes():
+    with given(_setup(EXPLICIT_MODEL)) as context:
+        _extraction_for(context, context.agent, PlaybookExtractionStatus.RUNNING, EXTRACTION_MODEL)
+
+        assert_that(_models_for(context), equal_to(_with("openrouter/openai/gpt-5-nano", EXTRACTION_MODEL)))
+
+
+@pytest.mark.parametrize(
+    ("status", "model"),
+    [
+        (PlaybookExtractionStatus.SUCCEEDED, EXTRACTION_MODEL),
+        (PlaybookExtractionStatus.FAILED, EXTRACTION_MODEL),
+        (PlaybookExtractionStatus.CANCELLED, EXTRACTION_MODEL),
+        (PlaybookExtractionStatus.QUEUED, EXTRACTION_MODEL),
+        (PlaybookExtractionStatus.RUNNING, None),
+    ],
+)
+def test_a_playbook_extraction_that_is_not_running_or_has_no_model_adds_nothing(status, model):
+    with given(_setup(EXPLICIT_MODEL)) as context:
+        _extraction_for(context, context.agent, status, model)
+
+        assert_that(_models_for(context), equal_to(_with("openrouter/openai/gpt-5-nano")))
+
+
+def test_another_agents_running_playbook_extraction_adds_nothing():
+    with given(_setup(EXPLICIT_MODEL)) as context:
+        own_agent = context.agent
+        there_is_an_agent_in_another_org()(context)
+        _extraction_for(context, context.other_org_agent, PlaybookExtractionStatus.RUNNING, EXTRACTION_MODEL)
+        context.agent = own_agent
+
+        assert_that(_models_for(context), equal_to(_with("openrouter/openai/gpt-5-nano")))
 
 
 def test_sync_sets_the_keys_list_from_the_agent_as_stored():

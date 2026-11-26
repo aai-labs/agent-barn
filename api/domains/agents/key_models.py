@@ -10,6 +10,7 @@ from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.playbooks.platform_repository import PlatformPlaybookRepository
+from api.domains.playbooks.repository import PlaybookExtractionRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
 
@@ -33,21 +34,23 @@ class AgentKeyModelService:
     repository: AgentRepository
     agent_settings_lookup: AgentSettingsLookupService
     playbook_settings: PlatformPlaybookRepository
+    playbook_extractions: PlaybookExtractionRepository
     litellm: LiteLLMClient
     config: Config
 
     def _litellm_configured(self) -> bool:
         return bool(self.config.litellm_base_url and self.config.litellm_secret_name)
 
-    def _platform_models(self) -> list[str]:
+    def _platform_models(self, agent: Agent) -> list[str]:
         return [
             *self.config.decision_models.values(),
             self.playbook_settings.read(self.config.playbook_default_model).model,
+            *self.playbook_extractions.running_models(agent.id),
         ]
 
     def models_for(self, agent: Agent, starting_model: str | None = None) -> list[str]:
         next_model = agent.model or self.agent_settings_lookup.resolve_default_model(agent.organization_id)
-        return key_models([agent.running_model, next_model, starting_model or ""], self._platform_models())
+        return key_models([agent.running_model, next_model, starting_model or ""], self._platform_models(agent))
 
     def sync(self, agent: Agent, starting_model: str | None = None) -> bool:
         return self._sync(agent.id, starting_model)

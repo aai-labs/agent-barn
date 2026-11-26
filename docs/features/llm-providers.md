@@ -50,7 +50,8 @@ So until Organizations can use other providers, an Organization without OpenRout
 
 - the Agent's own model, or its Organization's or the platform's default when it has none;
 - the model its running pod started on (`running_model`), until that pod stops;
-- every `DECISION_MODELS` value and the Platform Playbook model, sent as they are.
+- every `DECISION_MODELS` value and the Platform Playbook model, sent as they are;
+- the model of the Agent's running Playbook Extraction, sent as it is, until the run ends, so a run keeps the model it started on after the Platform Playbook model changes.
 
 It lists none of the rest of the Organization's allowlist, so switching model in chat to anything else is refused. `AgentKeyModelService` (`api/domains/agents/key_models.py`) works the list out and sets it under a per-Agent advisory lock, reading the Agent as stored:
 
