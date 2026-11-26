@@ -12,10 +12,16 @@ from api.domains.agent_settings.models import OrganizationAgentSettings
 from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
-from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
-from api.tests.steps.agent import FAKE_LITELLM_KEY, TEST_ENCRYPTION_KEY, MockLiteLLMModule, there_is_an_agent
+from api.tests.steps.agent import (
+    FAKE_LITELLM_KEY,
+    TEST_ENCRYPTION_KEY,
+    MockLiteLLMModule,
+    there_is_an_agent,
+    there_is_an_agent_in_another_org,
+)
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization
 
@@ -28,6 +34,9 @@ ORGANIZATION_DEFAULT = "litellm/openrouter/qwen/qwen3.6-plus"
 RUNNING_MODEL = "litellm/openrouter/openrouter/free"
 STARTING_MODEL = "litellm/openrouter/anthropic/claude-sonnet-4.5"
 LOCK_TIMEOUT = "SET LOCAL lock_timeout = '200ms'"
+DELETED_MODEL = "litellm/openrouter/deleted/model"
+KEYLESS_MODEL = "litellm/openrouter/keyless/model"
+FAILING_MODEL = "litellm/openrouter/failing/model"
 
 
 def _setup(model: str = "", *steps):
@@ -75,6 +84,17 @@ def _models_for(context, starting_model: str | None = None) -> list[str]:
 
 def _with(*models: str) -> list[str]:
     return sorted({*models, *PLATFORM_MODELS})
+
+
+def _own_models_synced(context) -> list[list[str]]:
+    calls = context.injector.get(LiteLLMClient).set_key_models.call_args_list
+    return [[model for model in call.args[1] if model not in PLATFORM_MODELS] for call in calls]
+
+
+def _refuse_failing_model(_key: str, models: list[str]) -> bool:
+    if "openrouter/failing/model" in models:
+        raise LiteLLMError("Failed to set the Agent key's models")
+    return True
 
 
 def _try_lock(context, agent_id: UUID) -> None:
@@ -179,3 +199,41 @@ def test_the_key_models_lock_is_held_for_the_callback_and_released_after_it():
 
         with then("after the call another session takes it"):
             _try_lock(context, agent_id)
+
+
+def test_reconcile_sets_the_list_of_every_live_keyed_agent_in_every_organization():
+    with given(
+        _setup(
+            EXPLICIT_MODEL,
+            there_is_an_agent_in_another_org(),
+            there_is_an_agent(model=DELETED_MODEL, deleted=True),
+            there_is_an_agent(model=KEYLESS_MODEL),
+        )
+    ) as context:
+        _stored(context, litellm_key_encrypted="")
+
+        with when("the sweep runs"):
+            context.injector.get(AgentKeyModelService).reconcile()
+
+        with then("the two live keyed Agents get their lists, and the deleted and keyless ones are skipped"):
+            assert_that(
+                _own_models_synced(context),
+                equal_to([["openrouter/openai/gpt-5-nano"], ["openrouter/z-ai/glm-5.2"]]),
+            )
+
+
+def test_reconcile_goes_on_past_a_key_whose_list_cannot_be_set(caplog):
+    with given(_setup(FAILING_MODEL)) as context:
+        failing_agent_id = context.agent.id
+        there_is_an_agent(model=EXPLICIT_MODEL)(context)
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = _refuse_failing_model
+
+        with when("the sweep runs and the first key's list can't be set"):
+            context.injector.get(AgentKeyModelService).reconcile()
+
+        with then("the next Agent still gets its list, and the failure is logged by Agent id"):
+            assert_that(
+                _own_models_synced(context),
+                equal_to([["openrouter/failing/model"], ["openrouter/openai/gpt-5-nano"]]),
+            )
+            assert_that(str(failing_agent_id) in caplog.text, equal_to(True))

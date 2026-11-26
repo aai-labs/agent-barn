@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
@@ -11,6 +12,8 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.playbooks.platform_repository import PlatformPlaybookRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient
+
+logger = logging.getLogger(__name__)
 
 
 def _runtime_model_name(model: str) -> str:
@@ -51,6 +54,22 @@ class AgentKeyModelService:
 
     def sync_by_id(self, agent_id: UUID) -> bool:
         return self._sync(agent_id, None)
+
+    def reconcile(self) -> None:
+        if not self._litellm_configured():
+            return
+        agents = self.repository.list_llm_budget_targets()
+        updated = failures = 0
+        for agent in agents:
+            try:
+                updated += self.sync_by_id(agent.id)
+            except Exception:
+                failures += 1
+                logger.exception("Key model reconciliation failed for agent %s", agent.id)
+        if failures:
+            logger.error("Agent key model reconciliation: %s of %s failed", failures, len(agents))
+        else:
+            logger.info("Agent key models reconciled (%s keys, %s updated)", len(agents), updated)
 
     def _sync(self, agent_id: UUID, starting_model: str | None) -> bool:
         if not self._litellm_configured():
