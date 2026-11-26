@@ -41,6 +41,7 @@ from api.domains.playbooks.prompts import NOTES_SYSTEM_PROMPT, PLAYBOOK_SYSTEM_P
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.service import PlaybookTargetUnavailable, SkillService
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import LambdaWith, given, then, when
 from api.tests.helpers.litellm_proxy import StubProxy, StubReply, completion, litellm_proxy
 from api.tests.steps.agent import FAKE_LITELLM_KEY, there_is_a_skill, there_is_an_agent
@@ -307,6 +308,39 @@ def test_every_model_call_uses_the_source_agents_key_and_the_platform_model():
             assert_that(
                 [r["json"]["model"] for r in requests], only_contains(equal_to("openrouter/anthropic/claude-sonnet"))
             )
+
+
+def test_the_source_agents_key_models_are_set_before_the_first_model_call():
+    with given(
+        _setup(two_refund_conversations(), the_model_proxy_is(model_replies()), there_is_a_playbook_extraction())
+    ) as context:
+        litellm = context.injector.get(LiteLLMClient)
+        model_calls_before: list[int] = []
+        litellm.set_key_models.side_effect = lambda *_: model_calls_before.append(len(context.proxy.requests))
+
+        with when("the worker runs the extraction"):
+            run = process_extraction(context)
+
+        with then("the Agent's key got its list once, before any model call"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that(litellm.set_key_models.call_args.args[0], equal_to(FAKE_LITELLM_KEY))
+            assert_that(model_calls_before, equal_to([0]))
+
+
+def test_a_run_continues_when_the_source_agents_key_models_cannot_be_set():
+    with given(
+        _setup(two_refund_conversations(), the_model_proxy_is(model_replies()), there_is_a_playbook_extraction())
+    ) as context:
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = LiteLLMError(
+            "Failed to set the Agent key's models"
+        )
+
+        with when("the worker runs the extraction"):
+            run = process_extraction(context)
+
+        with then("the run still succeeds"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that(context.proxy.requests, has_length(3))
 
 
 def test_each_conversation_is_read_once_and_memories_reach_the_playbook_step():
