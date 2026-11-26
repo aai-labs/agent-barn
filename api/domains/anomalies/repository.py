@@ -34,6 +34,7 @@ from api.domains.events.catalog import (
     AGENT_ANOMALY_FLAGGED,
     AGENT_ANOMALY_OVERRIDE_CHANGED,
     EVENT_REGISTRY,
+    ORGANIZATION_ANOMALY_ALERTS_CHANGED,
     ORGANIZATION_ANOMALY_DETECTION_CHANGED,
 )
 from api.domains.events.repository import OutboxMessageRepository
@@ -122,6 +123,45 @@ class AnomalySettingsRepository:
                     "organization_id": organization_id,
                     "enabled": enabled,
                     "previous_enabled": previous,
+                    "actor_display": actor.display,
+                    "subject_display": subject_display,
+                },
+            )
+            session.commit()
+            return settings, delivery_ids
+
+    def set_alerts_enabled_with_event(
+        self, organization_id: UUID, alerts_enabled: bool, *, actor: Actor, subject_display: str
+    ) -> tuple[OrganizationAnomalySettings, list[UUID]]:
+        """Whether flagged activity is emailed, and its change Event, atomically. No Event
+        when nothing changed. Detection stays as it is."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            settings = session.exec(
+                select(OrganizationAnomalySettings)
+                .where(col(OrganizationAnomalySettings.organization_id) == organization_id)
+                .with_for_update()
+            ).first()
+            if settings is None:
+                settings = OrganizationAnomalySettings(organization_id=organization_id)
+            previous = settings.alerts_enabled
+            if previous == alerts_enabled:
+                return settings, []
+            settings.alerts_enabled = alerts_enabled
+            settings.updated_at = datetime.now(UTC)
+            session.add(settings)
+            session.flush()
+            delivery_ids = self._stage(
+                session,
+                ORGANIZATION_ANOMALY_ALERTS_CHANGED,
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
+                ),
+                payload={
+                    "organization_id": organization_id,
+                    "alerts_enabled": alerts_enabled,
+                    "previous_alerts_enabled": previous,
                     "actor_display": actor.display,
                     "subject_display": subject_display,
                 },

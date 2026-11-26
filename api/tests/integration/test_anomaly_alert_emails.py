@@ -10,6 +10,7 @@ handler wiring, with only the mail client faked:
 - activity that could not be classified waits while classification may still be
   running, then is emailed as not classified;
 - a retry does not email anyone twice, and a failed send is retried;
+- nothing is emailed once the Organization has turned alerts or detection off;
 - Hermes and OpenClaw Agents are alike.
 """
 
@@ -32,7 +33,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentType
 from api.domains.anomalies.event_handlers import AnomalyAlertEmailHandler
-from api.domains.anomalies.models import AgentAnomaly
+from api.domains.anomalies.models import AgentAnomaly, OrganizationAnomalySettings
 from api.domains.events.catalog import AGENT_ANOMALY_ALERT_EMAIL_HANDLER, AGENT_ANOMALY_FLAGGED
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -266,6 +267,31 @@ def test_nobody_is_emailed_about_an_agent_deleted_since(sent):
         _deliver(context)
 
         assert_that(sent, equal_to([]))
+
+
+def _the_organization_turned(context, **values: bool) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        session.exec(
+            sa.update(OrganizationAnomalySettings)  # type: ignore[call-overload]
+            .where(col(OrganizationAnomalySettings.organization_id) == context.agent.organization_id)
+            .values(**values)
+        )
+        session.commit()
+
+
+@pytest.mark.parametrize(
+    "turned_off",
+    [pytest.param({"alerts_enabled": False}, id="alerts"), pytest.param({"enabled": False}, id="detection")],
+)
+def test_nobody_is_emailed_once_the_organization_has_turned_it_off(sent, turned_off):
+    """Read when the email is due, so an alert already queued is not sent either."""
+    with given(_given(the_decision_model_classifies())) as context:
+        _flag_a_spike(context)
+        _the_organization_turned(context, **turned_off)
+
+        _deliver(context)
+
+        assert_that(sent, empty())
 
 
 def test_the_workers_registry_delivers_alert_events_to_the_handler():

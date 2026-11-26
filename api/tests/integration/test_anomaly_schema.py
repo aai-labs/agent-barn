@@ -47,6 +47,8 @@ AF453_TABLES = {
 # AF-464: who was already emailed for an alert delivery.
 AF464_TABLES = {"anomaly_alert_email_receipt"}
 AF464_REVISION = "2180817c8927"
+# AF-464: whether an Organization emails its alerts.
+AF464_ALERTS_REVISION = "4010f1f2d1f1"
 AF453_PERMISSIONS = (PermissionKey.ANOMALY_READ, PermissionKey.ANOMALY_MANAGE)
 
 _GIVEN = [
@@ -201,3 +203,17 @@ def test_the_alert_receipt_migration_creates_its_table_and_removes_it_on_downgra
 
     command.downgrade(scratch_database.config, AF453_REVISION)
     assert_that(tables(), equal_to(set()))
+
+
+def test_the_alerts_migration_keeps_existing_organizations_alerted_and_removes_it_on_downgrade(scratch_database):
+    def alerts_column() -> list[dict]:
+        scratch_database.engine.dispose()
+        columns = inspect(scratch_database.engine).get_columns("organization_anomaly_settings")
+        return [column for column in columns if column["name"] == "alerts_enabled"]
+
+    command.upgrade(scratch_database.config, AF464_ALERTS_REVISION)
+    (column,) = alerts_column()
+    assert_that(column["default"], equal_to("true"))
+
+    command.downgrade(scratch_database.config, AF464_REVISION)
+    assert_that(alerts_column(), equal_to([]))

@@ -41,6 +41,7 @@ TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_ANOMALY_DETECTION_CHANGED = "organization.anomaly_detection.changed"
+ORGANIZATION_ANOMALY_ALERTS_CHANGED = "organization.anomaly_alerts.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_CREATED = "organization.created"
 ORGANIZATION_UPDATED = "organization.updated"
@@ -704,6 +705,18 @@ class OrganizationAnomalyDetectionChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationAnomalyAlertsChangedPayload(BaseModel):
+    """Unusual activity emails turned on or off for an Organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    alerts_enabled: bool
+    previous_alerts_enabled: bool
+    actor_display: str
+    subject_display: str
+
+
 class AgentAnomalyOverrideChangedPayload(BaseModel):
     """An Agent's sensitivity and hard caps before and after; a None cap is no cap.
 
@@ -1139,6 +1152,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_ANOMALY_DETECTION_CHANGED, OrganizationAnomalyDetectionChangedPayload),
+        (ORGANIZATION_ANOMALY_ALERTS_CHANGED, OrganizationAnomalyAlertsChangedPayload),
         (AGENT_ANOMALY_OVERRIDE_CHANGED, AgentAnomalyOverrideChangedPayload),
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),

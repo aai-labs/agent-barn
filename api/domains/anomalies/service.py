@@ -600,12 +600,19 @@ class AnomalyService:
         self.permission_policy.require(
             context, organization_id, PermissionKey.ANOMALY_MANAGE, detail=MANAGE_DENIED_DETAIL
         )
-        _settings, delivery_ids = self.settings_repository.set_enabled_with_event(
-            organization_id,
-            data.enabled,
-            actor=self._actor(context, organization_id),
-            subject_display=self.organization_lookup.get_name(organization_id),
-        )
+        actor = self._actor(context, organization_id)
+        subject_display = self.organization_lookup.get_name(organization_id)
+        delivery_ids: list[UUID] = []
+        if data.enabled is not None:
+            _settings, staged = self.settings_repository.set_enabled_with_event(
+                organization_id, data.enabled, actor=actor, subject_display=subject_display
+            )
+            delivery_ids += staged
+        if data.alerts_enabled is not None:
+            _settings, staged = self.settings_repository.set_alerts_enabled_with_event(
+                organization_id, data.alerts_enabled, actor=actor, subject_display=subject_display
+            )
+            delivery_ids += staged
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return self._settings_read(organization_id, context)
 
@@ -698,6 +705,7 @@ class AnomalyService:
         settings = self.settings_repository.get_settings(organization_id)
         return AnomalyDetectionSettingsRead(
             enabled=settings is not None and settings.enabled,
+            alerts_enabled=settings is None or settings.alerts_enabled,
             can_manage=self.permission_policy.resolve(context, organization_id, PermissionKey.ANOMALY_MANAGE)
             is not None,
             updated_at=settings.updated_at if settings is not None else None,

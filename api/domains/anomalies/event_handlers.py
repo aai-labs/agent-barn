@@ -10,7 +10,7 @@ from injector import inject
 from api.core.config import Config
 from api.domains.agents.service import AgentService
 from api.domains.anomalies.alerts import AlertDecision, alert_decision, describe
-from api.domains.anomalies.repository import AnomalyRepository
+from api.domains.anomalies.repository import AnomalyRepository, AnomalySettingsRepository
 from api.domains.events.catalog import AGENT_ANOMALY_ALERT_EMAIL_HANDLER, AGENT_ANOMALY_FLAGGED
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -42,9 +42,13 @@ class AnomalyAlertEmailHandler:
     The Event is recorded before the check classifies what it flagged, so this reads the
     Anomalies as they are now. While one may still be being classified, the delivery is
     retried rather than sent without its classification.
+
+    Whether the Organization still wants alerts is read here too, so turning detection or
+    alerts off also stops one already queued.
     """
 
     repository: AnomalyRepository
+    settings_repository: AnomalySettingsRepository
     agent_service: AgentService
     organization_lookup: OrganizationLookupService
     email_service: EmailService
@@ -57,6 +61,9 @@ class AnomalyAlertEmailHandler:
         if event.organization_id is None:
             raise TerminalEventHandlerError("Unusual activity alert requires an Organization")
         organization_id = event.organization_id
+        settings = self.settings_repository.get_settings(organization_id)
+        if settings is None or not settings.enabled or not settings.alerts_enabled:
+            return
         agent_id = UUID(str(event.payload["agent_id"]))
         anomalies = self.repository.get_anomalies([UUID(str(item)) for item in event.payload["anomaly_ids"]])
         now = datetime.now(UTC)
