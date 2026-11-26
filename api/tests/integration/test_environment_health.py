@@ -53,6 +53,7 @@ from sqlmodel import Session
 
 from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.conversations.models import MessageDirection
 from api.domains.environment_health import cluster
 from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -757,9 +758,13 @@ def test_agents_no_one_wrote_to_for_two_weeks_are_listed_with_what_they_hold():
         for agent in (ada, bo, cy):
             _backdate(context, agent, timedelta(days=30))
         now = datetime.now(UTC)
-        # Ada was last written to three weeks ago, but the platform woke it an hour ago.
+        # Ada was last written to three weeks ago, but the platform woke it an hour ago and it
+        # posted a reply of its own then: neither is a person using it.
         context.agent = ada
         there_is_a_recorded_message(occurred_at=now - timedelta(days=21))(context)
+        there_is_a_recorded_message(
+            occurred_at=now - timedelta(hours=1), direction=MessageDirection.OUTBOUND, platform_key="teams"
+        )(context)
         there_are_cost_records(agent_id=ada.id, occurred_at=now - timedelta(hours=1))(context)
         _scheduled(context, ada, RestorePointStatus.READY, timedelta(hours=2))
         # Bo was written to yesterday; Cy, stopped, never.
