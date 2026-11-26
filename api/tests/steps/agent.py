@@ -75,6 +75,7 @@ class MockLiteLLMModule(Module):
         mock.get_key_team.return_value = None
         mock.get_key_budget_status.return_value = {"spend": None, "renews_at": None}
         mock.apply_team_budget.return_value = None
+        mock.set_key_models.return_value = False
         return mock
 
 
