@@ -56,6 +56,34 @@ class _DefaultTimeoutApiClient(client.ApiClient):
         return super().call_api(*args, _request_timeout=_request_timeout or _DEFAULT_REQUEST_TIMEOUT, **kwargs)
 
 
+class BoundedLines:
+    """Splits streamed text into lines, holding at most ``max_chars`` of an unfinished one.
+
+    A line that grows past the limit is dropped whole, including the part still to come.
+    """
+
+    def __init__(self, max_chars: int) -> None:
+        self.max_chars = max_chars
+        self.pending = ""
+        self._overlong = False  # dropping the rest of a line that passed max_chars
+
+    def feed(self, text: str) -> list[str]:
+        *complete, self.pending = (self.pending + text).split("\n")
+        lines = []
+        for line in complete:
+            if not self._overlong and len(line) <= self.max_chars:
+                lines.append(line)
+            self._overlong = False
+        if len(self.pending) > self.max_chars:
+            self.pending, self._overlong = "", True
+        return lines
+
+    def rest(self) -> list[str]:
+        """The unfinished line once the stream has ended, unless it is empty or dropped."""
+        rest, self.pending = self.pending, ""
+        return [rest] if rest and not self._overlong else []
+
+
 @inject
 @dataclass
 @singleton
@@ -737,26 +765,18 @@ class KubernetesClient:
             tty=False,
             _preload_content=False,
         )
-        buffer = ""
-        overlong = False  # dropping the rest of a line that passed max_line_chars
+        lines = BoundedLines(max_line_chars)
         try:
             while ws.is_open() and (deadline is None or time.monotonic() < deadline):
                 ws.update(timeout=idle_seconds)
                 if not ws.peek_stdout():
                     yield None
                     continue
-                buffer += ws.read_stdout()
-                *lines, buffer = buffer.split("\n")
-                for line in lines:
-                    if not overlong and len(line) <= max_line_chars:
-                        yield line
-                    overlong = False
-                if len(buffer) > max_line_chars:
-                    buffer, overlong = "", True
+                yield from lines.feed(ws.read_stdout())
             if ws.is_open():
                 return
-            buffer += ws.read_stdout() if ws.peek_stdout() else ""
-            yield from (line for line in buffer.split("\n") if line and not overlong and len(line) <= max_line_chars)
+            yield from lines.feed(ws.read_stdout() if ws.peek_stdout() else "")
+            yield from lines.rest()
         finally:
             ws.close()
 

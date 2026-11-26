@@ -217,6 +217,34 @@ def test_a_new_openclaw_attempt_ends_an_abandoned_one(tmp_path: Path) -> None:
 
 
 @needs_shell_tools
+def test_openclaw_pairing_reports_a_session_the_gateway_recovered(tmp_path: Path) -> None:
+    recovered = {"connected": True, "message": "WhatsApp recovered the existing linked session (+15551234567)."}
+    events, calls = _run_openclaw_pairing(tmp_path, [json.dumps(recovered)], [])
+
+    assert events == [{"event": "connected", "phone": None}, {"event": "linked"}]
+    assert [method for method, _ in calls] == ["web.login.start"]
+
+
+@needs_shell_tools
+def test_a_stale_holder_file_never_gets_another_process_killed(tmp_path: Path) -> None:
+    # The PID in the holder file now belongs to something that is not a pairing attempt.
+    stranger = subprocess.Popen(["sleep", "60"])
+    (tmp_path / ".openclaw").mkdir()
+    (tmp_path / ".openclaw" / "whatsapp-pairing.holder").write_text(f"{stranger.pid}\n")
+    try:
+        with (tmp_path / ".openclaw" / "whatsapp-pairing.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            events, _ = _run_openclaw_pairing(tmp_path, [json.dumps({"qrDataUrl": QR_A})], [])
+
+        assert events == [
+            {"event": "error", "message": "Another Link phone attempt is already running for this Agent."}
+        ]
+        assert stranger.poll() is None
+    finally:
+        stranger.kill()
+
+
+@needs_shell_tools
 def test_a_lock_held_by_something_else_is_not_taken_over(tmp_path: Path) -> None:
     (tmp_path / ".openclaw").mkdir()
     with (tmp_path / ".openclaw" / "whatsapp-pairing.lock").open("w") as lock:

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.kubernetes.client import BoundedLines, KubernetesClient
 
 # The exec API object itself is never called: k8s_stream is replaced. Reading the
 # real property would load a kubeconfig.
@@ -80,3 +80,14 @@ def test_the_stream_ends_at_max_seconds_even_if_the_command_keeps_running() -> N
 
     assert lines == ["one", None]
     assert fake.closed
+
+
+def test_an_unfinished_line_never_holds_more_than_the_limit() -> None:
+    lines = BoundedLines(max_chars=10)
+
+    assert lines.feed("x" * 25) == []
+    assert lines.pending == ""
+    assert lines.feed("x" * 8) == []
+    assert len(lines.pending) <= 10
+    assert lines.feed("y\nok\nend") == ["ok"]
+    assert lines.rest() == ["end"]
