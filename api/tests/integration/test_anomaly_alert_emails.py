@@ -174,6 +174,7 @@ def test_owners_and_admins_are_emailed_what_was_flagged_and_how_it_was_classifie
         assert_that(email.subject, contains_string(context.agent.name))
         assert_that(email.html_part, contains_string("Tool calls per hour"))
         assert_that(email.html_part, contains_string("Runaway loop, high severity"))
+        assert_that(email.html_part, contains_string("because you can review unusual activity in"))
         assert_that(
             email.html_part,
             contains_string(

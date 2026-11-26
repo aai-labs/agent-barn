@@ -292,8 +292,12 @@ class AnomalyCheckService:
                 tool_calls_read_through=found.tool_calls_read_through,
                 business_actions_read_through=found.business_actions_read_through,
             )
-        self._classify(agent_id, started, context, until)
-        self.event_delivery_dispatcher.enqueue_immediate(alert_deliveries)
+        try:
+            self._classify(agent_id, started, context, until)
+        finally:
+            # Even when classifying fails unexpectedly: the alert goes out as not
+            # classified rather than waiting for reconciliation.
+            self.event_delivery_dispatcher.enqueue_immediate(alert_deliveries)
 
     def _classify(self, agent_id: UUID, anomaly_ids: list[UUID], context: AgentContext, until: datetime) -> None:
         """Ask the decision model about Anomalies that started in this check, once.
@@ -600,19 +604,13 @@ class AnomalyService:
         self.permission_policy.require(
             context, organization_id, PermissionKey.ANOMALY_MANAGE, detail=MANAGE_DENIED_DETAIL
         )
-        actor = self._actor(context, organization_id)
-        subject_display = self.organization_lookup.get_name(organization_id)
-        delivery_ids: list[UUID] = []
-        if data.enabled is not None:
-            _settings, staged = self.settings_repository.set_enabled_with_event(
-                organization_id, data.enabled, actor=actor, subject_display=subject_display
-            )
-            delivery_ids += staged
-        if data.alerts_enabled is not None:
-            _settings, staged = self.settings_repository.set_alerts_enabled_with_event(
-                organization_id, data.alerts_enabled, actor=actor, subject_display=subject_display
-            )
-            delivery_ids += staged
+        delivery_ids = self.settings_repository.update_settings_with_events(
+            organization_id,
+            enabled=data.enabled,
+            alerts_enabled=data.alerts_enabled,
+            actor=self._actor(context, organization_id),
+            subject_display=self.organization_lookup.get_name(organization_id),
+        )
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return self._settings_read(organization_id, context)
 

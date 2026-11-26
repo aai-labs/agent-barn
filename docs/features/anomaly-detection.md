@@ -48,9 +48,10 @@ Delivery state across the epic's slices is in the [change log](anomaly-detection
 - `organization_anomaly_settings.alerts_enabled`, on by default (no row is on), says
   whether what the checks flag is emailed (see [Alerts](#alerts)). Owners and Admins
   change it in the same section, through the same `PUT /anomaly-detection` (either field,
-  or both; one left out stays as it is). It cannot be changed in the UI while checks are
-  off, and turning checks off or on leaves it as it was. Each change records
-  `organization.anomaly_alerts.changed`.
+  or both, in one transaction; one left out stays as it is). It cannot be changed in the UI
+  while checks are off, and turning checks off or on leaves it as it was. Changing it
+  leaves `updated_at` alone, since that is the version a running check compares before it
+  records. Each change records `organization.anomaly_alerts.changed`.
 
 ## What is checked
 
@@ -274,8 +275,9 @@ classified". It links to the Agent's Unusual activity tab and uses the tab's wor
   per recipient, however many items it lists. A first use is its own Anomaly, so the next
   new tool alerts again.
 - **Not lost to a crash.** The Event is recorded in the check's transaction, together with
-  the Anomalies, and enqueued only once the check has classified them. If the check dies in
-  between, reconciliation sends the pending delivery about a minute later.
+  the Anomalies, and enqueued once the check has classified them, or failed to in any way.
+  If the check dies in between, reconciliation sends the pending delivery about a minute
+  later.
 - **Classified first.** Because the Event is recorded before classification, the handler
   (`AnomalyAlertEmailHandler`) reads the Anomalies when it delivers. An unclassified one
   younger than five minutes may still be being classified, so the delivery is retried

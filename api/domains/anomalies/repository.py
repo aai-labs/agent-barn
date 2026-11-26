@@ -72,102 +72,106 @@ class AnomalySettingsRepository:
                 )
             ).first()
 
-    def set_enabled_with_event(
-        self, organization_id: UUID, enabled: bool, *, actor: Actor, subject_display: str
-    ) -> tuple[OrganizationAnomalySettings, list[UUID]]:
-        """The opt-in and its change Event, atomically. No Event when nothing changed."""
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
+    def update_settings_with_events(
+        self,
+        organization_id: UUID,
+        *,
+        enabled: bool | None,
+        alerts_enabled: bool | None,
+        actor: Actor,
+        subject_display: str,
+    ) -> list[UUID]:
+        """Detection, alerts or both, with a change Event for each that moved, in one
+        transaction. A setting left out (None) or unchanged writes nothing."""
+        with Session(self.delegate.engine) as session:
             settings = session.exec(
                 select(OrganizationAnomalySettings)
                 .where(col(OrganizationAnomalySettings.organization_id) == organization_id)
                 .with_for_update()
             ).first()
-            previous = settings.enabled if settings is not None else False
-            if previous == enabled:
-                return settings or OrganizationAnomalySettings(organization_id=organization_id), []
+            current = settings or OrganizationAnomalySettings(organization_id=organization_id)
+            previous_enabled, previous_alerts = current.enabled, current.alerts_enabled
+            detection_moves = enabled is not None and enabled != previous_enabled
+            alerts_move = alerts_enabled is not None and alerts_enabled != previous_alerts
+            if not detection_moves and not alerts_move:
+                return []
             if settings is None:
-                settings = OrganizationAnomalySettings(organization_id=organization_id)
-            now = datetime.now(UTC)
-            settings.enabled = enabled
-            settings.updated_at = now
-            session.add(settings)
-            if not enabled:
-                # Nothing watches an ongoing Anomaly once detection is off, so it ends
-                # now; a deviation still going when it is back on starts a new one.
-                session.exec(
-                    sa.update(AgentAnomaly)  # type: ignore[call-overload]
-                    .where(
-                        col(AgentAnomaly.organization_id) == organization_id,
-                        col(AgentAnomaly.ended_at).is_(None),
-                    )
-                    .values(ended_at=now, updated_at=now)
-                )
-                # The check stops reading while detection is off. Forgetting how far it
-                # got makes it learn the gap when turned back on, rather than flag
-                # everything the Agents did meanwhile as a first use.
-                session.exec(
-                    sa.delete(AgentAnomalyState).where(  # type: ignore[call-overload]
-                        col(AgentAnomalyState.organization_id) == organization_id
-                    )
-                )
-            session.flush()
-            delivery_ids = self._stage(
-                session,
-                ORGANIZATION_ANOMALY_DETECTION_CHANGED,
-                organization_id=organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
-                ),
-                payload={
-                    "organization_id": organization_id,
-                    "enabled": enabled,
-                    "previous_enabled": previous,
-                    "actor_display": actor.display,
-                    "subject_display": subject_display,
-                },
+                settings = current
+                session.add(settings)
+                session.flush()
+            subject = SubjectIdentity(
+                type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
             )
+            delivery_ids: list[UUID] = []
+            if detection_moves:
+                assert enabled is not None
+                self._set_detection(session, settings, enabled)
+                delivery_ids += self._stage(
+                    session,
+                    ORGANIZATION_ANOMALY_DETECTION_CHANGED,
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=subject,
+                    payload={
+                        "organization_id": organization_id,
+                        "enabled": enabled,
+                        "previous_enabled": previous_enabled,
+                        "actor_display": actor.display,
+                        "subject_display": subject_display,
+                    },
+                )
+            if alerts_move:
+                # `updated_at` is the detection version a running check compares before it
+                # records (`check_writes`), so it stays as it is: changing who is emailed
+                # must not throw away what a check found.
+                session.exec(
+                    sa.update(OrganizationAnomalySettings)  # type: ignore[call-overload]
+                    .where(col(OrganizationAnomalySettings.id) == settings.id)
+                    .values(alerts_enabled=alerts_enabled, updated_at=OrganizationAnomalySettings.updated_at)
+                )
+                delivery_ids += self._stage(
+                    session,
+                    ORGANIZATION_ANOMALY_ALERTS_CHANGED,
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=subject,
+                    payload={
+                        "organization_id": organization_id,
+                        "alerts_enabled": alerts_enabled,
+                        "previous_alerts_enabled": previous_alerts,
+                        "actor_display": actor.display,
+                        "subject_display": subject_display,
+                    },
+                )
             session.commit()
-            return settings, delivery_ids
+            return delivery_ids
 
-    def set_alerts_enabled_with_event(
-        self, organization_id: UUID, alerts_enabled: bool, *, actor: Actor, subject_display: str
-    ) -> tuple[OrganizationAnomalySettings, list[UUID]]:
-        """Whether flagged activity is emailed, and its change Event, atomically. No Event
-        when nothing changed. Detection stays as it is."""
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            settings = session.exec(
-                select(OrganizationAnomalySettings)
-                .where(col(OrganizationAnomalySettings.organization_id) == organization_id)
-                .with_for_update()
-            ).first()
-            if settings is None:
-                settings = OrganizationAnomalySettings(organization_id=organization_id)
-            previous = settings.alerts_enabled
-            if previous == alerts_enabled:
-                return settings, []
-            settings.alerts_enabled = alerts_enabled
-            settings.updated_at = datetime.now(UTC)
-            session.add(settings)
-            session.flush()
-            delivery_ids = self._stage(
-                session,
-                ORGANIZATION_ANOMALY_ALERTS_CHANGED,
-                organization_id=organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
-                ),
-                payload={
-                    "organization_id": organization_id,
-                    "alerts_enabled": alerts_enabled,
-                    "previous_alerts_enabled": previous,
-                    "actor_display": actor.display,
-                    "subject_display": subject_display,
-                },
+    @staticmethod
+    def _set_detection(session: Session, settings: OrganizationAnomalySettings, enabled: bool) -> None:
+        now = datetime.now(UTC)
+        settings.enabled = enabled
+        settings.updated_at = now
+        session.add(settings)
+        if not enabled:
+            # Nothing watches an ongoing Anomaly once detection is off, so it ends
+            # now; a deviation still going when it is back on starts a new one.
+            session.exec(
+                sa.update(AgentAnomaly)  # type: ignore[call-overload]
+                .where(
+                    col(AgentAnomaly.organization_id) == settings.organization_id,
+                    col(AgentAnomaly.ended_at).is_(None),
+                )
+                .values(ended_at=now, updated_at=now)
             )
-            session.commit()
-            return settings, delivery_ids
+            # The check stops reading while detection is off. Forgetting how far it
+            # got makes it learn the gap when turned back on, rather than flag
+            # everything the Agents did meanwhile as a first use.
+            session.exec(
+                sa.delete(AgentAnomalyState).where(  # type: ignore[call-overload]
+                    col(AgentAnomalyState.organization_id) == settings.organization_id
+                )
+            )
+        session.flush()
 
     def get_override(self, agent_id: UUID) -> AgentAnomalyOverride | None:
         with Session(self.delegate.engine) as session:

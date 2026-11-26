@@ -113,7 +113,8 @@ export function UnusualActivityPanel() {
           />
         ) : (
           <dl className="m-0">
-            <Fact label="Emails">{settings.alertsEnabled ? "On" : "Off"}</Fact>
+            {/* Nothing is emailed while checks are off, whatever the setting says. */}
+            <Fact label="Emails">{settings.enabled && settings.alertsEnabled ? "On" : "Off"}</Fact>
           </dl>
         )}
         {update.error && (

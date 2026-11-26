@@ -6,12 +6,20 @@ The contract under test:
   what it flags;
 - Owners and Admins may turn them off and on again, Members may not, and turning them
   off leaves detection as it was;
+- a check that is running when alerts are changed still records what it found;
+- a change to both settings is all or nothing;
 - every change leaves an audit Event behind, and an unchanged value leaves none.
 """
 
-from fastapi import status
-from hamcrest import assert_that, empty, equal_to, has_entries
+from unittest.mock import patch
+from uuid import uuid4
 
+import pytest
+from fastapi import status
+from hamcrest import assert_that, empty, equal_to, has_entries, not_none
+
+from api.domains.anomalies.repository import AnomalyRepository, AnomalySettingsRepository
+from api.domains.events import EventDeliveryDispatcher
 from api.domains.rbac.catalog import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.integration.test_anomaly_settings import (
@@ -96,3 +104,53 @@ def test_saving_the_same_alerts_value_leaves_no_audit_event():
         put_alerts(context, True)
 
         assert_that(events_named(context, ALERTS_CHANGED), empty())
+
+
+def test_a_check_running_when_alerts_change_still_records_what_it_found():
+    with given(signed_in()) as context:
+        put_detection(context, True)
+        repository = context.injector.get(AnomalyRepository)
+        version = repository.detection_version(context.organization.id)
+
+        put_alerts(context, False)
+
+        with repository.check_writes(context.organization.id, uuid4(), version) as writes:
+            assert_that(writes, not_none())
+
+
+def test_turning_detection_on_and_alerts_off_together_is_all_or_nothing():
+    def fail_on_alerts(self, session, event_name, **kwargs):
+        if event_name == ALERTS_CHANGED:
+            raise RuntimeError("database went away")
+        return original(self, session, event_name, **kwargs)
+
+    original = AnomalySettingsRepository._stage
+    with given(signed_in()) as context:
+        with (
+            patch.object(AnomalySettingsRepository, "_stage", autospec=True, side_effect=fail_on_alerts),
+            patch.object(EventDeliveryDispatcher, "enqueue_immediate"),
+            pytest.raises(RuntimeError),
+        ):
+            context.client.put(
+                DETECTION.format(organization_id=context.organization.id),
+                json={"enabled": True, "alerts_enabled": False},
+                headers=auth(context),
+            )
+
+        assert_that(get_detection(context).json(), has_entries(enabled=False, alerts_enabled=True))
+        assert_that(events_named(context, SETTINGS_CHANGED), empty())
+
+
+def test_turning_detection_on_and_alerts_off_together_audits_both():
+    with given(signed_in()) as context:
+        response = context.client.put(
+            DETECTION.format(organization_id=context.organization.id),
+            json={"enabled": True, "alerts_enabled": False},
+            headers=auth(context),
+        )
+
+        assert_that(response.json(), has_entries(enabled=True, alerts_enabled=False))
+        (detection,) = events_named(context, SETTINGS_CHANGED)
+        assert_that(detection.payload, has_entries(enabled=True, previous_enabled=False))
+        (alerts,) = events_named(context, ALERTS_CHANGED)
+        assert_that(alerts.payload, has_entries(alerts_enabled=False, previous_alerts_enabled=True))

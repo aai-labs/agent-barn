@@ -563,8 +563,8 @@ def test_turning_detection_off_and_on_again_relearns_instead_of_flagging_the_gap
 
 def _set_enabled(context, enabled: bool) -> None:
     actor = Actor(identity=ActorIdentity(type=ActorIdentityType.SYSTEM, id=uuid4()), display="test")
-    context.injector.get(AnomalySettingsRepository).set_enabled_with_event(
-        context.organization.id, enabled, actor=actor, subject_display="org"
+    context.injector.get(AnomalySettingsRepository).update_settings_with_events(
+        context.organization.id, enabled=enabled, alerts_enabled=None, actor=actor, subject_display="org"
     )
 
 

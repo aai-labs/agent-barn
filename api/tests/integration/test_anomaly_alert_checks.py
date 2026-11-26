@@ -6,7 +6,7 @@ The contract under test:
   the same transaction as the Anomalies, so an alert can't be lost to a crash after
   that transaction commits;
 - the Event goes out only after the check has classified them, so the alert can say
-  how they were classified;
+  how they were classified, and goes out even when classifying fails unexpectedly;
 - an ongoing Anomaly raises no further Event, and neither does a check that flags
   nothing new;
 - Hermes and OpenClaw Agents are alike.
@@ -92,15 +92,26 @@ def test_the_alert_event_goes_out_only_after_classification():
         assert_that(classified_when_enqueued, equal_to([True]))
 
 
-def test_the_alert_event_survives_a_crash_after_the_anomaly_is_recorded():
+def test_an_error_while_classifying_still_sends_the_alert():
     with given(_given(the_decision_model_classifies())) as context:
         _a_tool_call_spike(context)
-        # Not a DecisionError: the check itself dies before it gets to send anything.
-        context.decide.side_effect = RuntimeError("worker killed")
+        # Not a DecisionError, which the check expects: something unforeseen.
+        context.decide.side_effect = RuntimeError("unexpected")
 
         with patch.object(EventDeliveryDispatcher, "enqueue_immediate") as enqueue:
             _check(context)
 
         assert_that(_anomalies(context), has_length(1))
+        assert_that([call.args[0] for call in enqueue.call_args_list if call.args[0]], has_length(1))
+
+
+def test_the_alert_event_survives_a_crash_after_the_anomaly_is_recorded():
+    with given(_given(the_decision_model_classifies())) as context:
+        _a_tool_call_spike(context)
+
+        # The worker dies just as it would send: reconciliation picks the delivery up.
+        with patch.object(EventDeliveryDispatcher, "enqueue_immediate", side_effect=RuntimeError("worker killed")):
+            _check(context)
+
+        assert_that(_anomalies(context), has_length(1))
         assert_that(_flagged_events(context), has_length(1))
-        enqueue.assert_not_called()

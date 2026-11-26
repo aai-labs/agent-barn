@@ -79,7 +79,8 @@ class AnomalyAlertEmailHandler:
             return
 
         organization_name = self.organization_lookup.get_name(organization_id)
-        reason = f"You received this because you are an owner or admin of {organization_name}."
+        # Whoever `anomaly.read` reaches, not a fixed pair of roles.
+        reason = f"You received this because you can review unusual activity in {organization_name}."
         link = f"{self.config.web_app_url}/dashboard/{organization_id}/agents/{agent_id}?tab=unusual-activity"
 
         # A retry re-runs the handler from scratch; skip anyone already emailed for

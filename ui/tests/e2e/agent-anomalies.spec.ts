@@ -208,13 +208,16 @@ test.describe("Agent · Unusual activity", () => {
 });
 
 test.describe("Settings · Unusual activity", () => {
-  async function openSettings(page: Page, { role = "OWNER", enabled = false, alertsEnabled = true } = {}) {
+  async function openSettings(
+    page: Page,
+    { role = "OWNER", enabled = false, alertsEnabled = true, canManage = true } = {},
+  ) {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest({ userContext: contextWithRole(role) });
     await data.users.interceptGetOrganizationsRequest();
     await data.organizations.interceptGetOrganization();
-    const mock = await data.anomalies.interceptDetection({ enabled, alertsEnabled });
+    const mock = await data.anomalies.interceptDetection({ enabled, alertsEnabled, canManage });
     const anomaliesPage = new AgentAnomaliesPage(page);
     await anomaliesPage.gotoSettings();
     return { mock, anomaliesPage };
@@ -268,6 +271,15 @@ test.describe("Settings · Unusual activity", () => {
     await expect(
       anomaliesPage.detectionSetting().getByRole("switch", { name: "Email Owners and Admins about unusual activity" }),
     ).toBeDisabled();
+  });
+
+  test("without the right to change them, emails read as off while checks are off", async ({ page }) => {
+    const { anomaliesPage } = await openSettings(page, { enabled: false, alertsEnabled: true, canManage: false });
+    const setting = anomaliesPage.detectionSetting();
+
+    await expect(setting.getByRole("switch")).toHaveCount(0);
+    const emails = setting.locator("dt", { hasText: "Emails" }).locator("xpath=following-sibling::dd");
+    await expect(emails).toHaveText("Off");
   });
 
   test("Members do not see the setting", async ({ page }) => {
