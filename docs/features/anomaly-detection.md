@@ -45,6 +45,12 @@ Delivery state across the epic's slices is in the [change log](anomaly-detection
   did meanwhile rather than flag all of it as a first use. Anomalies already recorded stay;
   ongoing ones end when it is turned off, since nothing watches them any more.
 - Each change records `organization.anomaly_detection.changed` in the security audit log.
+- `organization_anomaly_settings.alerts_enabled`, on by default (no row is on), says
+  whether what the checks flag is emailed (see [Alerts](#alerts)). Owners and Admins
+  change it in the same section, through the same `PUT /anomaly-detection` (either field,
+  or both; one left out stays as it is). It cannot be changed in the UI while checks are
+  off, and turning checks off or on leaves it as it was. Each change records
+  `organization.anomaly_alerts.changed`.
 
 ## What is checked
 
@@ -280,6 +286,8 @@ classified". It links to the Agent's Unusual activity tab and uses the tab's wor
   failed send is retried, and a message the mail provider refuses is dead-lettered.
 - Nobody is emailed about an Agent deleted before delivery, and with mail delivery off the
   handler does nothing, as for the other notifications.
+- **Turned off.** The handler reads the Organization's settings when the email is due, so
+  turning alerts or detection off also stops an alert already queued.
 
 ### Trying it locally
 
@@ -345,8 +353,8 @@ records, so they are the same for both too, and are tested with an Agent of each
   subject, the hours it covers and a status the later slices can update.
 - Off-hours and business-hours signals, acknowledge and resolve, an Organization-wide
   Anomalies page, and quarantine.
-- Choosing whether to get alerts, or getting them anywhere but email. There is no per-user
-  setting; turning detection off stops them for the Organization.
+- Choosing for oneself whether to get alerts, or getting them anywhere but email. The
+  switch is the Organization's; there is no per-user setting.
 - Retrying a failed classification. It would need a state of its own so a spent budget is
   not retried every check.
 - LLM spend per hour, which follows tokens per model closely.
