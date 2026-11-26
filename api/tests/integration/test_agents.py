@@ -30,6 +30,7 @@ from starlette.testclient import TestClient
 from api.core.config import Config
 from api.domains.agent_settings.models import OrganizationAgentSettings
 from api.domains.agents.builders import HERMES_DEFAULT_MAX_TURNS
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.models import (
     AgentSecret,
     AgentStatus,
@@ -1312,11 +1313,55 @@ def test_start_agent_sets_its_keys_models_to_the_started_model():
         with when("I start the agent"):
             response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("its key lists the started model and the platform's, set once"):
+        with then("its key lists the started model and the platform's, before the pod and again once saved"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
-            litellm.set_key_models.assert_called_once_with(
-                FAKE_LITELLM_KEY, sorted(["openrouter/openai/gpt-5-nano", *_PLATFORM_KEY_MODELS])
+            expected = (FAKE_LITELLM_KEY, sorted(["openrouter/openai/gpt-5-nano", *_PLATFORM_KEY_MODELS]))
+            assert_that([c.args for c in litellm.set_key_models.call_args_list], equal_to([expected, expected]))
+
+
+def _organization_default_changes_and_a_sweep_runs_during_the_start(context, agent_id: UUID) -> None:
+    def create_deployment(*_):
+        with Session(context.postgres_delegate.engine) as session:
+            session.add(
+                OrganizationAgentSettings(organization_id=context.organization.id, default_model=_ORGANIZATION_DEFAULT)
             )
+            session.commit()
+        context.injector.get(AgentKeyModelService).sync_by_id(agent_id)
+
+    context.injector.get(KubernetesClient).create_deployment.side_effect = create_deployment
+
+
+def test_a_sweep_during_a_start_does_not_take_the_started_model_off_the_key():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        _organization_default_changes_and_a_sweep_runs_during_the_start(context, context.agent.id)
+
+        with when("the inheriting agent starts while its Organization default changes and a sweep syncs its key"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the key's last list holds the model its pod started on and the new default"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(
+                litellm.set_key_models.call_args.args,
+                equal_to(
+                    (FAKE_LITELLM_KEY, sorted(["gpt-5-mini", "openrouter/qwen/qwen3.6-plus", *_PLATFORM_KEY_MODELS]))
+                ),
+            )
+
+
+def test_a_start_whose_key_cannot_be_set_again_once_saved_still_runs(caplog):
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = [True, LiteLLMError("LiteLLM is down")]
+
+        with when("I start the agent and LiteLLM fails after the pod was created"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the agent runs, and the failure is logged by Agent id"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(persisted.status, equal_to(AgentStatus.RUNNING))
+            assert_that(str(context.agent.id) in caplog.text, equal_to(True))
 
 
 def test_a_restart_after_an_organization_default_change_lists_the_new_default():

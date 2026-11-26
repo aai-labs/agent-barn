@@ -6,10 +6,12 @@ from uuid import UUID, uuid7
 import pytest
 import yaml
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
+from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, has_items, is_not
 from sqlmodel import Session, select
 
 from api.core.config import Config as AppConfig
+from api.domains.agent_settings.models import OrganizationAgentSettings
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.models import AgentStatus, AgentType, CommandApprovalMode, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
@@ -49,6 +51,8 @@ ROUTE_MISSING = "Not Found"
 _SYSTEM = ActorIdentity(type=ActorIdentityType.SYSTEM, id="test")
 CREATE = {"name": "Sales", "template_key": "test-template"}
 UNSYNCABLE_MODEL = "litellm/openrouter/contract/unsyncable"
+BOT_KEY = "sk-bot-key-for-tests"
+ORGANIZATION_DEFAULT = "litellm/openrouter/qwen/qwen3.6-plus"
 FIRECRAWL_SECRET = {"provider": "firecrawl", "content": {"api_key": "fc-bot-fixture"}}
 RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
 POD_OPERATIONS = [
@@ -1067,6 +1071,56 @@ def test_a_bot_whose_key_models_cannot_be_set_fails_only_that_bot():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
         assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_sweep_during_a_start_does_not_take_a_bots_started_model_off_its_key():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        bot = _stored(context, context.bot.id)
+        bot.litellm_key_encrypted = encrypt_token(BOT_KEY, TEST_ENCRYPTION_KEY)
+        context.injector.get(AgentRepository).save(bot)
+        litellm = context.injector.get(LiteLLMClient)
+
+        def create_deployment(*_):
+            with Session(context.postgres_delegate.engine) as session:
+                session.add(
+                    OrganizationAgentSettings(
+                        organization_id=context.organization.id, default_model=ORGANIZATION_DEFAULT
+                    )
+                )
+                session.commit()
+            context.injector.get(AgentKeyModelService).sync_by_id(bot.id)
+
+        _k8s(context).create_deployment.side_effect = create_deployment
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        bot_lists = [c.args[1] for c in litellm.set_key_models.call_args_list if c.args[0] == BOT_KEY]
+        assert_that(bot_lists[-1], has_items("gpt-5-mini", "openrouter/qwen/qwen3.6-plus"))
+
+
+def test_a_bot_whose_key_cannot_be_set_again_once_saved_still_runs():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        bot = _stored(context, context.bot.id)
+        bot.litellm_key_encrypted = encrypt_token(BOT_KEY, TEST_ENCRYPTION_KEY)
+        context.injector.get(AgentRepository).save(bot)
+        bot_syncs: list[str] = []
+
+        def set_key_models(key, models):
+            if key == BOT_KEY:
+                bot_syncs.append(key)
+                if len(bot_syncs) > 1:
+                    raise LiteLLMError("LiteLLM is down")
+            return True
+
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = set_key_models
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(len(bot_syncs), equal_to(2))
+        assert_that(_stored(context, bot.id).status, equal_to(AgentStatus.RUNNING))
         assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
 
 

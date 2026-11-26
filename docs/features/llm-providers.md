@@ -56,7 +56,7 @@ So until Organizations can use other providers, an Organization without OpenRout
 It lists none of the rest of the Organization's allowlist, so switching model in chat to anything else is refused. `AgentKeyModelService` (`api/domains/agents/key_models.py`) works the list out and sets it under a per-Agent advisory lock, reading the Agent as stored:
 
 - a new Agent's or Bot's key is created with it;
-- every start sets it before the pod is created. A start whose list can't be set fails with `500 PROVISIONING_FAILED`; a Bot whose list can't be set fails alone, and its parent and the other Bots start;
+- every start sets it before the pod is created. A start whose list can't be set fails with `500 PROVISIONING_FAILED`; a Bot whose list can't be set fails alone, and its parent and the other Bots start. Each Agent and Bot sets it again once its start is saved, so a sync that ran in between, before `running_model` was stored, can't leave the started model off; if that fails, it is logged by Agent id and the start stands;
 - a decision that LiteLLM rejects sets it and asks once more if that changed it ([Decisions](decisions.md#calls-billing-and-failures)); a Playbook Extraction sets it before its first model call and goes on if that fails ([Playbooks](playbooks.md#model-and-billing));
 - the 15-minute LLM budget reconciliation sets the list of every live Agent key ([Operations](../guidelines/operations.md#organization-llm-budgets)).
 

@@ -2580,6 +2580,7 @@ class AgentService:
             logger.exception("Failed to start agent %s", agent.id)
             raise self._record_provisioning_failure(agent, exc) from exc
         started = self._persist_started(agent, actor, previous_status)
+        self._sync_started_key_models(started)
         # A suspension recorded while it started couldn't stop it, since this start held the
         # lifecycle lock; the row read under the start's write has it, so stop it now.
         if started.suspended_at is not None and started.status == AgentStatus.RUNNING:
@@ -2722,7 +2723,14 @@ class AgentService:
         for bot, bot_assembled in created_bots:
             self._record_started(bot, bot_assembled)
             self.repository.save(bot)
+            self._sync_started_key_models(bot)
         return assembled.previous_status
+
+    def _sync_started_key_models(self, agent: Agent) -> None:
+        try:
+            self.key_models.sync(agent)
+        except Exception:
+            logger.exception("Failed to set the key models of agent %s after its start", agent.id)
 
     def _record_started(self, agent: Agent, assembled: _AssembledAgent) -> None:
         assert assembled.runtime is not None
