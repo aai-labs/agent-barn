@@ -72,6 +72,7 @@ from api.domains.agents.exceptions import (
     AgentSuspended,
     refuse_on_bot,
 )
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     MAX_BOTS_PER_PARENT,
@@ -462,6 +463,7 @@ class AgentService:
     artifact_buckets: ArtifactBucketRepository
     usage: UsageGuard
     llm_provider_access: LlmProviderAccessLookup
+    key_models: AgentKeyModelService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1255,6 +1257,7 @@ class AgentService:
                         max_budget=key_budget.agent_limit_usd,
                         budget_duration=key_budget.window,
                         team_budget=key_budget.organization_limit_usd,
+                        models=self.key_models.models_for(agent),
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(

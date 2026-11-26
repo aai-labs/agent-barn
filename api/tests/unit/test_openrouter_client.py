@@ -188,6 +188,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         artifact_buckets=MagicMock(),
         usage=MagicMock(),
         llm_provider_access=MagicMock(),
+        key_models=MagicMock(),
     )
 
 

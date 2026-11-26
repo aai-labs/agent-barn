@@ -125,6 +125,11 @@ _VALID_CREATE = {
     "name": "My Agent",
     "template_key": "test-template",
 }
+_PLATFORM_KEY_MODELS = [
+    "openrouter/openai/gpt-4.1-mini",
+    "openrouter/openai/gpt-6-luna-decisions",
+    "openrouter/typesafe/jev-1.14",
+]
 
 _GIVEN = [
     set_env_variable(
@@ -2007,9 +2012,27 @@ def test_create_agent_calls_litellm_generate_key():
                 max_budget=25.0,
                 budget_duration="30d",
                 team_budget=100.0,
+                models=sorted(["gpt-5-mini", *_PLATFORM_KEY_MODELS]),
             )
             litellm.delete_key.assert_not_called()
             litellm.block_key.assert_not_called()
+
+
+def test_create_agent_with_a_model_lists_that_model_on_its_key():
+    with given(_GIVEN) as context:
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+
+        with when("I create an agent with a model"):
+            response = context.client.post(
+                _BASE, json={**_VALID_CREATE, "model": "litellm/openrouter/openai/gpt-5-nano"}, headers=_auth(context)
+            )
+
+        with then("its key lists that model and the platform's"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(
+                litellm.generate_key.call_args.kwargs["models"],
+                equal_to(sorted(["openrouter/openai/gpt-5-nano", *_PLATFORM_KEY_MODELS])),
+            )
 
 
 def test_create_agent_litellm_failure_returns_503():

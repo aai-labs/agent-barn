@@ -418,6 +418,17 @@ def test_creating_a_bot_makes_a_stopped_hermes_agent_inside_its_parent():
         assert_that((stored.bot_slot, stored.file_sync_enabled), equal_to((1, False)))
 
 
+def test_a_new_bots_key_lists_its_own_model():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent, model="litellm/openrouter/openai/gpt-5-nano")
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(
+            context.injector.get(LiteLLMClient).generate_key.call_args.kwargs["models"],
+            has_item("openrouter/openai/gpt-5-nano"),
+        )
+
+
 def test_a_new_bot_takes_its_parents_turn_limit():
     with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
         context.parent.max_turns = 77
