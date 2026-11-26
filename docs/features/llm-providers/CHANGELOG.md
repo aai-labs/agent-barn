@@ -16,10 +16,17 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Not yet verified: the staging check in the AF-474 plan. Set OpenRouter to all except an Organization with Agents and expect a refusal naming them. Under only another Organization, a new Organization's picker is empty and a hire is refused. Back on all, it can pick and hire.
 - Delivered: AF-476, LiteLLM refuses with `403` any model an Agent's own key doesn't list, PRs 1 to 7 ([feature doc](../llm-providers.md#provider-access)). A key, a Bot's included, lists the Agent's own model or its Organization's or the platform's default, the model its running pod started on, every decision model and the Playbook Extraction model, so switching model in chat to anything else is refused. A key gets its list when it is made and at every start, and a start whose list can't be set fails. A rejected decision and a Playbook Extraction set it before calling, and the 15-minute LLM budget reconciliation sets every live key's list. Verified on local k3d with a Hermes and an OpenClaw Agent.
 - Not yet verified: AF-476 on staging, steps 2, 4 and 5 of the plan's verification: a running Agent's `/key/info` lists the right models, an unlisted model is refused with `403` from its pod, and a decision and a Playbook Extraction succeed. Before shipping, the plan's two read-only checks on staging and production: no running Agent with an empty `running_model`, and no Agent key asking for a model it won't list.
+- In progress: the review fixes for PR #417. Fix 1 is done: the worker and the CronJobs read the API's `AGENT_DEFAULT_MODEL`. Next are fix 2, so a running Playbook Extraction keeps its model on the key, and fix 3, so a start sets the key again once it is saved.
 - Next: AF-474's later slices: runtimes ready for any provider; the Organization pool, which brings other connections' access into effect.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-26 — AF-476 — review fix 1 for PR #417
+
+- Fixed: `AGENT_DEFAULT_MODEL` was set only on the API Deployment, so the event worker and the LLM budget reconciliation CronJob resolved an Agent's default from the code default (`litellm/openrouter/z-ai/glm-5.2`) and could set a key's list without the deployment's default. The chart now puts it in the shared Secret (`templates/secret.yaml`), which every chart workload but Memory's loads whole through `envFrom`, the worker and the CronJobs included, and only when `agentDefaultModel` is set, so an unset value still leaves the code default. The API Deployment no longer sets it itself. Starts made from the worker and the CronJobs now resolve the same default as the API too.
+- Added: `make check-agent-models` (`api/scripts/check_agent_model_charts.py`) renders the chart with and without `agentDefaultModel`. It checks that the shared Secret carries the variable only when it is set, that no workload sets its own, and that the API, the event worker and the LLM budget reconciler load the Secret. It runs in the API workflow's lint job and has a row in the [testing guide](../../guidelines/testing.md). It failed before the chart change.
+- Verified: `make check-agent-models`, `check-workflows`, `check-api-probes` and `check-restore-points` pass; ruff and ruff format pass, and ty is at its existing 17 diagnostics. No chart version bump; that is left to release preparation.
 
 ### 2026-11-26 — AF-476 — PR 7
 
