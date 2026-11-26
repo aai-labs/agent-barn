@@ -702,16 +702,25 @@ def test_failing_and_overdue_scheduled_backups_are_counted_and_named_by_agent():
         _scheduled(context, gus, RestorePointStatus.READY, timedelta(hours=5))
         _scheduled(context, gus, RestorePointStatus.FAILED, timedelta(hours=2))
         _soft_delete(context, gus)
+        # Hal failed twice, backed up, then failed again: one failure since it recovered.
+        there_is_an_agent(name="Hal", status=AgentStatus.RUNNING)(context)
+        hal = context.agent
+        _backdate(context, hal, timedelta(days=3))
+        _scheduled(context, hal, RestorePointStatus.FAILED, timedelta(hours=10))
+        _scheduled(context, hal, RestorePointStatus.FAILED, timedelta(hours=9))
+        _scheduled(context, hal, RestorePointStatus.READY, timedelta(hours=4))
+        _scheduled(context, hal, RestorePointStatus.FAILED, timedelta(hours=1))
 
         body = _get(context).json()
 
         backups = body["backups"]
         # Ada is overdue too, but is counted and named once, as failing.
-        assert_that(backups, has_entries(enabled=True, interval_minutes=360, failed_total=1, overdue_total=1))
+        assert_that(backups, has_entries(enabled=True, interval_minutes=360, failed_total=2, overdue_total=1))
         assert_that(
             backups["failed"],
             contains_exactly(
-                has_entries(agent=has_entries(agent_name="Ada", organization_name=context.acme.name), failures=2)
+                has_entries(agent=has_entries(agent_name="Ada", organization_name=context.acme.name), failures=2),
+                has_entries(agent=has_entries(agent_name="Hal"), failures=1),
             ),
         )
         assert_that(

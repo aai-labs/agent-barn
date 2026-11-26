@@ -179,11 +179,12 @@ class RestorePointRepository:
             return list(session.exec(query).all())
 
     def find_scheduled_failures_since(self, since: datetime) -> list[ScheduledBackupFailures]:
-        """Per running Agent, the scheduled backups created since `since` that failed. Most failures first.
+        """Per running Agent, the scheduled backups that failed since `since` and since its last good one.
 
         Only Agents still running and not deleted, as `find_overdue_scheduled_backups` reads
-        them, and only while failing: an Agent with a READY scheduled backup newer than its
-        latest failure has recovered and is left out.
+        them, and only while failing: a failure older than the Agent's newest READY scheduled
+        backup is over, so an Agent that has recovered is left out, and one that failed again
+        since counts only the failures after it recovered. Most failures first.
         """
         newest_ready = (
             select(
@@ -209,9 +210,12 @@ class RestorePointRepository:
                     col(AgentRestorePoint.created_at) >= since,
                     col(Agent.status) == AgentStatus.RUNNING,
                     col(Agent.deleted_at).is_(None),
+                    or_(
+                        newest_ready.c.taken_at.is_(None),
+                        col(AgentRestorePoint.created_at) > newest_ready.c.taken_at,
+                    ),
                 )
-                .group_by(col(AgentRestorePoint.agent_id), newest_ready.c.taken_at)
-                .having(or_(newest_ready.c.taken_at.is_(None), newest_ready.c.taken_at < last_failed))
+                .group_by(col(AgentRestorePoint.agent_id))
                 .order_by(func.count().desc(), last_failed.desc())
             )
             return [
