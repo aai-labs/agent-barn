@@ -28,6 +28,7 @@ from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.core.config import Config
+from api.domains.agent_settings.models import OrganizationAgentSettings
 from api.domains.agents.builders import HERMES_DEFAULT_MAX_TURNS
 from api.domains.agents.models import (
     AgentSecret,
@@ -43,6 +44,7 @@ from api.domains.agents.models import (
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
+from api.domains.agents.service import AgentService
 from api.domains.communications.models import CommunicationConnection
 from api.domains.conversations.models import MessageDirection
 from api.domains.events.catalog import (
@@ -130,6 +132,7 @@ _PLATFORM_KEY_MODELS = [
     "openrouter/openai/gpt-6-luna-decisions",
     "openrouter/typesafe/jev-1.14",
 ]
+_ORGANIZATION_DEFAULT = "litellm/openrouter/qwen/qwen3.6-plus"
 
 _GIVEN = [
     set_env_variable(
@@ -1300,6 +1303,51 @@ def test_start_agent_sets_status_running():
                 service.metadata.labels["agent-name"],
                 equal_to("test-agent"),
             )
+
+
+def test_start_agent_sets_its_keys_models_to_the_started_model():
+    with given([*_GIVEN, there_is_an_agent(model="litellm/openrouter/openai/gpt-5-nano")]) as context:
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+
+        with when("I start the agent"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its key lists the started model and the platform's, set once"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            litellm.set_key_models.assert_called_once_with(
+                FAKE_LITELLM_KEY, sorted(["openrouter/openai/gpt-5-nano", *_PLATFORM_KEY_MODELS])
+            )
+
+
+def test_a_restart_after_an_organization_default_change_lists_the_new_default():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+        with Session(context.postgres_delegate.engine) as session:
+            session.add(
+                OrganizationAgentSettings(organization_id=context.organization.id, default_model=_ORGANIZATION_DEFAULT)
+            )
+            session.commit()
+        context.client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with when("I start the inheriting agent again"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("its key lists the new default"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(
+                litellm.set_key_models.call_args.args,
+                equal_to((FAKE_LITELLM_KEY, sorted(["openrouter/qwen/qwen3.6-plus", *_PLATFORM_KEY_MODELS]))),
+            )
+
+
+def test_a_preflight_does_not_set_the_keys_models():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        agent = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+
+        context.injector.get(AgentService)._provision_and_start(agent, preflight=True)
+
+        context.injector.get(LiteLLMClient).set_key_models.assert_not_called()
 
 
 def test_start_agent_records_the_runtime_config_digest():

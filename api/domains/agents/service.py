@@ -2684,6 +2684,16 @@ class AgentService:
         if preflight:
             return assembled.previous_status
         assert assembled.runtime is not None
+        self.key_models.sync(agent, assembled.effective_model)
+        synced_bots: list[tuple[Agent, _AssembledAgent]] = []
+        for bot, bot_assembled in assembled_bots:
+            try:
+                self.key_models.sync(bot, bot_assembled.effective_model)
+                synced_bots.append((bot, bot_assembled))
+            except Exception as exc:
+                logger.exception("Failed to set the key models of bot %s", bot.id)
+                self._record_provisioning_failure(bot, exc)
+        assembled_bots = synced_bots
 
         # Failures here are recorded and normalized by _start_agent_unchecked, which
         # wraps this whole method rather than only the cluster calls.

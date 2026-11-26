@@ -23,7 +23,7 @@ from api.domains.usage.models import SuspensionReason
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
-from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.integration.test_communication_connections import _discord_payload, _slack_payload
@@ -48,6 +48,7 @@ BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
 _SYSTEM = ActorIdentity(type=ActorIdentityType.SYSTEM, id="test")
 CREATE = {"name": "Sales", "template_key": "test-template"}
+UNSYNCABLE_MODEL = "litellm/openrouter/contract/unsyncable"
 FIRECRAWL_SECRET = {"provider": "firecrawl", "content": {"api_key": "fc-bot-fixture"}}
 RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
 POD_OPERATIONS = [
@@ -1039,6 +1040,27 @@ def test_a_cluster_failure_on_one_bot_fails_only_that_bot():
                 raise RuntimeError("cluster said no")
 
         k8s.create_secret.side_effect = create_secret
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_bot_whose_key_models_cannot_be_set_fails_only_that_bot():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        bad = context.bots[0]
+        bad.model = UNSYNCABLE_MODEL
+        context.injector.get(AgentRepository).save(bad)
+
+        def set_key_models(key, models):
+            if "openrouter/contract/unsyncable" in models:
+                raise LiteLLMError("LiteLLM is down")
+            return True
+
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = set_key_models
 
         response = _start(context)
 
