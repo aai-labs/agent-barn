@@ -96,6 +96,7 @@ deployment limits cannot change their expected budget contracts.
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
 | `make check-api-probes` | Render the API Deployment and check its startup, liveness and readiness probes: a slow start gets time, a hung API is still restarted | Helm 3.19.0 |
 | `make check-workflows` | Render API, event worker and workflow maintenance cluster-access wiring with default and custom kubeconfig Secrets | Helm 3.19.0 |
+| `make check-agent-models` | Render the chart with and without `agentDefaultModel` and check that `AGENT_DEFAULT_MODEL` is set only in the shared Secret, which the API, the event worker and the LLM budget reconciler load, so they list the same default on Agent keys | Helm 3.19.0 |
 | `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
 | `make lint-ui` | ESLint | None |
 | `make check-ui` | TypeScript type check | None |

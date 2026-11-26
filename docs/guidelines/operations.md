@@ -452,10 +452,15 @@ proxy failure returns `502` with the amount already stored, because losing an
 administrator's setting because the proxy blinked is worse than a delayed push. The
 `<release>-llm-budget-reconciler` CronJob pushes stored limits onto every team and
 Agent key every 15 minutes to repair exactly that kind of drift, logging
-`Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
-`concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
-API itself never contacts the proxy at startup. A budget saved while the proxy was
-unreachable is therefore applied within one interval rather than at the next restart.
+`Organization LiteLLM budgets reconciled`. It then sets every live Agent key's model
+list ([LLM Providers](../features/llm-providers.md#provider-access)), logging
+`Agent key models reconciled (<keys> keys, <changed> updated)`, or how many failed with
+each failure logged by Agent id. So a changed default, decision model or Playbook
+model reaches the keys of Agents not started since within one interval. Like the
+other reconcilers it runs under `concurrencyPolicy: Forbid`, so one runner regardless
+of API replica count, and the API itself never contacts the proxy at startup. A
+budget saved while the proxy was unreachable is therefore applied within one interval
+rather than at the next restart.
 Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budget-alerts`.
 
 `ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an

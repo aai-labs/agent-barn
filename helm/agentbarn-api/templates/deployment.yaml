@@ -115,10 +115,6 @@ spec:
               value: {{ .Values.prometheus.url | quote }}
             - name: PROMETHEUS_USERNAME
               value: {{ .Values.prometheus.username | quote }}
-            {{- if .Values.agentDefaultModel }}
-            - name: AGENT_DEFAULT_MODEL
-              value: "{{ .Values.agentDefaultModel }}"
-            {{- end }}
             {{- include "agentbarn-api.restorePointEnv" . | nindent 12 }}
             {{- if .Values.managedUpdate.readyTimeoutSeconds }}
             - name: AGENT_UPDATE_READY_TIMEOUT_SECONDS

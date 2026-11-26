@@ -335,6 +335,30 @@ class LiteLLMClient:
         if unapplied:
             raise LiteLLMError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
 
+    def _key_models(self, key: str, failure: str) -> list[str]:
+        models = self._key_info(key, failure).get("models")
+        if not isinstance(models, list) or not all(isinstance(model, str) for model in models):
+            raise LiteLLMError(failure)
+        return sorted(models)
+
+    def set_key_models(self, key: str, models: list[str]) -> bool:
+        failure = "Failed to set the Agent key's models"
+        if self._key_models(key, failure) == sorted(models):
+            return False
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                json={"key": key, "models": models},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError(failure) from None
+        if self._key_models(key, failure) != sorted(models):
+            raise LiteLLMError("LiteLLM did not apply the Agent key's models")
+        return True
+
     def _reset_key_spend(self, key: str, failure: str) -> None:
         """Zero a key's spend before its first window.
 
@@ -431,6 +455,7 @@ class LiteLLMClient:
         max_budget: float | None = None,
         budget_duration: str | None = None,
         team_budget: float | None = None,
+        models: list[str] | None = None,
     ) -> str:
         """Returns a new plaintext LiteLLM key for the agent.
 
@@ -457,6 +482,7 @@ class LiteLLMClient:
                         "organization_id": org_id,
                     },
                     **policy,
+                    **({"models": models} if models is not None else {}),
                 },
                 headers=self._headers(master_key),
                 timeout=10,

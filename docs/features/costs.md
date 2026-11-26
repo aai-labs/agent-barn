@@ -229,7 +229,8 @@ only the keys whose resolved limit actually changed are rewritten; a key that ca
 be updated is left to reconciliation rather than failing a change already saved. The
 reconciliation CronJob pushes every team and every Agent key, and also re-applies the
 "never above the Organization" rule, so an Agent limit left above a lowered
-Organization limit by an interrupted request is brought back within it.
+Organization limit by an interrupted request is brought back within it. It then sets
+every live Agent key's model list ([LLM Providers](llm-providers.md#provider-access)).
 
 Keys issued before an Organization had a team carry none, so the team budget does not
 bind them until they are enrolled — `enroll_llm_keys` attaches them and refuses to move
