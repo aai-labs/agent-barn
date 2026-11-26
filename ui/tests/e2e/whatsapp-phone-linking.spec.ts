@@ -207,6 +207,8 @@ test.describe("WhatsApp phone linking", () => {
 
     const dialog = page.getByRole("dialog", { name: "Link a WhatsApp phone" });
     await expect(dialog.getByText(/\+15551234567 is linked to this Agent now/)).toBeVisible();
+    // No code is on screen while it asks, so the scan steps are gone.
+    await expect(dialog.getByText(/then scan this code/)).toHaveCount(0);
     expect(requests.map((url) => new URL(url).search)).toEqual([""]);
 
     await dialog.getByRole("button", { name: "Unlink it and link a new phone" }).click();

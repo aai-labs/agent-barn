@@ -146,8 +146,11 @@ export function WhatsAppPhoneLinking({
         icon={<Smartphone size={18} />}
         title="Link a WhatsApp phone"
         description={
-          "On the phone with the Agent's number, open WhatsApp → Settings → Linked devices → Link a device, then scan this code." +
-          (linked === false || !relinkNote ? "" : ` ${relinkNote}`)
+          // The scan steps only while a code is on screen or on its way; the body says the rest.
+          ["idle", "starting", "scan"].includes(state.phase)
+            ? "On the phone with the Agent's number, open WhatsApp → Settings → Linked devices → Link a device, then scan this code." +
+              (linked === false || !relinkNote ? "" : ` ${relinkNote}`)
+            : "Link the phone this Agent answers as on WhatsApp."
         }
         cancelLabel={
           state.phase === "replace" ? "Keep it" : linkedPhase ? (restartAfterLink ? "Restart later" : "Close") : "Cancel"
