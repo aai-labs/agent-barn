@@ -195,6 +195,26 @@ def test_a_withheld_destination_never_arrives_through_a_request_or_the_role(host
     assert host.lower() not in json.dumps(state).lower()
 
 
+@pytest.mark.parametrize(
+    "host, text, sent",
+    [
+        ("intranet", "key sk-proj-intranetAbCdEf1234", "key [secret]"),
+        ("api", "key sk-apiAPQnRqTpXvZaBcDeFgHiJkLmNoPrStUvWxYz", "key [secret]"),
+        ("intranet.example", "write to ops@intranet.example", "write to [email]"),
+        ("intranet", "see https://intranet/reports", "see [link]"),
+    ],
+)
+def test_a_withheld_host_inside_a_secret_email_or_link_does_not_break_its_redaction(host, text, sent):
+    context = _context(
+        role=AgentRole(name="Support", description=text), requests=(RecentRequest(minutes_ago=5, text=text),)
+    )
+
+    state, _ = classification_request([_destination(host)], context, other_ongoing=[])
+
+    assert_that(state["recent_requests"][0]["text"], equal_to(sent))
+    assert_that(state["agent"]["role"]["description"], equal_to(sent))
+
+
 def test_destinations_withheld_from_another_decision_are_kept_out_too():
     context = _context(requests=(RecentRequest(minutes_ago=5, text="Fetch it from intranet/reports"),))
 

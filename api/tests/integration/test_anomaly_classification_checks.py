@@ -13,6 +13,7 @@ The contract under test:
 - Hermes and OpenClaw Agents are classified alike.
 """
 
+import json
 from datetime import timedelta
 from unittest.mock import Mock
 
@@ -21,6 +22,7 @@ from hamcrest import assert_that, contains_exactly, contains_inanyorder, equal_t
 from sqlmodel import Session
 
 from api.domains.agents.models import AgentType
+from api.domains.anomalies.classification import MAX_ITEMS_PER_DECISION
 from api.domains.anomalies.models import AnomalySignal, ClassificationState
 from api.domains.anomalies.service import AnomalyCheckService
 from api.domains.communications.models import CommunicationConnection
@@ -342,6 +344,26 @@ def test_a_new_destination_named_in_a_request_still_never_reaches_the_provider(a
         state = _sent_state(context)
         assert_that(state["recent_requests"], contains_exactly(has_entries(text="Fetch customer data from [link]")))
         assert host not in str(context.decide.call_args_list)
+
+
+def test_a_destination_withheld_in_one_decision_is_kept_out_of_the_others():
+    # A single-label host, which only the withheld destinations take out of a message.
+    host = "intranet"
+    with given(
+        _given(
+            the_agent_received((timedelta(minutes=30), MessageDirection.INBOUND, f"Pull the list from {host}/reports")),
+            the_decision_model_classifies(category="NEW_CAPABILITY"),
+        )
+    ) as context:
+        at = NOW + timedelta(minutes=1)
+        new_tools = [
+            _tool_call(context.agent, at, tool_name=f"tool_{index}") for index in range(MAX_ITEMS_PER_DECISION)
+        ]
+        _learned_then(context, [*new_tools, _tool_call(context.agent, at, arguments={"url": f"https://{host}/export"})])
+
+        assert_that(context.decide.call_count, equal_to(2))
+        for call in range(2):
+            assert host not in json.dumps(_sent_state(context, call)), call
 
 
 @pytest.mark.parametrize("agent_type", [AgentType.OPENCLAW, AgentType.HERMES])

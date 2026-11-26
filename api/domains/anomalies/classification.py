@@ -244,13 +244,15 @@ def clean_text(text: str) -> str:
 
 
 def _cleaned(text: str, withheld: re.Pattern[str] | None) -> str:
-    if withheld is not None:
-        text = withheld.sub("[link]", text)
+    # Whole links, emails and secrets go first, so taking out a withheld host cannot
+    # split one into pieces that no longer look like what they are.
     text = _URL.sub("[link]", text)
     text = _EMAIL.sub("[email]", text)
     text = _KNOWN_SECRET.sub("[secret]", text)
     text = _BEARER.sub(r"\1 [secret]", text)
     text = _LONG_TOKEN.sub(_secret_if_mixed, text)
+    if withheld is not None:
+        text = withheld.sub("[link]", text)
     text = _IPV4.sub("[link]", text)
     text = _IPV6.sub(_link_if_address, text)
     text = _HOST.sub(_link_unless_file, text)
