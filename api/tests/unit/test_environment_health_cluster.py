@@ -384,6 +384,19 @@ def test_with_restart_history_lifetime_restarts_from_before_the_window_are_not_f
     assert issue.pod_name == "agentbarn-ui-1" and issue.restarts_in_window is None
 
 
+def test_a_pod_restarting_now_is_flagged_though_the_history_has_not_caught_up():
+    workloads = cluster.workloads(
+        # Its third restart was a minute ago; the last scrape saw two.
+        [_pod("agentbarn-worker-1", restarts=3, terminated="Error", stopped_ago=timedelta(minutes=1))],
+        {},
+        _NOW,
+        restarts={"agentbarn-worker-1": cluster.PodRestarts(restarts=2, oom_killed=False)},
+    )
+
+    [issue] = workloads.issues
+    assert (issue.restarts_in_window, issue.repeatedly_restarting) == (2, True)
+
+
 def test_without_restart_history_an_oom_kill_this_week_is_still_listed():
     workloads = cluster.workloads(
         [

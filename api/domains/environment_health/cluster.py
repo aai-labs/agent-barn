@@ -579,10 +579,10 @@ def workloads(
     `RESTART_HISTORY_WINDOW`, or is still not ready after its startup grace. A finished Job's
     pod is not counted.
 
-    With `restarts` (the restart history), a pod keeps restarting when it restarted
-    `REPEATED_RESTARTS` times within the window, however long ago the last one was. A pod
-    the history does not cover, or every pod when it could not be read, is judged by the pod
-    alone: that many restarts in its life, the last within `RECENT_RESTART_WINDOW`.
+    A pod keeps restarting when it restarted `REPEATED_RESTARTS` times in its life with the
+    last within `RECENT_RESTART_WINDOW`, or, with `restarts` (the restart history), that many
+    times within the window however long ago the last one was. Either is enough, so a pod the
+    history does not cover, or every pod when it could not be read, is still judged by itself.
     """
     total = ready_count = 0
     issues: list[PodIssueRead] = []
@@ -617,10 +617,11 @@ def workloads(
         # A restart with no recorded time is treated as recent: unknown is not "long ago".
         recently_restarted = last_restart_at is None or now - last_restart_at <= RECENT_RESTART_WINDOW
         history = _restart_history(pod, restarts) if restarts is not None else None
-        if history is not None:
-            repeatedly_restarting = history.restarts >= REPEATED_RESTARTS
-        else:
-            repeatedly_restarting = restart_total >= REPEATED_RESTARTS and recently_restarted
+        # Either answer is enough: the history lags the pod by up to a scrape, so a pod that
+        # just restarted for the third time can still read as two there.
+        repeatedly_restarting = (restart_total >= REPEATED_RESTARTS and recently_restarted) or (
+            history is not None and history.restarts >= REPEATED_RESTARTS
+        )
         oom_killed = (history is not None and history.oom_killed) or (
             termination == "OOMKilled"
             and last_restart_at is not None
