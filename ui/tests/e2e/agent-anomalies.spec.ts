@@ -208,13 +208,13 @@ test.describe("Agent · Unusual activity", () => {
 });
 
 test.describe("Settings · Unusual activity", () => {
-  async function openSettings(page: Page, { role = "OWNER", enabled = false } = {}) {
+  async function openSettings(page: Page, { role = "OWNER", enabled = false, alertsEnabled = true } = {}) {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest({ userContext: contextWithRole(role) });
     await data.users.interceptGetOrganizationsRequest();
     await data.organizations.interceptGetOrganization();
-    const mock = await data.anomalies.interceptDetection({ enabled });
+    const mock = await data.anomalies.interceptDetection({ enabled, alertsEnabled });
     const anomaliesPage = new AgentAnomaliesPage(page);
     await anomaliesPage.gotoSettings();
     return { mock, anomaliesPage };
@@ -243,6 +243,31 @@ test.describe("Settings · Unusual activity", () => {
 
     expect(mock.requests.find((request) => request.method === "PUT")?.body).toEqual({ enabled: false });
     await expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  test("alerts are emailed once checks are on, until an Owner turns them off", async ({ page }) => {
+    const { mock, anomaliesPage } = await openSettings(page, { enabled: true });
+    const setting = anomaliesPage.detectionSetting();
+    await expect(setting).toContainText("Owners and Admins are emailed");
+    const alerts = setting.getByRole("switch", { name: "Email Owners and Admins about unusual activity" });
+    await expect(alerts).toHaveAttribute("aria-checked", "true");
+
+    await alerts.click();
+
+    expect(mock.requests.find((request) => request.method === "PUT")?.body).toEqual({ alerts_enabled: false });
+    await expect(alerts).toHaveAttribute("aria-checked", "false");
+    await expect(setting.getByRole("switch", { name: "Check Agents for unusual activity" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  test("alerts cannot be changed while checks are off", async ({ page }) => {
+    const { anomaliesPage } = await openSettings(page, { enabled: false });
+
+    await expect(
+      anomaliesPage.detectionSetting().getByRole("switch", { name: "Email Owners and Admins about unusual activity" }),
+    ).toBeDisabled();
   });
 
   test("Members do not see the setting", async ({ page }) => {

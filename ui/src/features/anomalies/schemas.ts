@@ -26,10 +26,13 @@ export type AnomalySignal = z.infer<typeof AnomalySignalSchema>;
 
 export const AnomalyDetectionSettingsSchema = z.object({
   enabled: z.boolean(),
+  alertsEnabled: z.boolean(),
   canManage: z.boolean(),
   updatedAt: z.string().nullable(),
 });
 export type AnomalyDetectionSettings = z.infer<typeof AnomalyDetectionSettingsSchema>;
+/** Either setting, or both; one left out stays as it is. */
+export type AnomalyDetectionChange = Partial<Pick<AnomalyDetectionSettings, "enabled" | "alertsEnabled">>;
 
 export const AnomalyCategorySchema = z.enum([
   "RUNAWAY_LOOP",

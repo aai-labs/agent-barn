@@ -6,10 +6,14 @@ import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
-import { AnomalyDetectionSettingsSchema, type AnomalyDetectionSettings } from "../schemas";
+import {
+  AnomalyDetectionSettingsSchema,
+  type AnomalyDetectionChange,
+  type AnomalyDetectionSettings,
+} from "../schemas";
 import { anomaliesKey } from "../utils";
 
-/** Whether the active Organization checks its Agents for unusual activity. */
+/** Whether the active Organization checks its Agents for unusual activity, and emails what is flagged. */
 export function useAnomalyDetection() {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
@@ -36,10 +40,10 @@ export function useUpdateAnomalyDetection() {
   const organizationId = selectedOrganization?.id ?? "";
 
   return useMutation({
-    mutationFn: async (enabled: boolean) => {
+    mutationFn: async (change: AnomalyDetectionChange) => {
       const response = await api.put<AnomalyDetectionSettings>(
         `${orgApiBase}/anomaly-detection`,
-        { enabled },
+        change,
         { schema: AnomalyDetectionSettingsSchema },
       );
       return response.data;
