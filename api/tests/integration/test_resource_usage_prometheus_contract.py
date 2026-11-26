@@ -346,14 +346,17 @@ scrape_configs:
             repository = ResourceUsageRepository(prometheus=_client(url))
             result = Scraped(url, repository, org_id, agent_id, other_org_id, other_agent_id)
             ticker.start()
-            # Ready once both a gauge and a rate (which needs two scrapes) have arrived.
-            _wait_until(
-                lambda: (
-                    {"cpu_cores", "memory_working_set_bytes", "cpu_throttled_ratio"}
-                    <= _current(result, org_id, [agent_id]).get(agent_id, {}).keys()
-                ),
-                "the first scrapes",
-            )
+
+            # Ready once both a gauge and a rate have arrived, and the rate has seen the counter
+            # move. Two scrapes that land between ticks read the same counter, so the rate is
+            # there but 0 until a later scrape sees a tick, as on a slow CI runner.
+            def ready() -> bool:
+                fields = _current(result, org_id, [agent_id]).get(agent_id, {})
+                return {"memory_working_set_bytes", "cpu_throttled_ratio"} <= fields.keys() and (
+                    fields.get("cpu_cores", 0) > 0
+                )
+
+            _wait_until(ready, "the first scrapes to see the CPU counter move")
             yield result
     finally:
         ksm.shutdown()
