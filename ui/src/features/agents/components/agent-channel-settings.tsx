@@ -43,6 +43,16 @@ import { DefaultDeliveryTargetInput } from "@/features/communication-connections
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
 import { TelegramAccountLinking } from "@/features/communication-connections/components/telegram-account-linking";
 import {
+  WhatsAppPhoneLinking,
+  WhatsAppReach,
+} from "@/features/communication-connections/components/whatsapp-phone-linking";
+import {
+  whatsAppLinked,
+  whatsAppRelinkNote,
+  whatsAppRestartsAfterLink,
+  whatsAppUnavailableReason,
+} from "@/features/communication-connections/whatsapp";
+import {
   CUSTOM_SLACK_NAME,
   ServerAddressInput,
   connectionForm,
@@ -254,19 +264,24 @@ function PlatformOption({
   onSelect,
   custom = false,
   description = "Connect a channel",
+  unavailable = null,
 }: {
   platform: { key: string; displayName: string };
   selected: boolean;
   onSelect: () => void;
   custom?: boolean;
   description?: string;
+  /** Why this Agent can't use the platform; shown on a disabled tile. */
+  unavailable?: string | null;
 }) {
   return (
     <button
       type="button"
       aria-pressed={selected}
       aria-label={`Select ${platform.displayName}`}
-      className="group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm"
+      aria-describedby={unavailable ? `platform-unavailable-${platform.key}` : undefined}
+      disabled={Boolean(unavailable)}
+      className="group flex min-h-[4.75rem] cursor-pointer items-center gap-3 rounded-xl p-3 text-left transition-colors hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
       style={{
         border: selected
           ? "1.5px solid var(--accent)"
@@ -287,10 +302,11 @@ function PlatformOption({
           {platform.displayName}
         </span>
         <span
+          id={unavailable ? `platform-unavailable-${platform.key}` : undefined}
           className="mt-0.5 block text-xs"
           style={{ color: "var(--ink-3)" }}
         >
-          {selected ? "Selected" : description}
+          {unavailable ?? (selected ? "Selected" : description)}
         </span>
       </span>
       <span
@@ -650,6 +666,7 @@ export function AgentChannelSettings({
   const platforms = useCommunicationPlatforms();
   const setupManifest = (platformKey: string) =>
     platformKey === "slack" ? createSlackAppManifest(agent.name, agentDescription) : null;
+  const whatsAppUnavailable = whatsAppUnavailableReason(agent);
   // Web Chat is provisioned lazily; the shared Telegram bot belongs to ready-made setup.
   const addablePlatforms = useMemo(
     () => {
@@ -1208,6 +1225,26 @@ export function AgentChannelSettings({
                       canManage={agent.allowedActions.includes("agent.update")}
                     />
                   )}
+                  {connection.platformKey === "whatsapp" && <WhatsAppReach settings={connection.settings} />}
+                  {connection.platformKey === "whatsapp" && connection.enabled && (
+                    <WhatsAppPhoneLinking
+                      agentId={agent.id}
+                      connectionId={connection.id}
+                      linked={whatsAppLinked(agent.agentType, connection)}
+                      relinkNote={whatsAppRelinkNote(agent.agentType)}
+                      restartAfterLink={whatsAppRestartsAfterLink(agent.agentType)}
+                      agentRunning={agent.status === "RUNNING"}
+                      canManage={
+                        agent.allowedActions.includes("agent.update") &&
+                        agent.allowedActions.includes("agent.secret.manage")
+                      }
+                      restarts={canRestart}
+                      onRestart={async () => {
+                        await applyAndRestart(async () => {});
+                        await connections.refetch();
+                      }}
+                    />
+                  )}
                   <div className="mt-3">
                     <PlatformSetupHint
                       hint={platforms.data?.find((p) => p.key === connection.platformKey)?.postSetupHint}
@@ -1520,6 +1557,7 @@ export function AgentChannelSettings({
                           platform={platform}
                           selected={platformKey === platform.key && !customSlack}
                           onSelect={() => choosePlatform(platform.key)}
+                          unavailable={platform.key === "whatsapp" ? whatsAppUnavailable : null}
                         />
                       );
                       if (platform.key !== "slack" || !customSlackOffered) return [option];

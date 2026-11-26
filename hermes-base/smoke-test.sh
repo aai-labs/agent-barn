@@ -278,6 +278,24 @@ if 'recursive delete' not in approval._permanent_approved:
     raise SystemExit('approvals contract broken: command_allowlist is no longer loaded when tools.approval is imported')
 "
 
+# WhatsApp pairing and the adapter must start the baked-in bridge, not mirror it to the
+# PVC and npm install there: that needs registry egress from the Agent pod.
+check whatsapp-bridge-ready-without-npm python3 -c "
+import sys
+sys.path.insert(0, '/opt/hermes')
+
+from gateway.platforms.whatsapp_common import resolve_whatsapp_bridge_dir
+from plugins.platforms.whatsapp.adapter import _file_content_hash
+
+bridge = resolve_whatsapp_bridge_dir()
+if str(bridge) != '/opt/hermes/scripts/whatsapp-bridge':
+    raise SystemExit(f'WhatsApp bridge would run from {bridge}, not the image')
+stamp = bridge / 'node_modules' / '.hermes-pkg-hash'
+if not stamp.exists() or stamp.read_text().strip() != _file_content_hash(bridge / 'package.json'):
+    raise SystemExit('WhatsApp bridge dependencies are missing or stale; the adapter would npm install at start')
+"
+check whatsapp-bridge-loads node -e "import('/opt/hermes/scripts/whatsapp-bridge/node_modules/@whiskeysockets/baileys/lib/index.js')"
+
 if [ "$CLOUD_CLIS" = "true" ]; then
     check aws    aws --version
     check gcloud gcloud --version

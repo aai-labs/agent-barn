@@ -201,6 +201,46 @@ Connection's bot token. `hermes_slack_compat_driver.py` guards these private
 Hermes and aiohttp seams on the pinned image. OpenClaw Agents and Bots cannot
 use a Custom Slack server.
 
+A **WhatsApp** Connection runs Hermes' own WhatsApp adapter, which starts the
+bundled Node bridge (Baileys, a WhatsApp Web client) in bot or self-chat mode,
+from the Connection's Mode. Access is
+enforced in three places, and the builder sets all three together. The Hermes
+config's `platforms.whatsapp.extra` carries the Connection policy (`dm_policy`,
+`allow_from`, `group_policy`, `group_allow_from`, `require_mention`), which the
+adapter applies at intake and which wins over Hermes' `WHATSAPP_*` variables.
+The bridge itself drops every sender missing from `WHATSAPP_ALLOWED_USERS`,
+groups included, so it gets the number list only when the Connection allows
+nothing but those numbers' DMs and `*` otherwise.
+`WHATSAPP_ALLOW_ALL_USERS=true` lets the gateway accept what the adapter has
+already admitted, as for Slack. `hermes_whatsapp_access_driver.py` proves the
+combination against the pinned image. The adapter refuses to start without
+`creds.json` in `$HERMES_HOME/platforms/whatsapp/session`; the dashboard's Link
+phone flow writes it by running the bridge's pairing mode in the pod over a
+Kubernetes exec, and the Agent is restarted afterwards. `hermes-base` installs
+the bridge's npm dependencies and Hermes' freshness stamp at build time and
+gives the bridge directory to the `hermes` user, because otherwise Hermes copies
+the bridge to the PVC and runs `npm install` there on first start. Self Chat
+sets `reply_prefix` to 🤖 so replies stand apart from the owner's messages.
+
+On OpenClaw, a WhatsApp Connection lists `whatsapp` in
+`AGENTBARN_NATIVE_CHANNELS`, so `start.sh` installs `@openclaw/whatsapp`, and
+`channels.whatsapp` carries the policy: `dmPolicy` with `allowFrom` (numbers
+with `+`), and for groups `groupPolicy: open` with `groupAllowFrom: ["*"]` and
+the `groups` map as the group allowlist with each group's `requireMention`.
+Self Chat sets `selfChatMode`, an empty `allowFrom` (OpenClaw adds the owner),
+closed groups and `responsePrefix: "🤖"`, which OpenClaw also puts before inbound
+lines in place of its default `[openclaw]`. The running gateway owns the login,
+so Link phone calls its `web.login.start` and `web.login.wait` methods through
+`openclaw gateway call` and streams the PNG QR code it renders. While a phone
+is linked the gateway offers no QR and names the phone instead; only a request
+with `replace=true`, sent after the person confirms, passes `force` and logs it
+out. On Hermes the old session stays until the new one is linked. The gateway
+starts the channel once the phone links, so OpenClaw needs no restart. Each
+attempt runs as `sh -c SCRIPT agentbarn-whatsapp-pairing`; a new one kills the
+process tree of an attempt still holding the lock, identified by that marker in
+its command line. Bots cannot use WhatsApp on either runtime: one phone links
+the whole Agent pod.
+
 `SLACK_ALLOW_ALL_USERS=true` delegates Hermes' native user gate to the mandatory
 Connection-policy plugin and suppresses the otherwise misleading startup warning
 about having no user allowlists. The plugin remains authoritative for Slack;

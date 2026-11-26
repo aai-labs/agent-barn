@@ -17,6 +17,7 @@ from .hermes import (
     native_discord_env,
     native_slack_env,
     native_telegram_env,
+    native_whatsapp_env,
     runtime_teams_env,
     with_passthrough_placeholders,
 )
@@ -38,6 +39,7 @@ from .openclaw import (
     native_discord_channel,
     native_slack_channel,
     native_telegram_channel,
+    native_whatsapp_channel,
     runtime_teams_channel,
 )
 
@@ -64,6 +66,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "native_discord_channel",
     "native_slack_channel",
     "native_telegram_channel",
+    "native_whatsapp_channel",
     "runtime_teams_channel",
     # hermes
     "HERMES_DEFAULT_MAX_TURNS",
@@ -77,6 +80,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "native_discord_env",
     "native_slack_env",
     "native_telegram_env",
+    "native_whatsapp_env",
     "agentbarn_telegram_env",
     "runtime_teams_env",
     "build_hermes_config_map",

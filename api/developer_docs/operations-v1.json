@@ -1296,6 +1296,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/whatsapp-pairing",
+    "pair_whatsapp_connection_organizations__organization_id__agents__agent_id__connections__connection_id__whatsapp_pairing_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections",
     "create_connection_organizations__organization_id__agents__agent_id__custom_api_connections_post"
   ],

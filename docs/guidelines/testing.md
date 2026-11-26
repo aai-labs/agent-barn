@@ -141,6 +141,18 @@ real-adapter admission, thread-context, and group-DM button contracts.
 standalone-send calls to the Slack-compatible server, leaves other Slack apps on
 Slack, and trusts only that server's host for file downloads with its own token.
 
+`hermes_whatsapp_access_driver.py` is in the same filter. It puts WhatsApp DMs
+and group messages through the real bridge allowlist, the adapter's intake
+policy and the gateway's authorization for each Connection policy the builder
+renders, Self Chat included. The Hermes smoke test also fails if the image
+would install the WhatsApp bridge's npm dependencies at runtime. `openclaw_whatsapp_access_driver.py`
+runs the same Bot-mode cases, plus Self Chat, through OpenClaw's pinned sender
+access, group allowlist and mention rule from `openclaw-base`'s native runtime
+test; it mirrors the `@openclaw/whatsapp` glue, which is not in the image. The
+OpenClaw Link phone script is tested in `test_whatsapp_pairing.py` against a stand-in
+`openclaw` CLI; those tests need `flock` and `jq` and skip without them, as on
+macOS, so run them on Linux or in the `openclaw-base` image.
+
 `hermes_bots_driver.py` is in the same filter. It proves, on the real image, the multiplex
 behaviour Bots depend on: per-profile secrets, terminal passthrough, the Slack gate, and
 scheduled delivery using a Bot's own credential. It must pass on every Hermes upgrade.

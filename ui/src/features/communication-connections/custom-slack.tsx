@@ -75,7 +75,10 @@ export function connectionForm(
     return {
       custom,
       name: platform.displayName,
-      description: "Add its credentials first, then name the connection and choose where it listens.",
+      description:
+        platform.key === "whatsapp"
+          ? "Choose who can reach the Agent. Link the phone with a QR code once the connection is saved."
+          : "Add its credentials first, then name the connection and choose where it listens.",
       setupHint: platform.setupHint,
       manifest,
       credentialsSchema: platform.credentialsSchema,

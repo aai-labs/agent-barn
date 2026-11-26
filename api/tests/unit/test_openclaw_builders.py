@@ -21,6 +21,7 @@ from api.domains.agents.builders import (
     native_discord_channel,
     native_slack_channel,
     native_telegram_channel,
+    native_whatsapp_channel,
     runtime_teams_channel,
 )
 from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
@@ -351,6 +352,63 @@ def test_listen_in_prompt_says_when_to_stay_silent_and_when_to_speak() -> None:
     assert "Stay silent" in LISTEN_IN_SYSTEM_PROMPT
     assert "factual error" in LISTEN_IN_SYSTEM_PROMPT
     assert "@mention" in LISTEN_IN_SYSTEM_PROMPT
+
+
+_WHATSAPP = {
+    "mode": "bot",
+    "dm_policy": "allowlist",
+    "allowed_numbers": ["15551234567"],
+    "group_policy": "off",
+    "allowed_group_ids": [],
+    "require_mention": True,
+}
+
+
+def test_native_whatsapp_channel_answers_allowlisted_numbers_in_bot_mode() -> None:
+    assert native_whatsapp_channel(_WHATSAPP) == {
+        "enabled": True,
+        "selfChatMode": False,
+        "dmPolicy": "allowlist",
+        "allowFrom": ["+15551234567"],
+        "groupPolicy": "disabled",
+    }
+
+
+def test_native_whatsapp_channel_closes_dms_without_allowed_numbers() -> None:
+    assert native_whatsapp_channel({**_WHATSAPP, "allowed_numbers": []})["dmPolicy"] == "disabled"
+    assert native_whatsapp_channel({**_WHATSAPP, "dm_policy": "off"})["dmPolicy"] == "disabled"
+
+
+def test_native_whatsapp_channel_maps_open_dms_and_groups() -> None:
+    open_ = native_whatsapp_channel({**_WHATSAPP, "dm_policy": "open", "group_policy": "open"})
+    listed = native_whatsapp_channel(
+        {
+            **_WHATSAPP,
+            "group_policy": "allowlist",
+            "allowed_group_ids": ["120363001234567890@g.us"],
+            "require_mention": False,
+        }
+    )
+
+    assert (open_["dmPolicy"], open_["allowFrom"]) == ("open", ["*"])
+    assert open_["groups"] == {"*": {"requireMention": True}}
+    # OpenClaw's groups map is the group allowlist; any member of a listed group may talk.
+    assert (listed["groupPolicy"], listed["groupAllowFrom"]) == ("open", ["*"])
+    assert listed["groups"] == {"120363001234567890@g.us": {"requireMention": False}}
+    assert native_whatsapp_channel({**_WHATSAPP, "group_policy": "allowlist"})["groupPolicy"] == "disabled"
+
+
+def test_native_whatsapp_channel_self_chat_answers_only_the_owner_and_marks_replies() -> None:
+    channel = native_whatsapp_channel({**_WHATSAPP, "mode": "self_chat", "dm_policy": "open", "group_policy": "open"})
+
+    assert channel == {
+        "enabled": True,
+        "selfChatMode": True,
+        "dmPolicy": "allowlist",
+        "allowFrom": [],
+        "groupPolicy": "disabled",
+        "responsePrefix": "🤖",
+    }
 
 
 def test_native_slack_channel_listens_in_on_chosen_channels() -> None:

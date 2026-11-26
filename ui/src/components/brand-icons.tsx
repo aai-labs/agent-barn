@@ -94,6 +94,10 @@ export function EmailIcon(p: BrandIconProps) {
   return <ColorGlyph src="/brand/email.svg" label="Email" {...p} />;
 }
 
+export function WhatsAppIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/whatsapp.svg" label="WhatsApp" {...p} />;
+}
+
 export function OneDriveIcon(p: BrandIconProps) {
   return <ColorGlyph src="/brand/onedrive.svg" label="OneDrive" {...p} />;
 }
@@ -115,6 +119,7 @@ export function platformIcon(platformKey: string, props: BrandIconProps = {}): R
     case "agentbarn_telegram": return <TelegramIcon {...props} />;
     case "teams": return <TeamsIcon {...props} />;
     case "email": return <EmailIcon {...props} />;
+    case "whatsapp": return <WhatsAppIcon {...props} />;
     default: return null;
   }
 }

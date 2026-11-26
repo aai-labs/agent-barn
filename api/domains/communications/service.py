@@ -53,7 +53,12 @@ from api.domains.usage.guard import UsageAction, UsageGuard, UsageSubject
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
-BOT_UNSUPPORTED_PLATFORMS = frozenset({"teams", "agentbarn_telegram"})
+BOT_UNSUPPORTED_PLATFORMS = frozenset({"teams", "agentbarn_telegram", "whatsapp"})
+# Why a Platform is refused for a Bot, where saying so helps the person choose instead.
+_BOT_UNSUPPORTED_REASONS = {
+    "whatsapp": "a WhatsApp Connection links one phone to the whole Agent pod, which its Bots share. "
+    "Add WhatsApp to the Parent Agent instead",
+}
 BOT_PLATFORM_CONFLICTS = {"telegram": "agentbarn_telegram", "agentbarn_telegram": "telegram"}
 MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 
@@ -270,7 +275,8 @@ class CommunicationsService:
         if agent.parent_agent_id is not None and platform_key in BOT_UNSUPPORTED_PLATFORMS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{display_name} is not available for a Bot",
+                detail=f"{display_name} is not available for a Bot"
+                + (f": {reason}" if (reason := _BOT_UNSUPPORTED_REASONS.get(platform_key)) else ""),
             )
         conflicting = BOT_PLATFORM_CONFLICTS.get(platform_key)
         if conflicting and conflicting in self.repository.related_bot_platform_keys(agent):

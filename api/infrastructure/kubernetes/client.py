@@ -56,6 +56,34 @@ class _DefaultTimeoutApiClient(client.ApiClient):
         return super().call_api(*args, _request_timeout=_request_timeout or _DEFAULT_REQUEST_TIMEOUT, **kwargs)
 
 
+class BoundedLines:
+    """Splits streamed text into lines, holding at most ``max_chars`` of an unfinished one.
+
+    A line that grows past the limit is dropped whole, including the part still to come.
+    """
+
+    def __init__(self, max_chars: int) -> None:
+        self.max_chars = max_chars
+        self.pending = ""
+        self._overlong = False  # dropping the rest of a line that passed max_chars
+
+    def feed(self, text: str) -> list[str]:
+        *complete, self.pending = (self.pending + text).split("\n")
+        lines = []
+        for line in complete:
+            if not self._overlong and len(line) <= self.max_chars:
+                lines.append(line)
+            self._overlong = False
+        if len(self.pending) > self.max_chars:
+            self.pending, self._overlong = "", True
+        return lines
+
+    def rest(self) -> list[str]:
+        """The unfinished line once the stream has ended, unless it is empty or dropped."""
+        rest, self.pending = self.pending, ""
+        return [rest] if rest and not self._overlong else []
+
+
 @inject
 @dataclass
 @singleton
@@ -703,6 +731,54 @@ class KubernetesClient:
         if rc != 0:
             raise RuntimeError(stderr.strip() or f"exec failed with code {rc}")
         return stdout
+
+    def stream_exec_lines(
+        self,
+        pod_name: str,
+        namespace: str,
+        command: list[str],
+        *,
+        container: str = "agent",
+        idle_seconds: float = 5,
+        max_seconds: float | None = None,
+        max_line_chars: int = 1_000_000,
+    ) -> Generator[str | None]:
+        """Runs ``command`` in the pod and yields each stdout line as it is written.
+
+        Yields ``None`` after ``idle_seconds`` without output, so the caller regains
+        control from a quiet command and can drop a stream whose client has gone.
+        Closing the generator closes the exec session, as does passing
+        ``max_seconds``; closing does not reliably stop the command, so it must bound
+        its own lifetime too. A line longer than ``max_line_chars`` is dropped, since
+        pod output is the Agent's to write.
+        """
+        deadline = None if max_seconds is None else time.monotonic() + max_seconds
+        ws = k8s_stream(
+            self._stream_core_v1.connect_get_namespaced_pod_exec,
+            pod_name,
+            namespace,
+            command=command,
+            container=container,
+            stdout=True,
+            stderr=False,
+            stdin=False,
+            tty=False,
+            _preload_content=False,
+        )
+        lines = BoundedLines(max_line_chars)
+        try:
+            while ws.is_open() and (deadline is None or time.monotonic() < deadline):
+                ws.update(timeout=idle_seconds)
+                if not ws.peek_stdout():
+                    yield None
+                    continue
+                yield from lines.feed(ws.read_stdout())
+            if ws.is_open():
+                return
+            yield from lines.feed(ws.read_stdout() if ws.peek_stdout() else "")
+            yield from lines.rest()
+        finally:
+            ws.close()
 
     def fetch_agent_healthz(self, service_name: str, namespace: str) -> dict:
         host = f"{service_name}.{namespace}"

@@ -46,6 +46,17 @@ RUN python3 /tmp/patch-bot-cron-delivery.py && rm /tmp/patch-bot-cron-delivery.p
 
 COPY --from=rust-build /out/bin/ /usr/local/bin/
 
+# WhatsApp bridge dependencies. Upstream ships the bridge source without node_modules
+# and runs `npm install` when the adapter or pairing first starts it, which would need
+# npm registry egress from the pod and land the modules on the PVC. Installing here and
+# writing the adapter's freshness stamp (sha256 of package.json, first 16 hex) skips
+# that. The directory is handed to hermes because a read-only bridge directory makes
+# Hermes mirror the source, without node_modules, into HERMES_HOME.
+RUN cd /opt/hermes/scripts/whatsapp-bridge && \
+    npm ci --omit=dev --no-audit --no-fund && \
+    sha256sum package.json | cut -c1-16 > node_modules/.hermes-pkg-hash && \
+    chown -R hermes:hermes /opt/hermes/scripts/whatsapp-bridge
+
 RUN set -eu; \
     if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
       sed -i "s|deb\.debian\.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \

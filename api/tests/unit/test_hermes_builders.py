@@ -25,6 +25,7 @@ from api.domains.agents.builders import (
     native_discord_env,
     native_slack_env,
     native_telegram_env,
+    native_whatsapp_env,
     runtime_teams_env,
 )
 from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
@@ -290,6 +291,82 @@ def test_native_telegram_env_maps_the_dm_allowlist() -> None:
     assert env["TELEGRAM_ALLOWED_USERS"] == "111"
     assert "TELEGRAM_GROUP_ALLOWED_CHATS" not in env
     assert "TELEGRAM_ALLOW_ALL_USERS" not in env
+
+
+_WHATSAPP_DEFAULTS = {
+    "dm_policy": "allowlist",
+    "allowed_numbers": ["15551234567"],
+    "group_policy": "off",
+    "allowed_group_ids": [],
+    "require_mention": True,
+}
+
+
+def test_native_whatsapp_config_hands_the_connection_policy_to_the_adapter() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", whatsapp_settings=_WHATSAPP_DEFAULTS, native_slack=True
+    )
+
+    assert config["plugins"]["enabled"][-2:] == ["agentbarn-observer", "agentbarn-slack-access"]
+    assert config["platforms"]["slack"] == {"extra": {"markdown_blocks": True}}
+    assert config["platforms"]["whatsapp"] == {
+        "extra": {
+            "dm_policy": "allowlist",
+            "allow_from": ["15551234567"],
+            "group_policy": "disabled",
+            "group_allow_from": [],
+            "require_mention": True,
+        }
+    }
+    assert config["display"]["platforms"]["whatsapp"]["tool_progress"] == "off"
+
+
+def test_native_whatsapp_config_maps_open_and_allowlisted_groups() -> None:
+    settings = {**_WHATSAPP_DEFAULTS, "dm_policy": "off", "group_policy": "allowlist"}
+    settings["allowed_group_ids"] = ["120363001234567890@g.us"]
+
+    extra = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", whatsapp_settings=settings)[
+        "platforms"
+    ]["whatsapp"]["extra"]
+
+    assert extra["dm_policy"] == "disabled"
+    assert extra["group_policy"] == "allowlist"
+    assert extra["group_allow_from"] == ["120363001234567890@g.us"]
+
+
+def test_native_whatsapp_env_gives_the_bridge_only_the_allowed_numbers_for_dm_only_access() -> None:
+    assert native_whatsapp_env({**_WHATSAPP_DEFAULTS, "allowed_numbers": ["15551234567", "251911234567"]}) == {
+        "WHATSAPP_ENABLED": "true",
+        "WHATSAPP_MODE": "bot",
+        "WHATSAPP_ALLOWED_USERS": "15551234567,251911234567",
+        "WHATSAPP_ALLOW_ALL_USERS": "true",
+        "WHATSAPP_HOME_CHANNEL": "__agentbarn_no_home_channel__",
+    }
+
+
+def test_native_whatsapp_env_keeps_the_bridge_closed_without_allowed_numbers() -> None:
+    assert native_whatsapp_env({**_WHATSAPP_DEFAULTS, "allowed_numbers": []})["WHATSAPP_ALLOWED_USERS"] == ""
+
+
+def test_native_whatsapp_env_lets_group_and_open_dm_senders_through_the_bridge() -> None:
+    # The bridge's sender gate also applies in groups, so the adapter's policy decides there.
+    assert native_whatsapp_env({**_WHATSAPP_DEFAULTS, "group_policy": "allowlist"})["WHATSAPP_ALLOWED_USERS"] == "*"
+    assert native_whatsapp_env({**_WHATSAPP_DEFAULTS, "dm_policy": "open"})["WHATSAPP_ALLOWED_USERS"] == "*"
+
+
+def test_native_whatsapp_self_chat_answers_only_the_owner_and_marks_replies() -> None:
+    settings = {**_WHATSAPP_DEFAULTS, "mode": "self_chat", "dm_policy": "open", "group_policy": "open"}
+
+    extra = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", whatsapp_settings=settings)[
+        "platforms"
+    ]["whatsapp"]["extra"]
+    env = native_whatsapp_env(settings)
+
+    # The bridge passes only the owner's Message yourself chat, so the access settings are ignored.
+    assert env["WHATSAPP_MODE"] == "self-chat"
+    assert env["WHATSAPP_ALLOWED_USERS"] == "*"
+    assert extra["group_policy"] == "disabled"
+    assert extra["reply_prefix"] == "🤖 "
 
 
 def test_native_telegram_env_sets_the_home_chat() -> None:
