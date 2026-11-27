@@ -32,6 +32,7 @@ BASE = "/api/v1/platform/settings/llm-providers"
 ADMIN_NAME = "Platform Person"
 EVENT = "platform.llm_provider.organizations_changed"
 OPENROUTER_MODEL = "openai/gpt-4o"
+OPENROUTER_ENTRY = f"openrouter/{OPENROUTER_MODEL}"
 ORGANIZATIONS_NOT_TAKEN = 'Organizations are listed only for "all_except" and "only". Nothing was saved.'
 ACCESS_CHOICE = 'Organization access is "all", "none", "all_except" or "only". Nothing was saved.'
 UNKNOWN_ORGANIZATION = "One of these organizations does not exist. Nothing was saved."
@@ -302,7 +303,7 @@ def _uses_its_allowlist(context, organization_id):
     with _session(context) as session:
         organization = session.get(Organization, organization_id)
         assert organization is not None
-        organization.allowed_models = [OPENROUTER_MODEL]
+        organization.allowed_models = [OPENROUTER_ENTRY]
         session.add(organization)
         session.commit()
 
@@ -373,7 +374,7 @@ def test_an_organization_with_only_deleted_agents_does_not_use_openrouter():
 def test_the_refusal_names_what_each_organization_uses_and_at_most_10_of_them():
     with given(_setup(admin)) as context:
         _uses_its_allowlist(context, context.organization.id)
-        users = [_organization(context, f"User {index:02d}", [OPENROUTER_MODEL]) for index in range(11)]
+        users = [_organization(context, f"User {index:02d}", [OPENROUTER_ENTRY]) for index in range(11)]
         _uses_its_own_default(context, users[0])
         _has_a_live_agent(context, users[0])
         _has_a_live_agent(context, users[0])
@@ -395,7 +396,7 @@ def test_the_refusal_names_what_each_organization_uses_and_at_most_10_of_them():
 
 def test_opening_openrouter_to_more_organizations_is_never_refused():
     with given(_setup(admin)) as context:
-        beta = _organization(context, "Beta Org", [OPENROUTER_MODEL])
+        beta = _organization(context, "Beta Org", [OPENROUTER_ENTRY])
         with _session(context) as session:
             session.connection().execute(text("UPDATE llm_provider_connection SET organization_access = 'none'"))
             session.commit()
@@ -407,7 +408,7 @@ def test_opening_openrouter_to_more_organizations_is_never_refused():
 
 def test_only_withdrawing_from_an_organization_checks_whether_it_uses_openrouter():
     with given(_setup(admin)) as context:
-        beta = _organization(context, "Beta Org", [OPENROUTER_MODEL])
+        beta = _organization(context, "Beta Org", [OPENROUTER_ENTRY])
         gamma = _organization(context, "Gamma Org")
         _put(context, "openrouter", "all_except", [gamma])
 

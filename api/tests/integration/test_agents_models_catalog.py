@@ -117,7 +117,7 @@ def _owner_with_allowlist(context):
     there_is_an_access_token_for_user(user_id=context.user.id)(context)
     with Session(_engine(context)) as session:
         organization = session.get_one(Organization, context.organization.id)
-        organization.allowed_models = [ALLOWED_MODEL]
+        organization.allowed_models = [f"openrouter/{ALLOWED_MODEL}"]
         session.add(organization)
         session.commit()
 

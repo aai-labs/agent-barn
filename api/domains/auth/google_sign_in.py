@@ -304,7 +304,7 @@ class GoogleSignInService:
             name=AuthService._default_organization_name(identity.name),
             created_by_user_id=user.id,
             allowed_models=self.llm_provider_access.initial_allowed_models(
-                session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+                session, self.config.agent_default_model.removeprefix("litellm/")
             ),
             is_trial=True,
             tier_id=self.plans.trial_plan_id(),
@@ -350,7 +350,7 @@ class GoogleSignInService:
             name=AuthService._default_organization_name(identity.name),
             created_by_user_id=user.id,
             allowed_models=self.llm_provider_access.initial_allowed_models(
-                session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+                session, self.config.agent_default_model.removeprefix("litellm/")
             ),
             tier_id=plan_id,
             llm_budget_usd=0,

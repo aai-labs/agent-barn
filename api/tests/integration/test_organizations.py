@@ -206,7 +206,7 @@ def test_new_organization_uses_platform_default_model():
 
             with then("the organization receives the platform default model"):
                 assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-                expected_model = context.injector.get(Config).agent_default_model.removeprefix("litellm/openrouter/")
+                expected_model = context.injector.get(Config).agent_default_model.removeprefix("litellm/")
                 assert_that(
                     response.json()["allowed_models"],
                     equal_to([expected_model]),

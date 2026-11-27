@@ -17,11 +17,19 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: AF-476, LiteLLM refuses with `403` any model an Agent's own key doesn't list, PRs 1 to 7 ([feature doc](../llm-providers.md#provider-access)). A key, a Bot's included, lists the Agent's own model or its Organization's or the platform's default, the model its running pod started on, every decision model, the Playbook Extraction model and the model of its running Playbook Extraction, so switching model in chat to anything else is refused. A key gets its list when it is made and at every start, before the pod and again once the start is saved, and a start whose list can't be set before the pod fails. A rejected decision and a Playbook Extraction set it before calling, and the 15-minute LLM budget reconciliation sets every live key's list. Verified on local k3d with a Hermes and an OpenClaw Agent.
 - Not yet verified: AF-476 on staging, steps 2, 4 and 5 of the plan's verification: a running Agent's `/key/info` lists the right models, an unlisted model is refused with `403` from its pod, and a decision and a Playbook Extraction succeed. Before shipping, the plan's two read-only checks on staging and production: no running Agent with an empty `running_model`, and no Agent key asking for a model it won't list.
 - Delivered: the review fixes for PR #417. The worker and the CronJobs read the API's `AGENT_DEFAULT_MODEL`, a running Playbook Extraction keeps its model on the key, and a start sets the key again once it is saved.
-- In progress: AF-484, the Organization pool, PRs 1 to 12. PR 1: model routes drop OpenRouter's `session_id`. PR 2: a provider's `402` is answered without naming OpenRouter.
-- Next: AF-484, PR 3.
+- In progress: AF-484, the Organization pool, PRs 1 to 12. PR 1: model routes drop OpenRouter's `session_id`. PR 2: a provider's `402` is answered without naming OpenRouter. PR 3: allowlist entries name their connection (`openrouter/<model>`); the UI reads them from PR 4.
+- Next: AF-484, PR 4.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-27 — AF-484 — PR 3
+
+- Delivered: an Organization allowlist entry names its connection, `<connection slug>/<model>`. Migration `e5c2a9d4b7f1` prefixes every stored entry with `openrouter/`, globs and `openrouter/…` ids included; its downgrade strips one `openrouter/` and drops other connections' entries. `is_model_allowed` and `filter_models_by_allowlist` match the stored model without `litellm/`, and OpenRouter's catalogue as `openrouter/<id>`. A save strips `litellm/` from incoming entries and refuses, with `400`, a new entry that doesn't start with `openrouter/`, until PR 6 opens other connections. New Organizations are seeded with `openrouter/<platform default>`. The allowlist's refusals name models as entries, such as `'openrouter/qwen/qwen3.6-plus'`.
+- Changed: `agents/selection.py` (`pool_name`), `agents/service.py`, `organizations/service.py`, and the seeds in `auth/google_sign_in.py`, `auth/service.py` and `users/service.py`. The test Organization defaults to `["openrouter/*"]`. [`agent-settings.md`](../agent-settings.md#invariants) describes the format, and [`domain-events.md`](../domain-events.md) notes that `organization.model_allowlist.changed` entries carry the connection from this migration on.
+- Release impact: the UI still sends bare OpenRouter ids until PR 4, so these two ship together.
+- Verified: the migration tests (own database) and `test_openrouter_client.py` (34); in `test_organization_update_models.py`, the new tests for an entry naming another connection and a `litellm/` prefix, seen failing first, and the whole file; `test_new_organization_provider_access.py`; and the default and pinned-model refusals in `test_agent_settings.py` (33 integration tests). The other moved tests (`test_agents.py`, `test_agents_models_catalog.py`, `test_integration_setup.py`, `test_organizations.py`, `test_organization_updated_event.py`, `test_platform_llm_provider_organizations.py`, `test_trial_onboarding_migration.py`, the rest of `test_agent_settings.py`) were not run here and are left to CI.
+- Follow-up: PR 4, the UI reads and sends the new entries.
 
 ### 2026-11-27 — AF-484 — PR 2
 

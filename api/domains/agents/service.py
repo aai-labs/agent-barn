@@ -245,6 +245,7 @@ logger = logging.getLogger(__name__)
 # Port of the in-pod LLM proxy. Shared by the URL the runtime dials and the
 # LLM_PROXY_PORT the healthz servers listen on — see the runtime scripts.
 AGENT_LLM_PROXY_PORT = 8090
+OPENROUTER_POOL_PREFIX = f"{OPENROUTER_SLUG}/"
 
 _CREDENTIAL_FIELDS = frozenset(
     {
@@ -417,15 +418,19 @@ def _validation_problems(exc: ValidationError) -> str:
 
 
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
-    """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
-    An empty allowlist blocks everything. Matching is case-insensitive.
+    """Keeps OpenRouter catalogue entries whose openrouter/<id> matches any entry in the
+    allowlist. An empty allowlist blocks everything. Matching is case-insensitive.
     """
     if not allowlist:
         return []
     patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
         return []
-    return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
+    return [
+        model
+        for model in catalog
+        if any(fnmatch.fnmatch(f"{OPENROUTER_POOL_PREFIX}{model['id']}".lower(), pattern) for pattern in patterns)
+    ]
 
 
 @inject

@@ -35,6 +35,8 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 LIST_MODELS = "api.infrastructure.openrouter.client.OpenRouterClient.list_models"
 MODEL = "openai/gpt-4o"
 OTHER_MODEL = "openai/gpt-5-mini"
+ENTRY = f"openrouter/{MODEL}"
+OTHER_ENTRY = f"openrouter/{OTHER_MODEL}"
 ALLOWLIST_EVENT = ORGANIZATION_MODEL_ALLOWLIST_CHANGED
 NO_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 
@@ -83,7 +85,7 @@ def test_update_organization_with_invalid_model_id_is_rejected():
                     "Authorization": f"Bearer {context.access_token}",
                     "X-Organization-Id": str(org_a),
                 },
-                json={"allowed_models": ["this-is-not-a-valid-model-id"]},
+                json={"allowed_models": ["openrouter/this-is-not-a-valid-model-id"]},
             )
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(
@@ -124,7 +126,7 @@ def test_update_organization_allowed_models_by_non_admin_is_rejected():
                 "Authorization": f"Bearer {context.access_token}",
                 "X-Organization-Id": str(org_a),
             },
-            json={"allowed_models": ["*"]},
+            json={"allowed_models": ["openrouter/*"]},
         )
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
@@ -157,7 +159,7 @@ def test_update_organization_preserves_existing_orphaned_model():
         org = org_repo.get(org_a)
         assert org is not None
         # gpt-4o is in the catalog; removed/model has been dropped by OpenRouter.
-        org.allowed_models = ["openai/gpt-4o", "removed/model"]
+        org.allowed_models = ["openrouter/openai/gpt-4o", "openrouter/removed/model"]
         org_repo.save(org)
 
         with patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models") as mock_list_models:
@@ -169,11 +171,13 @@ def test_update_organization_preserves_existing_orphaned_model():
                     "X-Organization-Id": str(org_a),
                 },
                 # UI re-submits the orphaned entry to preserve it.
-                json={"allowed_models": ["openai/gpt-4o", "removed/model"]},
+                json={"allowed_models": ["openrouter/openai/gpt-4o", "openrouter/removed/model"]},
             )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["allowed_models"], equal_to(["openai/gpt-4o", "removed/model"]))
+        assert_that(
+            response.json()["allowed_models"], equal_to(["openrouter/openai/gpt-4o", "openrouter/removed/model"])
+        )
 
 
 def test_update_organization_ignores_null_allowed_models():
@@ -202,7 +206,7 @@ def test_update_organization_ignores_null_allowed_models():
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(org_a)
         assert org is not None
-        org.allowed_models = ["openai/gpt-4o"]
+        org.allowed_models = ["openrouter/openai/gpt-4o"]
         org_repo.save(org)
 
         response = client.patch(
@@ -217,7 +221,7 @@ def test_update_organization_ignores_null_allowed_models():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         body = response.json()
         assert_that(body["name"], equal_to("Renamed Org"))
-        assert_that(body["allowed_models"], equal_to(["openai/gpt-4o"]))
+        assert_that(body["allowed_models"], equal_to(["openrouter/openai/gpt-4o"]))
 
 
 def test_update_organization_allowed_models_emits_model_allowlist_changed_event():
@@ -250,14 +254,14 @@ def test_update_organization_allowed_models_emits_model_allowlist_changed_event(
                     "Authorization": f"Bearer {context.access_token}",
                     "X-Organization-Id": str(org_a),
                 },
-                json={"allowed_models": ["openai/gpt-4o"]},
+                json={"allowed_models": ["openrouter/openai/gpt-4o"]},
             )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         messages = _outbox_messages(context)
         changed_events = [m for m in messages if m.event_name == ORGANIZATION_MODEL_ALLOWLIST_CHANGED]
         assert_that(len(changed_events), equal_to(1))
-        assert_that(changed_events[0].payload["added"], equal_to(["openai/gpt-4o"]))
+        assert_that(changed_events[0].payload["added"], equal_to(["openrouter/openai/gpt-4o"]))
         assert_that(changed_events[0].payload["removed"], equal_to([]))
         # Regression: actor_display must be the acting user's name, not the
         # ActorIdentity type string ("MEMBERSHIP"/"USER").
@@ -288,7 +292,7 @@ def test_update_organization_same_allowed_models_emits_no_event():
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(org_a)
         assert org is not None
-        org.allowed_models = ["openai/gpt-4o"]
+        org.allowed_models = ["openrouter/openai/gpt-4o"]
         org_repo.save(org)
 
         with patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models") as mock_list_models:
@@ -299,7 +303,7 @@ def test_update_organization_same_allowed_models_emits_no_event():
                     "Authorization": f"Bearer {context.access_token}",
                     "X-Organization-Id": str(org_a),
                 },
-                json={"allowed_models": ["openai/gpt-4o"]},
+                json={"allowed_models": ["openrouter/openai/gpt-4o"]},
             )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -338,7 +342,7 @@ def test_model_allowlist_changed_event_projects_to_durable_security_audit_record
                     "Authorization": f"Bearer {context.access_token}",
                     "X-Organization-Id": str(org_a),
                 },
-                json={"allowed_models": ["openai/gpt-4o"]},
+                json={"allowed_models": ["openrouter/openai/gpt-4o"]},
             )
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
 
@@ -422,7 +426,7 @@ def _allowlist_events(context) -> list[OutboxMessage]:
 )
 def test_an_organization_without_openrouter_access_cannot_allow_models(access, listed):
     with given(_setup(_owner_with_allowlist([]), openrouter_access(access, listed))) as context:
-        response, catalogue = _save_allowlist(context, [MODEL])
+        response, catalogue = _save_allowlist(context, [ENTRY])
 
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
         assert_that(response.json()["detail"], equal_to(NO_PROVIDER))
@@ -431,7 +435,7 @@ def test_an_organization_without_openrouter_access_cannot_allow_models(access, l
 
 
 def test_an_organization_without_openrouter_access_can_empty_its_allowlist():
-    with given(_setup(_owner_with_allowlist([MODEL]), openrouter_access(OrganizationAccess.NONE))) as context:
+    with given(_setup(_owner_with_allowlist([ENTRY]), openrouter_access(OrganizationAccess.NONE))) as context:
         response, _ = _save_allowlist(context, [])
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
@@ -445,7 +449,7 @@ def test_access_withdrawn_after_the_first_check_still_refuses_the_save():
             _set_openrouter_access(context, OrganizationAccess.NONE)
             return [{"id": MODEL}]
 
-        response, catalogue = _save_allowlist(context, [MODEL], catalogue=withdraw_while_the_catalogue_is_read)
+        response, catalogue = _save_allowlist(context, [ENTRY], catalogue=withdraw_while_the_catalogue_is_read)
 
         catalogue.assert_called_once()
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
@@ -458,9 +462,26 @@ def test_access_withdrawn_after_the_first_check_still_refuses_the_save():
     [(OrganizationAccess.ALL, None), (OrganizationAccess.ONLY, "self"), (OrganizationAccess.ALL_EXCEPT, "other")],
 )
 def test_an_organization_with_openrouter_access_saves_its_allowlist(access, listed):
-    with given(_setup(_owner_with_allowlist([MODEL]), openrouter_access(access, listed))) as context:
-        response, _ = _save_allowlist(context, [MODEL, OTHER_MODEL])
+    with given(_setup(_owner_with_allowlist([ENTRY]), openrouter_access(access, listed))) as context:
+        response, _ = _save_allowlist(context, [ENTRY, OTHER_ENTRY])
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
-        assert_that(_stored_allowlist(context), equal_to([MODEL, OTHER_MODEL]))
+        assert_that(_stored_allowlist(context), equal_to([ENTRY, OTHER_ENTRY]))
         assert_that(_allowlist_events(context), has_length(1))
+
+
+def test_an_entry_naming_another_connection_is_refused():
+    with given(_setup(_owner_with_allowlist([ENTRY]))) as context:
+        response, _ = _save_allowlist(context, [ENTRY, OTHER_MODEL])
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], contains_string(f"'{OTHER_MODEL}' does not match any known models"))
+        assert_that((_stored_allowlist(context), _allowlist_events(context)), equal_to(([ENTRY], [])))
+
+
+def test_an_entry_sent_with_the_gateway_prefix_is_stored_without_it():
+    with given(_setup(_owner_with_allowlist([]))) as context:
+        response, _ = _save_allowlist(context, [f"litellm/{ENTRY}"])
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored_allowlist(context), equal_to([ENTRY]))

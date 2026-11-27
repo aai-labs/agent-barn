@@ -35,7 +35,7 @@ def there_is_an_organization(
             description=description,
             # Permissive by default so tests that don't care about the allowlist
             # aren't blocked by it. Pass an explicit list to exercise it.
-            allowed_models=["*"] if allowed_models is None else allowed_models,
+            allowed_models=["openrouter/*"] if allowed_models is None else allowed_models,
         )
         organization_repository.save(organization)
 

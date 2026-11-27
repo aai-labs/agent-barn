@@ -1722,7 +1722,7 @@ def test_start_agent_rejects_model_removed_from_allowlist():
         org = org_repo.get(context.organization.id)
         assert org is not None
         # Allowlist changed after the agent was created: gpt-4o is no longer permitted.
-        org.allowed_models = ["anthropic/*"]
+        org.allowed_models = ["openrouter/anthropic/*"]
         org_repo.save(org)
 
         with when("I start the agent"):
@@ -6731,7 +6731,7 @@ def test_a_rejected_selection_writes_nothing():
         org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
         org = org_repo.get(context.organization.id)
         assert org is not None
-        org.allowed_models = ["openai/gpt-4o"]
+        org.allowed_models = ["openrouter/openai/gpt-4o"]
         org_repo.save(org)
         there_is_a_template(template_key="recorded-template", name="Recorded")(context)
         agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
