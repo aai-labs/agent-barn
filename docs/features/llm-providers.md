@@ -40,7 +40,12 @@ Each connection says which Organizations may use it, in `organization_access`:
 
 So until Organizations can use other providers, an Organization without OpenRouter access can't run Agents. The model pickers offer it none; they show the two fallback models only while the list loads or after a failed read.
 
-**In use.** OpenRouter can't be withdrawn from an Organization that still uses it. A change after which an Organization could no longer use OpenRouter is refused with `409` while that Organization has a non-empty allowlist, its own default model, or any Agent not deleted, Bots and suspended Agents included. Only Organizations that would lose access are checked. Other connections are never in use yet, so their access can always change. Because of this rule no running Agent loses OpenRouter.
+**In use.** An Organization uses a connection through an allowlist entry `<slug>/…`, its own default `litellm/<slug>/…`, or an Agent not deleted, Bots and suspended Agents included, whose model, or the default it inherits when its model is empty, or the model its pod is running on (`running_model`) is `litellm/<slug>/…`. An Agent inheriting the platform default uses the platform default's connection. A model of the connection is used through the same three, naming exactly `<slug>/<model_id>` or `litellm/<slug>/<model_id>`. Under the connection's exclusive lock, three writes are refused with `409` naming who still uses it, and nothing is saved:
+- a change of access after which an Organization that uses the connection could no longer use it; only Organizations that would lose access are checked;
+- a models save that would remove a used model, named as "{connection} model {model_id} is still used by …", checked before LiteLLM's routes are touched;
+- deleting a connection any Organization uses, checked before its routes are removed.
+
+Because of this rule no Agent loses the connection or the model it runs on.
 
 **No race.** A change of access checks use and writes under the connection's advisory lock, taken exclusive. Each Organization-side write that starts using OpenRouter checks access again in its own transaction, under the same lock taken shared, which holds until that transaction ends: an allowlist save with entries, its own default save, the Agent or Bot insert, and each Organization creation. So a withdrawal and such a write can't both commit on what each read before the other. The allowlist, default and hire writes also check first without the lock, so a hire is refused before a LiteLLM key is made.
 
