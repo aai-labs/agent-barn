@@ -7,7 +7,7 @@ from sqlmodel import Session
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher
-from api.domains.onboarding.exceptions import TrialSignupCreditRequired
+from api.domains.onboarding.exceptions import TrialSignupCreditRequired, TrialSignupTierRequired
 from api.domains.onboarding.models import TrialSettingsRead, TrialSettingsUpdate
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.organizations.lookup import OrganizationLookupService
@@ -54,7 +54,7 @@ class TrialSettingsService:
 
     def read(self, context: CurrentUserContext) -> TrialSettingsRead:
         self.authority.require_platform_admin(context.user)
-        return self.with_active_trials(self.repository.read())
+        return self.with_active_trials(self.repository.read(include_signup_availability=True))
 
     def with_active_trials(self, settings: TrialSettingsRead) -> TrialSettingsRead:
         return settings.model_copy(update={"active_trials": self.organizations.count_trials()})
@@ -112,15 +112,15 @@ class TrialSettingsUpdateService:
         terms: dict[str, float | int] = {
             setting: value for setting in _PLAN_TERMS if (value := settings.pop(setting, None)) is not None
         }
-        current = self.repository.read()
+        current = self.repository.read(include_signup_availability=True)
         if (
             settings.get("self_signup_enabled") is True
             and not current.self_signup_enabled
-            and not current.any_tier_offered
+            and not current.signup_tier_available
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Offer a tier before enabling self-signup: with none offered, no one can sign up.",
+                detail=str(TrialSignupTierRequired()),
             )
         signup = settings.get("self_signup_enabled", current.self_signup_enabled)
         if signup and terms.get("credit_usd", current.credit_usd) <= 0:
@@ -137,9 +137,9 @@ class TrialSettingsUpdateService:
                 context.user.id,
                 context.user.full_name or context.user.email,
             )
-        except TrialSignupCreditRequired as error:
+        except (TrialSignupCreditRequired, TrialSignupTierRequired) as error:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
         self.dispatcher.enqueue_immediate(delivery_ids)
         if terms and closing_signup:
             self.terms.change(terms, context)
-        return self.settings.with_active_trials(self.repository.read())
+        return self.settings.read(context)

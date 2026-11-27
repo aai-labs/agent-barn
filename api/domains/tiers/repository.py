@@ -192,6 +192,13 @@ class TierRepository:
                 ).all()
             )
 
+    def has_offered_paid_tier(self, *, session: Session | None = None) -> bool:
+        query = select(Tier.id).where(col(Tier.enabled).is_(True), Tier.activation == TierActivation.PAID).limit(1)
+        if session is not None:
+            return session.exec(query.with_for_update(read=True)).first() is not None
+        with Session(self.delegate.engine) as read_session:
+            return read_session.exec(query).first() is not None
+
     def system_tier_id(self, key: str) -> UUID:
         """The id of one of the system's Tiers, which the catalog always has."""
         with Session(self.delegate.engine) as session:

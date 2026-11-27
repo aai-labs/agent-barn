@@ -7,11 +7,12 @@ import sqlalchemy as sa
 from injector import inject, singleton
 from sqlmodel import Session, col, select
 
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_TRIAL_SETTINGS_CHANGED
 from api.domains.events.models import EventScope
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.onboarding.exceptions import TrialSignupCreditRequired
+from api.domains.onboarding.exceptions import TrialSignupCreditRequired, TrialSignupTierRequired
 from api.domains.onboarding.models import (
     TRIAL_SETTINGS_SUBJECT_DISPLAY,
     PlatformTrialSettings,
@@ -34,11 +35,19 @@ class TrialSettingsRepository:
     delegate: PostgresRepositoryDelegate
     outbox: OutboxMessageRepository
     plans: OrganizationPlans
+    telegram: AgentBarnTelegramService
 
-    def read(self) -> TrialSettingsRead:
+    def read(self, *, include_signup_availability: bool = False) -> TrialSettingsRead:
         with Session(self.delegate.engine) as session:
             current = self._current(session.get(PlatformTrialSettings, 1), self.plans.trial_terms(session))
-        return current.model_copy(update={"any_tier_offered": bool(self.plans.offered_keys())})
+        if not include_signup_availability:
+            return current
+        return current.model_copy(update={"signup_tier_available": self._signup_tier_available(current)})
+
+    def _signup_tier_available(self, current: TrialSettingsRead, *, session: Session | None = None) -> bool:
+        return (current.free_tier_offered and self.telegram.is_offered()) or self.plans.paid_signup_available(
+            session=session
+        )
 
     @staticmethod
     def _current(row: PlatformTrialSettings | None, terms: TrialTerms | None) -> TrialSettingsRead:
@@ -86,6 +95,12 @@ class TrialSettingsRepository:
             row = session.get(PlatformTrialSettings, 1)
             terms = self.plans.trial_terms(session, for_update=True)
             current = self._current(row, terms)
+            if (
+                changes.get("self_signup_enabled") is True
+                and not current.self_signup_enabled
+                and not self._signup_tier_available(current, session=session)
+            ):
+                raise TrialSignupTierRequired()
             moved = [
                 (setting, getattr(current, setting), value)
                 for setting, value in changes.items()

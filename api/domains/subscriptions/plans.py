@@ -31,9 +31,12 @@ class TierPlans(OrganizationPlans):
         return self.repository.system_tier_id(FREE_TIER_KEY)
 
     def plan_for_paying_organization(self) -> UUID | None:
-        if not self.subscription_providers.paid_tiers_purchasable():
+        if not self.paid_signup_available():
             return None
         return self.repository.system_tier_id(NONE_TIER_KEY)
+
+    def paid_signup_available(self, *, session: Session | None = None) -> bool:
+        return self.subscription_providers.paid_tiers_purchasable(session=session)
 
     def trial_terms(self, session: Session, *, for_update: bool = False) -> TrialTerms | None:
         free = self._free(session, for_update=for_update)
