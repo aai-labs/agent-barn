@@ -1386,8 +1386,8 @@ export function AgentChannelSettings({
                               className="mb-3 mt-0 text-xs"
                               style={{ color: "var(--ink-3)" }}
                             >
-                              Leave every credential blank to keep the encrypted
-                              credentials already stored.
+                              Fill in only the credentials you are replacing. A
+                              blank field keeps its stored value.
                             </p>
                             <div className="flex w-full flex-col gap-3">
                               <SchemaFields
