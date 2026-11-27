@@ -35,11 +35,12 @@ def _free_port() -> int:
 
 
 class ChatCompletionsStub:
-    """An OpenAI-compatible chat endpoint that records each request's key and model and sends `reply`."""
+    """An OpenAI-compatible chat endpoint that records each request's key, model and body and sends `reply`."""
 
     def __init__(self):
         self.keys: list[str] = []
         self.models: list[str] = []
+        self.bodies: list[dict] = []
         self.reply: dict = COMPLETION
         stub = self
 
@@ -48,6 +49,7 @@ class ChatCompletionsStub:
                 posted = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 stub.keys.append(self.headers.get("Authorization", "").removeprefix("Bearer "))
                 stub.models.append(posted.get("model"))
+                stub.bodies.append(posted)
                 body = json.dumps(stub.reply).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

@@ -10,6 +10,9 @@ import type { ModelOption } from "../schemas";
 
 const MENU_GAP = 4;
 const VIEWPORT_MARGIN = 8;
+const OPENROUTER = "OpenRouter";
+
+type ModelGroup = { connection: string; options: ModelOption[] };
 
 interface ModelSelectProps {
   value: string;
@@ -43,24 +46,37 @@ export function ModelSelect({
     allOptions.find((m) => m.value === value)?.label ?? value ?? "Select a model…";
 
   // Case-insensitive substring search across label + value so "gpt" matches
-  // "GPT-5 mini" and ".../gpt-5-mini". Results are sorted alphabetically by
-  // label, then the current selection is pinned to the top (Array.sort is
-  // stable, so the alphabetical order of the rest is preserved).
-  const visible = useMemo(() => {
+  // "GPT-5 mini" and ".../gpt-5-mini", across every connection. Options without a
+  // connection (a kept current value) come first; then one group per connection,
+  // OpenRouter first and the rest by name, each sorted alphabetically by label.
+  const { ungrouped, groups } = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filtered = q
+    const filtered = (q
       ? allOptions.filter(
           (m) =>
             m.label.toLowerCase().includes(q) ||
             m.value.toLowerCase().includes(q),
         )
-      : allOptions;
-    return [...filtered]
+      : allOptions
+    ).sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+    );
+    const byConnection = new Map<string, ModelOption[]>();
+    for (const option of filtered) {
+      if (!option.connection) continue;
+      byConnection.set(option.connection, [...(byConnection.get(option.connection) ?? []), option]);
+    }
+    const ordered: ModelGroup[] = [...byConnection.entries()]
+      .map(([connection, options]) => ({ connection, options }))
       .sort((a, b) =>
-        a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
-      )
-      .sort((a, b) => (a.value === value ? -1 : b.value === value ? 1 : 0));
-  }, [allOptions, search, value]);
+        a.connection === OPENROUTER
+          ? -1
+          : b.connection === OPENROUTER
+            ? 1
+            : a.connection.localeCompare(b.connection, undefined, { sensitivity: "base" }),
+      );
+    return { ungrouped: filtered.filter((option) => !option.connection), groups: ordered };
+  }, [allOptions, search]);
 
   function setMenuOpen(next: boolean) {
     setOpen(next);
@@ -120,36 +136,62 @@ export function ModelSelect({
         </div>
 
         <div role="listbox" className="min-h-0 flex-1 overflow-y-auto py-1">
-          {visible.length === 0 ? (
+          {ungrouped.length === 0 && groups.length === 0 ? (
             <div className="px-3 py-2 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
               No models match.
             </div>
           ) : (
-            visible.map((m) => {
-              const selected = m.value === value;
-              return (
-                <button
-                  key={m.value}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-left text-[0.8125rem] hover:bg-[var(--bg-soft)]"
-                  style={{
-                    color: "var(--ink)",
-                    background: selected ? "var(--bg-soft)" : "transparent",
-                  }}
-                  onClick={() => choose(m.value)}
-                >
-                  <span className="w-4 flex-shrink-0">
-                    {selected && <CheckIcon size={14} style={{ color: "var(--ok)" }} />}
-                  </span>
-                  <span className="truncate">{m.label}</span>
-                </button>
-              );
-            })
+            <>
+              {ungrouped.map((m) => (
+                <ModelOptionButton key={m.value} option={m} selected={m.value === value} onChoose={choose} />
+              ))}
+              {groups.map((group) => (
+                <div key={group.connection} role="group" aria-label={group.connection}>
+                  <div
+                    aria-hidden
+                    className="px-3 pt-2 pb-1 text-[0.72rem] font-medium uppercase tracking-wide"
+                    style={{ color: "var(--ink-3)" }}
+                  >
+                    {group.connection}
+                  </div>
+                  {group.options.map((m) => (
+                    <ModelOptionButton key={m.value} option={m} selected={m.value === value} onChoose={choose} />
+                  ))}
+                </div>
+              ))}
+            </>
           )}
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function ModelOptionButton({
+  option,
+  selected,
+  onChoose,
+}: {
+  option: ModelOption;
+  selected: boolean;
+  onChoose: (value: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      className="flex items-center gap-2 w-full px-3 py-2 text-left text-[0.8125rem] hover:bg-[var(--bg-soft)]"
+      style={{
+        color: "var(--ink)",
+        background: selected ? "var(--bg-soft)" : "transparent",
+      }}
+      onClick={() => onChoose(option.value)}
+    >
+      <span className="w-4 flex-shrink-0">
+        {selected && <CheckIcon size={14} style={{ color: "var(--ok)" }} />}
+      </span>
+      <span className="truncate">{option.label}</span>
+    </button>
   );
 }

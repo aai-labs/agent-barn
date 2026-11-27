@@ -33,21 +33,26 @@ from api.domains.skills.repository import SkillRepository
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import split_requirements
 
-_OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+_GATEWAY_PREFIX = "litellm/"
+
+
+def pool_name(model: str) -> str:
+    """A stored model (litellm/<connection slug>/<model>) as the allowlist names it."""
+    return model.removeprefix(_GATEWAY_PREFIX)
 
 
 def is_model_allowed(model: str, allowlist: list[str]) -> bool:
-    """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist blocks everything. The litellm/
-    gateway prefix is stripped so patterns match the OpenRouter slug.
+    """Whether a stored model (litellm/<connection slug>/<model>) is permitted by an
+    allowlist of <connection slug>/<model> entries, OpenRouter's possibly globs. An
+    empty allowlist blocks everything. Matching is case-insensitive.
     """
     if not allowlist:
         return False
     patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
         return False
-    slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
-    return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
+    name = pool_name(model).lower()
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
 
 
 @dataclass(frozen=True)

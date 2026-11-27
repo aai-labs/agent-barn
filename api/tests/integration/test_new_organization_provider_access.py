@@ -107,7 +107,7 @@ def _owned_allowlist(context, email: str) -> list[str]:
 
 
 def _expected(context, seeded: bool) -> list[str]:
-    return [context.injector.get(Config).agent_default_model.removeprefix("litellm/openrouter/")] if seeded else []
+    return [context.injector.get(Config).agent_default_model.removeprefix("litellm/")] if seeded else []
 
 
 @pytest.mark.parametrize(("access", "listed", "seeded"), ACCESS)

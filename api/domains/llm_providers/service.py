@@ -533,11 +533,14 @@ class PlatformLlmProviderService:
                 seen_base_url=connection.base_url,
                 wanted=wanted,
                 apply=partial(self._route_models, api_key),
+                platform_default=self.config.agent_default_model,
             )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
         except ConnectionChanged:
             raise HTTPException(409, MODELS_CHANGED_WHILE_READING) from None
+        except ConnectionInUse as refused:
+            raise HTTPException(409, _in_use(refused)) from None
         self.dispatcher.enqueue_immediate(ids)
         return [
             LlmProviderModelRead.model_validate(model, from_attributes=True)
@@ -563,6 +566,7 @@ class PlatformLlmProviderService:
                 organization_ids,
                 context.user.id,
                 context.user.full_name or context.user.email,
+                self.config.agent_default_model,
             )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
@@ -579,10 +583,16 @@ class PlatformLlmProviderService:
             raise HTTPException(409, OPENROUTER_FIXED)
         try:
             ids = self.repository.delete(
-                slug, context.user.id, context.user.full_name or context.user.email, apply=self._remove_routes
+                slug,
+                context.user.id,
+                context.user.full_name or context.user.email,
+                apply=self._remove_routes,
+                platform_default=self.config.agent_default_model,
             )
         except ConnectionNotFound:
             raise HTTPException(404, NOT_FOUND) from None
+        except ConnectionInUse as refused:
+            raise HTTPException(409, _in_use(refused)) from None
         self.dispatcher.enqueue_immediate(ids)
 
     @staticmethod

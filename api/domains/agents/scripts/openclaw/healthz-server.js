@@ -24,7 +24,7 @@ let refreshing = false;
 
 const TERMINAL_LLM_ERRORS = {
   401: 'LLM API key is invalid or expired. Check your API key configuration.',
-  402: 'OpenRouter credits exhausted. Add credits at https://openrouter.ai/credits.',
+  402: "The model provider's account has run out of credit. Ask a Platform Administrator to add credit.",
   403: 'LLM API access denied. Check your account permissions.',
 };
 

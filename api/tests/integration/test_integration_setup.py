@@ -199,7 +199,7 @@ def test_stopped_credential_save_ignores_unrelated_start_blocker(empty_custom_ap
         agent = repository.get_by_id(context.agent.id)
         agent.model = "litellm/openrouter/disallowed/model"
         repository.save(agent)
-        context.organization.allowed_models = ["openai/*"]
+        context.organization.allowed_models = ["openrouter/openai/*"]
         context.postgres_delegate.save(context.organization)
         blocked = context.client.post(f"{_base(context)}/start", headers=_auth(context))
         assert blocked.status_code == 400, blocked.text

@@ -283,8 +283,8 @@ test("each provider card says which Organizations may use it", async ({ page }) 
 
   await expect(settings.card()).toContainText("All organizations");
   await expect(settings.providerCard("Anthropic")).toContainText("No organizations");
-  await expect(settings.providerCard("Azure Europe")).toContainText("All except 3");
-  await expect(settings.providerCard("Aardvark lab")).toContainText("Only 1");
+  await expect(settings.providerCard("Azure Europe")).toContainText("All organizations except 3 ticked");
+  await expect(settings.providerCard("Aardvark lab")).toContainText("1 organization ticked");
 });
 
 test("Platform Admin limits a provider to ticked Organizations, searching and paging the list", async ({ page }) => {
@@ -315,7 +315,7 @@ test("Platform Admin limits a provider to ticked Organizations, searching and pa
 
   await expect(settings.dialog()).toHaveCount(0);
   await expect(settings.toast("Anthropic organizations saved")).toBeVisible();
-  await expect(settings.providerCard("Anthropic")).toContainText("Only 3");
+  await expect(settings.providerCard("Anthropic")).toContainText("3 organizations ticked");
   await expect(settings.manageButton("Anthropic")).toBeFocused();
   expect(mock.saves).toEqual([
     {
@@ -352,6 +352,52 @@ test("the Organizations dialog opens on the stored access and its ticked Organiz
   await expect(settings.dialog()).toHaveCount(0);
   await expect(settings.providerCard("Azure Europe")).toContainText("No organizations");
   expect(mock.saves).toEqual([{ slug: "azure-eu", body: { organization_access: "none", organization_ids: [] } }]);
+});
+
+test("a ticked Organization on a later page is listed first, once, and searched like the rest", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [{ ...ANTHROPIC_CONNECTION, organization_access: "only", organization_count: 1 }] });
+  await data.interceptOrganizations({ organizations: ORGANIZATIONS, access: "only", listed: [ORGANIZATIONS[13].id] });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.openOrganizations("Anthropic");
+  await expect(settings.organizationCheckboxes().first()).toHaveAccessibleName("Org 14");
+  await expect(settings.organizationCheckboxes().first()).toBeChecked();
+  await expect(settings.organizationCheckboxes()).toHaveCount(13);
+  await settings.showMoreOrganizations().click();
+  await expect(settings.organizationCheckboxes()).toHaveCount(15);
+  await expect(settings.organizationCheckbox("Org 14")).toHaveCount(1);
+
+  await settings.organizationSearch().fill("Org 02");
+  await expect(settings.organizationCheckboxes()).toHaveCount(1);
+  await expect(settings.organizationCheckbox("Org 02")).toBeVisible();
+});
+
+test("in a short window the Organizations dialog keeps its buttons inside and scrolls the list", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 480 });
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  await data.interceptOrganizations({ organizations: ORGANIZATIONS });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+
+  await settings.openOrganizations("Anthropic");
+  await settings.accessOption("Only the ticked organizations").check();
+  await expect(settings.organizationCheckboxes()).toHaveCount(12);
+
+  await expect(async () => {
+    const dialog = await settings.dialog().boundingBox();
+    const save = await settings.saveOrganizationsButton().boundingBox();
+    expect(dialog).not.toBeNull();
+    expect(save).not.toBeNull();
+    expect(save!.y + save!.height).toBeLessThanOrEqual(dialog!.y + dialog!.height);
+    expect(dialog!.y + dialog!.height).toBeLessThanOrEqual(480);
+  }).toPass();
+  await settings.organizationCheckbox("Org 12").check();
+  await expect(settings.tickedOrganizations()).toHaveText("1 ticked");
 });
 
 test("a refused Organizations change shows the server's reason and keeps the dialog open", async ({ page }) => {
@@ -410,6 +456,37 @@ test("the providers are three columns wide on a desktop and one on a phone", asy
     const anthropic = await settings.providerCard("Anthropic").boundingBox();
     expect(anthropic?.x).toBe(google?.x);
     expect(anthropic?.y).toBeGreaterThan(google?.y ?? Infinity);
+  }).toPass();
+});
+
+test("every provider card is as tall as a connected one, with or without a connection", async ({ page }) => {
+  await signIn(page);
+  const data = new PlatformLlmProviderDataSupport(page);
+  await data.intercept({
+    connection: {
+      has_api_key: false,
+      api_key_last4: null,
+      updated_at: null,
+      updated_by: null,
+      env_key_configured: false,
+      env_key_last4: null,
+    },
+  });
+  const settings = new PlatformLlmProvidersPage(page);
+  await settings.goto();
+  await expect(settings.providersHeading()).toHaveText("Providers · 0 of 9 connected");
+  const height = async (name: string) => (await settings.providerCard(name).boundingBox())?.height;
+  const unconnected = await height("Anthropic");
+
+  await data.intercept({ connections: [ANTHROPIC_CONNECTION] });
+  await page.reload();
+  await expect(settings.providerCard("Anthropic")).toContainText("Connected");
+  await expect(async () => {
+    const connected = await height("Anthropic");
+    expect(unconnected).toBe(connected);
+    for (const name of ["OpenRouter", "Google", "Fireworks", "Novita", "Custom endpoint"]) {
+      expect(await height(name)).toBe(connected);
+    }
   }).toPass();
 });
 
@@ -728,7 +805,7 @@ test("Platform Admin adds a provider open only to two ticked Organizations", asy
   await settings.dialog().getByRole("button", { name: "Add provider" }).click();
 
   await expect(settings.dialog()).toHaveCount(0);
-  await expect(settings.providerCard("OpenAI")).toContainText("Only 2");
+  await expect(settings.providerCard("OpenAI")).toContainText("2 organizations ticked");
   expect(mock.adds).toEqual([
     {
       provider_type: "openai",

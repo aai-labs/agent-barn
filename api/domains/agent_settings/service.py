@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -15,12 +16,18 @@ from api.domains.agent_settings.models import (
 from api.domains.agent_settings.repository import AgentSettingsRepository
 from api.domains.agents.llm_budget import LOWERED_TO_FIT_ORGANIZATION, AgentLlmBudgetService
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.selection import is_model_allowed
+from api.domains.agents.selection import is_model_allowed, pool_name
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.access import (
+    MODEL_NOT_STORED,
+    NO_LLM_PROVIDER,
+    PROVIDER_NOT_OPEN,
+    ModelNotStored,
+    ProviderNotOpen,
+    UnknownConnection,
+)
 from api.domains.llm_providers.lookup import LlmProviderAccessLookup
-from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED, OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
@@ -82,29 +89,51 @@ class AgentSettingsService:
             # No transition, so no Event: an audit trail of unchanged values is noise.
             return
 
+        named = [candidate] if candidate is not None else []
         if candidate is not None:
-            if not self.llm_provider_access.can_use(OPENROUTER_SLUG, organization_id):
+            if not self.llm_provider_access.open_models(organization_id):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+            self._require_pool(organization_id, lambda: self.llm_provider_access.check_models(named, organization_id))
             self._ensure_selectable_default(candidate, organization_id)
 
-        def require_openrouter(session: Session) -> None:
-            self.llm_provider_access.require_open(session, OPENROUTER_SLUG, organization_id)
+        def require_pool(session: Session) -> None:
+            self._require_pool(
+                organization_id, lambda: self.llm_provider_access.require_models(session, named, organization_id)
+            )
 
         inheriting, _ = self.agent_repository.count_by_model_source(organization_id)
-        try:
-            result = self.repository.set_default_model_with_event(
-                organization_id,
-                candidate,
-                previous=previous,
-                inheriting_agent_count=inheriting,
-                actor=resolve_actor_identity(context, organization_id),
-                actor_display=context.user.full_name or context.user.email,
-                subject_display=self.organization_lookup.get_name(organization_id),
-                in_transaction=require_openrouter if candidate is not None else None,
-            )
-        except ProviderNotOpen:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
+        result = self.repository.set_default_model_with_event(
+            organization_id,
+            candidate,
+            previous=previous,
+            inheriting_agent_count=inheriting,
+            actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
+            subject_display=self.organization_lookup.get_name(organization_id),
+            in_transaction=require_pool if candidate is not None else None,
+        )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+
+    def _require_pool(self, organization_id: UUID, check: Callable[[], None]) -> None:
+        try:
+            check()
+        except UnknownConnection as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{pool_name(refused.model)}' does not match any known models in the catalog.",
+            ) from None
+        except ProviderNotOpen as refused:
+            detail = (
+                PROVIDER_NOT_OPEN.format(name=refused.connection_name)
+                if self.llm_provider_access.open_models(organization_id)
+                else NO_LLM_PROVIDER
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
+        except ModelNotStored as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MODEL_NOT_STORED.format(model=pool_name(refused.model), name=refused.connection_name),
+            ) from None
 
     def _update_default_agent_llm_budget(
         self, organization_id: UUID, candidate: float | None, context: CurrentUserContext
@@ -230,23 +259,32 @@ class AgentSettingsService:
 
         The allowlist keeps the default inside what the Organization permits, so an
         Agent that inherits it is never running a model the Organization disallows.
-        But the allowlist holds globs — an Organization on `["*"]` would accept any
-        string — so the candidate is also checked against the live catalogue. That
-        second check is advisory: when OpenRouter is unreachable the save proceeds,
-        matching how the allowlist editor itself degrades.
+        But OpenRouter's entries may be globs — an Organization on `["openrouter/*"]`
+        would accept any OpenRouter string — so an OpenRouter candidate is also checked
+        against the live catalogue; another connection's was already matched against
+        its stored models. That second check is advisory: when OpenRouter is
+        unreachable the save proceeds, matching how the allowlist editor itself
+        degrades.
         """
         allowed_models = self.organization_lookup.get_allowed_models(organization_id)
         if allowed_models is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
         if not is_model_allowed(model, allowed_models):
+            shown = (
+                model.removeprefix(_OPENROUTER_MODEL_PREFIX)
+                if model.startswith(_OPENROUTER_MODEL_PREFIX)
+                else pool_name(model)
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"Model '{model.removeprefix(_OPENROUTER_MODEL_PREFIX)}' is not in the organization's "
+                    f"Model '{shown}' is not in the organization's "
                     "allowed model list. "
                     "Add it under Allowed Models before making it the default."
                 ),
             )
+        if not model.startswith(_OPENROUTER_MODEL_PREFIX):
+            return
 
         try:
             catalog = self.openrouter.list_models()

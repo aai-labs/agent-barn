@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from api.domains.agent_settings.models import OrganizationAgentSettings
-from api.domains.agents.models import Agent
+from api.domains.agents.models import Agent, AgentStatus
 from api.domains.events.models import OutboxMessage
 from api.domains.llm_providers.models import (
     OPENROUTER_CONNECTION_ID,
@@ -32,6 +32,10 @@ BASE = "/api/v1/platform/settings/llm-providers"
 ADMIN_NAME = "Platform Person"
 EVENT = "platform.llm_provider.organizations_changed"
 OPENROUTER_MODEL = "openai/gpt-4o"
+OPENROUTER_ENTRY = f"openrouter/{OPENROUTER_MODEL}"
+ANTHROPIC_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_ENTRY = f"anthropic/{ANTHROPIC_MODEL}"
+ANTHROPIC_STORED = f"litellm/{ANTHROPIC_ENTRY}"
 ORGANIZATIONS_NOT_TAKEN = 'Organizations are listed only for "all_except" and "only". Nothing was saved.'
 ACCESS_CHOICE = 'Organization access is "all", "none", "all_except" or "only". Nothing was saved.'
 UNKNOWN_ORGANIZATION = "One of these organizations does not exist. Nothing was saved."
@@ -302,14 +306,16 @@ def _uses_its_allowlist(context, organization_id):
     with _session(context) as session:
         organization = session.get(Organization, organization_id)
         assert organization is not None
-        organization.allowed_models = [OPENROUTER_MODEL]
+        organization.allowed_models = [OPENROUTER_ENTRY]
         session.add(organization)
         session.commit()
 
 
 def _uses_its_own_default(context, organization_id):
     with _session(context) as session:
-        session.add(OrganizationAgentSettings(organization_id=organization_id, default_model=OPENROUTER_MODEL))
+        session.add(
+            OrganizationAgentSettings(organization_id=organization_id, default_model=f"litellm/{OPENROUTER_ENTRY}")
+        )
         session.commit()
 
 
@@ -373,7 +379,7 @@ def test_an_organization_with_only_deleted_agents_does_not_use_openrouter():
 def test_the_refusal_names_what_each_organization_uses_and_at_most_10_of_them():
     with given(_setup(admin)) as context:
         _uses_its_allowlist(context, context.organization.id)
-        users = [_organization(context, f"User {index:02d}", [OPENROUTER_MODEL]) for index in range(11)]
+        users = [_organization(context, f"User {index:02d}", [OPENROUTER_ENTRY]) for index in range(11)]
         _uses_its_own_default(context, users[0])
         _has_a_live_agent(context, users[0])
         _has_a_live_agent(context, users[0])
@@ -395,7 +401,7 @@ def test_the_refusal_names_what_each_organization_uses_and_at_most_10_of_them():
 
 def test_opening_openrouter_to_more_organizations_is_never_refused():
     with given(_setup(admin)) as context:
-        beta = _organization(context, "Beta Org", [OPENROUTER_MODEL])
+        beta = _organization(context, "Beta Org", [OPENROUTER_ENTRY])
         with _session(context) as session:
             session.connection().execute(text("UPDATE llm_provider_connection SET organization_access = 'none'"))
             session.commit()
@@ -407,7 +413,7 @@ def test_opening_openrouter_to_more_organizations_is_never_refused():
 
 def test_only_withdrawing_from_an_organization_checks_whether_it_uses_openrouter():
     with given(_setup(admin)) as context:
-        beta = _organization(context, "Beta Org", [OPENROUTER_MODEL])
+        beta = _organization(context, "Beta Org", [OPENROUTER_ENTRY])
         gamma = _organization(context, "Gamma Org")
         _put(context, "openrouter", "all_except", [gamma])
 
@@ -417,13 +423,99 @@ def test_only_withdrawing_from_an_organization_checks_whether_it_uses_openrouter
         assert_that(_put(context, "openrouter", "all_except", [beta]).status_code, equal_to(409))
 
 
-def test_a_connection_other_than_openrouter_is_never_in_use():
+def _allows_anthropic(context, organization_id):
+    with _session(context) as session:
+        organization = session.get_one(Organization, organization_id)
+        organization.allowed_models = [OPENROUTER_ENTRY, ANTHROPIC_ENTRY]
+        session.add(organization)
+        session.commit()
+
+
+def _defaults_to_anthropic(context, organization_id):
+    with _session(context) as session:
+        session.add(OrganizationAgentSettings(organization_id=organization_id, default_model=ANTHROPIC_STORED))
+        session.commit()
+
+
+def _has_an_agent_on_anthropic(context, organization_id):
+    there_is_an_agent(name="Anthropic Agent", organization_id=organization_id, model=ANTHROPIC_STORED)(context)
+
+
+def _has_an_agent_inheriting_anthropic(context, organization_id):
+    _defaults_to_anthropic(context, organization_id)
+    there_is_an_agent(name="Inheriting Agent", organization_id=organization_id)(context)
+
+
+def _has_an_agent_still_running_on_anthropic(context, organization_id):
+    there_is_an_agent(name="Moved Agent", organization_id=organization_id, status=AgentStatus.RUNNING)(context)
+    with _session(context) as session:
+        agent = session.get_one(Agent, context.agent.id)
+        agent.running_model = ANTHROPIC_STORED
+        session.add(agent)
+        session.commit()
+
+
+@pytest.mark.parametrize(
+    ("use", "what"),
+    [
+        (_allows_anthropic, "allowed models"),
+        (_defaults_to_anthropic, "its default model"),
+        (_has_an_agent_on_anthropic, "1 Agent"),
+        (_has_an_agent_inheriting_anthropic, "its default model, 1 Agent"),
+        (_has_an_agent_still_running_on_anthropic, "1 Agent"),
+    ],
+)
+def test_withdrawing_another_connection_from_an_organization_that_uses_it_is_refused(use, what):
     with given(_setup(admin, anthropic_connected)) as context:
-        _has_a_live_agent(context, context.organization.id)
+        beta = _organization(context, "Beta Org")
+        use(context, beta)
 
-        response = _put(context, "anthropic", "none", [])
+        response = _put(context, "anthropic", "all_except", [beta])
 
-        assert_that(response.status_code, equal_to(200))
+        assert_that(response.status_code, equal_to(409))
+        assert_that(
+            response.json()["detail"], equal_to(f"Anthropic is still used by Beta Org ({what}). Nothing was saved.")
+        )
+        assert_that(_stored(context, "anthropic"), equal_to(("all", [])))
+        assert_that(_events(context), has_length(0))
+
+
+def test_an_agent_inheriting_a_platform_default_on_another_connection_holds_it():
+    with given(
+        [set_env_variable({"AGENT_DEFAULT_MODEL": ANTHROPIC_STORED}), *_setup(admin, anthropic_connected)]
+    ) as context:
+        beta = _organization(context, "Beta Org")
+        there_is_an_agent(name="Inheriting Agent", organization_id=beta)(context)
+
+        response = _put(context, "anthropic", "all_except", [beta])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(
+            response.json()["detail"], equal_to("Anthropic is still used by Beta Org (1 Agent). Nothing was saved.")
+        )
+
+
+def test_an_organization_using_only_openrouter_does_not_hold_another_connection():
+    with given(_setup(admin, anthropic_connected)) as context:
+        beta = _organization(context, "Beta Org", [OPENROUTER_ENTRY])
+        _uses_its_own_default(context, beta)
+        _has_a_live_agent(context, beta)
+
+        response = _put(context, "anthropic", "all_except", [beta])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(_stored(context, "anthropic"), equal_to(("all_except", [beta])))
+
+
+def test_an_agent_on_another_connection_does_not_hold_openrouter():
+    with given(_setup(admin, anthropic_connected)) as context:
+        beta = _organization(context, "Beta Org")
+        _has_an_agent_on_anthropic(context, beta)
+
+        response = _put(context, "openrouter", "all_except", [beta])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(_stored(context, "openrouter"), equal_to(("all_except", [beta])))
 
 
 def test_changing_access_leaves_when_the_key_was_saved():

@@ -257,9 +257,7 @@ def test_existing_users_receive_organizations_once_without_touching_trials_or_in
             assert_that(row["is_trial"], equal_to(False))
             assert_that(row["llm_budget_usd"], equal_to(get_config().organization_default_llm_budget_usd))
             assert_that(row["llm_budget_duration"], equal_to("30d"))
-            assert_that(
-                row["allowed_models"], equal_to([get_config().agent_default_model.removeprefix("litellm/openrouter/")])
-            )
+            assert_that(row["allowed_models"], equal_to([get_config().agent_default_model.removeprefix("litellm/")]))
         for key in ("owner", "invited", "pending_invite"):
             assert_that(by_user[user_ids[key]]["id"], equal_to(existing_org))
         assert_that(connection.execute(text("SELECT count(*) FROM agent")).scalar_one(), equal_to(0))

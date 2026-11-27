@@ -86,7 +86,7 @@ def test_resending_the_current_values_records_nothing():
 def test_a_rename_with_an_allowlist_change_records_and_enqueues_both_events():
     with given(_given()) as context:
         with patch.object(EventDeliveryDispatcher, "enqueue_immediate") as enqueue:
-            response = _patch(context, {"name": "Renamed Again", "allowed_models": ["openai/gpt-4o"]})
+            response = _patch(context, {"name": "Renamed Again", "allowed_models": ["openrouter/openai/gpt-4o"]})
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         updated = _events(context, ORGANIZATION_UPDATED)

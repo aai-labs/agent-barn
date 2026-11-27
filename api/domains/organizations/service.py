@@ -1,5 +1,6 @@
 import fnmatch
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -13,7 +14,7 @@ from api.core.config import get_config
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allowed
+from api.domains.agents.selection import is_model_allowed, pool_name
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
@@ -29,7 +30,14 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
     ORGANIZATION_UPDATED,
 )
-from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.access import (
+    MODEL_NOT_STORED,
+    NO_LLM_PROVIDER,
+    PROVIDER_NOT_OPEN,
+    ModelNotStored,
+    ProviderNotOpen,
+    UnknownConnection,
+)
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
@@ -57,6 +65,7 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 logger = logging.getLogger(__name__)
 
 _TRACKED_ORGANIZATION_FIELDS = ("name", "description")
+_OPENROUTER_ENTRY_PREFIX = f"{OPENROUTER_SLUG}/"
 
 
 def _and_list(items: list[str]) -> str:
@@ -135,12 +144,43 @@ class OrganizationService:
         )
 
     @staticmethod
-    def _bare_model(pattern: str) -> str:
-        # Strip any litellm gateway prefix so patterns match the bare OpenRouter slug.
-        return pattern.strip().lower().removeprefix("litellm/openrouter/")
+    def _entry(pattern: str) -> str:
+        return pool_name(pattern.strip().lower())
+
+    @staticmethod
+    def _unknown_model(pattern: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
+        )
+
+    def _require_pool(self, organization_id: UUID, check: Callable[[], None]) -> None:
+        try:
+            check()
+        except UnknownConnection as refused:
+            raise self._unknown_model(refused.model) from None
+        except ProviderNotOpen as refused:
+            detail = (
+                PROVIDER_NOT_OPEN.format(name=refused.connection_name)
+                if self.agent_service.llm_provider_access.open_models(organization_id)
+                else NO_LLM_PROVIDER
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
+        except ModelNotStored as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MODEL_NOT_STORED.format(model=refused.model, name=refused.connection_name),
+            ) from None
 
     def _validate_allowed_models(self, allowed_models: list[str], existing: list[str] | None = None) -> None:
-        if not allowed_models:
+        existing_entries = {self._entry(m) for m in (existing or [])}
+        added = [
+            pattern
+            for pattern in allowed_models
+            if self._entry(pattern) not in existing_entries
+            and self._entry(pattern).startswith(_OPENROUTER_ENTRY_PREFIX)
+        ]
+        if not added:
             return
         try:
             catalog = self.agent_service.openrouter.list_models()
@@ -155,17 +195,10 @@ class OrganizationService:
         # Entries already stored on the org are exempt from catalog validation:
         # a model OpenRouter has since removed ("orphaned") must be preservable on
         # save. Only newly-added patterns are checked against the live catalog.
-        existing_bare = {self._bare_model(m) for m in (existing or [])}
-        catalog_ids_lower = [m["id"].lower() for m in catalog]
-        for pattern in allowed_models:
-            bare = self._bare_model(pattern)
-            if bare in existing_bare:
-                continue
-            if not any(fnmatch.fnmatch(cid, bare) for cid in catalog_ids_lower):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
-                )
+        catalog_entries = [f"{_OPENROUTER_ENTRY_PREFIX}{m['id']}".lower() for m in catalog]
+        for pattern in added:
+            if not any(fnmatch.fnmatch(entry, self._entry(pattern)) for entry in catalog_entries):
+                raise self._unknown_model(pattern)
 
     def _ensure_default_model_still_allowed(self, organization_id: UUID, allowed_models: list[str]) -> None:
         """Keeps the Organization's own default model inside its allowlist.
@@ -184,7 +217,7 @@ class OrganizationService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"Model '{default_model.removeprefix(_OPENROUTER_MODEL_PREFIX)}' is the organization's "
+                    f"Model '{pool_name(default_model)}' is the organization's "
                     "default Agent model and must stay in the "
                     "allowed model list. Change the default under Agent Settings first."
                 ),
@@ -210,9 +243,7 @@ class OrganizationService:
             return
 
         names = [name for name, _ in stranded]
-        models = [
-            f"'{model.removeprefix(_OPENROUTER_MODEL_PREFIX)}'" for model in sorted({model for _, model in stranded})
-        ]
+        models = [f"'{pool_name(model)}'" for model in sorted({model for _, model in stranded})]
         subject = "Agent is" if len(names) == 1 else "Agents are"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -293,7 +324,7 @@ class OrganizationService:
             if trial:
                 admit_trial(session)
             organization.allowed_models = self.agent_service.llm_provider_access.initial_allowed_models(
-                session, config.agent_default_model.removeprefix("litellm/openrouter/")
+                session, pool_name(config.agent_default_model)
             )
 
         try:
@@ -493,23 +524,20 @@ class OrganizationService:
                     # the model level, so never overwrite the stored list with NULL.
                     del dump["allowed_models"]
                 else:
-                    if dump["allowed_models"] and not self.agent_service.llm_provider_access.can_use(
-                        OPENROUTER_SLUG, organization_id
-                    ):
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+                    access = self.agent_service.llm_provider_access
+                    entries = [pool_name(m) for m in dump["allowed_models"]]
+                    if entries:
+                        if not access.open_models(organization_id):
+                            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+                        self._require_pool(organization_id, lambda: access.check_models(entries, organization_id))
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
-                    dump["allowed_models"] = [m.removeprefix("litellm/openrouter/") for m in dump["allowed_models"]]
+                    dump["allowed_models"] = entries
                     self._ensure_default_model_still_allowed(organization_id, dump["allowed_models"])
                     self._ensure_no_agent_is_pinned_to_a_removed_model(organization_id, dump["allowed_models"])
-                    if dump["allowed_models"]:
-                        try:
-                            self.agent_service.llm_provider_access.require_open(
-                                session, OPENROUTER_SLUG, organization_id
-                            )
-                        except ProviderNotOpen:
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER
-                            ) from None
+                    if entries:
+                        self._require_pool(
+                            organization_id, lambda: access.require_models(session, entries, organization_id)
+                        )
                     previous_set = set(organization.allowed_models)
                     new_set = set(dump["allowed_models"])
                     added_models = sorted(new_set - previous_set)

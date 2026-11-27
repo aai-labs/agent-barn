@@ -63,6 +63,10 @@ CREDIT_MESSAGE = (
     "This organization has used all its credit, so this agent cannot reply right now. "
     "Ask the organization's owner to add more credit."
 )
+PROVIDER_OUT_OF_CREDIT_MESSAGE = (
+    "The model provider's account has run out of credit. Ask a Platform Administrator to add credit."
+)
+PROVIDER_OUT_OF_CREDIT_BODY = {"error": {"message": "Insufficient credits", "type": "insufficient_quota"}}
 UNKNOWN_MODEL_BODY = {"error": {"message": "model 'nope' not found", "type": "invalid_request_error"}}
 
 _COUNT_START = """
@@ -349,6 +353,14 @@ def test_a_spent_limit_outside_chat_completions_stays_a_terminal_402(runtime):
         status, body = _post(proxy, path="/embeddings")
     assert_that(status, equal_to(402))
     assert_that(body["error"]["message"], equal_to(SPEND_LIMIT_MESSAGE))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_a_provider_out_of_credit_is_answered_without_naming_a_provider(runtime):
+    with _upstream(402, PROVIDER_OUT_OF_CREDIT_BODY) as target, _proxy(runtime, target) as proxy:
+        status, body = _post(proxy)
+    assert_that(status, equal_to(402))
+    assert_that(body["error"]["message"], equal_to(PROVIDER_OUT_OF_CREDIT_MESSAGE))
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])

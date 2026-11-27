@@ -338,6 +338,7 @@ export const ModelOptionSchema = z.object({
   label: z.string(),
   contextLength: z.number().nullish(),
   pricing: z.unknown().nullish(),
+  connection: z.string().nullish(),
   isDefault: z.boolean().optional(),
 });
 

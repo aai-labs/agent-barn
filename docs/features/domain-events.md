@@ -94,7 +94,7 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `agent.deleted` — emitted when an Agent is soft-deleted.
 - `agent.secret.added` / `agent.secret.updated` / `agent.secret.removed` — emitted on Agent Secret (credential) create/update/delete; payload is built allowlist-style from safe fields only and never includes the encrypted `content`.
 - `template.created` / `template.updated` / `template.deleted` — emitted on org Template lineage create/update/delete; `template.updated`'s `field_changes` is scoped to `template_name`/`description` only, excluding the markdown prompt bodies.
-- `organization.model_allowlist.changed` — emitted when an Organization's `allowed_models` list changes.
+- `organization.model_allowlist.changed` — emitted when an Organization's `allowed_models` list changes. Its `added` and `removed` entries name their connection (`openrouter/<model>`) from migration `e5c2a9d4b7f1` on; earlier events carry bare OpenRouter ids.
 - `organization.agent_settings.changed` — emitted when an Organization's Agent Settings change, naming the setting and carrying its previous and current values plus the number of Agents that inherit it. Not emitted when a save leaves the value unchanged.
 - `organization.value_settings.changed` — emitted when an Organization's value settings change: its hourly rate, or the minutes saved for an Outcome Type.
   - Carries a `field_changes` diff keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings, where `null` means unset or the default.

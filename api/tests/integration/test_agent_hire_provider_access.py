@@ -1,8 +1,10 @@
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to
+from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentStatus, AgentType
@@ -10,7 +12,10 @@ from api.domains.llm_providers.models import (
     OPENROUTER_CONNECTION_ID,
     LlmProviderConnection,
     LlmProviderConnectionOrganization,
+    LlmProviderModel,
     OrganizationAccess,
+    PriceSource,
+    ProviderType,
 )
 from api.domains.organizations.models import Organization
 from api.infrastructure.litellm.client import LiteLLMClient
@@ -32,6 +37,10 @@ from api.tests.steps.template import there_is_a_template
 BASE = "/api/v1/organizations/{organization_id}/agents"
 CREATE = {"name": "Sales", "template_key": "test-template"}
 NO_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
+NO_OPENROUTER = "This organization can't use OpenRouter. Ask a Platform Administrator."
+ANTHROPIC_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_ENTRY = f"anthropic/{ANTHROPIC_MODEL}"
+ANTHROPIC_DEFAULT = f"litellm/{ANTHROPIC_ENTRY}"
 NO_ACCESS = [
     (OrganizationAccess.NONE, None),
     (OrganizationAccess.ONLY, "other"),
@@ -51,7 +60,7 @@ def _setup(*steps):
                 "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
                 "LITELLM_BASE_URL": "http://litellm:4000",
                 "LITELLM_SECRET_NAME": "litellm",
-                "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+                "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
                 "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
                 "API_EXTERNAL_URL": "https://api.test.com",
                 "SKIP_SLACK_TOKEN_VALIDATION": "true",
@@ -110,8 +119,8 @@ def _hire(context, **fields):
     return context.client.post(BASE, json={**CREATE, **fields}, headers=_auth(context))
 
 
-def _add_bot(context):
-    return context.client.post(f"{BASE}/{context.parent.id}/bots", json=CREATE, headers=_auth(context))
+def _add_bot(context, **fields):
+    return context.client.post(f"{BASE}/{context.parent.id}/bots", json={**CREATE, **fields}, headers=_auth(context))
 
 
 def _hired(context) -> list[str]:
@@ -176,3 +185,71 @@ def test_an_organization_with_openrouter_access_hires_and_adds_bots(access, list
 
         assert_that((hired.status_code, bot.status_code), equal_to((201, 201)), f"{hired.text} {bot.text}")
         assert_that(_hired(context), equal_to(["Sales", "Sales"]))
+
+
+def an_anthropic_connection(access: OrganizationAccess = OrganizationAccess.ALL):
+    def step(context):
+        with Session(_engine(context)) as session:
+            connection = LlmProviderConnection(
+                slug="anthropic", name="Anthropic", provider_type=ProviderType.ANTHROPIC, organization_access=access
+            )
+            session.add(connection)
+            session.flush()
+            session.add(
+                LlmProviderModel(
+                    connection_id=connection.id,
+                    model_id=ANTHROPIC_MODEL,
+                    input_cost_per_token=Decimal("0.000003"),
+                    output_cost_per_token=Decimal("0.000015"),
+                    cache_read_input_token_cost=Decimal(0),
+                    cache_creation_input_token_cost=Decimal(0),
+                    price_source=PriceSource.MANUAL,
+                )
+            )
+            session.commit()
+
+    return step
+
+
+def _remove_the_anthropic_model(context) -> None:
+    with Session(_engine(context)) as session:
+        session.exec(delete(LlmProviderModel).where(col(LlmProviderModel.model_id) == ANTHROPIC_MODEL))
+        session.commit()
+
+
+def test_a_hire_and_a_bot_on_another_open_connection_succeed_without_openrouter():
+    with given(_setup(parent_agent, openrouter_access(OrganizationAccess.NONE), an_anthropic_connection())) as context:
+        hired = _hire(context, model=ANTHROPIC_DEFAULT)
+        bot = _add_bot(context, model=ANTHROPIC_DEFAULT)
+
+        assert_that((hired.status_code, bot.status_code), equal_to((201, 201)), f"{hired.text} {bot.text}")
+        assert_that(_hired(context), equal_to(["Sales", "Sales"]))
+
+
+def test_a_hire_or_a_bot_inheriting_the_openrouter_platform_default_is_refused_without_openrouter():
+    with given(_setup(parent_agent, openrouter_access(OrganizationAccess.NONE), an_anthropic_connection())) as context:
+        hired = _hire(context)
+        bot = _add_bot(context)
+
+        assert_that((hired.status_code, bot.status_code), equal_to((400, 400)))
+        assert_that((hired.json()["detail"], bot.json()["detail"]), equal_to((NO_OPENROUTER, NO_OPENROUTER)))
+        _litellm(context).generate_key.assert_not_called()
+        assert_that(_hired(context), equal_to([]))
+
+
+def test_a_model_removed_after_the_first_check_refuses_the_hire_and_releases_the_key():
+    with given(_setup(an_anthropic_connection())) as context:
+        litellm = _litellm(context)
+
+        def remove_while_the_key_is_made(*args, **kwargs):
+            _remove_the_anthropic_model(context)
+            return FAKE_LITELLM_KEY
+
+        litellm.generate_key.side_effect = remove_while_the_key_is_made
+
+        response = _hire(context, model=ANTHROPIC_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(f"Model '{ANTHROPIC_ENTRY}' is not one of Anthropic's models."))
+        litellm.delete_key.assert_called_once_with(FAKE_LITELLM_KEY)
+        assert_that(_hired(context), equal_to([]))

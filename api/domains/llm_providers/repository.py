@@ -1,10 +1,11 @@
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4, uuid5
 
 import sqlalchemy as sa
 from injector import inject, singleton
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from api.domains.agent_settings.models import OrganizationAgentSettings
@@ -72,6 +73,7 @@ class ConnectionInUse(Exception):
 
 
 ListedOrganizations = tuple[OrganizationAccess, list[tuple[UUID, str]]]
+_GATEWAY_PREFIX = "litellm/"
 
 
 def _reprice(model: LlmProviderModel, prices: LlmProviderModelPrices) -> None:
@@ -165,6 +167,61 @@ class LlmProviderRepository:
         self._lock(session, slug, shared=True)
         return self._access(session, slug, organization_id)
 
+    def open_models(self, organization_id: UUID) -> list[tuple[LlmProviderConnection, list[LlmProviderModel]]]:
+        """The live connections the Organization may use, OpenRouter first and then by name, each with
+        its stored models by model id."""
+        with Session(self.delegate.engine) as session:
+            connections = session.exec(
+                select(LlmProviderConnection)
+                .where(col(LlmProviderConnection.deleted_at).is_(None))
+                .order_by(
+                    sa.case((col(LlmProviderConnection.slug) == OPENROUTER_SLUG, 0), else_=1),
+                    col(LlmProviderConnection.name),
+                    col(LlmProviderConnection.slug),
+                )
+            ).all()
+            listed = frozenset(
+                session.exec(
+                    select(LlmProviderConnectionOrganization.connection_id).where(
+                        LlmProviderConnectionOrganization.organization_id == organization_id
+                    )
+                ).all()
+            )
+            open_connections = [
+                connection
+                for connection in connections
+                if can_use(
+                    connection.organization_access,
+                    {organization_id} if connection.id in listed else set(),
+                    organization_id,
+                )
+            ]
+            models = session.exec(
+                select(LlmProviderModel)
+                .where(col(LlmProviderModel.connection_id).in_([connection.id for connection in open_connections]))
+                .order_by(col(LlmProviderModel.model_id))
+            ).all()
+        return [
+            (connection, [model for model in models if model.connection_id == connection.id])
+            for connection in open_connections
+        ]
+
+    def pool_connection(
+        self, slug: str, organization_id: UUID
+    ) -> tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None:
+        """The live connection, of its listed Organizations only this one if listed, and its stored
+        model ids."""
+        with Session(self.delegate.engine) as session:
+            return self._pool_connection(session, slug, organization_id)
+
+    def pool_connection_held(
+        self, session: Session, slug: str, organization_id: UUID
+    ) -> tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None:
+        """As `pool_connection`, read in the caller's transaction after taking the connection's lock
+        shared, so no withdrawal or models save can commit until that transaction ends."""
+        self._lock(session, slug, shared=True)
+        return self._pool_connection(session, slug, organization_id)
+
     def organizations(self, slug: str) -> ListedOrganizations | None:
         """The live connection's Provider Access and its listed Organizations, by name."""
         with Session(self.delegate.engine) as session:
@@ -180,13 +237,15 @@ class LlmProviderRepository:
         organization_ids: frozenset[UUID],
         actor_id: UUID,
         actor_display: str,
+        platform_default: str,
     ) -> tuple[ListedOrganizations, list[UUID]]:
         """Store the connection's Provider Access and listed Organizations with the event, under its
         lock, unless nothing changes.
 
         Raises ConnectionNotFound when no connection with this slug is live, UnknownOrganization when
         an id names no Organization, and ConnectionInUse when an Organization losing access still
-        uses OpenRouter. The key's save time is left as it was.
+        uses the connection, read with `platform_default` as the default of Organizations without
+        their own. The key's save time is left as it was.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
@@ -203,15 +262,14 @@ class LlmProviderRepository:
                     )
                 ).all()
             )
-            if connection.slug == OPENROUTER_SLUG:
-                losing = [
-                    use
-                    for use in self._openrouter_uses(session)
-                    if can_use(previous_access, previous, use.organization_id)
-                    and not can_use(organization_access, organization_ids, use.organization_id)
-                ]
-                if losing:
-                    raise ConnectionInUse(connection.name, losing)
+            losing = [
+                use
+                for use in self._uses(session, connection, platform_default)
+                if can_use(previous_access, previous, use.organization_id)
+                and not can_use(organization_access, organization_ids, use.organization_id)
+            ]
+            if losing:
+                raise ConnectionInUse(connection.name, losing)
             if organization_access == previous_access and organization_ids == previous:
                 return (previous_access, self._listed_organizations(session, connection.id)), []
             added = sorted(organization_ids - previous, key=str)
@@ -320,6 +378,7 @@ class LlmProviderRepository:
         seen_base_url: str | None,
         wanted: list[tuple[str, LlmProviderModelPrices | None]],
         apply: Callable[[LlmProviderConnection, list[LlmProviderModel]], None],
+        platform_default: str,
     ) -> list[UUID]:
         """Make the connection's models exactly `wanted`, calling `apply` first under its lock.
 
@@ -328,8 +387,9 @@ class LlmProviderRepository:
         `apply` gets the connection and the models it will have, and writes their LiteLLM routes;
         if it raises, nothing is stored. When no model is added, removed or repriced, nothing is
         stored and no event is staged. Raises ConnectionNotFound when no connection with this slug is
-        live, and ConnectionChanged when its key or base URL is no longer the one read before the
-        provider's list was, or a model to keep is no longer stored.
+        live, ConnectionChanged when its key or base URL is no longer the one read before the
+        provider's list was, or a model to keep is no longer stored, and ConnectionInUse, before
+        `apply`, when a model it would remove is still used, read as `replace_organizations` reads use.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
@@ -367,9 +427,13 @@ class LlmProviderRepository:
                     _reprice(model, prices)
                 models.append(model)
             models.sort(key=lambda model: model.model_id)
+            removed = sorted(stored.keys() - {model.model_id for model in models})
+            for model_id in removed:
+                users = self._uses(session, connection, platform_default, [model_id])
+                if users:
+                    raise ConnectionInUse(f"{connection.name} model {model_id}", users)
             apply(connection, models)
             added = sorted(model.model_id for model in models if model.model_id not in stored)
-            removed = sorted(stored.keys() - {model.model_id for model in models})
             repriced.sort()
             if not (added or removed or repriced):
                 return []
@@ -491,12 +555,15 @@ class LlmProviderRepository:
         actor_display: str,
         *,
         apply: Callable[[LlmProviderConnection], None],
+        platform_default: str,
     ) -> list[UUID]:
         """Delete the connection's models and listed Organizations, soft-delete the connection and
         purge its key, calling `apply` first under the connection's lock.
 
         `apply` removes the connection's routes from LiteLLM; if it raises, nothing is deleted.
-        Raises ConnectionNotFound when no connection with this slug is live.
+        Raises ConnectionNotFound when no connection with this slug is live, and ConnectionInUse,
+        before `apply`, while any Organization still uses it, read as `replace_organizations` reads
+        use.
         """
         with Session(self.delegate.engine) as session:
             self._lock(session, slug)
@@ -507,6 +574,9 @@ class LlmProviderRepository:
             ).one_or_none()
             if connection is None:
                 raise ConnectionNotFound(slug)
+            users = self._uses(session, connection, platform_default)
+            if users:
+                raise ConnectionInUse(connection.name, users)
             apply(connection)
             session.exec(sa.delete(LlmProviderModel).where(col(LlmProviderModel.connection_id) == connection.id))
             session.exec(
@@ -565,15 +635,42 @@ class LlmProviderRepository:
         return [(organization_id, name) for organization_id, name in rows]
 
     @staticmethod
-    def _openrouter_uses(session: Session) -> list[OrganizationUse]:
+    def _uses(
+        session: Session,
+        connection: LlmProviderConnection,
+        platform_default: str,
+        model_ids: Collection[str] | None = None,
+    ) -> list[OrganizationUse]:
+        """The Organizations using the connection, or only these of its models: through an allowlist
+        entry, their own default, or a live Agent's model, inherited default or running model."""
+        entry_prefix = f"{connection.slug}/"
+        stored_prefix = f"{_GATEWAY_PREFIX}{entry_prefix}"
+
+        def names(column, prefix: str):
+            if model_ids is None:
+                return column.startswith(prefix)
+            return column.in_([f"{prefix}{model_id}" for model_id in model_ids])
+
+        entries = sa.func.jsonb_array_elements_text(col(Organization.allowed_models)).table_valued("value")
+        allowlist = sa.exists(sa.select(1).select_from(entries).where(names(entries.c.value, entry_prefix)))
+        own_default = sa.func.coalesce(names(col(OrganizationAgentSettings.default_model), stored_prefix), False)
+        agent_settings = aliased(OrganizationAgentSettings)
+        resolved_default = sa.func.coalesce(col(agent_settings.default_model), platform_default)
         live_agents = (
-            select(col(Agent.organization_id), sa.func.count().label("agents"))
-            .where(col(Agent.deleted_at).is_(None))
+            sa.select(col(Agent.organization_id), sa.func.count().label("agents"))
+            .select_from(Agent)
+            .outerjoin(agent_settings, col(agent_settings.organization_id) == col(Agent.organization_id))
+            .where(
+                col(Agent.deleted_at).is_(None),
+                sa.or_(
+                    names(col(Agent.model), stored_prefix),
+                    sa.and_(col(Agent.model) == "", names(resolved_default, stored_prefix)),
+                    names(col(Agent.running_model), stored_prefix),
+                ),
+            )
             .group_by(col(Agent.organization_id))
             .subquery()
         )
-        allowlist = sa.func.coalesce(sa.func.jsonb_array_length(col(Organization.allowed_models)), 0) > 0
-        own_default = col(OrganizationAgentSettings.default_model).is_not(None)
         agents = sa.func.coalesce(live_agents.c.agents, 0)
         rows = (
             session.connection()
@@ -600,6 +697,22 @@ class LlmProviderRepository:
                 .order_by(col(LlmProviderModel.model_id))
             )
         )
+
+    @staticmethod
+    def _pool_connection(
+        session: Session, slug: str, organization_id: UUID
+    ) -> tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None:
+        connection = LlmProviderRepository._live(session, slug)
+        if connection is None:
+            return None
+        listed = session.exec(
+            select(LlmProviderConnectionOrganization.organization_id).where(
+                LlmProviderConnectionOrganization.connection_id == connection.id,
+                LlmProviderConnectionOrganization.organization_id == organization_id,
+            )
+        ).all()
+        model_ids = frozenset(model.model_id for model in LlmProviderRepository._models(session, connection.id))
+        return connection, frozenset(listed), model_ids
 
     @staticmethod
     def _lock(session: Session, slug: str, *, shared: bool = False) -> None:

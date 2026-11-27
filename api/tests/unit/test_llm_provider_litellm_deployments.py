@@ -24,6 +24,7 @@ PRICES = {
     "cache_creation_input_token_cost": 3.75e-06,
 }
 API_KEY_FINGERPRINT = "5aee43ea47c03b00"
+DROPPED_PARAMS = {"additional_drop_params": ["session_id"]}
 MODEL_INFO = {"id": ROUTE_ID, "disable_background_health_check": True, "key_fingerprint": API_KEY_FINGERPRINT}
 
 
@@ -108,7 +109,7 @@ def test_build_model_deployment_gives_each_provider_its_full_route(connection, m
 
     assert deployment == LiteLLMDeployment(
         model_name=model_name,
-        litellm_params={**provider_params, "api_key": API_KEY, **PRICES},
+        litellm_params={**provider_params, "api_key": API_KEY, **PRICES, **DROPPED_PARAMS},
         model_info=MODEL_INFO,
     )
 

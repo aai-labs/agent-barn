@@ -76,7 +76,7 @@ test.describe("Agent Detail Page", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    await expect(page.getByRole("main").getByText("litellm/gpt-5-mini").first()).toBeVisible();
+    await expect(page.getByRole("main").getByText("gpt-5-mini", { exact: true }).first()).toBeVisible();
   });
 
   test("disables web chat until the Agent is working", async ({ page }) => {

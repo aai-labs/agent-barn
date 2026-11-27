@@ -39,6 +39,12 @@ async function hirePayload(page: Page, dataSupport: DataSupport) {
 }
 
 const HINT = "Communication connections and integration credentials are configured independently after hiring.";
+const POOL_MODELS = [
+  { value: "litellm/anthropic/claude-sonnet-4-5", label: "claude-sonnet-4-5", connection: "Anthropic", is_default: true },
+  { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", connection: "OpenRouter" },
+  { value: "litellm/openrouter/anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", connection: "OpenRouter" },
+  { value: "litellm/anthropic/claude-haiku-4-5", label: "claude-haiku-4-5", connection: "Anthropic" },
+];
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -46,6 +52,10 @@ async function box(locator: Locator): Promise<Box> {
   const found = await locator.boundingBox();
   if (!found) throw new Error("element has no box");
   return found;
+}
+
+async function groupNames(menu: Locator): Promise<string[]> {
+  return menu.getByRole("group").evaluateAll((groups) => groups.map((group) => group.getAttribute("aria-label") ?? ""));
 }
 
 function sameRow(a: Box, b: Box) {
@@ -155,6 +165,50 @@ test.describe("Hire Dialog", () => {
       approval_mode: "auto",
       model: "litellm/openrouter/openai/gpt-5-mini",
     });
+  });
+
+  test("groups the model menu by connection, OpenRouter first, and searches across groups", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({ body: POOL_MODELS });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+    await page.getByRole("radio", { name: "Choose a specific model" }).check();
+    await page.getByRole("button", { name: "Model", exact: true }).click();
+
+    const menu = page.getByRole("listbox");
+    await expect(menu.getByRole("group")).toHaveCount(2);
+    expect(await groupNames(menu)).toEqual(["OpenRouter", "Anthropic"]);
+    await expect(menu.getByRole("group", { name: "Anthropic" }).getByRole("option")).toHaveText([
+      "claude-haiku-4-5",
+      "claude-sonnet-4-5",
+    ]);
+
+    await page.getByPlaceholder("Search models…").fill("sonnet");
+    expect(await groupNames(menu)).toEqual(["OpenRouter", "Anthropic"]);
+    await expect(menu.getByRole("group", { name: "OpenRouter" }).getByRole("option")).toHaveText(["Claude Sonnet 4.5"]);
+    await expect(menu.getByRole("group", { name: "Anthropic" }).getByRole("option")).toHaveText(["claude-sonnet-4-5"]);
+
+    await page.getByPlaceholder("Search models…").fill("haiku");
+    expect(await groupNames(menu)).toEqual(["Anthropic"]);
+    await page.getByRole("option", { name: "claude-haiku-4-5" }).click();
+
+    await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveText("claude-haiku-4-5");
+    expect((await hirePayload(page, dataSupport)).model).toEqual("litellm/anthropic/claude-haiku-4-5");
+  });
+
+  test("an Agent on another connection reads its connection and model", async ({ page }) => {
+    const model = "litellm/anthropic/claude-sonnet-4-5";
+    await dataSupport.agents.interceptGetAgentsRequest({
+      body: {
+        page: 1,
+        page_size: 50,
+        total: 1,
+        items: [{ ...mockAgent, model, effective_model: model, running_model: model }],
+      },
+    });
+    await dashboardPage.goto();
+
+    await expect(page.getByText("anthropic/claude-sonnet-4-5", { exact: true })).toBeVisible();
+    await expect(page.getByText(model, { exact: true })).toHaveCount(0);
   });
 
   test("offers no models when the Organization has none", async ({ page }) => {

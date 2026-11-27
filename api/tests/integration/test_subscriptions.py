@@ -48,7 +48,7 @@ def _setup(*steps, mock_payments: bool = True):
                 "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
                 "LITELLM_BASE_URL": "http://litellm:4000",
                 "LITELLM_SECRET_NAME": "litellm",
-                "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+                "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
                 "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
                 "AGENTBARN_TELEGRAM_BOT_TOKEN": "424242:the-shared-bot-token",
                 "AGENTBARN_TELEGRAM_BOT_USERNAME": "AgentBarnTestBot",

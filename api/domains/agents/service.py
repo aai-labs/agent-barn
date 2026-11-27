@@ -159,6 +159,7 @@ from api.domains.agents.selection import (
     ensure_max_turns_supported,
     ensure_verbose_mode_supported,
     is_model_allowed,
+    pool_name,
 )
 from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.artifacts.buckets import ArtifactBucketRepository
@@ -196,7 +197,14 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
-from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.access import (
+    MODEL_NOT_STORED,
+    NO_LLM_PROVIDER,
+    PROVIDER_NOT_OPEN,
+    ModelNotStored,
+    ProviderNotOpen,
+    UnknownConnection,
+)
 from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.mcp_servers import runtime as mcp_runtime
@@ -245,6 +253,7 @@ logger = logging.getLogger(__name__)
 # Port of the in-pod LLM proxy. Shared by the URL the runtime dials and the
 # LLM_PROXY_PORT the healthz servers listen on — see the runtime scripts.
 AGENT_LLM_PROXY_PORT = 8090
+OPENROUTER_POOL_PREFIX = f"{OPENROUTER_SLUG}/"
 
 _CREDENTIAL_FIELDS = frozenset(
     {
@@ -417,15 +426,19 @@ def _validation_problems(exc: ValidationError) -> str:
 
 
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
-    """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
-    An empty allowlist blocks everything. Matching is case-insensitive.
+    """Keeps OpenRouter catalogue entries whose openrouter/<id> matches any entry in the
+    allowlist. An empty allowlist blocks everything. Matching is case-insensitive.
     """
     if not allowlist:
         return []
     patterns = [p.strip().lower() for p in allowlist if p.strip()]
     if not patterns:
         return []
-    return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
+    return [
+        model
+        for model in catalog
+        if any(fnmatch.fnmatch(f"{OPENROUTER_POOL_PREFIX}{model['id']}".lower(), pattern) for pattern in patterns)
+    ]
 
 
 @inject
@@ -510,6 +523,27 @@ class AgentService:
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         self.selection.ensure_model_allowed(model, org_id)
+
+    def _require_pool(self, org_id: UUID, check: Callable[[], None]) -> None:
+        try:
+            check()
+        except UnknownConnection as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{pool_name(refused.model)}' does not match any known models in the catalog.",
+            ) from None
+        except ProviderNotOpen as refused:
+            detail = (
+                PROVIDER_NOT_OPEN.format(name=refused.connection_name)
+                if self.llm_provider_access.open_models(org_id)
+                else NO_LLM_PROVIDER
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
+        except ModelNotStored as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MODEL_NOT_STORED.format(model=pool_name(refused.model), name=refused.connection_name),
+            ) from None
 
     def _require_size_manage(self, context: CurrentUserContext, org_id: UUID) -> None:
         self.authorization.policy.require(
@@ -1086,8 +1120,11 @@ class AgentService:
     ) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+        run_model = data.model or self.agent_settings_lookup.resolve_default_model(org_id)
+        run_models = [run_model] if run_model else []
+        if not self.llm_provider_access.open_models(org_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+        self._require_pool(org_id, lambda: self.llm_provider_access.check_models(run_models, org_id))
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
@@ -1283,15 +1320,13 @@ class AgentService:
                         if self.config.artifact_s3_endpoint_url
                         else None
                     ),
-                    in_transaction=lambda session: self.llm_provider_access.require_open(
-                        session, OPENROUTER_SLUG, org_id
+                    in_transaction=lambda session: self._require_pool(
+                        org_id, lambda: self.llm_provider_access.require_models(session, run_models, org_id)
                     ),
                 )
             except AgentSizeUnavailable:
                 # Disabled or withdrawn since the check above.
                 raise _size_unavailable() from None
-            except ProviderNotOpen:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:
@@ -4189,15 +4224,15 @@ class AgentService:
                     logger.warning("Could not block LiteLLM key for agent %s", target.id)
 
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
-        """Returns the allowlisted OpenRouter models as picker options, or none while OpenRouter is
-        not open to the Organization.
+        """Returns the Organization's pool as picker options: the allowlisted models of every live
+        connection open to it, OpenRouter's from its catalogue and the others' from their stored
+        models, or none while no connection is open to it.
 
-        The Organization's resolved default model is guaranteed present, flagged
-        is_default, and listed first, so the frontend and backend agree on which
-        model an Agent inherits without a second request. It is normally already in
-        the filtered list, since an Organization picks its default from its own
-        allowlist; the append only fires for an Organization following a platform
-        default its allowlist does not cover.
+        The Organization's resolved default model is flagged is_default and listed first, and is
+        appended when missing while its connection is open, so the frontend and backend agree on
+        which model an Agent inherits without a second request. It is normally already in the
+        filtered list, since an Organization picks its default from its own allowlist; the append
+        only fires for an Organization following a platform default its allowlist does not cover.
         """
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
@@ -4208,39 +4243,70 @@ class AgentService:
                 PermissionKey.ORGANIZATION_UPDATE,
                 detail="You don't have permission to view the full model catalog.",
             )
-        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+        open_connections = self.llm_provider_access.open_models(org_id)
+        if not open_connections:
             return []
-        raw_catalog = self.openrouter.list_models()
 
-        if catalog:
-            allowed = raw_catalog
-        else:
-            allowed_models = self.organization_lookup.get_allowed_models(org_id)
-            if allowed_models is None:
+        allowed_models: list[str] = []
+        if not catalog:
+            listed_models = self.organization_lookup.get_allowed_models(org_id)
+            if listed_models is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            allowed = filter_models_by_allowlist(raw_catalog, allowed_models)
-        options = [
-            {
-                "value": f"litellm/openrouter/{model['id']}",
-                "label": model["name"],
-                "contextLength": model.get("context_length"),
-                "pricing": model.get("pricing"),
-            }
-            for model in allowed
-        ]
+            allowed_models = listed_models
+
+        options: list[dict] = []
+        for connection, models in open_connections:
+            if connection.slug == OPENROUTER_SLUG:
+                raw_catalog = self.openrouter.list_models()
+                offered = raw_catalog if catalog else filter_models_by_allowlist(raw_catalog, allowed_models)
+                options.extend(
+                    {
+                        "value": f"litellm/openrouter/{model['id']}",
+                        "label": model["name"],
+                        "contextLength": model.get("context_length"),
+                        "pricing": model.get("pricing"),
+                        "connection": connection.name,
+                    }
+                    for model in offered
+                )
+                continue
+            for model in models:
+                value = f"litellm/{connection.slug}/{model.model_id}"
+                if catalog or is_model_allowed(value, allowed_models):
+                    options.append(
+                        {
+                            "value": value,
+                            "label": model.model_id,
+                            "contextLength": None,
+                            "pricing": {
+                                "prompt": str(model.input_cost_per_token),
+                                "completion": str(model.output_cost_per_token),
+                            },
+                            "connection": connection.name,
+                        }
+                    )
 
         default_value = self.agent_settings_lookup.resolve_default_model(org_id)
-        if default_value and not any(o["value"] == default_value for o in options):
+        default_connection = next(
+            (
+                connection
+                for connection, _ in open_connections
+                if default_value and pool_name(default_value).startswith(f"{connection.slug}/")
+            ),
+            None,
+        )
+        if default_connection is not None and not any(o["value"] == default_value for o in options):
             options.append(
                 {
                     "value": default_value,
-                    "label": default_value.removeprefix("litellm/openrouter/"),
+                    "label": pool_name(default_value).removeprefix(f"{default_connection.slug}/"),
                     "contextLength": None,
                     "pricing": None,
+                    "connection": default_connection.name,
                 }
             )
 
-        # Stable sort puts the default first while preserving catalogue order.
+        # Stable sort puts the default first while preserving the pool's order.
         options.sort(key=lambda o: o["value"] != default_value)
         for option in options:
             option["isDefault"] = option["value"] == default_value

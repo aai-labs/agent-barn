@@ -13,22 +13,28 @@ The contract under test is three rules:
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
 import pytest
 from fastapi import status
 from hamcrest import assert_that, contains_string, empty, equal_to, has_length, is_not, none
-from sqlmodel import Session
+from sqlalchemy import delete
+from sqlmodel import Session, col
 
 from api.domains.agents.models import AgentStatus
 from api.domains.events.catalog import ORGANIZATION_AGENT_SETTINGS_CHANGED
 from api.domains.events.models import OutboxMessage
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import (
     OPENROUTER_CONNECTION_ID,
     LlmProviderConnection,
     LlmProviderConnectionOrganization,
+    LlmProviderModel,
     OrganizationAccess,
+    PriceSource,
+    ProviderType,
 )
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
@@ -77,6 +83,9 @@ OWN_DEFAULT_ID = "qwen/qwen3.6-plus"
 OWN_DEFAULT = f"litellm/openrouter/{OWN_DEFAULT_ID}"
 NO_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 _AGENTS = "/api/v1/organizations/{organization_id}/agents"
+ANTHROPIC_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_ENTRY = f"anthropic/{ANTHROPIC_MODEL}"
+ANTHROPIC_DEFAULT = f"litellm/{ANTHROPIC_ENTRY}"
 
 
 def _given(allowed_models: list[str] | None = None, role: OrganizationRole = OrganizationRole.OWNER):
@@ -143,7 +152,7 @@ def test_agent_settings_require_authentication():
 
 
 def test_setting_a_default_reports_it_as_the_organizations_own():
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains("openai/gpt-5-mini", "qwen/qwen3.6-plus"):
             with when("the owner picks a default model"):
                 response = _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
@@ -158,7 +167,7 @@ def test_setting_a_default_reports_it_as_the_organizations_own():
 
 
 def test_reverting_to_null_follows_the_platform_default_again():
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
 
@@ -174,7 +183,7 @@ def test_reverting_to_null_follows_the_platform_default_again():
 
 
 def test_counts_split_inheriting_agents_from_overrides():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         there_is_an_agent(
             name="Pinned Agent",
             model="litellm/openrouter/qwen/qwen3.6-plus",
@@ -192,7 +201,7 @@ def test_counts_split_inheriting_agents_from_overrides():
 
 def test_a_member_cannot_read_or_write_agent_settings():
     member_id = uuid7()
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         there_is_a_user(
             id=member_id,
             email="member-agent-settings@example.com",
@@ -215,7 +224,7 @@ def test_a_member_cannot_read_or_write_agent_settings():
 
 
 def test_a_default_outside_the_allowlist_is_rejected():
-    with given(_given(allowed_models=["qwen/*"])) as context:
+    with given(_given(allowed_models=["openrouter/qwen/*"])) as context:
         with catalog_contains("qwen/qwen3.6-plus", "openai/gpt-5-mini"):
             with when("the owner picks a model the Organization does not allow"):
                 response = _set_default(context, "litellm/openrouter/openai/gpt-5-mini")
@@ -227,7 +236,7 @@ def test_a_default_outside_the_allowlist_is_rejected():
 
 
 def test_a_default_inside_the_allowlist_is_accepted():
-    with given(_given(allowed_models=["qwen/*"])) as context:
+    with given(_given(allowed_models=["openrouter/qwen/*"])) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             with when("the owner picks a model the Organization allows"):
                 response = _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
@@ -239,7 +248,7 @@ def test_a_default_inside_the_allowlist_is_accepted():
 def test_a_wildcard_allowlist_still_rejects_a_model_that_does_not_exist():
     """The allowlist holds globs, so `["*"]` permits any string. The catalogue check
     is what stops a default that no provider actually serves."""
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             with when("the owner picks a model absent from the catalogue"):
                 response = _set_default(context, "litellm/openrouter/acme/not-a-real-model")
@@ -252,7 +261,7 @@ def test_a_wildcard_allowlist_still_rejects_a_model_that_does_not_exist():
 def test_an_unreachable_catalogue_does_not_block_setting_a_default():
     """The catalogue check is advisory: an OpenRouter outage must not stop an owner
     from managing their own settings, matching how the allowlist editor degrades."""
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with patch("api.infrastructure.openrouter.client.OpenRouterClient.list_models") as list_models:
             list_models.side_effect = RuntimeError("OpenRouter unreachable")
 
@@ -268,32 +277,32 @@ def test_an_unreachable_catalogue_does_not_block_setting_a_default():
 
 
 def test_the_allowlist_cannot_drop_the_organizations_default():
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains("qwen/qwen3.6-plus", "openai/gpt-5-mini"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
 
             with when("the owner narrows the allowlist so it no longer covers the default"):
                 response = context.client.patch(
                     f"/api/v1/organizations/{context.organization.id}",
-                    json={"allowed_models": ["openai/gpt-5-mini"]},
+                    json={"allowed_models": ["openrouter/openai/gpt-5-mini"]},
                     headers=_auth(context),
                 )
 
             with then("the edit is refused and names the default"):
                 assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
                 assert_that(response.json()["detail"], contains_string("default Agent model"))
-                assert_that(response.json()["detail"], contains_string("qwen/qwen3.6-plus"))
+                assert_that(response.json()["detail"], contains_string("'openrouter/qwen/qwen3.6-plus'"))
 
 
 def test_the_allowlist_may_drop_the_platform_default_when_the_organization_tracks_it():
     """An Organization that never set its own default has nothing to protect: the
     platform value can change without any request to this API."""
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains("openai/gpt-5-mini"):
             with when("the owner narrows the allowlist while following the platform default"):
                 response = context.client.patch(
                     f"/api/v1/organizations/{context.organization.id}",
-                    json={"allowed_models": ["openai/gpt-5-mini"]},
+                    json={"allowed_models": ["openrouter/openai/gpt-5-mini"]},
                     headers=_auth(context),
                 )
 
@@ -306,7 +315,7 @@ def test_the_allowlist_cannot_strand_an_agent_pinned_to_a_removed_model():
     unstartable, and not until someone next restarted it."""
     with given(
         [
-            *_given(allowed_models=["*"]),
+            *_given(allowed_models=["openrouter/*"]),
             there_is_an_agent(name="Scribe", model="litellm/openrouter/qwen/qwen3.6-plus"),
         ]
     ) as context:
@@ -314,7 +323,7 @@ def test_the_allowlist_cannot_strand_an_agent_pinned_to_a_removed_model():
             with when("the owner removes a model an Agent is pinned to"):
                 response = context.client.patch(
                     f"/api/v1/organizations/{context.organization.id}",
-                    json={"allowed_models": ["openai/gpt-5-mini"]},
+                    json={"allowed_models": ["openrouter/openai/gpt-5-mini"]},
                     headers=_auth(context),
                 )
 
@@ -322,14 +331,14 @@ def test_the_allowlist_cannot_strand_an_agent_pinned_to_a_removed_model():
                 assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
                 detail = response.json()["detail"]
                 assert_that(detail, contains_string("Scribe"))
-                assert_that(detail, contains_string("qwen/qwen3.6-plus"))
+                assert_that(detail, contains_string("'openrouter/qwen/qwen3.6-plus'"))
                 assert_that(detail, contains_string("1 Agent is"))
 
 
 def test_the_refusal_names_every_stranded_agent():
     with given(
         [
-            *_given(allowed_models=["*"]),
+            *_given(allowed_models=["openrouter/*"]),
             there_is_an_agent(name="Scribe", model="litellm/openrouter/qwen/qwen3.6-plus"),
             there_is_an_agent(name="Herald", model="litellm/openrouter/qwen/qwen3.6-plus"),
         ]
@@ -338,7 +347,7 @@ def test_the_refusal_names_every_stranded_agent():
             with when("the owner removes the model both Agents are pinned to"):
                 response = context.client.patch(
                     f"/api/v1/organizations/{context.organization.id}",
-                    json={"allowed_models": ["openai/gpt-5-mini"]},
+                    json={"allowed_models": ["openrouter/openai/gpt-5-mini"]},
                     headers=_auth(context),
                 )
 
@@ -350,12 +359,12 @@ def test_the_refusal_names_every_stranded_agent():
 
 def test_an_inheriting_agent_never_blocks_an_allowlist_edit():
     """Inheriting Agents follow the default, which its own guard protects."""
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("openai/gpt-5-mini"):
             with when("the owner narrows the allowlist"):
                 response = context.client.patch(
                     f"/api/v1/organizations/{context.organization.id}",
-                    json={"allowed_models": ["openai/gpt-5-mini"]},
+                    json={"allowed_models": ["openrouter/openai/gpt-5-mini"]},
                     headers=_auth(context),
                 )
 
@@ -366,7 +375,7 @@ def test_an_inheriting_agent_never_blocks_an_allowlist_edit():
 def test_an_allowlist_edit_that_keeps_every_pinned_model_is_accepted():
     with given(
         [
-            *_given(allowed_models=["*"]),
+            *_given(allowed_models=["openrouter/*"]),
             there_is_an_agent(name="Scribe", model="litellm/openrouter/qwen/qwen3.6-plus"),
         ]
     ) as context:
@@ -374,7 +383,7 @@ def test_an_allowlist_edit_that_keeps_every_pinned_model_is_accepted():
             with when("the owner narrows the allowlist but keeps the pinned model"):
                 response = context.client.patch(
                     f"/api/v1/organizations/{context.organization.id}",
-                    json={"allowed_models": ["qwen/qwen3.6-plus", "openai/gpt-5-mini"]},
+                    json={"allowed_models": ["openrouter/qwen/qwen3.6-plus", "openrouter/openai/gpt-5-mini"]},
                     headers=_auth(context),
                 )
 
@@ -393,7 +402,7 @@ def _started_overlay_model(context) -> str:
 
 
 def test_an_inheriting_agent_starts_on_the_organizations_default():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
 
@@ -408,7 +417,7 @@ def test_an_inheriting_agent_starts_on_the_organizations_default():
 def test_an_agent_with_its_own_model_ignores_the_organizations_default():
     with given(
         [
-            *_given(allowed_models=["*"]),
+            *_given(allowed_models=["openrouter/*"]),
             there_is_an_agent(model="litellm/openrouter/openai/gpt-5-mini"),
         ]
     ) as context:
@@ -426,7 +435,7 @@ def test_an_agent_with_its_own_model_ignores_the_organizations_default():
 def test_an_inheriting_agent_starts_when_the_platform_default_is_outside_the_allowlist():
     """The AF-225 regression: before this, changing AGENT_DEFAULT_MODEL broke starts
     for every Agent in an Organization whose allowlist predated the change."""
-    with given([*_given(allowed_models=["qwen/*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/qwen/*"]), there_is_an_agent(model="")]) as context:
         with when("I start an inheriting Agent whose platform default the allowlist excludes"):
             response = context.client.post(f"{_AGENTS}/{context.agent.id}/start", headers=_auth(context))
 
@@ -458,7 +467,7 @@ def _stop(context):
 
 
 def test_starting_an_agent_records_the_model_its_pod_was_started_on():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
 
@@ -473,7 +482,7 @@ def test_starting_an_agent_records_the_model_its_pod_was_started_on():
 
 
 def test_stopping_an_agent_clears_the_recorded_running_model():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
 
         with when("I stop it again"):
@@ -489,7 +498,7 @@ def test_a_running_agent_keeps_reporting_the_model_it_started_on():
     """The runtime reads its model once at container start, so a default change does not
     reach a running Agent. Reporting the freshly resolved value as current would claim a
     model the pod is not serving."""
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("qwen/qwen3.6-plus", "openai/gpt-5-mini"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
             assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
@@ -507,7 +516,7 @@ def test_a_running_agent_keeps_reporting_the_model_it_started_on():
 def test_a_pinned_agent_reports_nothing_pending_when_the_default_moves():
     with given(
         [
-            *_given(allowed_models=["*"]),
+            *_given(allowed_models=["openrouter/*"]),
             there_is_an_agent(model="litellm/openrouter/openai/gpt-5-mini"),
         ]
     ) as context:
@@ -525,7 +534,7 @@ def test_a_pinned_agent_reports_nothing_pending_when_the_default_moves():
 
 
 def test_restarting_adopts_the_new_default_and_clears_the_pending_switch():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("qwen/qwen3.6-plus", "openai/gpt-5-mini"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
             assert_that(_start(context).status_code, equal_to(status.HTTP_200_OK))
@@ -546,7 +555,7 @@ def test_an_agent_pinning_a_disallowed_model_still_fails_to_start():
     """The allowlist keeps its job for the choices a user actually made."""
     with given(
         [
-            *_given(allowed_models=["qwen/*"]),
+            *_given(allowed_models=["openrouter/qwen/*"]),
             there_is_an_agent(model="litellm/openrouter/openai/gpt-5-mini"),
         ]
     ) as context:
@@ -564,7 +573,7 @@ def test_an_agent_pinning_a_disallowed_model_still_fails_to_start():
 
 
 def test_agent_read_names_where_its_model_comes_from():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
 
@@ -581,7 +590,7 @@ def test_agent_read_names_where_its_model_comes_from():
 def test_clearing_an_agents_model_returns_it_to_the_default():
     with given(
         [
-            *_given(allowed_models=["*"]),
+            *_given(allowed_models=["openrouter/*"]),
             there_is_an_agent(model="litellm/openrouter/openai/gpt-5-mini", status=AgentStatus.STOPPED),
         ]
     ) as context:
@@ -607,7 +616,7 @@ def test_clearing_an_agents_model_returns_it_to_the_default():
 
 
 def test_a_default_change_is_recorded_once_with_its_blast_radius():
-    with given([*_given(allowed_models=["*"]), there_is_an_agent(model="")]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), there_is_an_agent(model="")]) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             with when("the owner changes the default"):
                 response = _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
@@ -625,7 +634,7 @@ def test_a_default_change_is_recorded_once_with_its_blast_radius():
 
 
 def test_resaving_the_same_default_records_nothing():
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains("qwen/qwen3.6-plus"):
             _set_default(context, "litellm/openrouter/qwen/qwen3.6-plus")
             before = len([m for m in _outbox_messages(context) if m.event_name == ORGANIZATION_AGENT_SETTINGS_CHANGED])
@@ -643,7 +652,7 @@ def test_resaving_the_same_default_records_nothing():
 
 def test_agent_settings_are_concealed_for_another_organization():
     other_org = uuid7()
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         organization_repository: OrganizationRepository = context.injector.get(OrganizationRepository)
         assert_that(organization_repository.get(other_org), none())
 
@@ -693,7 +702,7 @@ def _settings_events(context) -> list[OutboxMessage]:
     [(OrganizationAccess.NONE, None), (OrganizationAccess.ONLY, "other"), (OrganizationAccess.ALL_EXCEPT, "self")],
 )
 def test_an_organization_without_openrouter_access_cannot_set_a_default(access, listed):
-    with given([*_given(allowed_models=["*"]), openrouter_access(access, listed)]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), openrouter_access(access, listed)]) as context:
         with catalog_contains(OWN_DEFAULT_ID) as catalogue:
             response = _set_default(context, OWN_DEFAULT)
 
@@ -705,7 +714,7 @@ def test_an_organization_without_openrouter_access_cannot_set_a_default(access, 
 
 
 def test_an_organization_without_openrouter_access_can_clear_its_default():
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
         with catalog_contains(OWN_DEFAULT_ID):
             _set_default(context, OWN_DEFAULT)
         _set_openrouter_access(context, OrganizationAccess.NONE)
@@ -717,7 +726,7 @@ def test_an_organization_without_openrouter_access_can_clear_its_default():
 
 
 def test_access_withdrawn_after_the_first_check_still_refuses_the_default():
-    with given(_given(allowed_models=["*"])) as context:
+    with given(_given(allowed_models=["openrouter/*"])) as context:
 
         def withdraw_while_the_catalogue_is_read():
             _set_openrouter_access(context, OrganizationAccess.NONE)
@@ -738,10 +747,106 @@ def test_access_withdrawn_after_the_first_check_still_refuses_the_default():
     [(OrganizationAccess.ALL, None), (OrganizationAccess.ONLY, "self"), (OrganizationAccess.ALL_EXCEPT, "other")],
 )
 def test_an_organization_with_openrouter_access_sets_its_default(access, listed):
-    with given([*_given(allowed_models=["*"]), openrouter_access(access, listed)]) as context:
+    with given([*_given(allowed_models=["openrouter/*"]), openrouter_access(access, listed)]) as context:
         with catalog_contains(OWN_DEFAULT_ID):
             response = _set_default(context, OWN_DEFAULT)
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(response.json()["default_model"], equal_to(OWN_DEFAULT))
         assert_that(_settings_events(context), has_length(1))
+
+
+def an_anthropic_connection(access: OrganizationAccess = OrganizationAccess.ALL):
+    def step(context):
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            connection = LlmProviderConnection(
+                slug="anthropic", name="Anthropic", provider_type=ProviderType.ANTHROPIC, organization_access=access
+            )
+            session.add(connection)
+            session.flush()
+            session.add(
+                LlmProviderModel(
+                    connection_id=connection.id,
+                    model_id=ANTHROPIC_MODEL,
+                    input_cost_per_token=Decimal("0.000003"),
+                    output_cost_per_token=Decimal("0.000015"),
+                    cache_read_input_token_cost=Decimal(0),
+                    cache_creation_input_token_cost=Decimal(0),
+                    price_source=PriceSource.MANUAL,
+                )
+            )
+            session.commit()
+
+    return step
+
+
+def _remove_the_anthropic_model(context) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        session.exec(delete(LlmProviderModel).where(col(LlmProviderModel.model_id) == ANTHROPIC_MODEL))
+        session.commit()
+
+
+def test_a_default_on_another_open_connection_saves_without_openrouter():
+    with given(
+        [
+            *_given(allowed_models=["openrouter/*", ANTHROPIC_ENTRY]),
+            openrouter_access(OrganizationAccess.NONE),
+            an_anthropic_connection(),
+        ]
+    ) as context:
+        with catalog_contains(OWN_DEFAULT_ID) as catalogue:
+            response = _set_default(context, ANTHROPIC_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json()["default_model"], equal_to(ANTHROPIC_DEFAULT))
+        catalogue.assert_not_called()
+        assert_that(_settings_events(context), has_length(1))
+
+
+@pytest.mark.parametrize(
+    ("access", "model", "detail"),
+    [
+        (
+            OrganizationAccess.NONE,
+            ANTHROPIC_DEFAULT,
+            "This organization can't use Anthropic. Ask a Platform Administrator.",
+        ),
+        (
+            OrganizationAccess.ALL,
+            "litellm/anthropic/claude-unknown",
+            "Model 'anthropic/claude-unknown' is not one of Anthropic's models.",
+        ),
+    ],
+    ids=["closed", "unknown-model"],
+)
+def test_a_default_off_the_organizations_pool_is_refused(access, model, detail):
+    with given(
+        [
+            *_given(allowed_models=["openrouter/*", "anthropic/claude-unknown", ANTHROPIC_ENTRY]),
+            an_anthropic_connection(access),
+        ]
+    ) as context:
+        with catalog_contains(OWN_DEFAULT_ID):
+            response = _set_default(context, model)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(detail))
+        assert_that(context.client.get(_SETTINGS, headers=_auth(context)).json()["default_model"], none())
+        assert_that(_settings_events(context), empty())
+
+
+def test_a_default_whose_model_is_removed_after_the_first_check_is_refused_under_the_lock():
+    with given([*_given(allowed_models=["openrouter/*", ANTHROPIC_ENTRY]), an_anthropic_connection()]) as context:
+        first_check = LlmProviderAccessLookup.check_models
+
+        def check_then_remove(lookup, *args, **kwargs):
+            first_check(lookup, *args, **kwargs)
+            _remove_the_anthropic_model(context)
+
+        with patch.object(LlmProviderAccessLookup, "check_models", autospec=True, side_effect=check_then_remove):
+            response = _set_default(context, ANTHROPIC_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(f"Model '{ANTHROPIC_ENTRY}' is not one of Anthropic's models."))
+        assert_that(context.client.get(_SETTINGS, headers=_auth(context)).json()["default_model"], none())
+        assert_that(_settings_events(context), empty())

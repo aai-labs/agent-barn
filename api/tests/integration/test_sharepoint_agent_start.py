@@ -49,7 +49,7 @@ def _given(agent_type: AgentType, sharepoint=None):
                 "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
                 "LITELLM_BASE_URL": "http://litellm:4000",
                 "LITELLM_SECRET_NAME": "litellm",
-                "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+                "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
                 "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
                 "API_EXTERNAL_URL": "https://api.test.com",
                 "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",

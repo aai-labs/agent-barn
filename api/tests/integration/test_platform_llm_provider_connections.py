@@ -8,6 +8,7 @@ from hamcrest import assert_that, equal_to, has_entries, has_length, is_not, non
 from sqlmodel import Session, col, select
 
 from api.core.config import Config
+from api.domains.agent_settings.models import OrganizationAgentSettings
 from api.domains.events.models import OutboxMessage
 from api.domains.llm_providers.litellm_deployments import key_fingerprint
 from api.domains.llm_providers.models import (
@@ -17,6 +18,7 @@ from api.domains.llm_providers.models import (
     PriceSource,
     ProviderType,
 )
+from api.domains.organizations.models import Organization
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice
 from api.infrastructure.llm_provider_catalogue.catalogue import (
@@ -51,6 +53,10 @@ ADMIN_NAME = "Platform Person"
 AZURE_BASE_URL = "https://contoso.openai.azure.com"
 NEW_KEY = "sk-new-provider-key-g7h8"
 CREATED_EVENT = "platform.llm_provider.created"
+HAIKU_IN_USE = (
+    "Anthropic model claude-haiku-4-5 is still used by Test Organization (allowed models). Nothing was saved."
+)
+ANTHROPIC_IN_USE = "Anthropic is still used by Test Organization (its default model). Nothing was saved."
 KNOWN_PROVIDERS = [
     (ProviderType.ANTHROPIC, "Anthropic"),
     (ProviderType.OPENAI, "OpenAI"),
@@ -67,6 +73,7 @@ ROUTE_PRICES = {
     "cache_read_input_token_cost": 1.25e-06,
     "cache_creation_input_token_cost": 0.0,
 }
+DROPPED_PARAMS = {"additional_drop_params": ["session_id"]}
 OTHER_ROUTE_ID = "agentbarn:model:0190a1b2-0000-7000-8000-000000000009:0190a1b2-0000-7000-8000-000000000010"
 OTHER_ROUTE = {
     "model_name": "anthropic/claude-sonnet-4-5",
@@ -1269,6 +1276,7 @@ def _azure_routes(context, key: str, base_url: str) -> dict[str, dict]:
                 "api_version": "v1",
                 "api_key": key,
                 **ROUTE_PRICES,
+                **DROPPED_PARAMS,
             },
             "model_info": _model_info(_route_id(context.connection, model), key),
         }
@@ -1864,6 +1872,7 @@ def _claude_route(context, model_id: str, row_id: UUID, prices: tuple[str, str, 
                 "output_cost_per_token": float(prices[1]),
                 "cache_read_input_token_cost": float(prices[2]),
                 "cache_creation_input_token_cost": float(prices[3]),
+                **DROPPED_PARAMS,
             },
             "model_info": _model_info(route_id, ANTHROPIC_KEY),
         }
@@ -2457,6 +2466,7 @@ def test_a_custom_connection_saves_typed_prices_routed_at_its_base_url():
                         "output_cost_per_token": 2e-06,
                         "cache_read_input_token_cost": 0.0,
                         "cache_creation_input_token_cost": 0.0,
+                        **DROPPED_PARAMS,
                     },
                     "model_info": _model_info(route_id, CUSTOM_KEY),
                 }
@@ -2508,6 +2518,7 @@ def _azure_route(context, deployment: str, row_id: UUID, prices: tuple[str, str,
                 "output_cost_per_token": float(prices[1]),
                 "cache_read_input_token_cost": float(prices[2]),
                 "cache_creation_input_token_cost": float(prices[3]),
+                **DROPPED_PARAMS,
             },
             "model_info": _model_info(route_id, AZURE_KEY),
         }
@@ -2725,3 +2736,63 @@ def test_the_azure_catalogue_lists_litellms_azure_chat_models():
             ),
         )
         context.list_models.assert_not_called()
+
+
+def _allows(context, *entries: str) -> None:
+    with _session(context) as session:
+        organization = session.get_one(Organization, context.organization.id)
+        organization.allowed_models = ["openrouter/*", *entries]
+        session.add(organization)
+        session.commit()
+
+
+def test_a_models_save_that_removes_a_used_model_is_refused_naming_it():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        _allows(context, "anthropic/claude-haiku-4-5")
+        routes_before = dict(context.routes)
+        prices_before = _stored_prices(context)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json()["detail"], equal_to(HAIKU_IN_USE))
+        assert_that(_stored_prices(context), equal_to(prices_before))
+        assert_that(context.routes, equal_to(routes_before))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_a_models_save_removes_a_model_nobody_uses_while_another_is_used():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        _allows(context, "anthropic/claude-sonnet-4-5")
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(list(_stored_prices(context)), equal_to(["claude-sonnet-4-5"]))
+
+
+def test_deleting_a_used_connection_is_refused_and_deletes_nothing():
+    with given(_setup(admin, anthropic_with_routes)) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        with _session(context) as session:
+            session.add(
+                OrganizationAgentSettings(
+                    organization_id=context.organization.id, default_model="litellm/anthropic/claude-sonnet-4-5"
+                )
+            )
+            session.commit()
+        routes_before = dict(context.routes)
+
+        response = _delete(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json()["detail"], equal_to(ANTHROPIC_IN_USE))
+        [row] = _rows(context, "anthropic")
+        assert_that(row.deleted_at, none())
+        assert_that(list(_stored_prices(context)), equal_to(["claude-sonnet-4-5"]))
+        assert_that(context.routes, equal_to(routes_before))
+        assert_that(_deleted_events(context), has_length(0))

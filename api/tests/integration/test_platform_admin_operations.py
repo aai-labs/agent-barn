@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 import jwt
@@ -14,6 +15,7 @@ from hamcrest import (
     not_,
     not_none,
 )
+from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.core.config import Config
@@ -22,10 +24,12 @@ from api.domains.events.models import EventScope
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
 from api.tests.core.modules import (
     create_test_client,
@@ -35,6 +39,10 @@ from api.tests.core.modules import (
 from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+
+PAGED_ORGANIZATIONS = 30
+PAGE_SIZE = 12
+SAVED_AT = datetime(2026, 11, 1, tzinfo=UTC)
 
 
 def test_platform_admin_can_list_all_users():
@@ -770,3 +778,65 @@ def test_regular_user_cannot_list_platform_organization_members():
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def _platform_admin_and_organizations(created_at):
+    super_id = uuid7()
+
+    def organizations(context):
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            rows = [
+                Organization(name=f"Paged Org {index:02}", created_at=created_at(index), updated_at=SAVED_AT)
+                for index in range(PAGED_ORGANIZATIONS)
+            ]
+            session.add_all(rows)
+            session.commit()
+            context.organization_ids = [row.id for row in rows]
+
+    return [
+        prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+        prepare_api_server(),
+        create_test_client(),
+        database_repo_is_ready(),
+        database_is_clean(),
+        there_is_a_user(id=super_id, email="super-paged-orgs@example.com", is_platform_admin=True),
+        there_is_an_access_token_for_user(user_id=super_id),
+        organizations,
+    ]
+
+
+def _page(context, page: int) -> list[str]:
+    response = context.client.get(
+        "/api/v1/platform/organizations",
+        params={"page": page, "page_size": PAGE_SIZE},
+        headers={"Authorization": f"Bearer {context.access_token}"},
+    )
+    assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+    return [item["id"] for item in response.json()["items"]]
+
+
+def _all_pages(context) -> list[str]:
+    return [id_ for page in (1, 2, 3) for id_ in _page(context, page)]
+
+
+def test_platform_organization_pages_list_each_organization_once_by_creation_then_id():
+    with given(_platform_admin_and_organizations(lambda index: SAVED_AT)) as context:
+        first_read = _all_pages(context)
+        second_read = _all_pages(context)
+
+        assert_that(first_read, equal_to(sorted(str(id_) for id_ in context.organization_ids)))
+        assert_that(second_read, equal_to(first_read))
+
+
+def test_an_organization_saved_between_page_reads_is_neither_repeated_nor_skipped():
+    with given(_platform_admin_and_organizations(lambda index: SAVED_AT + timedelta(seconds=index))) as context:
+        first_page = _page(context, 1)
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            saved = session.get_one(Organization, UUID(first_page[0]))
+            saved.description = "Saved while the list was read"
+            session.add(saved)
+            session.commit()
+
+        read = first_page + _page(context, 2) + _page(context, 3)
+
+        assert_that(read, equal_to([str(id_) for id_ in context.organization_ids]))

@@ -181,7 +181,7 @@ class AuthService:
                 name=self._default_organization_name(full_name),
                 created_by_user_id=user.id,
                 allowed_models=self.llm_provider_access.initial_allowed_models(
-                    session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+                    session, self.config.agent_default_model.removeprefix("litellm/")
                 ),
             )
             self.organization_repository.save_with_session(organization, session)
