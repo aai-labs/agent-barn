@@ -301,7 +301,8 @@ through the platform admin flow, and organisations fork or override them per
 agent. Details:
 [`docs/features/templates-and-skills.md`](docs/features/templates-and-skills.md).
 See [Templates and Skills documentation](https://agentbarn.dev/guides/templates-and-skills/templates)
-for the template model and [workflow walkthroughs](docs/use-cases.md) for setup examples.
+for the template model, [workflow walkthroughs](docs/use-cases.md) for setup examples,
+and [agentbarn.dev/recipes](https://agentbarn.dev/recipes) for a guided setup per template.
 
 ### Skills
 

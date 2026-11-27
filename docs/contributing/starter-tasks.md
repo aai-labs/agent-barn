@@ -11,30 +11,7 @@ credential migrations, and draft-editor bugs were not selected as beginner work.
 Publication and maintainer assignment follow
 [the maintainer guide](../guidelines/repository-discovery.md#publish-approachable-contributor-tasks).
 
-## Draft 1: Explain configured Agent Sizes in memory troubleshooting
-
-**Problem:** [local startup troubleshooting](../guidelines/local-troubleshooting.md)
-says Agent pods request 320Mi and have a 1Gi limit. Those are the seeded Standard
-values; the [Agent Size catalog](../features/agent-sizes.md) can provide different
-resources. The current explanation can mislead a reader debugging OOMKilled.
-
-**Scope:** Update that one troubleshooting entry to explain how to inspect the
-running pod's actual requests/limits and compare them with the selected Agent
-Size. Link the existing size contract rather than reproducing its settings.
-
-**Acceptance criteria:**
-
-- Standard values are identified as defaults, not universal limits.
-- The entry explains that size changes apply on the next Agent start.
-- The existing distinction between container OOM and Docker/node pressure remains.
-- Commands contain placeholders, no real tenant identifiers or credentials.
-- All relative links and commands are checked against the current source.
-
-**Verification:** Documentation review and link/path checks; application tests are
-unnecessary unless the contributor discovers a separate behavior defect.
-**Maintainer sponsor:** Assign before publication; no sponsor has been committed.
-
-## Draft 2: Verify and document the Windows WSL2 quick-start prerequisites
+## Draft 1: Verify and document the Windows WSL2 quick-start prerequisites
 
 **Problem:** [the Windows section](../../README.md#windows) gives brief shell advice,
 but the full stack also needs Docker integration, host-side storage bootstrap,
@@ -62,7 +39,7 @@ the authoritative command sequence in the README; do not redesign startup.
 validating real model execution. Do not run cleanup against an existing install.
 **Maintainer sponsor:** Assign before publication; no sponsor has been committed.
 
-## Draft 3: Add a documented, synthetic screenshot for per-agent costs
+## Draft 2: Add a documented, synthetic screenshot for per-agent costs
 
 **Problem:** The [per-agent cost walkthrough](../use-cases.md#track-per-agent-model-costs)
 explains synchronization and attribution but has no accompanying cost-screen

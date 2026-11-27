@@ -42,12 +42,12 @@ attribution. Check every benefit against the release tag, not current staging.
 
 The existing Release Deploy Bundle workflow creates/updates a release with a
 version-only name and generated notes. Apply the reviewed introduction and display
-title after that workflow finishes, and check them again if it is rerun. This PR
-does not change that workflow, create tags, publish releases, or deploy anything.
+title after that workflow finishes, and check them again if it is rerun. Editing
+release copy never changes tags, images, or deployments.
 
-A [v0.22.0 introduction draft](../release-notes/v0.22.0-introduction.md) is provided
-for review. It is editorial copy for the existing release, not a new release.
-Keep its existing technical changelog beneath the introduction if publishing it.
+A [v0.22.0 introduction](../release-notes/v0.22.0-introduction.md) is a sample of
+the template filled in for an existing release. If publishing it, keep the
+release's existing technical changelog beneath the introduction.
 
 ## Publish approachable contributor tasks
 

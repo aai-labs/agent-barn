@@ -81,9 +81,12 @@ above.
 <details>
 <summary><b>Agent pod <code>CrashLoopBackOff</code> with <code>OOMKilled</code> / exit code 137</b></summary>
 
-Hermes and OpenClaw pods request `320Mi` and have a `1Gi` memory limit. Inspect
-the pod with `kubectl -n agent-farm describe pod POD_NAME` to see whether it
-hit that limit. Exit code 137 can also result from memory pressure on the k3d
+An Agent pod's memory request and limit come from its
+[Agent Size](../features/agent-sizes.md); the seeded Standard default is a
+`320Mi` request and a `1Gi` limit, but other sizes differ. Inspect the pod with
+`kubectl -n agent-farm describe pod POD_NAME` to see its actual limits and whether
+it hit them. A size change applies only at the Agent's next start, so a running
+pod keeps the resources it started with. Exit code 137 can also result from memory pressure on the k3d
 node or Docker VM; check `docker stats --no-stream` and the Docker Desktop
 memory allocation too.
 
