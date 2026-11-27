@@ -1,4 +1,4 @@
-"""Cron sessions must leave state.db after 7 days, a day per transaction.
+"""Cron sessions must leave every state.db after 7 days, a day per transaction.
 
 Every scheduled run opens a Hermes session; one Agent's crons filled its 1 GiB volume with
 them. A prune's WAL grows with what one transaction deletes, so clearing weeks of backlog in
@@ -54,9 +54,9 @@ def _prune_a_month_of_cron_sessions(image: str) -> dict:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-def test_cron_sessions_older_than_seven_days_are_pruned_a_day_at_a_time():
+def test_cron_sessions_older_than_seven_days_are_pruned_a_day_at_a_time_in_every_profile():
     with given([_hermes_image_is_selected()]) as context:
-        with when("an Agent with a month of cron sessions prunes"):
+        with when("an Agent with a month of cron sessions and a Bot prunes"):
             report = _prune_a_month_of_cron_sessions(context.image)
 
         with then("only the last 7 days of ended cron sessions remain"):
@@ -64,6 +64,12 @@ def test_cron_sessions_older_than_seven_days_are_pruned_a_day_at_a_time():
 
         with then("a cron run still in progress is kept"):
             assert_that(report["running_cron_kept"], is_(True))
+
+        with then("a pinned cron session is kept"):
+            assert_that(report["pinned_cron_kept"], is_(True))
+
+        with then("a Bot's own state.db is pruned too"):
+            assert_that(report["bot_sessions_kept"], equal_to(["bot_cron_new"]))
 
         with then("sessions from other sources are left to Hermes' own retention"):
             assert_that(report["old_api_session_kept"], is_(True))

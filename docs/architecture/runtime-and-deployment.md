@@ -266,6 +266,8 @@ The dashboard combines supported recovery actions with the actor's `agent.update
 
 Hermes scheduled runs are isolated sessions: they do not inherit Slack thread or interactive-session history unless a job explicitly supplies continuity context. They do load the agent's persistent `MEMORY.md` and `USER.md` stores into the system prompt, using the same enabled memory configuration as interactive runs. This contract requires Hermes `v2026.8.19` or newer and is verified inside the pinned base image because an API-side builder test alone cannot prove runtime behavior.
 
+Each scheduled run therefore adds a session to `state.db`. Hermes' `sessions.auto_prune` keeps 30 days of every session and runs only when the gateway starts, which let one Agent's cron transcripts fill its 1 GiB volume. `start.sh` runs `scripts/hermes/session-prune.py` before the gateway and then daily: it deletes ended, unpinned cron sessions older than 7 days from the Parent Agent's `state.db` and each Bot profile's (`profiles/<bot-id>/state.db`, where Hermes keeps that profile's cron runs). It deletes one day of sessions per transaction, because one transaction over weeks of backlog grows the WAL by about half of what it deletes, enough to fill a nearly full volume. It never runs VACUUM; SQLite reuses the freed pages. Job results in `cron/output` are kept.
+
 Hermes Agents have two intentional writable mounts: `/opt/data` for Hermes-owned
 state and `/workspace` for the persistent Agent workspace. The base image sets
 `HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace`, so Hermes' file tools may write

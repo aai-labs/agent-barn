@@ -99,6 +99,12 @@ From a spike on 2026-11-11 against OpenClaw `2026.8.2` in local k3d: a real Open
 - Changed: the conflicted files keep both sides. Migration `c87b17ccfe1a` joins this branch's `3e9d8fca9996` with staging's `0a07b0b57b62`. `ui.md` now says the Bot switcher shows on every Agent, as `path-bar.tsx` already does on this branch.
 - Follow-up: the end-to-end runs.
 
+### 2026-11-27 — Prune cron sessions after 7 days, in every profile
+
+- Fixed: every scheduled run adds a Hermes session, and the 30-day prune kept a month of them. On the cloud cluster, one Agent with ten scheduled jobs (8,247 cron sessions, 440 MB of `state.db`) filled its 1 GiB volume, and writes failed for about two hours.
+- Now `start.sh` runs `session-prune.py` once before the gateway starts and then daily. It deletes ended, unpinned cron sessions older than 7 days from the Parent Agent's `state.db` and each Bot profile's, one day per transaction, because a single prune of weeks of backlog grows the WAL by about half of what it deletes. No VACUUM. Other sessions keep the 30-day prune. Checked in the pinned Hermes image by `runtime_tests/test_hermes_session_prune.py`.
+- Follow-up: existing Agents pick this up at their next managed update or stop and start.
+
 ### 2026-11-19 — AF-425 — Workflows run on Bots again
 
 - Fixed: AF-439 moved workflows to the Organization, and its "Run as" and default-Agent pickers read the first page of Agents without Bots. A Bot's Workflows tab linked to the run dialog with the Bot named, but the dialog dropped it, and a workflow that had belonged to a Bot (migrated with the Bot as its default Agent) could not run on it. The API already accepted a Bot.
