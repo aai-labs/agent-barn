@@ -10,6 +10,12 @@ const OFFERED_MODELS = [
   { value: "litellm/openrouter/z-ai/glm-5.2", label: "GLM 5.2", is_default: true },
   { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini" },
 ];
+const ANTHROPIC_SONNET = {
+  value: "litellm/anthropic/claude-sonnet-4-5",
+  label: "claude-sonnet-4-5",
+  connection: "Anthropic",
+  pricing: { prompt: "0.000003000000000000", completion: "0.000015000000000000" },
+};
 
 /** The default fixture is a platform-admin Owner; Agent Settings is admin-only, so a
  *  Member needs both of those stripped to prove the tab is hidden. */
@@ -168,6 +174,51 @@ test.describe("Settings · Models", () => {
     await expect(alert).toContainText("1 Agent is still pinned to");
     await expect(alert).toContainText("openai/gpt-5-mini");
     await expect(alert).toContainText("Staging");
+  });
+
+  test("the default picker lists a value it no longer offers on top, then each connection", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({ body: [
+      { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", connection: "OpenRouter" },
+      ANTHROPIC_SONNET,
+    ] });
+    await settings.open();
+    await settings.editDefaultModel();
+    await page.getByRole("button", { name: "Default model" }).click();
+
+    const menu = page.getByRole("listbox");
+    await expect(menu.locator(":scope > [role=option]")).toHaveText(["litellm/openrouter/z-ai/glm-5.2"]);
+    expect(await menu.getByRole("group").evaluateAll((groups) => groups.map((group) => group.getAttribute("aria-label")))).toEqual(["OpenRouter", "Anthropic"]);
+  });
+
+  test("an allowed model of another connection shows its provider and prices, and the catalog groups by connection", async ({ page }) => {
+    const saved = await dataSupport.organizations.interceptRenameOrganization();
+    await dataSupport.organizations.interceptGetOrganization({ organization: org({ allowed_models: ["openrouter/openai/gpt-5-mini", "anthropic/claude-sonnet-4-5"] }) });
+    await dataSupport.agents.interceptGetModelsRequest({ body: [
+      { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", connection: "OpenRouter", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
+      ANTHROPIC_SONNET,
+      { value: "litellm/anthropic/claude-haiku-4-5", label: "claude-haiku-4-5", connection: "Anthropic", pricing: { prompt: "0.000001000000000000", completion: "0.000005000000000000" } },
+    ] });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    const card = section.locator("[data-slot=card]").filter({ hasText: "claude-sonnet-4-5" });
+    await expect(card.getByText("anthropic", { exact: true })).toBeVisible();
+    await expect(card.getByText("Input $3 / 1M tokens")).toBeVisible();
+    await expect(card.getByText("Output $15 / 1M tokens")).toBeVisible();
+    await expect(section.getByText("Not in the OpenRouter catalog")).toHaveCount(0);
+
+    await section.getByRole("button", { name: "Edit" }).click();
+    await section.getByRole("button", { name: "Add models" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add models" });
+    expect(await dialog.getByRole("group").evaluateAll((groups) => groups.map((group) => group.getAttribute("aria-label")))).toEqual(["OpenRouter", "Anthropic"]);
+    await dialog.getByLabel("Search catalog").fill("claude");
+    await expect(dialog.getByRole("group")).toHaveCount(1);
+    await dialog.getByRole("group", { name: "Anthropic" }).getByRole("checkbox", { name: "claude-haiku-4-5" }).check();
+    await dialog.getByRole("button", { name: "Add 1 model" }).click();
+    await section.getByRole("button", { name: "Save models" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save models" }).click();
+    await expect.poll(() => saved.payload).toEqual({
+      allowed_models: ["openrouter/openai/gpt-5-mini", "anthropic/claude-sonnet-4-5", "anthropic/claude-haiku-4-5"],
+    });
   });
 
   test("a member never sees the Models tab", async ({ page }) => {

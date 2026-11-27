@@ -108,7 +108,8 @@ export function agentInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-const MODEL_DISPLAY_PREFIX = "litellm/openrouter/";
+const OPENROUTER_DISPLAY_PREFIX = "litellm/openrouter/";
+const GATEWAY_DISPLAY_PREFIX = "litellm/";
 
 /** Bounds of an Agent's own Hermes turn limit, the same ones the API enforces. */
 export const MAX_TURNS_MIN = 1;
@@ -123,12 +124,12 @@ export function turnLimitLabel(agent: Pick<Agent, "maxTurns" | "effectiveMaxTurn
   return agent.maxTurns === null ? `Platform default (${agent.effectiveMaxTurns})` : turnLimitText(agent.maxTurns);
 }
 
-// Strips the internal litellm/openrouter routing prefix for display, leaving the
-// provider/model slug (e.g. "openai/gpt-5-mini"). No-op if the prefix is absent.
+// Strips the internal routing prefix for display: an OpenRouter model reads as its
+// provider/model slug (e.g. "openai/gpt-5-mini"), any other connection's as
+// connection/model (e.g. "anthropic/claude-sonnet-4-5"). No-op if neither prefix is present.
 export function formatModelName(model: string): string {
-  return model.startsWith(MODEL_DISPLAY_PREFIX)
-    ? model.slice(MODEL_DISPLAY_PREFIX.length)
-    : model;
+  if (model.startsWith(OPENROUTER_DISPLAY_PREFIX)) return model.slice(OPENROUTER_DISPLAY_PREFIX.length);
+  return model.startsWith(GATEWAY_DISPLAY_PREFIX) ? model.slice(GATEWAY_DISPLAY_PREFIX.length) : model;
 }
 
 export type RequiredSkillGroup = {

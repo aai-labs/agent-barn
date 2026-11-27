@@ -44,7 +44,7 @@ test.describe("Agent pending-model banner", () => {
     await dataSupport.agents.interceptGetAgentRequest({ body: pendingAgent });
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await expect(agentDetailPage.pendingModelBanner()).toContainText(
-      "Maya is still running on litellm/gpt-5-mini. Restart it to switch to litellm/gpt-5.",
+      "Maya is still running on gpt-5-mini. Restart it to switch to gpt-5.",
     );
     await expect(agentDetailPage.pendingModelRestartButton()).toBeEnabled();
   });

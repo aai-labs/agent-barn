@@ -14,6 +14,8 @@ import { SettingsErrorText } from "@/components/settings/settings-error-text";
 import { SettingsSectionHeading } from "@/components/settings/settings-section-heading";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { useModels } from "@/features/agents/hooks/use-models";
+import type { ModelOption } from "@/features/agents/schemas";
+import { formatModelName } from "@/features/agents/utils";
 import { useOrganization } from "@/features/organizations/hooks/use-organization";
 import { useUpdateOrganization } from "@/features/organizations/hooks/use-organization-actions";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
@@ -34,10 +36,13 @@ const providerIcons: Record<string, string> = {
   "meta-llama": "meta",
   mistralai: "mistralai",
   deepseek: "deepseek",
+  gemini: "googlegemini",
 };
+const OPENROUTER = "OpenRouter";
+const OTHER_MODELS = "Other";
 
 function modelDetails(model: { value: string; contextLength?: number | null; pricing?: unknown }) {
-  const provider = stripPrefix(model.value).split("/")[0];
+  const provider = formatModelName(model.value).split("/")[0];
   const pricing = model.pricing && typeof model.pricing === "object" ? model.pricing as Record<string, unknown> : {};
   const price = (value: unknown) => {
     if (typeof value !== "string" && typeof value !== "number") return null;
@@ -47,6 +52,23 @@ function modelDetails(model: { value: string; contextLength?: number | null; pri
   const input = price(pricing.prompt);
   const output = price(pricing.completion);
   return { provider, context: model.contextLength ? `${model.contextLength.toLocaleString()} tokens` : null, input, output };
+}
+
+function groupByConnection(models: ModelOption[]): { connection: string; models: ModelOption[] }[] {
+  const groups = new Map<string, ModelOption[]>();
+  for (const model of models) {
+    const connection = model.connection ?? OTHER_MODELS;
+    groups.set(connection, [...(groups.get(connection) ?? []), model]);
+  }
+  return [...groups.entries()]
+    .map(([connection, grouped]) => ({ connection, models: grouped }))
+    .sort((a, b) =>
+      a.connection === OPENROUTER
+        ? -1
+        : b.connection === OPENROUTER
+          ? 1
+          : a.connection.localeCompare(b.connection, undefined, { sensitivity: "base" }),
+    );
 }
 
 function ProviderIcon({ provider }: { provider: string }) {
@@ -244,18 +266,21 @@ export function AllowedModelsSection({
               )}
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent className="max-h-[85vh] sm:max-w-2xl">
-                  <DialogHeader><DialogTitle>Add models</DialogTitle><DialogDescription>Search the OpenRouter catalog and select models to allow.</DialogDescription></DialogHeader>
+                  <DialogHeader><DialogTitle>Add models</DialogTitle><DialogDescription>Search the models of every connection open to this organization and select models to allow.</DialogDescription></DialogHeader>
                   <Input placeholder="Search by model or provider…" aria-label="Search catalog" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} />
                   <div className="max-h-[50vh] overflow-y-auto pr-4">
-                    {filteredCatalog.map((model) => {
-                      const details = modelDetails(model);
-                      const enabled = selected.includes(model.value);
-                      return <label key={model.value} className="flex items-center gap-3 border-b py-3" style={{ borderColor: "var(--line)" }}>
-                        <ProviderIcon provider={details.provider} />
-                        <span className="min-w-0 flex-1"><span className="block text-[0.84rem] font-medium">{model.label}</span><span className="block text-[0.72rem]" style={{ color: "var(--ink-3)" }}>{details.provider}{details.context && ` · ${details.context} context`}{details.input && ` · ${details.input} input / 1M`}{details.output && ` · ${details.output} output / 1M`}</span></span>
-                        {enabled ? <span className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>Already enabled</span> : <Checkbox aria-label={model.label} checked={toAdd.includes(model.value)} onCheckedChange={() => setToAdd((current) => current.includes(model.value) ? current.filter((item) => item !== model.value) : [...current, model.value])} />}
-                      </label>;
-                    })}
+                    {groupByConnection(filteredCatalog).map((group) => <div key={group.connection} role="group" aria-label={group.connection}>
+                      <div aria-hidden className="pt-3 pb-1 text-[0.72rem] font-medium uppercase tracking-wide" style={{ color: "var(--ink-3)" }}>{group.connection}</div>
+                      {group.models.map((model) => {
+                        const details = modelDetails(model);
+                        const enabled = selected.includes(model.value);
+                        return <label key={model.value} className="flex items-center gap-3 border-b py-3" style={{ borderColor: "var(--line)" }}>
+                          <ProviderIcon provider={details.provider} />
+                          <span className="min-w-0 flex-1"><span className="block text-[0.84rem] font-medium">{model.label}</span><span className="block text-[0.72rem]" style={{ color: "var(--ink-3)" }}>{details.provider}{details.context && ` · ${details.context} context`}{details.input && ` · ${details.input} input / 1M`}{details.output && ` · ${details.output} output / 1M`}</span></span>
+                          {enabled ? <span className="text-[0.72rem]" style={{ color: "var(--ink-3)" }}>Already enabled</span> : <Checkbox aria-label={model.label} checked={toAdd.includes(model.value)} onCheckedChange={() => setToAdd((current) => current.includes(model.value) ? current.filter((item) => item !== model.value) : [...current, model.value])} />}
+                        </label>;
+                      })}
+                    </div>)}
                     {filteredCatalog.length === 0 && <p className="text-sm">No models match.</p>}
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-[0.8rem]" style={{ color: "var(--ink-3)" }}>{toAdd.length} selected</span><div className="flex gap-2"><Button variant="outline" type="button" onClick={() => setDialogOpen(false)}>Cancel</Button><Button type="button" disabled={!toAdd.length} onClick={() => { setSelectedDraft([...new Set([...selected, ...toAdd])]); setDialogOpen(false); }}>Add {toAdd.length} {toAdd.length === 1 ? "model" : "models"}</Button></div></div>
