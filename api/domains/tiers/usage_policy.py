@@ -13,6 +13,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from sqlmodel import Session
 
 from api.domains.templates.defaults import PREMADE_TEMPLATE_KEY
 from api.domains.tiers.models import (
@@ -153,9 +154,20 @@ class TierUsagePolicy(UsageGuard):
         tier = self.repository.for_organization(organization_id)
         return tier is None or _RULES[action].allowed(tier, subject or UsageSubject())
 
-    def check(self, organization_id: UUID, action: UsageAction, subject: UsageSubject | None = None) -> None:
+    def check(
+        self,
+        organization_id: UUID,
+        action: UsageAction,
+        subject: UsageSubject | None = None,
+        *,
+        session: Session | None = None,
+    ) -> None:
         subject = subject or UsageSubject()
-        tier = self.repository.for_organization(organization_id)
+        tier = (
+            self.repository.for_organization(organization_id)
+            if session is None
+            else self.repository.lock_organization_tier(session, organization_id)
+        )
         rule = _RULES[action]
         if tier is None or rule.allowed(tier, subject):
             return

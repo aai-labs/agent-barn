@@ -209,6 +209,14 @@ class TierRepository:
                 .where(col(Organization.id) == organization_id)
             ).first()
 
+    def lock_organization_tier(self, session: Session, organization_id: UUID) -> Tier | None:
+        """Serialize with Tier assignment and holds, and keep catalog edits from changing
+        the Tier's entitlements until the caller commits its write."""
+        organization = self._locked_organization(session, organization_id)
+        if organization is None or organization.tier_id is None:
+            return None
+        return session.get(Tier, organization.tier_id, with_for_update={"read": True})
+
     def coverage(self, organization_id: UUID) -> TierCoverage:
         """What the Organization runs that a Tier restricts, counting every live Agent."""
         with Session(self.delegate.engine) as session:

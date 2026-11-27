@@ -619,15 +619,23 @@ class CommunicationsService:
         enabled again after a Tier Hold switched it off, once the Tier covers Web Chat again."""
         if connection.suspended_at is None or data.model_fields_set != {"revision", "enabled"} or not data.enabled:
             self._reject_web_chat_mutation(connection.platform_key)
-        self.usage.check(
-            agent.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=connection.platform_key)
-        )
         connection.enabled = True
         connection.resume()
         # Nothing reports Web Chat's status; it is connected whenever it is enabled.
         connection.observed_status = ConnectionObservedStatus.CONNECTED
         try:
-            return self._read(self.repository.update(connection, expected_revision=data.revision))
+            return self._read(
+                self.repository.update(
+                    connection,
+                    expected_revision=data.revision,
+                    check_entitlement=lambda session: self.usage.check(
+                        agent.organization_id,
+                        UsageAction.CONNECT_CHANNEL,
+                        UsageSubject(platform_key=connection.platform_key),
+                        session=session,
+                    ),
+                )
+            )
         except CommunicationConnectionConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

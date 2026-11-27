@@ -323,14 +323,19 @@ class CommunicationConnectionRepository:
         connection: CommunicationConnection,
         *,
         expected_revision: int,
+        check_entitlement: Callable[[Session], None] | None = None,
     ) -> CommunicationConnection:
         try:
             with Session(self.delegate.engine) as session:
+                if check_entitlement is not None:
+                    check_entitlement(session)
                 persisted = session.exec(
-                    select(CommunicationConnection).where(
+                    select(CommunicationConnection)
+                    .where(
                         col(CommunicationConnection.id) == connection.id,
                         col(CommunicationConnection.retired_at).is_(None),
                     )
+                    .with_for_update()
                 ).one_or_none()
                 if persisted is None or persisted.revision != expected_revision:
                     raise CommunicationConnectionConflictError("Communication Connection changed; refresh and retry")

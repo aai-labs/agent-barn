@@ -27,6 +27,7 @@ from api.domains.agent_webhooks.models import AgentWebhook
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.service import AgentService
 from api.domains.communications.models import CommunicationConnection
+from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.subscriptions.service import SubscriptionService
@@ -405,7 +406,7 @@ def test_an_upgrade_releases_nothing_until_the_owner_re_enables_it():
             assert_that(stored(context, "Newest"), has_properties_of(suspended_at=None, status=AgentStatus.STOPPED))
 
 
-def test_a_held_web_chat_is_released_by_enabling_it_once_the_tier_covers_it():
+def test_a_held_web_chat_is_released_by_enabling_it_once_the_tier_covers_it(monkeypatch):
     def free_without_web_chat(context):
         context.injector.get(TierRepository).update_with_events(
             TIER_IDS["free"],
@@ -430,6 +431,22 @@ def test_a_held_web_chat_is_released_by_enabling_it_once_the_tier_covers_it():
         with then("it stays held while the Tier leaves Web Chat out"):
             refused = enable(context, enabled=True)
             assert_that(refused.status_code, equal_to(status.HTTP_403_FORBIDDEN), refused.text)
+
+        with when("a downgrade completes just before the release writes"):
+            put_on(context, "cloud_2")
+            repository = context.injector.get(CommunicationConnectionRepository)
+            update = repository.update
+
+            def downgrade_then_update(*args, **kwargs):
+                put_on(context, "free")
+                return update(*args, **kwargs)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(repository, "update", downgrade_then_update)
+                raced = enable(context, enabled=True)
+            assert_that(raced.status_code, equal_to(status.HTTP_403_FORBIDDEN), raced.text)
+            (stored,) = connections_of(context)
+            assert_that((stored.enabled, stored.suspension_reason), equal_to((False, SuspensionReason.TIER)))
 
         with when("the Organization moves to a Tier with Web Chat and the owner enables it"):
             put_on(context, "cloud_2")
