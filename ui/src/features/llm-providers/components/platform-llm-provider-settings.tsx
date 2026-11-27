@@ -173,7 +173,7 @@ export function PlatformLlmProviderSettings() {
         <p className="mb-3 mt-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
           Each key is checked with its provider before it is saved, and only its last four characters are shown.
         </p>
-        <ul aria-label="LLM providers" className="m-0 grid list-none grid-cols-1 gap-3 p-0 md:grid-cols-3">
+        <ul aria-label="LLM providers" className="m-0 grid list-none auto-rows-fr grid-cols-1 gap-3 p-0 md:grid-cols-3">
           {gridOpenRouter && connectionCard(gridOpenRouter)}
           {KNOWN_PROVIDER_TYPES.map((type) => {
             const connection = ofType(type)[0];

@@ -17,6 +17,7 @@ import { providerTitle } from "../utils";
 
 const MUTED = { color: "var(--ink-3)" };
 const DASHED = { borderStyle: "dashed" } as const;
+const CARD_MIN_HEIGHT = "min-h-[15.625rem]";
 
 export function ProviderInitials({ providerType }: { providerType: ProviderType }) {
   return (
@@ -46,7 +47,7 @@ function CardShell({
   const headingId = useId();
 
   return (
-    <section className="af-card flex h-full flex-col p-5" style={dashed ? DASHED : undefined} aria-labelledby={headingId}>
+    <section className={`af-card flex h-full flex-col p-5 ${CARD_MIN_HEIGHT}`} style={dashed ? DASHED : undefined} aria-labelledby={headingId}>
       <div className="flex items-start gap-3">
         <ProviderInitials providerType={providerType} />
         <div className="min-w-0">
@@ -83,9 +84,9 @@ export function organizationsLabel({ organizationAccess, organizationCount }: Ll
     case "none":
       return "No organizations";
     case "all_except":
-      return `All except ${organizationCount}`;
+      return `All organizations except ${organizationCount} ticked`;
     case "only":
-      return `Only ${organizationCount}`;
+      return `${organizationCount} ${organizationCount === 1 ? "organization" : "organizations"} ticked`;
   }
 }
 

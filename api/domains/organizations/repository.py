@@ -773,7 +773,7 @@ class OrganizationRepository:
         with Session(self.delegate.engine) as session:
             query, owner = self._build_platform_organization_read_query()
             query = self._apply_platform_organization_filters(query, organization_filter, owner)
-            query = query.order_by(col(Organization.updated_at).asc())
+            query = query.order_by(col(Organization.created_at).asc(), col(Organization.id).asc())
 
             count_query, count_owner = self._build_platform_organization_count_query()
             count_query = self._apply_platform_organization_filters(count_query, organization_filter, count_owner)

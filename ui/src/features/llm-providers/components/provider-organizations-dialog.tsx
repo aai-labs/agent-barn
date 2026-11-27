@@ -41,6 +41,7 @@ export function useOrganizationAccess(initialAccess: OrganizationAccess, initial
   const [ticked, setTicked] = useState(
     () => new Map(initialOrganizations.map((organization) => [organization.id, organization.name])),
   );
+  const [storedTicked] = useState(initialOrganizations);
   const listsOrganizations = LISTING_ACCESS.includes(access);
 
   function toggle(organization: Organization) {
@@ -56,6 +57,7 @@ export function useOrganizationAccess(initialAccess: OrganizationAccess, initial
     access,
     setAccess,
     ticked,
+    storedTicked,
     toggle,
     listsOrganizations,
     organizationIds: listsOrganizations ? [...ticked.keys()] : [],
@@ -95,7 +97,9 @@ export function OrganizationAccessFields({
           </label>
         ))}
       </fieldset>
-      {state.listsOrganizations && <OrganizationChecklist ticked={state.ticked} onToggle={state.toggle} />}
+      {state.listsOrganizations && (
+        <OrganizationChecklist ticked={state.ticked} storedTicked={state.storedTicked} onToggle={state.toggle} />
+      )}
     </>
   );
 }
@@ -124,7 +128,7 @@ export function ProviderOrganizationsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] sm:max-w-lg" onCloseAutoFocus={focusOnClose(returnFocusTo)}>
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-lg" onCloseAutoFocus={focusOnClose(returnFocusTo)}>
         <DialogHeader>
           <DialogTitle>{title} organizations</DialogTitle>
           <DialogDescription>
@@ -182,7 +186,7 @@ function OrganizationsForm({
 
   return (
     <form
-      className="flex min-h-0 flex-col gap-4"
+      className="flex min-h-0 flex-1 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
         void save();
@@ -208,18 +212,23 @@ function OrganizationsForm({
 
 function OrganizationChecklist({
   ticked,
+  storedTicked,
   onToggle,
 }: {
   ticked: Map<string, string>;
+  storedTicked: Organization[];
   onToggle: (organization: Organization) => void;
 }) {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, { wait: SEARCH_WAIT_MS });
   const { organizations, hasNextPage, fetchNextPage, isFetchingNextPage, isLoading, error, refetch } =
     useInfiniteOrganizations({ search: debouncedSearch });
+  const pinned = debouncedSearch.trim() ? [] : storedTicked;
+  const pinnedIds = new Set(pinned.map((organization) => organization.id));
+  const listed = [...pinned, ...organizations.filter((organization) => !pinnedIds.has(organization.id))];
 
   return (
-    <div className="flex min-h-0 flex-col gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex items-center gap-3">
         <input
           className="af-input w-full"
@@ -245,13 +254,13 @@ function OrganizationChecklist({
             Retry
           </button>
         </div>
-      ) : organizations.length === 0 ? (
+      ) : listed.length === 0 ? (
         <p className="m-0 text-sm" style={MUTED}>
           No organizations match.
         </p>
       ) : (
-        <ul aria-label="Organizations" className="m-0 max-h-64 list-none overflow-y-auto p-0">
-          {organizations.map((organization) => (
+        <ul aria-label="Organizations" className="m-0 max-h-64 min-h-0 list-none overflow-y-auto p-0">
+          {listed.map((organization) => (
             <li key={organization.id}>
               <label className="flex items-center gap-2.5 py-1 text-sm">
                 <input
