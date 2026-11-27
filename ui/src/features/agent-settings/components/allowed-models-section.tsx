@@ -19,9 +19,11 @@ import { useUpdateOrganization } from "@/features/organizations/hooks/use-organi
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import {
+  entryLabel,
   getEffectiveModels,
   getOrphanedModels,
   stripPrefix,
+  toEntry,
 } from "../allowed-models-utils";
 import { useAgentSettings } from "../hooks/use-agent-settings";
 
@@ -130,7 +132,7 @@ export function AllowedModelsSection({
 
   async function applyChanges() {
     const cleaned = [
-      ...new Set([...selected.map((model) => stripPrefix(model)), ...orphaned]),
+      ...new Set([...selected.map((model) => toEntry(model)), ...orphaned]),
     ];
     await updateOrg.mutateAsync({ organizationId, data: { allowedModels: cleaned } });
     setSelectedDraft(null);
@@ -218,12 +220,12 @@ export function AllowedModelsSection({
                 {visibleOrphans.map((value) => (
                   <Card key={value} className="gap-3 p-4 ring-0" style={{ background: "var(--bg-elev)", border: "1px solid var(--line)" }}>
                     <div className="flex items-start gap-3">
-                      <ProviderIcon provider={stripPrefix(value).split("/")[0]} />
+                      <ProviderIcon provider={entryLabel(value).split("/")[0]} />
                       <div className="min-w-0 flex-1">
-                        <div className="break-all text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{value}</div>
+                        <div className="break-all text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>{entryLabel(value)}</div>
                         <div className="mt-1 text-[0.75rem]" style={{ color: "var(--ink-3)" }}>Not in the OpenRouter catalog</div>
                       </div>
-                      {editing && canEdit && <Button variant="ghost" size="sm" type="button" aria-label={`Remove ${value}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</Button>}
+                      {editing && canEdit && <Button variant="ghost" size="sm" type="button" aria-label={`Remove ${entryLabel(value)}`} onClick={() => setOrphanDraft((prev) => (prev ?? baselineOrphans).filter((model) => model !== value))}>Remove</Button>}
                     </div>
                     <div className="border-t pt-3 text-[0.72rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>Kept in the allowed list until removed.</div>
                   </Card>

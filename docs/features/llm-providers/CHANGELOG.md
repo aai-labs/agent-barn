@@ -17,11 +17,18 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: AF-476, LiteLLM refuses with `403` any model an Agent's own key doesn't list, PRs 1 to 7 ([feature doc](../llm-providers.md#provider-access)). A key, a Bot's included, lists the Agent's own model or its Organization's or the platform's default, the model its running pod started on, every decision model, the Playbook Extraction model and the model of its running Playbook Extraction, so switching model in chat to anything else is refused. A key gets its list when it is made and at every start, before the pod and again once the start is saved, and a start whose list can't be set before the pod fails. A rejected decision and a Playbook Extraction set it before calling, and the 15-minute LLM budget reconciliation sets every live key's list. Verified on local k3d with a Hermes and an OpenClaw Agent.
 - Not yet verified: AF-476 on staging, steps 2, 4 and 5 of the plan's verification: a running Agent's `/key/info` lists the right models, an unlisted model is refused with `403` from its pod, and a decision and a Playbook Extraction succeed. Before shipping, the plan's two read-only checks on staging and production: no running Agent with an empty `running_model`, and no Agent key asking for a model it won't list.
 - Delivered: the review fixes for PR #417. The worker and the CronJobs read the API's `AGENT_DEFAULT_MODEL`, a running Playbook Extraction keeps its model on the key, and a start sets the key again once it is saved.
-- In progress: AF-484, the Organization pool, PRs 1 to 12. PR 1: model routes drop OpenRouter's `session_id`. PR 2: a provider's `402` is answered without naming OpenRouter. PR 3: allowlist entries name their connection (`openrouter/<model>`); the UI reads them from PR 4.
-- Next: AF-484, PR 4.
+- In progress: AF-484, the Organization pool, PRs 1 to 12. PR 1: model routes drop OpenRouter's `session_id`. PR 2: a provider's `402` is answered without naming OpenRouter. PR 3: allowlist entries name their connection (`openrouter/<model>`); PR 4: the allowlist editor reads and saves them.
+- Next: AF-484, PR 5.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-27 — AF-484 — PR 4
+
+- Delivered: the Organization settings **Allowed models** editor reads and saves `openrouter/<id>` entries. A stored entry matches the catalogue value `litellm/<entry>`, an `openrouter/` glob still expands against the catalogue, and an entry the catalogue no longer has is still kept and shown, named without `openrouter/`. A save sends each ticked model as `openrouter/<id>`.
+- Changed: `ui/src/features/agent-settings/allowed-models-utils.ts` (`toEntry`, `entryLabel`) and `components/allowed-models-section.tsx`.
+- Verified: `settings-agent-defaults.spec.ts`, 9 pass. The new tests that a save sends `openrouter/…` and that an `openrouter/` glob expands, and the unavailable-models test with `openrouter/` fixtures, each failed first on the old code. `make lint-ui` and `make check-ui` pass.
+- Follow-up: PR 5, the pool is offered.
 
 ### 2026-11-27 — AF-484 — PR 3
 

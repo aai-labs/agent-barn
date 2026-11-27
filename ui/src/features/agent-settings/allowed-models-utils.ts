@@ -1,9 +1,17 @@
-const MODEL_PREFIX = "litellm/openrouter/";
+const GATEWAY_PREFIX = "litellm/";
+const OPENROUTER_ENTRY_PREFIX = "openrouter/";
 
 export const stripPrefix = (model: string) => model.replace(/^litellm\/openrouter\//, "");
 
-// Stored allowlists (and the original migration backfill) can hold glob patterns such
-// as "*" or "openai/*". Detect them so they can be expanded against the live catalog
+export const toEntry = (value: string) => value.replace(/^litellm\//, "");
+
+const toValue = (entry: string) => `${GATEWAY_PREFIX}${entry}`;
+
+export const entryLabel = (entry: string) =>
+  entry.startsWith(OPENROUTER_ENTRY_PREFIX) ? entry.slice(OPENROUTER_ENTRY_PREFIX.length) : entry;
+
+// Stored allowlists can hold OpenRouter glob patterns such as "openrouter/*" or
+// "openrouter/openai/*". Detect them so they can be expanded against the live catalog
 // rather than shown as bogus "not in catalog" orphans.
 const isGlob = (model: string) => /[*?[\]]/.test(model);
 
@@ -15,10 +23,10 @@ const globToRegExp = (pattern: string) => {
   return new RegExp(`^${escaped}$`, "i");
 };
 
-// Catalog entries whose bare slug matches a glob pattern, as full prefixed values.
+// Catalog values whose allowlist entry matches a glob pattern.
 const expandGlob = (pattern: string, catalog: { value: string }[]) => {
-  const re = globToRegExp(stripPrefix(pattern).toLowerCase());
-  return catalog.map((entry) => entry.value).filter((value) => re.test(stripPrefix(value).toLowerCase()));
+  const re = globToRegExp(toEntry(pattern).toLowerCase());
+  return catalog.map((entry) => entry.value).filter((value) => re.test(toEntry(value).toLowerCase()));
 };
 
 export const getPrefixedModels = (stored: string[] | undefined, catalog: { value: string }[]) => {
@@ -29,10 +37,9 @@ export const getPrefixedModels = (stored: string[] | undefined, catalog: { value
       resolved.add(model);
       continue;
     }
-    // Handles bare OpenRouter slugs and values like "litellm/gpt-5-mini".
-    const withPrefix = `${MODEL_PREFIX}${model}`;
-    if (catalogValues.has(withPrefix)) {
-      resolved.add(withPrefix);
+    const value = toValue(model);
+    if (catalogValues.has(value)) {
+      resolved.add(value);
       continue;
     }
     if (isGlob(model)) {
@@ -50,7 +57,7 @@ export const getPrefixedModels = (stored: string[] | undefined, catalog: { value
 export const getOrphanedModels = (stored: string[] | undefined, catalog: { value: string }[]) => {
   const catalogValues = new Set(catalog.map((entry) => entry.value));
   return (stored || []).filter((model) => {
-    if (catalogValues.has(model) || catalogValues.has(`${MODEL_PREFIX}${model}`)) return false;
+    if (catalogValues.has(model) || catalogValues.has(toValue(model))) return false;
     if (isGlob(model)) return expandGlob(model, catalog).length === 0;
     return true;
   });

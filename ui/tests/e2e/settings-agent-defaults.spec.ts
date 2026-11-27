@@ -109,20 +109,46 @@ test.describe("Settings · Models", () => {
   });
 
   test("keeps unavailable models visible and removable", async ({ page }) => {
-    await dataSupport.organizations.interceptGetOrganization({ organization: org({ allowed_models: ["openai/gpt-5-mini", "nex-agi/nex-n2-pro"] }) });
+    await dataSupport.organizations.interceptGetOrganization({ organization: org({ allowed_models: ["openrouter/openai/gpt-5-mini", "openrouter/nex-agi/nex-n2-pro"] }) });
     await dataSupport.agents.interceptGetModelsRequest({ body: [
       { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
       { value: "litellm/openrouter/anthropic/claude-sonnet", label: "Claude Sonnet", context_length: 200000, pricing: { prompt: "0.000003", completion: "0.000015" } },
     ] });
     await settings.open();
     const section = page.getByRole("region", { name: "Allowed models" });
-    await expect(section.getByText("Not in the OpenRouter catalog")).toBeVisible();
+    await expect(section.getByText("Not in the OpenRouter catalog")).toHaveCount(1);
+    await expect(section.getByText("128,000 tokens context")).toBeVisible();
     await expect(section.getByText("Kept in the allowed list until removed.")).toBeVisible();
     await section.getByRole("button", { name: "Edit" }).click();
     await section.getByRole("button", { name: "Remove nex-agi/nex-n2-pro" }).click();
     await expect(section.getByText("nex-agi/nex-n2-pro")).toHaveCount(0);
     await section.getByRole("button", { name: "Cancel" }).click();
     await expect(section.getByText("nex-agi/nex-n2-pro")).toBeVisible();
+  });
+
+  test("a save sends each model as its connection's entry", async ({ page }) => {
+    const saved = await dataSupport.organizations.interceptRenameOrganization();
+    await dataSupport.agents.interceptGetModelsRequest({ body: OFFERED_MODELS });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    await section.getByRole("button", { name: "Edit" }).click();
+    await section.getByRole("button", { name: "Remove GPT-5 mini" }).click();
+    await section.getByRole("button", { name: "Save models" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save models" }).click();
+    await expect.poll(() => saved.payload).toEqual({ allowed_models: ["openrouter/z-ai/glm-5.2"] });
+  });
+
+  test("an OpenRouter glob still expands to the catalog's models", async ({ page }) => {
+    await dataSupport.organizations.interceptGetOrganization({ organization: org({ allowed_models: ["openrouter/openai/*"] }) });
+    await dataSupport.agents.interceptGetModelsRequest({ body: [
+      { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini", context_length: 128000, pricing: { prompt: "0.0000025", completion: "0.00001" } },
+      { value: "litellm/openrouter/anthropic/claude-sonnet", label: "Claude Sonnet", context_length: 200000, pricing: { prompt: "0.000003", completion: "0.000015" } },
+    ] });
+    await settings.open();
+    const section = page.getByRole("region", { name: "Allowed models" });
+    await expect(section.getByText("GPT-5 mini", { exact: true })).toBeVisible();
+    await expect(section.getByText("Claude Sonnet", { exact: true })).toHaveCount(0);
+    await expect(section.getByText("Not in the OpenRouter catalog")).toHaveCount(0);
   });
 
   test("shows the reason when an allowed model cannot be removed", async ({ page }) => {
