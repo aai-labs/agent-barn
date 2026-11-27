@@ -64,6 +64,8 @@ export function PlatformTrialSettings() {
   const capCleared = draft !== null && draft.cap.trim() === "";
   const cap = draft === null || capCleared ? null : parseWholeNumber(draft.cap, MAX_ACTIVE_TRIALS);
   const capInvalid = draft !== null && !capCleared && cap === null;
+  const noSignupTier = trialSettings.signupTierAvailable === false;
+  const signupLocked = noSignupTier && !trialSettings.selfSignupEnabled;
   const unchanged =
     draft?.selfSignupEnabled === trialSettings.selfSignupEnabled && credit === trialSettings.creditUsd && agentLimit === trialSettings.agentLimit && cap === savedCap;
 
@@ -88,8 +90,18 @@ export function PlatformTrialSettings() {
     <section className="af-card overflow-hidden" aria-label="Signup and trial settings">
       <p className="m-0 border-b px-5 py-3 text-[0.84rem]" style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}>
         A trial is the Free tier: its credit and agent limit are Free&apos;s, also editable under Tiers.
-        {trialSettings.freeTierOffered === false && " Free isn't offered, so sign-up is closed until it is."}
+        {!noSignupTier && trialSettings.freeTierOffered === false && " Free trials are unavailable."}
       </p>
+      {noSignupTier && (
+        <p
+          className="m-0 border-b px-5 py-3 text-[0.84rem]"
+          data-testid="no-signup-tier"
+          style={{ borderColor: "var(--line)", background: "var(--warn-soft)", color: "var(--warn)" }}
+        >
+          No tier is available for self-signup. Offer Free with Agent Barn Telegram configured, or a purchasable paid tier.
+          {trialSettings.selfSignupEnabled && " Until then, new users will be turned away."}
+        </p>
+      )}
       <div className="p-5">
         {draft !== null ? (
           <div className="flex flex-col gap-5">
@@ -102,7 +114,7 @@ export function PlatformTrialSettings() {
                   role="switch"
                   aria-checked={draft.selfSignupEnabled}
                   aria-describedby="self-signup-description"
-                  disabled={isSaving}
+                  disabled={isSaving || signupLocked}
                   onClick={() => change({ selfSignupEnabled: !draft.selfSignupEnabled })}
                   className="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50"
                   style={{ backgroundColor: draft.selfSignupEnabled ? "var(--ink)" : "var(--line)" }}
@@ -111,7 +123,7 @@ export function PlatformTrialSettings() {
                 </button>
               </div>
               <p id="self-signup-description" className="mb-0 mt-2 text-sm" style={{ color: "var(--ink-3)" }}>
-                Let new users sign up with Google and receive a trial. Existing users can always sign in.
+                Let new users sign up with Google for a trial or a subscription. Existing users can always sign in.
               </p>
             </div>
             <div>

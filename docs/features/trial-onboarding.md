@@ -141,7 +141,13 @@ moves is audited as `platform.trial_settings.changed`, a removed cap as `null`. 
 Credit and agent limit are the Free Tier's, so this page changes them through the Tier
 catalog, as **Tiers** does: audited as `platform.tier.changed`, and a lower agent limit
 holds what Free no longer covers ([Tier Holds](tiers.md#tier-holds)). The read also says
-whether Free is offered (`free_tier_offered`). The page shows how many trials are active.
+whether Free is offered (`free_tier_offered`) and whether there is a Tier for self-signup
+(`signup_tier_available`): Free with Agent Barn Telegram configured, or a paid Tier that
+can be purchased through an active subscription provider. If neither is available, enabling
+self-signup returns 400 and the page disables the switch while signup is off. The write
+checks availability again under lock. Withdrawing the last usable Tier leaves the signup
+setting as it was. The page warns that new users will be turned away while it remains on
+without a usable Tier, and shows how many trials are active.
 Until the first save, self-signup is disabled and there is no cap; the credit and limit are
 Free's seeded $10 and one Agent. Self-signup requires positive Trial Credit.
 Updates validate the combined settings first: administrators may enable signup and set

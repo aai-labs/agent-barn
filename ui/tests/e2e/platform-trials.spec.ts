@@ -104,6 +104,47 @@ test.describe("Platform trials", () => {
     expect(settings.credit_usd).toBe(0);
   });
 
+  test("signup can't be enabled without a usable tier", async ({ page }) => {
+    const data = await signInAsPlatformAdmin(page);
+    await data.platformMemory.intercept();
+    await page.route(TRIAL_SETTINGS, (route) =>
+      route.fulfill({
+        json: { self_signup_enabled: false, credit_usd: 10, agent_limit: 1, signup_tier_available: false, free_tier_offered: false },
+      }),
+    );
+    await page.goto("/dashboard/platform/settings");
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
+
+    await expect(page.getByTestId("no-signup-tier")).toHaveText(
+      "No tier is available for self-signup. Offer Free with Agent Barn Telegram configured, or a purchasable paid tier.",
+    );
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(page.getByRole("switch", { name: "Allow self-signup" })).toBeDisabled();
+  });
+
+  test("signup already on can be turned off without a usable tier", async ({ page }) => {
+    const data = await signInAsPlatformAdmin(page);
+    await data.platformMemory.intercept();
+    let settings: Record<string, unknown> = { self_signup_enabled: true, credit_usd: 10, agent_limit: 1, signup_tier_available: false };
+    await page.route(TRIAL_SETTINGS, async (route) => {
+      if (route.request().method() === "PUT") settings = { ...route.request().postDataJSON(), signup_tier_available: false };
+      return route.fulfill({ json: settings });
+    });
+    await page.goto("/dashboard/platform/settings");
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
+
+    await expect(page.getByTestId("no-signup-tier")).toContainText("new users will be turned away");
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("switch", { name: "Allow self-signup" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByTestId("saved-self-signup")).toHaveText("Disabled");
+    await expect(page.getByTestId("no-signup-tier")).toContainText("No tier is available for self-signup.");
+  });
+
   test("a Platform Administrator caps the active trials", async ({ page }) => {
     const data = await signInAsPlatformAdmin(page);
     await data.platformMemory.intercept();
