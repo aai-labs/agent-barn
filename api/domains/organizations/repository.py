@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -196,13 +196,19 @@ class OrganizationRepository:
     def find_budget_email_recipients(self, organization_id: UUID) -> list[tuple[str, str | None]]:
         """Owners and Admins, i.e. the same audience `cost.read` gives the figures to.
         Plain members are deliberately excluded."""
+        return self.find_member_recipients(organization_id, [OrganizationRole.OWNER, OrganizationRole.ADMIN])
+
+    def find_member_recipients(
+        self, organization_id: UUID, roles: Collection[OrganizationRole]
+    ) -> list[tuple[str, str | None]]:
+        """The address and name of each member of the Organization holding one of `roles`."""
         with Session(self.delegate.engine) as session:
             rows = session.exec(
                 select(User.email, User.full_name)
                 .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
                 .where(
                     col(OrganizationUser.organization_id) == organization_id,
-                    col(OrganizationUser.role).in_([OrganizationRole.OWNER, OrganizationRole.ADMIN]),
+                    col(OrganizationUser.role).in_(list(roles)),
                 )
             ).all()
         return _deduped_recipients(rows)

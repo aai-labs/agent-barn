@@ -11,13 +11,20 @@ Related context: [`../anomaly-detection.md`](../anomaly-detection.md), [`../rbac
   - the Organization opt-in, which already tells Owners that checks may be billed to each Agent;
   - the scheduled statistics-only check: rates against each Agent's own last 14 days, first use of tools, integrations, actions and hosts, and hard caps on model tokens and calls;
   - Anomaly records; each new one is classified once by the decision model (kind, severity, how likely it is really unusual), billed to its Agent, and stays `STATISTICS_ONLY` if that call fails (AF-459);
-  - the per-Agent override, and the Agent's Unusual activity tab for Owners and Admins, which shows each item's classification.
+  - the per-Agent override, and the Agent's Unusual activity tab for Owners and Admins, which shows each item's classification;
+  - email alerts to Owners and Admins about newly flagged activity of `MEDIUM` severity or above that is not probably fine, or that could not be classified, unless the Organization has turned the emails off (AF-464).
 - In transition: nothing.
-- Next: alerts when an Agent's activity is flagged (AF-464).
+- Next: acknowledge and resolve, and quarantine on critical (AF-465).
 - Later: acknowledge and resolve, an Organization-wide Anomalies page, and quarantine (AF-465).
 - Blockers: none.
 
 ## Changes
+
+### 2026-11-25 — AF-464
+
+- Delivered: Owners and Admins (whoever `anomaly.read` reaches) are emailed when a check newly flags activity worth a look for one of their Agents: classified `MEDIUM` or above and not probably fine, or not classified. One email per recipient per check, naming the Agent, what was flagged and how it was classified, with a link to the Unusual activity tab. Ongoing activity does not alert again. Owners and Admins can turn the emails off in Settings → Unusual activity while keeping detection on; they are on by default.
+- Changed: the Event `agent.anomaly.flagged`, recorded in the check's transaction and enqueued after classification, and its handler `AnomalyAlertEmailHandler`; table `anomaly_alert_email_receipt` (migration `2180817c8927`); `CheckWrites.record_flagged`; `OrganizationLookupService.recipients_with_permission`; `AgentService.agent_name`; `EmailService.send_anomaly_alert_email` and its template; column `organization_anomaly_settings.alerts_enabled` (migration `4010f1f2d1f1`), `alerts_enabled` on `/anomaly-detection` (whose `PUT` now takes either field), and the audit Event `organization.anomaly_alerts.changed`.
+- Follow-up: AF-465 can reuse the Event to quarantine on `CRITICAL`; a failed classification alerts about five minutes late, after the handler's wait for classification.
 
 ### 2026-11-24 — AF-459
 

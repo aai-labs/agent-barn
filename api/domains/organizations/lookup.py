@@ -8,6 +8,7 @@ from injector import inject, singleton
 
 from api.domains.organizations.models import CreditGrantKind, CreditGrantRead, PlatformCreditGrantRead
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import OrganizationRole, PermissionKey, organization_role_allows
 from api.domains.usage.guard import UsageGuard
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -91,6 +92,15 @@ class OrganizationLookupService:
 
     repository: OrganizationRepository
     usage: UsageGuard
+
+    def recipients_with_permission(
+        self, organization_id: UUID, permission: PermissionKey
+    ) -> list[tuple[str, str | None]]:
+        """The address and name of each member whose role grants `permission`, for
+        emailing them about something only they may see. Follows the role grants, so
+        the audience changes with them rather than drifting from them."""
+        roles = [role for role in OrganizationRole if organization_role_allows(role, permission)]
+        return self.repository.find_member_recipients(organization_id, roles) if roles else []
 
     def get_name(self, organization_id: UUID) -> str:
         organization = self.repository.get(organization_id)

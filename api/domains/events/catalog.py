@@ -41,6 +41,7 @@ TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_ANOMALY_DETECTION_CHANGED = "organization.anomaly_detection.changed"
+ORGANIZATION_ANOMALY_ALERTS_CHANGED = "organization.anomaly_alerts.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_CREATED = "organization.created"
 ORGANIZATION_UPDATED = "organization.updated"
@@ -104,12 +105,14 @@ AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
 ORGANIZATION_MCP_SERVER_CREATED = "organization.mcp_server.created"
 ORGANIZATION_MCP_SERVER_UPDATED = "organization.mcp_server.updated"
 ORGANIZATION_MCP_SERVER_DELETED = "organization.mcp_server.deleted"
+AGENT_ANOMALY_FLAGGED = "agent.anomaly.flagged"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 ORGANIZATION_TRIAL_EXPIRY_HANDLER = "organization.trial_expiry.projection"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
+AGENT_ANOMALY_ALERT_EMAIL_HANDLER = "agent.anomaly_alert_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 WORKFLOW_RUN_CHANGED = "workflow.run.changed"
 WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
@@ -508,6 +511,18 @@ class OrganizationLlmBudgetPayload(BaseModel):
     subject_display: str
 
 
+class AgentAnomalyFlaggedPayload(BaseModel):
+    """The Anomalies one check of one Agent started. Identifiers only: the handler reads
+    what was flagged and how it was classified when it delivers, since classification
+    finishes after the Event is recorded."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    anomaly_ids: list[UUID]
+
+
 class AgentLlmBudgetPayload(BaseModel):
     """Spend against one Agent's own limit when a threshold was first crossed. Same
     snapshot semantics as the Organization's: informational, never gating."""
@@ -686,6 +701,18 @@ class OrganizationAnomalyDetectionChangedPayload(BaseModel):
     organization_id: UUID
     enabled: bool
     previous_enabled: bool
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationAnomalyAlertsChangedPayload(BaseModel):
+    """Unusual activity emails turned on or off for an Organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    alerts_enabled: bool
+    previous_alerts_enabled: bool
     actor_display: str
     subject_display: str
 
@@ -1125,6 +1152,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_ANOMALY_DETECTION_CHANGED, OrganizationAnomalyDetectionChangedPayload),
+        (ORGANIZATION_ANOMALY_ALERTS_CHANGED, OrganizationAnomalyAlertsChangedPayload),
         (AGENT_ANOMALY_OVERRIDE_CHANGED, AgentAnomalyOverrideChangedPayload),
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
@@ -1267,6 +1295,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_ANOMALY_FLAGGED,
+            schema_version=1,
+            payload_model=AgentAnomalyFlaggedPayload,
+            handler_names=(AGENT_ANOMALY_ALERT_EMAIL_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
     for event_name in (AGENT_LLM_BUDGET_THRESHOLD_REACHED, AGENT_LLM_BUDGET_EXHAUSTED):
         registry.register(
             DomainEventDefinition(

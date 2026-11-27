@@ -8,6 +8,7 @@ from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
 from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
 from api.domains.agents.repository import AgentRepository
 from api.domains.analytics.event_handlers import ProductAnalyticsHandler
+from api.domains.anomalies.event_handlers import AnomalyAlertEmailHandler
 from api.domains.artifacts.storage import ArtifactStorage
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
@@ -133,6 +134,7 @@ class AppModule(Module):
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
         organization_trial_expiry_handler: OrganizationTrialExpiryHandler,
         agent_budget_email_handler: AgentBudgetEmailHandler,
+        anomaly_alert_email_handler: AnomalyAlertEmailHandler,
         security_audit_projection: SecurityAuditProjection,
         product_analytics_handler: ProductAnalyticsHandler,
         workflow_controller_handler: WorkflowControllerHandler,
@@ -143,6 +145,7 @@ class AppModule(Module):
                 organization_budget_email_handler,
                 organization_trial_expiry_handler,
                 agent_budget_email_handler,
+                anomaly_alert_email_handler,
                 security_audit_projection,
                 product_analytics_handler,
                 workflow_controller_handler,

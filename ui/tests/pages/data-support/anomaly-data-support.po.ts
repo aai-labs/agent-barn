@@ -53,20 +53,22 @@ export interface AnomalyMock {
 export class AnomalyDataSupport {
   constructor(private page: Page) {}
 
-  /** The Organization's opt-in: reads return the current value, writes store it. */
+  /** The Organization's opt-in and alerts: reads return the current values, writes
+   * store whichever they give. */
   async interceptDetection({
     enabled = false,
+    alertsEnabled = true,
     canManage = true,
     organizationId = TEST_ORG_ID,
-  }: { enabled?: boolean; canManage?: boolean; organizationId?: string } = {}): Promise<AnomalyMock> {
+  }: { enabled?: boolean; alertsEnabled?: boolean; canManage?: boolean; organizationId?: string } = {}): Promise<AnomalyMock> {
     const mock: AnomalyMock = { requests: [] };
-    let current = enabled;
+    let current = { enabled, alerts_enabled: alertsEnabled };
     await this.page.route(`**/api/v1/organizations/${organizationId}/anomaly-detection`, async (route) => {
       const request = route.request();
       const body = request.postDataJSON?.() ?? null;
       mock.requests.push({ method: request.method(), url: new URL(request.url()), body });
-      if (request.method() === "PUT") current = Boolean((body as Json).enabled);
-      return json(route, 200, { enabled: current, can_manage: canManage, updated_at: null });
+      if (request.method() === "PUT") current = { ...current, ...(body as Json) };
+      return json(route, 200, { ...current, can_manage: canManage, updated_at: null });
     });
     return mock;
   }

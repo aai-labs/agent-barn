@@ -4,7 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class EmailTemplateAttribute:
     name: str
-    value: str | dict
+    value: str | dict | list[dict[str, str]]
 
 
 @dataclass

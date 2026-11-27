@@ -4,19 +4,21 @@
 
 Read before changing how Agents are checked for unusual activity: the Organization
 opt-in, what counts as an Agent's normal and how it is learned, the scheduled check, how
-flagged activity is classified by the decision model and what is sent to it,
-Anomaly records, the per-Agent override, or who may see any of it.
+flagged activity is classified by the decision model and what is sent to it, who is
+alerted about it and when, Anomaly records, the per-Agent override, or who may see any of
+it.
 
 ## Role in the system
 
 An Organization may turn on checks that compare each of its Agents' activity with what
 is normal for that Agent, learned from its own last 14 days. A check that sees something
-unusual records an **Anomaly**, shown on the Agent's Unusual activity tab. Detection is passive:
-nobody is alerted and nothing is stopped.
+unusual records an **Anomaly**, shown on the Agent's Unusual activity tab, and Owners and
+Admins are emailed about what is worth a look ([Alerts](#alerts)). Nothing is stopped.
 
 Anomaly detection is built in slices (epic AF-198). Statistics find candidates (AF-453),
-and a decision model classifies each new one (AF-459, [Classification](#classification)).
-Later slices add off-hours signals, alerts with acknowledge and resolve, and quarantine.
+a decision model classifies each new one (AF-459, [Classification](#classification)),
+and Owners and Admins are alerted (AF-464, [Alerts](#alerts)). Later slices add off-hours
+signals, acknowledge and resolve, and quarantine.
 Delivery state across the epic's slices is in the [change log](anomaly-detection/CHANGELOG.md).
 
 ## Authorization
@@ -43,6 +45,13 @@ Delivery state across the epic's slices is in the [change log](anomaly-detection
   did meanwhile rather than flag all of it as a first use. Anomalies already recorded stay;
   ongoing ones end when it is turned off, since nothing watches them any more.
 - Each change records `organization.anomaly_detection.changed` in the security audit log.
+- `organization_anomaly_settings.alerts_enabled`, on by default (no row is on), says
+  whether what the checks flag is emailed (see [Alerts](#alerts)). Owners and Admins
+  change it in the same section, through the same `PUT /anomaly-detection` (either field,
+  or both, in one transaction; one left out stays as it is). It cannot be changed in the UI
+  while checks are off, and turning checks off or on leaves it as it was. Changing it
+  leaves `updated_at` alone, since that is the version a running check compares before it
+  records. Each change records `organization.anomaly_alerts.changed`.
 
 ## What is checked
 
@@ -244,6 +253,44 @@ state moves to `CLASSIFIED`.
 - One call takes at most 42 Anomalies (three questions each, under the 128-question
   limit); more are split across calls.
 
+## Alerts
+
+Owners and Admins are emailed when a check flags activity worth a look for one of their
+Agents. The email names the Agent and, per item, what was flagged, how far it went (or the
+tool, integration, action or host first used), and how it was classified or "Not
+classified". It links to the Agent's Unusual activity tab and uses the tab's wording.
+
+- **Who.** Whoever `anomaly.read` reaches, the same people who can open the tab:
+  `OrganizationLookupService.recipients_with_permission` follows the role grants rather than
+  a copied role list. Members, including a Member who owns the Agent, and Platform
+  Administrators outside the Organization are not emailed.
+- **What alerts** (`api/domains/anomalies/alerts.py`). Classified activity alerts from
+  `MEDIUM` severity up, unless it is "Probably fine" (`unusual_probability` below 0.5, the
+  tab's threshold; a missing probability is not "probably fine"). `LOW` severity does not
+  alert. Activity that could not be classified alerts, as "Not classified": classification
+  most often fails because the Agent's spend ran out, and a runaway Agent is the one to hear
+  about.
+- **Once.** A check that starts Anomalies records one `agent.anomaly.flagged` Event naming
+  them; ongoing Anomalies start nothing, so they never alert again. One check is one email
+  per recipient, however many items it lists. A first use is its own Anomaly, so the next
+  new tool alerts again.
+- **Not lost to a crash.** The Event is recorded in the check's transaction, together with
+  the Anomalies, and enqueued once the check has classified them, or failed to in any way.
+  If the check dies in between, reconciliation sends the pending delivery about a minute
+  later.
+- **Classified first.** Because the Event is recorded before classification, the handler
+  (`AnomalyAlertEmailHandler`) reads the Anomalies when it delivers. An unclassified one
+  younger than five minutes may still be being classified, so the delivery is retried
+  rather than sent without it; after that it goes out as "Not classified". A failed
+  classification therefore alerts about five minutes late.
+- **Each recipient once.** `anomaly_alert_email_receipt` records who was emailed for a
+  delivery, so a retry after a partial failure emails only those it did not reach. A
+  failed send is retried, and a message the mail provider refuses is dead-lettered.
+- Nobody is emailed about an Agent deleted before delivery, and with mail delivery off the
+  handler does nothing, as for the other notifications.
+- **Turned off.** The handler reads the Organization's settings when the email is due, so
+  turning alerts or detection off also stops an alert already queued.
+
 ### Trying it locally
 
 A fresh Agent is flagged for nothing until it has been active on three days.
@@ -294,7 +341,8 @@ Rates and first use of tools and integrations read runtime-neutral tables, fille
 way for Hermes and OpenClaw. Destination parsing is per runtime (the table above) and is
 tested with each runtime's argument shapes. Classification runs in the API on the same
 records, so it is the same for both; it is tested with Hermes and OpenClaw destinations,
-and with each runtime's Agent getting its role and recent requests.
+and with each runtime's Agent getting its role and recent requests. Alerts follow the same
+records, so they are the same for both too, and are tested with an Agent of each runtime.
 
 ## Deliberately left for later
 
@@ -305,8 +353,10 @@ and with each runtime's Agent getting its role and recent requests.
   those hours for rates, that tool, integration, action or host for first use. Anomalies
   dismissed as fine stay in. The record already carries what that filter needs: signal,
   subject, the hours it covers and a status the later slices can update.
-- Off-hours and business-hours signals, alerts, an Organization-wide Anomalies page, and
-  quarantine.
+- Off-hours and business-hours signals, acknowledge and resolve, an Organization-wide
+  Anomalies page, and quarantine.
+- Choosing for oneself whether to get alerts, or getting them anywhere but email. The
+  switch is the Organization's; there is no per-user setting.
 - Retrying a failed classification. It would need a state of its own so a spent budget is
   not retried every check.
 - LLM spend per hour, which follows tokens per model closely.

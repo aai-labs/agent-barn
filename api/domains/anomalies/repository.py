@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 
 from api.domains.anomalies.detection import Verdict
@@ -16,15 +17,24 @@ from api.domains.anomalies.models import (
     AgentAnomaly,
     AgentAnomalyOverride,
     AgentAnomalyState,
+    AnomalyAlertEmailReceipt,
     AnomalySignal,
     ClassificationState,
     OrganizationAnomalySettings,
     SeenKind,
 )
-from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events import (
+    ActorIdentity,
+    ActorIdentityType,
+    EventDelivery,
+    SubjectIdentity,
+    SubjectIdentityType,
+)
 from api.domains.events.catalog import (
+    AGENT_ANOMALY_FLAGGED,
     AGENT_ANOMALY_OVERRIDE_CHANGED,
     EVENT_REGISTRY,
+    ORGANIZATION_ANOMALY_ALERTS_CHANGED,
     ORGANIZATION_ANOMALY_DETECTION_CHANGED,
 )
 from api.domains.events.repository import OutboxMessageRepository
@@ -62,63 +72,106 @@ class AnomalySettingsRepository:
                 )
             ).first()
 
-    def set_enabled_with_event(
-        self, organization_id: UUID, enabled: bool, *, actor: Actor, subject_display: str
-    ) -> tuple[OrganizationAnomalySettings, list[UUID]]:
-        """The opt-in and its change Event, atomically. No Event when nothing changed."""
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
+    def update_settings_with_events(
+        self,
+        organization_id: UUID,
+        *,
+        enabled: bool | None,
+        alerts_enabled: bool | None,
+        actor: Actor,
+        subject_display: str,
+    ) -> list[UUID]:
+        """Detection, alerts or both, with a change Event for each that moved, in one
+        transaction. A setting left out (None) or unchanged writes nothing."""
+        with Session(self.delegate.engine) as session:
             settings = session.exec(
                 select(OrganizationAnomalySettings)
                 .where(col(OrganizationAnomalySettings.organization_id) == organization_id)
                 .with_for_update()
             ).first()
-            previous = settings.enabled if settings is not None else False
-            if previous == enabled:
-                return settings or OrganizationAnomalySettings(organization_id=organization_id), []
+            current = settings or OrganizationAnomalySettings(organization_id=organization_id)
+            previous_enabled, previous_alerts = current.enabled, current.alerts_enabled
+            detection_moves = enabled is not None and enabled != previous_enabled
+            alerts_move = alerts_enabled is not None and alerts_enabled != previous_alerts
+            if not detection_moves and not alerts_move:
+                return []
             if settings is None:
-                settings = OrganizationAnomalySettings(organization_id=organization_id)
-            now = datetime.now(UTC)
-            settings.enabled = enabled
-            settings.updated_at = now
-            session.add(settings)
-            if not enabled:
-                # Nothing watches an ongoing Anomaly once detection is off, so it ends
-                # now; a deviation still going when it is back on starts a new one.
-                session.exec(
-                    sa.update(AgentAnomaly)  # type: ignore[call-overload]
-                    .where(
-                        col(AgentAnomaly.organization_id) == organization_id,
-                        col(AgentAnomaly.ended_at).is_(None),
-                    )
-                    .values(ended_at=now, updated_at=now)
-                )
-                # The check stops reading while detection is off. Forgetting how far it
-                # got makes it learn the gap when turned back on, rather than flag
-                # everything the Agents did meanwhile as a first use.
-                session.exec(
-                    sa.delete(AgentAnomalyState).where(  # type: ignore[call-overload]
-                        col(AgentAnomalyState.organization_id) == organization_id
-                    )
-                )
-            session.flush()
-            delivery_ids = self._stage(
-                session,
-                ORGANIZATION_ANOMALY_DETECTION_CHANGED,
-                organization_id=organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
-                ),
-                payload={
-                    "organization_id": organization_id,
-                    "enabled": enabled,
-                    "previous_enabled": previous,
-                    "actor_display": actor.display,
-                    "subject_display": subject_display,
-                },
+                settings = current
+                session.add(settings)
+                session.flush()
+            subject = SubjectIdentity(
+                type=SubjectIdentityType.ORGANIZATION, id=organization_id, organization_id=organization_id
             )
+            delivery_ids: list[UUID] = []
+            if detection_moves:
+                assert enabled is not None
+                self._set_detection(session, settings, enabled)
+                delivery_ids += self._stage(
+                    session,
+                    ORGANIZATION_ANOMALY_DETECTION_CHANGED,
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=subject,
+                    payload={
+                        "organization_id": organization_id,
+                        "enabled": enabled,
+                        "previous_enabled": previous_enabled,
+                        "actor_display": actor.display,
+                        "subject_display": subject_display,
+                    },
+                )
+            if alerts_move:
+                # `updated_at` is the detection version a running check compares before it
+                # records (`check_writes`), so it stays as it is: changing who is emailed
+                # must not throw away what a check found.
+                session.exec(
+                    sa.update(OrganizationAnomalySettings)  # type: ignore[call-overload]
+                    .where(col(OrganizationAnomalySettings.id) == settings.id)
+                    .values(alerts_enabled=alerts_enabled, updated_at=OrganizationAnomalySettings.updated_at)
+                )
+                delivery_ids += self._stage(
+                    session,
+                    ORGANIZATION_ANOMALY_ALERTS_CHANGED,
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=subject,
+                    payload={
+                        "organization_id": organization_id,
+                        "alerts_enabled": alerts_enabled,
+                        "previous_alerts_enabled": previous_alerts,
+                        "actor_display": actor.display,
+                        "subject_display": subject_display,
+                    },
+                )
             session.commit()
-            return settings, delivery_ids
+            return delivery_ids
+
+    @staticmethod
+    def _set_detection(session: Session, settings: OrganizationAnomalySettings, enabled: bool) -> None:
+        now = datetime.now(UTC)
+        settings.enabled = enabled
+        settings.updated_at = now
+        session.add(settings)
+        if not enabled:
+            # Nothing watches an ongoing Anomaly once detection is off, so it ends
+            # now; a deviation still going when it is back on starts a new one.
+            session.exec(
+                sa.update(AgentAnomaly)  # type: ignore[call-overload]
+                .where(
+                    col(AgentAnomaly.organization_id) == settings.organization_id,
+                    col(AgentAnomaly.ended_at).is_(None),
+                )
+                .values(ended_at=now, updated_at=now)
+            )
+            # The check stops reading while detection is off. Forgetting how far it
+            # got makes it learn the gap when turned back on, rather than flag
+            # everything the Agents did meanwhile as a first use.
+            session.exec(
+                sa.delete(AgentAnomalyState).where(  # type: ignore[call-overload]
+                    col(AgentAnomalyState.organization_id) == settings.organization_id
+                )
+            )
+        session.flush()
 
     def get_override(self, agent_id: UUID) -> AgentAnomalyOverride | None:
         with Session(self.delegate.engine) as session:
@@ -222,6 +275,7 @@ class AnomalyRepository:
     """
 
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     def enabled_organization_ids(self) -> list[UUID]:
         with Session(self.delegate.engine) as session:
@@ -260,7 +314,7 @@ class AnomalyRepository:
             if settings is None or not settings.enabled or settings.updated_at != version:
                 yield None
                 return
-            yield CheckWrites(session, organization_id, agent_id)
+            yield CheckWrites(session, organization_id, agent_id, self.outbox_repository)
             session.commit()
 
     def get_state(self, agent_id: UUID) -> AgentAnomalyState | None:
@@ -343,6 +397,25 @@ class AnomalyRepository:
             ).all()
             return [AnomalySignal(signal) for signal in signals]
 
+    def find_notified_alert_recipients(self, delivery_id: UUID) -> set[str]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(AnomalyAlertEmailReceipt.recipient_email).where(
+                        col(AnomalyAlertEmailReceipt.delivery_id) == delivery_id
+                    )
+                ).all()
+            )
+
+    def record_alert_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(AnomalyAlertEmailReceipt(delivery_id=delivery_id, recipient_email=recipient_email))
+            try:
+                session.commit()
+            except IntegrityError:
+                # The receipt already exists, which is exactly the idempotency it records.
+                session.rollback()
+
     def set_classification(self, anomaly_id: UUID, category: str, severity: float, details: dict[str, Any]) -> None:
         with Session(self.delegate.engine) as session:
             session.exec(
@@ -368,6 +441,27 @@ class CheckWrites:
     session: Session
     organization_id: UUID
     agent_id: UUID
+    outbox_repository: OutboxMessageRepository
+
+    def record_flagged(self, anomaly_ids: list[UUID]) -> list[UUID]:
+        """The alert Event for the Anomalies this check started, recorded with them so a
+        crash after the commit cannot lose it. Returns its delivery ids, which the check
+        enqueues once it has classified them; until then the deliveries wait, and
+        reconciliation sends them if the check never gets that far."""
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_ANOMALY_FLAGGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=self.organization_id,
+            actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="anomaly-checks"),
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT, id=self.agent_id, organization_id=self.organization_id
+            ),
+            correlation_id=uuid4(),
+            payload={"organization_id": self.organization_id, "agent_id": self.agent_id, "anomaly_ids": anomaly_ids},
+        )
+        self.outbox_repository.stage(session=self.session, registry=EVENT_REGISTRY, event=event)
+        return self.outbox_repository.delivery_ids_for_event(self.session, event.event_id)
 
     def open_or_update(self, signal: AnomalySignal, verdict: Verdict, at: datetime) -> UUID | None:
         """Start an Anomaly for `signal`, or bring the ongoing one up to date. Returns

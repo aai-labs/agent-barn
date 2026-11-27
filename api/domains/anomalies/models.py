@@ -5,7 +5,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field as SqlField
 
@@ -77,13 +77,18 @@ def _check_in(column: str, values: type[StrEnum]) -> str:
 
 
 class OrganizationAnomalySettings(BaseModel, table=True):
-    """Whether an Organization has turned anomaly detection on. No row means off."""
+    """Whether an Organization has turned anomaly detection on, and whether what it flags
+    is emailed to Owners and Admins. No row means detection off and alerts on."""
 
     __tablename__: str = "organization_anomaly_settings"
     __table_args__ = (sa.UniqueConstraint("organization_id", name="uq_organization_anomaly_settings_organization_id"),)
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     enabled: bool = SqlField(default=False, nullable=False)
+    alerts_enabled: bool = SqlField(
+        default=True,
+        sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
 
 
 class AgentAnomalyOverride(BaseModel, table=True):
@@ -207,14 +212,24 @@ class AgentAnomaly(BaseModel, table=True):
 
 class AnomalyDetectionSettingsRead(PydanticBaseModel):
     enabled: bool
+    alerts_enabled: bool
     can_manage: bool
     updated_at: datetime | None
 
 
 class AnomalyDetectionSettingsUpdate(PydanticBaseModel):
+    """Either setting, or both; one left out stays as it is."""
+
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool
+    enabled: bool | None = None
+    alerts_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> AnomalyDetectionSettingsUpdate:
+        if self.enabled is None and self.alerts_enabled is None:
+            raise ValueError("Give enabled, alerts_enabled or both")
+        return self
 
 
 class AnomalyClassificationRead(PydanticBaseModel):
@@ -282,3 +297,19 @@ class AgentNormalBehaviourRead(PydanticBaseModel):
     destinations: list[str] = Field(default_factory=list)
     override: AgentAnomalyOverrideRead
     can_manage: bool
+
+
+class AnomalyAlertEmailReceipt(BaseModel, table=True):
+    """Idempotency record: a recipient was already emailed for an alert's Event Delivery.
+
+    Same shape and reasoning as the Agent lifecycle receipt: one delivery fans out to
+    several recipients, and a retry must only email the ones that were not reached.
+    """
+
+    __tablename__: str = "anomaly_alert_email_receipt"
+    __table_args__ = (
+        sa.UniqueConstraint("delivery_id", "recipient_email", name="uq_anomaly_alert_email_receipt_delivery_recipient"),
+    )
+
+    delivery_id: UUID = SqlField(foreign_key="event_delivery.id", nullable=False, ondelete="CASCADE", index=True)
+    recipient_email: str = SqlField(nullable=False, max_length=320)

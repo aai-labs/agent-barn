@@ -14,9 +14,49 @@ const WHAT_IT_DOES = `Each Agent's activity is compared with what is normal for 
 // Said before anyone turns checks on, so judging what was flagged later needs no second
 // consent.
 const BILLING = "Checks may use an AI model provider, and any cost is billed to that Agent's spend.";
-const TOGGLE_LABEL_ID = "unusual-activity-toggle-label";
+const ALERTS =
+  "Owners and Admins are emailed when something unusual is flagged, unless it is low severity or probably fine.";
+const DETECTION_LABEL_ID = "unusual-activity-toggle-label";
+const ALERTS_LABEL_ID = "unusual-activity-alerts-toggle-label";
 
-/** The Organization's opt-in to unusual activity checks. Owners and Admins only. */
+function Switch({
+  labelId,
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  labelId: string;
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span id={labelId} className="text-[0.9rem] font-medium" style={{ color: "var(--ink)" }}>
+        {label}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-labelledby={labelId}
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ backgroundColor: checked ? "var(--ink)" : "var(--line)" }}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? "translate-x-4" : ""}`}
+        />
+      </button>
+    </div>
+  );
+}
+
+/** The Organization's opt-in to unusual activity checks, and whether what they flag is
+ * emailed. Owners and Admins only. */
 export function UnusualActivityPanel() {
   const { settings, isLoading, error, refetch } = useAnomalyDetection();
   const update = useUpdateAnomalyDetection();
@@ -34,9 +74,11 @@ export function UnusualActivityPanel() {
     );
   }
 
-  // The change is saved as soon as the toggle is flipped, as for the other on/off
-  // settings; the billing note above it is read before checks are turned on.
-  const enabled = update.isPending && update.variables !== undefined ? update.variables : settings.enabled;
+  // Each change is saved as soon as its toggle is flipped, as for the other on/off
+  // settings; the billing note above them is read before checks are turned on.
+  const pending = update.isPending ? update.variables : undefined;
+  const enabled = pending?.enabled ?? settings.enabled;
+  const alertsEnabled = pending?.alertsEnabled ?? settings.alertsEnabled;
 
   return (
     <SettingsSection title="Unusual activity checks" description={WHAT_IT_DOES}>
@@ -45,28 +87,34 @@ export function UnusualActivityPanel() {
           {WHAT_IT_DOES} {BILLING}
         </p>
         {settings.canManage ? (
-          <div className="flex items-center justify-between gap-4">
-            <span id={TOGGLE_LABEL_ID} className="text-[0.9rem] font-medium" style={{ color: "var(--ink)" }}>
-              Check Agents for unusual activity
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-labelledby={TOGGLE_LABEL_ID}
-              aria-checked={enabled}
-              disabled={update.isPending}
-              onClick={() => update.mutate(!enabled)}
-              className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ backgroundColor: enabled ? "var(--ink)" : "var(--line)" }}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${enabled ? "translate-x-4" : ""}`}
-              />
-            </button>
-          </div>
+          <Switch
+            labelId={DETECTION_LABEL_ID}
+            label="Check Agents for unusual activity"
+            checked={enabled}
+            disabled={update.isPending}
+            onChange={(checked) => update.mutate({ enabled: checked })}
+          />
         ) : (
           <dl className="m-0">
             <Fact label="Status">{settings.enabled ? "On" : "Off"}</Fact>
+          </dl>
+        )}
+        <p className="m-0 max-w-2xl text-[0.86rem]" style={{ color: "var(--ink-2)" }}>
+          {ALERTS}
+        </p>
+        {settings.canManage ? (
+          // Nothing is flagged while checks are off, so there is nothing to email.
+          <Switch
+            labelId={ALERTS_LABEL_ID}
+            label="Email Owners and Admins about unusual activity"
+            checked={alertsEnabled}
+            disabled={update.isPending || !enabled}
+            onChange={(checked) => update.mutate({ alertsEnabled: checked })}
+          />
+        ) : (
+          <dl className="m-0">
+            {/* Nothing is emailed while checks are off, whatever the setting says. */}
+            <Fact label="Emails">{settings.enabled && settings.alertsEnabled ? "On" : "Off"}</Fact>
           </dl>
         )}
         {update.error && (
