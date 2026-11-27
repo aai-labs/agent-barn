@@ -7,17 +7,23 @@ Related context: [`../anomaly-detection.md`](../anomaly-detection.md), [`../rbac
 ## Current state
 
 - Delivered:
-  - the platform decision model and `DecisionService.decide` (AF-449), which nothing in anomaly detection calls yet;
+  - the platform decision model and `DecisionService.decide` (AF-449);
   - the Organization opt-in, which already tells Owners that checks may be billed to each Agent;
   - the scheduled statistics-only check: rates against each Agent's own last 14 days, first use of tools, integrations, actions and hosts, and hard caps on model tokens and calls;
-  - Anomaly records, with `classification_state` `STATISTICS_ONLY` and empty classification fields;
-  - the per-Agent override, and the Agent's Unusual activity tab for Owners and Admins.
+  - Anomaly records; each new one is classified once by the decision model (kind, severity, how likely it is really unusual), billed to its Agent, and stays `STATISTICS_ONLY` if that call fails (AF-459);
+  - the per-Agent override, and the Agent's Unusual activity tab for Owners and Admins, which shows each item's classification.
 - In transition: nothing.
-- Next: classification of candidates with the decision model (AF-459).
-- Later: alerts with acknowledge and resolve, an Organization-wide Anomalies page, and quarantine.
+- Next: alerts when an Agent's activity is flagged (AF-464).
+- Later: acknowledge and resolve, an Organization-wide Anomalies page, and quarantine (AF-465).
 - Blockers: none.
 
 ## Changes
+
+### 2026-11-24 — AF-459
+
+- Delivered: each Anomaly that starts in a check is classified once by the platform decision model, in one call per Agent billed to its own LiteLLM key, and the Unusual activity tab shows its kind, severity and "Probably fine" when the model thinks it is likely ordinary. A failed call (including a spent limit) leaves it as the statistics flagged it, with no retry.
+- Changed: `agent_anomaly` classification fields are now filled (no migration); `GET /anomalies` returns `classification`; `CheckWrites.open_or_update` and `record_first_use` return the started Anomaly's id; `AgentService.agent_role` and `ConversationService.recent_inbound_texts` for background reads. What reaches the provider: derived features, never a destination's host, plus the Agent's role and its latest inbound messages after cleaning, which also removes every held-back destination host (after whole links, emails and secrets, so it cannot split one) and IP addresses, and cleans at most 1,200 characters per message in linear time (see the feature doc).
+- Follow-up: alerts (AF-464) can rely on `classification_category` and `classification_severity`, and must treat `STATISTICS_ONLY` as "not classified" rather than "harmless".
 
 ### 2026-11-23 — AF-453 — [#387](https://github.com/aai-labs/agent-barn/pull/387)
 

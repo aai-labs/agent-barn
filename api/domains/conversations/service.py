@@ -60,6 +60,14 @@ class ConversationService:
         """Return Agent IDs with communication activity for Platform View."""
         return self.repository.daily_active_agent_ids_since(window_start, window_end, **kwargs)
 
+    def recent_inbound_texts(
+        self, agent_id: UUID, *, since: datetime, until: datetime, limit: int
+    ) -> list[tuple[datetime, str]]:
+        """The text and time of an Agent's latest `limit` inbound messages in
+        [since, until], oldest first. Background work only (the anomaly check's
+        classification): no caller and no authorization scope."""
+        return list(reversed(self.repository.recent_inbound_texts(agent_id, since=since, until=until, limit=limit)))
+
     def list_threads(
         self,
         agent_id: UUID,

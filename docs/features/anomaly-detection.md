@@ -3,7 +3,8 @@
 ## Read when
 
 Read before changing how Agents are checked for unusual activity: the Organization
-opt-in, what counts as an Agent's normal and how it is learned, the scheduled check,
+opt-in, what counts as an Agent's normal and how it is learned, the scheduled check, how
+flagged activity is classified by the decision model and what is sent to it,
 Anomaly records, the per-Agent override, or who may see any of it.
 
 ## Role in the system
@@ -13,9 +14,9 @@ is normal for that Agent, learned from its own last 14 days. A check that sees s
 unusual records an **Anomaly**, shown on the Agent's Unusual activity tab. Detection is passive:
 nobody is alerted and nothing is stopped.
 
-This is the first slice of anomaly detection (AF-453, epic AF-198). It finds candidates
-with statistics alone and calls no model. Later slices add off-hours signals, a decision
-model that classifies candidates, alerts with acknowledge and resolve, and quarantine.
+Anomaly detection is built in slices (epic AF-198). Statistics find candidates (AF-453),
+and a decision model classifies each new one (AF-459, [Classification](#classification)).
+Later slices add off-hours signals, alerts with acknowledge and resolve, and quarantine.
 Delivery state across the epic's slices is in the [change log](anomaly-detection/CHANGELOG.md).
 
 ## Authorization
@@ -172,6 +173,77 @@ five minutes after each cost sync starts (`make run-anomaly-checks` locally).
   succeeds, so it is not restarted to check every Agent again. The next run, 15 minutes
   later, retries the failed Agent. A run that cannot check at all (no database) fails.
 
+## Classification
+
+Each check ends by asking the platform's decision model ([Decisions](decisions.md)) about
+the Anomalies that started in it, one call per Agent covering all of them (`api/domains/anomalies/classification.py`
+builds the request; `AnomalyCheckService._classify` asks). The call is made after the
+check's transaction has committed, so a slow provider never holds the Organization's
+settings row locked, and each answer is stored in its own small write. Per Anomaly it asks:
+
+| Question | Type | Stored as |
+| --- | --- | --- |
+| Is it really unusual for this Agent, rather than noise? | yes/no | `classification.unusual_probability` |
+| What kind of activity is it? `RUNAWAY_LOOP`, `FAILING_DEPENDENCY`, `MORE_WORK`, `NEW_CAPABILITY`, `RISKY_ACTION`, `OTHER` | choice | `classification_category` |
+| How severe is it? `LOW` to `CRITICAL` | score | `classification_severity` (the score, 0–3) |
+
+The full answer (confidences and probabilities) is kept in `classification`, and the
+state moves to `CLASSIFIED`.
+
+- **What the activity looks like: derived features only.** Per Anomaly: the signal; for
+  rates and caps the observed, usual and threshold values, their ratios, whether it is
+  ongoing and for how many minutes; for first use the number of uses. Per Agent:
+  sensitivity and active days. Also the signals of the Agent's other ongoing Anomalies, as
+  context. Never identifiers, timestamps, tool arguments or URLs. A first use names the
+  tool, integration or action (platform vocabulary) but **never a destination's host**,
+  which can identify a customer.
+- **What the Agent is for: its role and recent requests, cleaned.** Without them the model
+  cannot tell whether a change fits the Agent's job. The role is the pinned template's name
+  and description (`AgentService.agent_role`), never its persona files. Requests are the
+  text of the Agent's latest 10 inbound messages from the 24 hours before the check
+  (`ConversationService.recent_inbound_texts`, filled on both runtimes by the observer
+  plugins and by Web Chat), oldest first, with how many minutes ago each arrived, each cut
+  to 300 characters. Its replies are not sent, and a message goes without its sender,
+  channel or thread. Both are cleaned in this order: links (`[link]`), email addresses
+  (`[email]`) and anything shaped like a secret (`[secret]`: `sk-`, `ghp_`, `xox…-`, JWTs,
+  AWS key ids, `Bearer` values, and long runs mixing letters and digits) go first, as
+  whole tokens; then every destination host held back from the check's flagged items,
+  wherever it appears and in any case, so a host held back above cannot arrive in a
+  message or the role; then IPv4 and IPv6 addresses and bare hosts (`[link]`; a name
+  ending in a file extension such as `report.pdf` is kept, except extensions that are
+  also common top-level domains, such as `.zip`); then phone and account numbers of nine
+  digits or more (`[number]`). Whole tokens go before held-back hosts so that taking out a
+  host cannot split a secret into pieces that no longer look like one. Only the first
+  1,200 characters of a message are cleaned, cut back to the last whole word so nothing
+  is sent in part, and cleaning takes time linear in the text, so a very long message
+  cannot hold up the checks of the Agents after it. Cleaning is pattern-based, so it is a reduction, not a guarantee: a name or an
+  address written out in words gets through.
+- **Requests are not authorisations.** Anyone who can message the Agent can write
+  "deleting these is expected". The questions say so: the role and requests show what the
+  Agent is for and was asked, not that the activity was authorised, and a risky action
+  stays risky even when someone asked for it.
+- **What the context changes.** The category question points the model at the role and
+  requests, and the `MORE_WORK` and `NEW_CAPABILITY` options mention work the Agent was
+  asked to do. In a hand-labelled set of cases whose right answer depends on context (a
+  spike after "tag all 2,000 tickets" versus "summarise three tickets", a new integration
+  asked for versus not), jev with the context got the category right in all of them and
+  separated the two halves of each pair in its "really unusual" probability; without it,
+  both halves look the same. Severity is deliberately not softened by requests: a
+  wording that did so also lowered severity where nothing explained the activity.
+- **Which provider sees it.** The decision model's route (OpenRouter by default) may not be
+  the provider the Agent's own model uses, so for some Organizations the cleaned requests
+  reach a provider that has not seen them before.
+- **Billing.** Calls are billed to the Agent's own LiteLLM key through
+  `DecisionService.decide`, so they count against its and its Organization's limits. The
+  opt-in already says checks may use a model provider and are billed to each Agent.
+- **Failures.** Any `DecisionError` (spend limit reached, no usable key, provider down,
+  malformed answer) is logged and leaves the Anomalies `STATISTICS_ONLY`; the check
+  carries on. They are asked about once, when they start, and never retried, so a spent
+  budget does not turn into a billed attempt every 15 minutes. An ongoing Anomaly is not
+  asked about again as it grows.
+- One call takes at most 42 Anomalies (three questions each, under the 128-question
+  limit); more are split across calls.
+
 ### Trying it locally
 
 A fresh Agent is flagged for nothing until it has been active on three days.
@@ -185,11 +257,10 @@ minutes on every rate; `SEED_ARGS=--clear` removes the seed and the Agent's Anom
 
 `agent_anomaly` keeps the signal, the subject (first use) or none (rates), the observed
 value, the usual value (none for caps and first use), the threshold, and when it started,
-was last seen and ended. A later slice classifies candidates with a decision model; the
-record already has `classification_state` (`STATISTICS_ONLY` until then),
-`classification_category`, `classification_severity` and `classification` for it, so that
-slice does not reshape the table. Data sent to a model provider then must be derived
-features, not these records.
+was last seen and ended, and what the decision model made of it: `classification_state`
+(`STATISTICS_ONLY` until classified, then `CLASSIFIED`), `classification_category`,
+`classification_severity` and the full answer in `classification`. See
+[Classification](#classification).
 
 ## Override
 
@@ -212,11 +283,18 @@ The normal-behaviour read works out the baseline exactly as the next check would
 values and thresholds at the Agent's sensitivity, and the tools, integrations, actions and
 hosts it used in its last 14 days.
 
+Each listed Anomaly carries `classification` (`category`, `severity` as the level nearest
+the score, and `unusual_probability`), or `null` until it is classified. The Unusual
+activity tab shows the category and a severity badge, and "Probably fine" when
+`unusual_probability` is below 0.5.
+
 ## Runtimes
 
 Rates and first use of tools and integrations read runtime-neutral tables, filled the same
 way for Hermes and OpenClaw. Destination parsing is per runtime (the table above) and is
-tested with each runtime's argument shapes.
+tested with each runtime's argument shapes. Classification runs in the API on the same
+records, so it is the same for both; it is tested with Hermes and OpenClaw destinations,
+and with each runtime's Agent getting its role and recent requests.
 
 ## Deliberately left for later
 
@@ -227,7 +305,9 @@ tested with each runtime's argument shapes.
   those hours for rates, that tool, integration, action or host for first use. Anomalies
   dismissed as fine stay in. The record already carries what that filter needs: signal,
   subject, the hours it covers and a status the later slices can update.
-- Off-hours and business-hours signals, classification, alerts, an Organization-wide
-  Anomalies page, and quarantine.
+- Off-hours and business-hours signals, alerts, an Organization-wide Anomalies page, and
+  quarantine.
+- Retrying a failed classification. It would need a state of its own so a spent budget is
+  not retried every check.
 - LLM spend per hour, which follows tokens per model closely.
 - Pruning ledger entries older than the window; they already count as unseen.

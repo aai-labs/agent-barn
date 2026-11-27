@@ -4117,6 +4117,16 @@ class AgentService:
         anomaly check): no caller and no authorization scope."""
         return self.repository.find_live_ids_by_org(organization_id)
 
+    def agent_role(self, agent_id: UUID) -> tuple[str, str | None] | None:
+        """The name and description of the template an Agent is pinned to, or None
+        without one. Background work only (the anomaly check's classification): no
+        caller and no authorization scope."""
+        agent = self.repository.get_by_id(agent_id)
+        template = self.template_repository.get_pinned_template(agent) if agent is not None else None
+        if template is None:
+            return None
+        return template.template_name, template.description
+
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
         deletion) to decide whether an org can be safely torn down."""

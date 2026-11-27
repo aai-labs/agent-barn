@@ -62,6 +62,46 @@ test.describe("Agent · Unusual activity", () => {
     await expect(anomaly).toContainText("Ongoing");
   });
 
+  test("a classified item says what kind of activity it is and how severe", async ({ page }) => {
+    const { anomaliesPage } = await openTab(page, {
+      anomalies: [
+        mockAnomaly({
+          classification_state: "CLASSIFIED",
+          classification: { category: "RUNAWAY_LOOP", severity: "HIGH", unusual_probability: 0.9 },
+        }),
+      ],
+    });
+
+    const anomaly = anomaliesPage.anomalies().first();
+    await expect(anomaly).toContainText("Runaway loop");
+    await expect(anomaly).toContainText("High severity");
+    await expect(anomaly).not.toContainText("Probably fine");
+  });
+
+  test("a classified item that is likely noise reads as probably fine", async ({ page }) => {
+    const { anomaliesPage } = await openTab(page, {
+      anomalies: [
+        mockAnomaly({
+          classification_state: "CLASSIFIED",
+          classification: { category: "MORE_WORK", severity: "LOW", unusual_probability: 0.2 },
+        }),
+      ],
+    });
+
+    const anomaly = anomaliesPage.anomalies().first();
+    await expect(anomaly).toContainText("More work than usual");
+    await expect(anomaly).toContainText("Probably fine");
+  });
+
+  test("an item not classified shows only what the checks saw", async ({ page }) => {
+    const { anomaliesPage } = await openTab(page, { anomalies: [mockAnomaly()] });
+
+    const anomaly = anomaliesPage.anomalies().first();
+    await expect(anomaly).toContainText("Tool calls per hour");
+    await expect(anomaly).not.toContainText("severity");
+    await expect(anomaly).not.toContainText("Probably fine");
+  });
+
   test("failing model calls read as a share of the Agent's model calls", async ({ page }) => {
     const { anomaliesPage } = await openTab(page, {
       anomalies: [mockAnomaly({ signal: "LLM_ERROR_RATE", observed_value: 0.8, usual_value: 0.05, threshold: 0.3 })],

@@ -10,6 +10,7 @@ from api.domains.agents.models import AgentStatus
 from api.domains.communications.models import CommunicationConnection
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
 from api.domains.conversations.repository import ConversationRepository
+from api.domains.conversations.service import ConversationService
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -619,3 +620,32 @@ def test_list_messages_matches_a_case_sensitive_channel_id():
             body = response.json()
             assert_that(body["threads"], has_length(1))
             assert_that(body["threads"][0]["root"]["content"], equal_to("Hello"))
+
+
+def test_recent_inbound_texts_are_the_latest_requests_in_a_window_oldest_first():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        until = datetime(2025, 5, 2, 12, 0, 0, tzinfo=UTC)
+        for minutes_ago, direction, content in [
+            (60 * 30, MessageDirection.INBOUND, "too old"),
+            (60 * 5, MessageDirection.INBOUND, "first"),
+            (60 * 4, MessageDirection.OUTBOUND, "a reply"),
+            (60 * 3, MessageDirection.INBOUND, "second"),
+            (60 * 2, MessageDirection.INBOUND, "third"),
+            (-5, MessageDirection.INBOUND, "after the window"),
+        ]:
+            _seed_message(
+                context,
+                direction=direction,
+                channel_id="CABC",
+                content=content,
+                occurred_at=until - timedelta(minutes=minutes_ago),
+            )
+
+        texts = context.injector.get(ConversationService).recent_inbound_texts(
+            context.agent.id, since=until - timedelta(hours=24), until=until, limit=2
+        )
+
+        assert_that(
+            texts,
+            equal_to([(until - timedelta(hours=3), "second"), (until - timedelta(hours=2), "third")]),
+        )

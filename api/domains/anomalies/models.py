@@ -52,8 +52,9 @@ NEW_SIGNAL_BY_KIND: dict[SeenKind, AnomalySignal] = {
 class ClassificationState(StrEnum):
     """Whether a decision model has judged the Anomaly yet.
 
-    Only STATISTICS_ONLY is written today. Classification (a later ticket) fills in
-    the classification columns and moves the state on, without reshaping the table.
+    A new Anomaly starts STATISTICS_ONLY. The check then asks the decision model about it
+    once; an answer fills in the classification columns and moves it to CLASSIFIED, a
+    failure leaves it as it is.
     """
 
     STATISTICS_ONLY = "STATISTICS_ONLY"
@@ -216,6 +217,16 @@ class AnomalyDetectionSettingsUpdate(PydanticBaseModel):
     enabled: bool
 
 
+class AnomalyClassificationRead(PydanticBaseModel):
+    """What the decision model made of an Anomaly."""
+
+    category: str
+    # LOW, MEDIUM, HIGH or CRITICAL.
+    severity: str
+    # How likely the activity is really unusual for the Agent, rather than noise.
+    unusual_probability: float | None
+
+
 class AgentAnomalyRead(PydanticBaseModel):
     id: UUID
     signal: AnomalySignal
@@ -227,6 +238,8 @@ class AgentAnomalyRead(PydanticBaseModel):
     last_observed_at: datetime
     ended_at: datetime | None
     classification_state: ClassificationState
+    # None until the Anomaly is classified.
+    classification: AnomalyClassificationRead | None
 
 
 class AgentAnomalyOverrideRead(PydanticBaseModel):
