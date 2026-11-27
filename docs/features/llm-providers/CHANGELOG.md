@@ -17,11 +17,25 @@ Related context: [`../llm-providers.md`](../llm-providers.md), [`../../adr/2026-
 - Delivered: AF-476, LiteLLM refuses with `403` any model an Agent's own key doesn't list, PRs 1 to 7 ([feature doc](../llm-providers.md#provider-access)). A key, a Bot's included, lists the Agent's own model or its Organization's or the platform's default, the model its running pod started on, every decision model, the Playbook Extraction model and the model of its running Playbook Extraction, so switching model in chat to anything else is refused. A key gets its list when it is made and at every start, before the pod and again once the start is saved, and a start whose list can't be set before the pod fails. A rejected decision and a Playbook Extraction set it before calling, and the 15-minute LLM budget reconciliation sets every live key's list. Verified on local k3d with a Hermes and an OpenClaw Agent.
 - Not yet verified: AF-476 on staging, steps 2, 4 and 5 of the plan's verification: a running Agent's `/key/info` lists the right models, an unlisted model is refused with `403` from its pod, and a decision and a Playbook Extraction succeed. Before shipping, the plan's two read-only checks on staging and production: no running Agent with an empty `running_model`, and no Agent key asking for a model it won't list.
 - Delivered: the review fixes for PR #417. The worker and the CronJobs read the API's `AGENT_DEFAULT_MODEL`, a running Playbook Extraction keeps its model on the key, and a start sets the key again once it is saved.
-- In progress: AF-484, the Organization pool, PRs 1 to 12. PR 1: model routes drop OpenRouter's `session_id`. PR 2: a provider's `402` is answered without naming OpenRouter. PR 3: allowlist entries name their connection (`openrouter/<model>`); PR 4: the allowlist editor reads and saves them. PR 5: `GET .../agents/models` offers the stored models of every live connection open to the Organization, each option naming its connection.
-- Next: AF-484, PR 6.
+- In progress: AF-484, the Organization pool, PRs 1 to 12. PR 1: model routes drop OpenRouter's `session_id`. PR 2: a provider's `402` is answered without naming OpenRouter. PR 3: allowlist entries name their connection (`openrouter/<model>`); PR 4: the allowlist editor reads and saves them. PR 5: `GET .../agents/models` offers the stored models of every live connection open to the Organization, each option naming its connection. PR 6: an allowlist saves any open connection's stored models.
+- Next: AF-484, PR 7.
 - Blockers: `LITELLM_SALT_KEY`, `STAGING_LITELLM_SALT_KEY` and `PUBLIC_LITELLM_SALT_KEY` GitHub secrets must exist before the next deploy.
 
 ## Changes
+
+### 2026-11-27 — AF-484 — PR 6
+
+- Delivered: an Organization's allowlist can name the stored models of any live connection open to it, as `<slug>/<model_id>`, matched exactly; globs stay OpenRouter-only. A save with entries checks every entry, first without a lock and then in its own transaction under each named connection's lock taken shared, in slug order, so a withdrawal or a models save can't commit in between. Each refusal is `400`:
+  - no connection open to the Organization: "This organization has no LLM provider. Ask a Platform Administrator." (`NO_LLM_PROVIDER`);
+  - an entry whose connection isn't open to it: "This organization can't use {connection name}. Ask a Platform Administrator." (`PROVIDER_NOT_OPEN`), OpenRouter included;
+  - a model its open connection doesn't store, or a glob off OpenRouter: "Model '{entry}' is not one of {connection name}'s models." (`MODEL_NOT_STORED`);
+  - an entry whose connection is deleted or never existed: the catalogue message "Model pattern '{entry}' does not match any known models in the catalog.", as before.
+
+  New `openrouter/` entries are still checked against OpenRouter's catalogue, and stored ones are still kept; a save with no new OpenRouter entry no longer reads the catalogue.
+- Changed: `llm_providers/access.py` (`connection_slug`, `connection_model_id`, the messages, `UnknownConnection`, `ModelNotStored`, and `ProviderNotOpen` naming its connection); `LlmProviderAccessLookup.check_models` and `require_models` over `LlmProviderRepository.pool_connection` and `pool_connection_held`; `OrganizationService.update_organization`, which replaces the OpenRouter-only gate.
+- Release impact: until PR 7 an Organization can allow another connection's model but can't yet make it its default or hire on it, and until PR 8 that connection can still be withdrawn, deleted or lose the model while an allowlist names it; a later save naming the entry is then refused. [`agent-settings.md`](../agent-settings.md#invariants) still says only `openrouter/` entries can be saved, and [`llm-providers.md`](../llm-providers.md#provider-access) still describes OpenRouter-only access, until PR 10.
+- Verified: `test_organization_update_models.py` (26 pass). The new tests (a stored Anthropic model saves beside OpenRouter entries and with OpenRouter closed without reading its catalogue; an unknown model, a glob, a closed connection and OpenRouter closed are refused with their messages; a model removed after the first check is refused under the lock; a save's connection can't be taken exclusive until it commits) each failed first; the deleted-connection case already answered as kept. `test_llm_provider_access.py` (6) passes.
+- Follow-up: PR 7, default and hire on any open connection.
 
 ### 2026-11-27 — AF-484 — PR 5
 

@@ -1,5 +1,6 @@
 import fnmatch
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -29,7 +30,14 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
     ORGANIZATION_UPDATED,
 )
-from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.access import (
+    MODEL_NOT_STORED,
+    NO_LLM_PROVIDER,
+    PROVIDER_NOT_OPEN,
+    ModelNotStored,
+    ProviderNotOpen,
+    UnknownConnection,
+)
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
@@ -146,14 +154,34 @@ class OrganizationService:
             detail=f"Model pattern '{pattern}' does not match any known models in the catalog.",
         )
 
+    def _require_pool(self, organization_id: UUID, check: Callable[[], None]) -> None:
+        try:
+            check()
+        except UnknownConnection as refused:
+            raise self._unknown_model(refused.model) from None
+        except ProviderNotOpen as refused:
+            detail = (
+                PROVIDER_NOT_OPEN.format(name=refused.connection_name)
+                if self.agent_service.llm_provider_access.open_models(organization_id)
+                else NO_LLM_PROVIDER
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
+        except ModelNotStored as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MODEL_NOT_STORED.format(model=refused.model, name=refused.connection_name),
+            ) from None
+
     def _validate_allowed_models(self, allowed_models: list[str], existing: list[str] | None = None) -> None:
-        if not allowed_models:
-            return
         existing_entries = {self._entry(m) for m in (existing or [])}
-        added = [pattern for pattern in allowed_models if self._entry(pattern) not in existing_entries]
-        for pattern in added:
-            if not self._entry(pattern).startswith(_OPENROUTER_ENTRY_PREFIX):
-                raise self._unknown_model(pattern)
+        added = [
+            pattern
+            for pattern in allowed_models
+            if self._entry(pattern) not in existing_entries
+            and self._entry(pattern).startswith(_OPENROUTER_ENTRY_PREFIX)
+        ]
+        if not added:
+            return
         try:
             catalog = self.agent_service.openrouter.list_models()
         except Exception as e:
@@ -496,23 +524,20 @@ class OrganizationService:
                     # the model level, so never overwrite the stored list with NULL.
                     del dump["allowed_models"]
                 else:
-                    if dump["allowed_models"] and not self.agent_service.llm_provider_access.can_use(
-                        OPENROUTER_SLUG, organization_id
-                    ):
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+                    access = self.agent_service.llm_provider_access
+                    entries = [pool_name(m) for m in dump["allowed_models"]]
+                    if entries:
+                        if not access.open_models(organization_id):
+                            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+                        self._require_pool(organization_id, lambda: access.check_models(entries, organization_id))
                     self._validate_allowed_models(dump["allowed_models"], existing=organization.allowed_models)
-                    dump["allowed_models"] = [pool_name(m) for m in dump["allowed_models"]]
+                    dump["allowed_models"] = entries
                     self._ensure_default_model_still_allowed(organization_id, dump["allowed_models"])
                     self._ensure_no_agent_is_pinned_to_a_removed_model(organization_id, dump["allowed_models"])
-                    if dump["allowed_models"]:
-                        try:
-                            self.agent_service.llm_provider_access.require_open(
-                                session, OPENROUTER_SLUG, organization_id
-                            )
-                        except ProviderNotOpen:
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER
-                            ) from None
+                    if entries:
+                        self._require_pool(
+                            organization_id, lambda: access.require_models(session, entries, organization_id)
+                        )
                     previous_set = set(organization.allowed_models)
                     new_set = set(dump["allowed_models"])
                     added_models = sorted(new_set - previous_set)

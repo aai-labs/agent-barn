@@ -204,6 +204,22 @@ class LlmProviderRepository:
             for connection in open_connections
         ]
 
+    def pool_connection(
+        self, slug: str, organization_id: UUID
+    ) -> tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None:
+        """The live connection, of its listed Organizations only this one if listed, and its stored
+        model ids."""
+        with Session(self.delegate.engine) as session:
+            return self._pool_connection(session, slug, organization_id)
+
+    def pool_connection_held(
+        self, session: Session, slug: str, organization_id: UUID
+    ) -> tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None:
+        """As `pool_connection`, read in the caller's transaction after taking the connection's lock
+        shared, so no withdrawal or models save can commit until that transaction ends."""
+        self._lock(session, slug, shared=True)
+        return self._pool_connection(session, slug, organization_id)
+
     def organizations(self, slug: str) -> ListedOrganizations | None:
         """The live connection's Provider Access and its listed Organizations, by name."""
         with Session(self.delegate.engine) as session:
@@ -639,6 +655,22 @@ class LlmProviderRepository:
                 .order_by(col(LlmProviderModel.model_id))
             )
         )
+
+    @staticmethod
+    def _pool_connection(
+        session: Session, slug: str, organization_id: UUID
+    ) -> tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None:
+        connection = LlmProviderRepository._live(session, slug)
+        if connection is None:
+            return None
+        listed = session.exec(
+            select(LlmProviderConnectionOrganization.organization_id).where(
+                LlmProviderConnectionOrganization.connection_id == connection.id,
+                LlmProviderConnectionOrganization.organization_id == organization_id,
+            )
+        ).all()
+        model_ids = frozenset(model.model_id for model in LlmProviderRepository._models(session, connection.id))
+        return connection, frozenset(listed), model_ids
 
     @staticmethod
     def _lock(session: Session, slug: str, *, shared: bool = False) -> None:

@@ -1,3 +1,4 @@
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -5,7 +6,14 @@ from injector import inject, singleton
 from sqlmodel import Session
 
 from api.core.config import Config
-from api.domains.llm_providers.access import ProviderNotOpen, can_use
+from api.domains.llm_providers.access import (
+    ModelNotStored,
+    ProviderNotOpen,
+    UnknownConnection,
+    can_use,
+    connection_model_id,
+    connection_slug,
+)
 from api.domains.llm_providers.models import (
     OPENROUTER_SLUG,
     LlmProviderConnection,
@@ -18,6 +26,28 @@ from api.infrastructure.crypto import decrypt_token
 
 def _open(access: tuple[OrganizationAccess, frozenset[UUID]] | None, organization_id: UUID | None) -> bool:
     return access is not None and can_use(*access, organization_id)
+
+
+def _check_models(
+    names: Collection[str],
+    organization_id: UUID,
+    read: Callable[[str], tuple[LlmProviderConnection, frozenset[UUID], frozenset[str]] | None],
+) -> None:
+    by_slug: dict[str, list[str]] = {}
+    for name in names:
+        by_slug.setdefault(connection_slug(name), []).append(name)
+    for slug in sorted(by_slug):
+        found = read(slug)
+        if found is None:
+            raise UnknownConnection(by_slug[slug][0])
+        connection, listed, model_ids = found
+        if not can_use(connection.organization_access, listed, organization_id):
+            raise ProviderNotOpen(connection.name)
+        if slug == OPENROUTER_SLUG:
+            continue
+        for name in by_slug[slug]:
+            if connection_model_id(name) not in model_ids:
+                raise ModelNotStored(connection.name, name)
 
 
 @inject
@@ -57,6 +87,22 @@ class LlmProviderAccessLookup:
         caller's transaction under the connection's shared lock, held until that transaction ends."""
         if not _open(self.repository.access_held(session, slug, organization_id), organization_id):
             raise ProviderNotOpen
+
+    def check_models(self, names: Collection[str], organization_id: UUID) -> None:
+        """Raises unless every named model's connection is live and open to the Organization and, off
+        OpenRouter, the model is stored on it, read without a lock: UnknownConnection for a connection
+        that isn't live, ProviderNotOpen for one not open to it, ModelNotStored for a model it
+        doesn't store."""
+        _check_models(names, organization_id, lambda slug: self.repository.pool_connection(slug, organization_id))
+
+    def require_models(self, session: Session, names: Collection[str], organization_id: UUID) -> None:
+        """As `check_models`, in the caller's transaction after taking each named connection's lock
+        shared, in slug order, held until that transaction ends."""
+        _check_models(
+            names,
+            organization_id,
+            lambda slug: self.repository.pool_connection_held(session, slug, organization_id),
+        )
 
     def initial_allowed_models(self, session: Session, default: str) -> list[str]:
         """The allowlist a new Organization starts with: the default model while OpenRouter is open to
