@@ -144,6 +144,57 @@ def test_an_anomaly_carries_what_was_seen_and_what_is_usual():
         )
 
 
+def test_an_anomaly_not_classified_has_no_classification():
+    with given([*signed_in(), there_is_an_agent(), there_are_anomalies(1)]) as context:
+        (item,) = get(context, ANOMALIES).json()["items"]
+
+        assert_that(item, has_entries(classification=None))
+
+
+def there_is_a_classified_anomaly(severity: float):
+    def step(context):
+        at = datetime(2026, 11, 1, tzinfo=UTC)
+        _save(
+            context,
+            AgentAnomaly(
+                organization_id=context.organization.id,
+                agent_id=context.agent.id,
+                signal=AnomalySignal.TOOL_CALLS_PER_HOUR.value,
+                observed_value=400,
+                usual_value=100,
+                threshold=150,
+                started_at=at,
+                last_observed_at=at,
+                classification_state="CLASSIFIED",
+                classification_category="RUNAWAY_LOOP",
+                classification_severity=severity,
+                classification={"unusual_probability": 0.82, "category": "RUNAWAY_LOOP", "severity_level": "LOW"},
+            ),
+        )
+
+    return step
+
+
+def test_a_classified_anomaly_carries_its_category_severity_and_how_likely_it_is_unusual():
+    with given([*signed_in(), there_is_an_agent(), there_is_a_classified_anomaly(severity=2.4)]) as context:
+        (item,) = get(context, ANOMALIES).json()["items"]
+
+        assert_that(
+            item,
+            has_entries(
+                classification_state="CLASSIFIED",
+                classification=equal_to({"category": "RUNAWAY_LOOP", "severity": "HIGH", "unusual_probability": 0.82}),
+            ),
+        )
+
+
+def test_the_severity_shown_is_the_level_nearest_the_score():
+    with given([*signed_in(), there_is_an_agent(), there_is_a_classified_anomaly(severity=2.6)]) as context:
+        (item,) = get(context, ANOMALIES).json()["items"]
+
+        assert_that(item["classification"], has_entries(severity="CRITICAL"))
+
+
 def test_an_admin_lists_anomalies():
     with given([*signed_in(OrganizationRole.ADMIN), there_is_an_agent(), there_are_anomalies(1)]) as context:
         assert_that(get(context, ANOMALIES).status_code, equal_to(status.HTTP_200_OK))

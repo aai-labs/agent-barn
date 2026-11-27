@@ -72,6 +72,7 @@ from api.domains.agents.exceptions import (
     AgentSuspended,
     refuse_on_bot,
 )
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     MAX_BOTS_PER_PARENT,
@@ -462,6 +463,7 @@ class AgentService:
     artifact_buckets: ArtifactBucketRepository
     usage: UsageGuard
     llm_provider_access: LlmProviderAccessLookup
+    key_models: AgentKeyModelService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1255,6 +1257,7 @@ class AgentService:
                         max_budget=key_budget.agent_limit_usd,
                         budget_duration=key_budget.window,
                         team_budget=key_budget.organization_limit_usd,
+                        models=self.key_models.models_for(agent),
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(
@@ -2577,6 +2580,7 @@ class AgentService:
             logger.exception("Failed to start agent %s", agent.id)
             raise self._record_provisioning_failure(agent, exc) from exc
         started = self._persist_started(agent, actor, previous_status)
+        self._sync_started_key_models(started)
         # A suspension recorded while it started couldn't stop it, since this start held the
         # lifecycle lock; the row read under the start's write has it, so stop it now.
         if started.suspended_at is not None and started.status == AgentStatus.RUNNING:
@@ -2681,6 +2685,16 @@ class AgentService:
         if preflight:
             return assembled.previous_status
         assert assembled.runtime is not None
+        self.key_models.sync(agent, assembled.effective_model)
+        synced_bots: list[tuple[Agent, _AssembledAgent]] = []
+        for bot, bot_assembled in assembled_bots:
+            try:
+                self.key_models.sync(bot, bot_assembled.effective_model)
+                synced_bots.append((bot, bot_assembled))
+            except Exception as exc:
+                logger.exception("Failed to set the key models of bot %s", bot.id)
+                self._record_provisioning_failure(bot, exc)
+        assembled_bots = synced_bots
 
         # Failures here are recorded and normalized by _start_agent_unchecked, which
         # wraps this whole method rather than only the cluster calls.
@@ -2709,7 +2723,14 @@ class AgentService:
         for bot, bot_assembled in created_bots:
             self._record_started(bot, bot_assembled)
             self.repository.save(bot)
+            self._sync_started_key_models(bot)
         return assembled.previous_status
+
+    def _sync_started_key_models(self, agent: Agent) -> None:
+        try:
+            self.key_models.sync(agent)
+        except Exception:
+            logger.exception("Failed to set the key models of agent %s after its start", agent.id)
 
     def _record_started(self, agent: Agent, assembled: _AssembledAgent) -> None:
         assert assembled.runtime is not None
@@ -4095,6 +4116,16 @@ class AgentService:
         """An Organization's non-deleted Agents. Background work only (the scheduled
         anomaly check): no caller and no authorization scope."""
         return self.repository.find_live_ids_by_org(organization_id)
+
+    def agent_role(self, agent_id: UUID) -> tuple[str, str | None] | None:
+        """The name and description of the template an Agent is pinned to, or None
+        without one. Background work only (the anomaly check's classification): no
+        caller and no authorization scope."""
+        agent = self.repository.get_by_id(agent_id)
+        template = self.template_repository.get_pinned_template(agent) if agent is not None else None
+        if template is None:
+            return None
+        return template.template_name, template.description
 
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org

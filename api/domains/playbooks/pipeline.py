@@ -12,6 +12,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agent_memory.view_client import MemoryViewClient
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.repository import AgentRepository
 from api.domains.playbooks.models import PlaybookExtraction, PlaybookExtractionError
 from api.domains.playbooks.platform_service import PlatformPlaybookService
@@ -105,6 +106,7 @@ class PlaybookPipeline:
     repository: PlaybookExtractionRepository
     sessions: PlaybookSessionReader
     agents: AgentRepository
+    key_models: AgentKeyModelService
     memories: MemoryViewClient
     completions: LiteLLMCompletionClient
     settings: PlatformPlaybookService
@@ -140,6 +142,7 @@ class PlaybookPipeline:
         if not transcripts:
             raise PlaybookExtractionFailed(PlaybookExtractionError.NO_SESSIONS)
 
+        self._sync_key_models(extraction.source_agent_id)
         usage = _Usage()
         notes = self._notes(extraction.id, transcripts, api_key, model, usage)
         memories = self._memories(extraction.organization_id, extraction.source_agent_id)
@@ -193,6 +196,12 @@ class PlaybookPipeline:
             return decrypt_token(agent.litellm_key_encrypted, self.config.agent_token_encryption_key)
         except InvalidToken, ValueError:
             raise PlaybookExtractionFailed(PlaybookExtractionError.MODEL_UNAVAILABLE) from None
+
+    def _sync_key_models(self, agent_id: UUID) -> None:
+        try:
+            self.key_models.sync_by_id(agent_id)
+        except Exception:
+            logger.exception("Could not set the key models of agent %s before a playbook extraction", agent_id)
 
     def _notes(
         self,

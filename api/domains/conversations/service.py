@@ -26,6 +26,10 @@ class ConversationService:
     repository: ConversationRepository
     agent_authorization: AgentAuthorization
 
+    def latest_inbound_times_for_platform(self, agent_ids: list[UUID]) -> dict[UUID, datetime]:
+        """When a person last wrote to each Agent, platform-wide. For `require_platform_admin` routes only."""
+        return self.repository.latest_inbound_times_for_platform(agent_ids)
+
     def list_channels(self, agent_id: UUID, context: CurrentUserContext) -> list[ConversationChannelRead]:
         agent = self.agent_authorization.require_visible(context, agent_id)
         activity_scope = self.agent_authorization.require_action_for_visible(
@@ -55,6 +59,14 @@ class ConversationService:
     ) -> dict[datetime, set[UUID]]:
         """Return Agent IDs with communication activity for Platform View."""
         return self.repository.daily_active_agent_ids_since(window_start, window_end, **kwargs)
+
+    def recent_inbound_texts(
+        self, agent_id: UUID, *, since: datetime, until: datetime, limit: int
+    ) -> list[tuple[datetime, str]]:
+        """The text and time of an Agent's latest `limit` inbound messages in
+        [since, until], oldest first. Background work only (the anomaly check's
+        classification): no caller and no authorization scope."""
+        return list(reversed(self.repository.recent_inbound_texts(agent_id, since=since, until=until, limit=limit)))
 
     def list_threads(
         self,

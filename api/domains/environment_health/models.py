@@ -25,7 +25,11 @@ class EnvironmentSource(str, enum.Enum):
     PODS = "pods"
     DEPLOYMENTS = "deployments"
     STATEFUL_SETS = "stateful_sets"
+    REPLICA_SETS = "replica_sets"
     VOLUME_CLAIMS = "volume_claims"
+    SERVICES = "services"
+    CRON_JOBS = "cron_jobs"
+    JOBS = "jobs"
     RESOURCE_QUOTAS = "resource_quotas"
     EVENTS = "events"
     PROMETHEUS = "prometheus"
@@ -67,6 +71,15 @@ class AgentRefRead(PydanticBaseModel):
     status: AgentStatus | None = None
 
 
+class RolloutState(str, enum.Enum):
+    """A Deployment's `Progressing` condition, reduced to what an administrator acts on."""
+
+    COMPLETE = "complete"
+    IN_PROGRESS = "in_progress"
+    # The rollout passed its progress deadline: the new pods never became ready.
+    STUCK = "stuck"
+
+
 class CoreServiceRead(PydanticBaseModel):
     """A Deployment or StatefulSet of the platform itself, not an Agent's."""
 
@@ -75,6 +88,82 @@ class CoreServiceRead(PydanticBaseModel):
     desired_replicas: int
     ready_replicas: int
     level: HealthLevel
+    # The commit the Deployment's pods were built from, from the `build-sha` annotation the
+    # charts set. Only a 7 to 40 character hex string is kept.
+    build_sha: str | None = None
+    rollout: RolloutState | None = None
+    # When the last rollout finished. None while one is under way or stuck.
+    rolled_out_at: datetime | None = None
+
+
+class DeployedVersionRead(PydanticBaseModel):
+    """The build the platform runs: the one rolled out most recently."""
+
+    build_sha: str
+    rolled_out_at: datetime | None = None
+    # Some services carry another build, as when one failed to roll out.
+    mixed: bool = False
+    # The services on another build than `build_sha`.
+    behind: list[str] = Field(default_factory=list)
+
+
+class CronJobState(str, enum.Enum):
+    OK = "ok"
+    # Its newest run failed.
+    FAILING = "failing"
+    # No run has succeeded for longer than every platform schedule allows, or none ever has.
+    STALLED = "stalled"
+    # Switched off on purpose. Not a problem in itself.
+    SUSPENDED = "suspended"
+
+
+class CronJobRead(PydanticBaseModel):
+    """One of the platform's scheduled jobs, named as its chart names it."""
+
+    name: str
+    # Only a schedule in the cron grammar is kept.
+    schedule: str | None = None
+    state: CronJobState
+    running: bool = False
+    last_scheduled_at: datetime | None = None
+    last_successful_at: datetime | None = None
+    # When its most recent failed run, of those Kubernetes still keeps, failed.
+    last_failed_at: datetime | None = None
+
+
+class BackupFailureRead(PydanticBaseModel):
+    """An Agent whose scheduled backups failed in the failure window. The failure text is not carried."""
+
+    agent: AgentRefRead
+    failures: int
+    last_failed_at: datetime
+
+
+class OverdueBackupRead(PydanticBaseModel):
+    """A running Agent with no successful scheduled backup for two intervals or more."""
+
+    agent: AgentRefRead
+    # None when it never had one.
+    last_backup_at: datetime | None = None
+
+
+class ScheduledBackupsRead(PydanticBaseModel):
+    """Whether the scheduled backups of running Agents are happening, from the database."""
+
+    enabled: bool = False
+    interval_minutes: int = 0
+    # The window `failed` covers.
+    failure_window_hours: int = 24
+    # Running Agents, which are the ones the schedule backs up.
+    running_agents: int = 0
+    # How many Agents fail or are overdue. When every backup fails at once (a full volume
+    # quota, say) that is the news, so only the worst few are named in the lists below.
+    failed_total: int = 0
+    overdue_total: int = 0
+    # Most failures first. An Agent named here is not named again under `overdue`.
+    failed: list[BackupFailureRead] = Field(default_factory=list)
+    # Never backed up first, then the longest without one.
+    overdue: list[OverdueBackupRead] = Field(default_factory=list)
 
 
 class FiringAlertRead(PydanticBaseModel):
@@ -117,6 +206,10 @@ class CapacityLineRead(PydanticBaseModel):
     used: float | None = None
     hard: float | None = None
     ratio: float | None = None
+    # The highest `used` reached over the last `peak_window_hours`, from kube-state-metrics,
+    # for the lines it can count (CPU, memory and pods). None when it is not known.
+    peak: float | None = None
+    peak_ratio: float | None = None
     level: CapacityLevel
 
 
@@ -170,8 +263,13 @@ class PodIssueRead(PydanticBaseModel):
     ready: bool
     # Unschedulable: no node has room for it, or none matches it.
     unschedulable: bool = False
+    # Restarts since the pod was created. Never reset, so a high count may be old news.
     restart_count: int = 0
+    # Restarts within the restart window, from kube-state-metrics. None when not known.
+    restarts_in_window: int | None = None
     repeatedly_restarting: bool = False
+    # A container ran out of memory within the restart window.
+    oom_killed: bool = False
     waiting_reason: str | None = None
     termination_reason: str | None = None
     last_restart_at: datetime | None = None
@@ -217,18 +315,60 @@ class WarningEventRead(PydanticBaseModel):
     detail: str | None = None
 
 
+class IdleAgentRead(PydanticBaseModel):
+    """A running or stopped Agent no one has written to for `idle_after_days`: a cleanup candidate.
+
+    What it holds is what deleting it would free. A figure that could not be read is None.
+    """
+
+    agent: AgentRefRead
+    # The newest message a person sent it. None when no one ever has.
+    last_user_message_at: datetime | None = None
+    # Its newest model call, for context. The platform wakes Agents on its own, so a recent
+    # call with no user message does not make an Agent in use.
+    last_call_at: datetime | None = None
+    holds_pod: bool | None = None
+    volume_claims: int | None = None
+    requested_bytes: int | None = None
+    restore_points: int = 0
+    restore_point_bytes: int = 0
+
+
+class ListTotalsRead(PydanticBaseModel):
+    """How many rows each list has. A list carries at most `LIST_LIMIT` of them, worst first."""
+
+    failed_agents: int = 0
+    unhealthy_runtimes: int = 0
+    pod_issues: int = 0
+    idle_agents: int = 0
+    volume_claims: int = 0
+    events: int = 0
+
+
 class EnvironmentHealthRead(PydanticBaseModel):
     observed_at: datetime
     namespace: str
     level: HealthLevel
+    # The window each capacity line's `peak` covers.
+    peak_window_hours: int
+    # The window a pod's `restarts_in_window` and `oom_killed` cover.
+    restart_window_days: int
     sources: list[EnvironmentSourceRead] = Field(default_factory=list)
+    # The build the platform's services run, when their Deployments carry one.
+    deployed: DeployedVersionRead | None = None
     # The quota ceilings as entered, so the page can edit them whichever source `capacity` used.
     ceilings: ResourceLimitsRead = Field(default_factory=ResourceLimitsRead)
     services: list[CoreServiceRead] = Field(default_factory=list)
+    cron_jobs: list[CronJobRead] = Field(default_factory=list)
+    backups: ScheduledBackupsRead = Field(default_factory=ScheduledBackupsRead)
     alerts: list[FiringAlertRead] = Field(default_factory=list)
     capacity: list[CapacityLineRead] = Field(default_factory=list)
     volumes: VolumeAllocationRead = Field(default_factory=VolumeAllocationRead)
     workloads: WorkloadsRead = Field(default_factory=WorkloadsRead)
     unhealthy_runtimes: list[UnhealthyRuntimeRead] = Field(default_factory=list)
     failed_agents: list[FailedAgentRead] = Field(default_factory=list)
+    idle_agents: list[IdleAgentRead] = Field(default_factory=list)
+    # How long without a user message before an Agent is listed in `idle_agents`.
+    idle_after_days: int = 14
     events: list[WarningEventRead] = Field(default_factory=list)
+    totals: ListTotalsRead = Field(default_factory=ListTotalsRead)

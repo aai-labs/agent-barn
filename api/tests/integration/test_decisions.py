@@ -1,6 +1,8 @@
+from unittest.mock import Mock
+
 import pytest
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_length
+from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_length, same_instance
 from sqlmodel import Session, select
 
 from api.core.config import Config
@@ -8,7 +10,15 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.decisions.models import PlatformDecisionSettings
 from api.domains.decisions.service import DecisionService
 from api.domains.events.models import OutboxMessage
-from api.infrastructure.litellm.decisions import DecisionError, DecisionFailure, YesNoQuestion
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.litellm.decisions import (
+    DecisionError,
+    DecisionFailure,
+    DecisionResult,
+    LiteLLMDecisionClient,
+    YesNoAnswer,
+    YesNoQuestion,
+)
 from api.tests.core.givenpy import given, then, when
 from api.tests.steps.agent import FAKE_LITELLM_KEY, there_is_an_agent
 from api.tests.steps.decisions import (
@@ -21,6 +31,7 @@ BASE = "/api/v1/platform/settings/decisions"
 JEV = "openrouter/typesafe/jev-1.14"
 OPENAI = "openrouter/openai/gpt-6-luna-decisions"
 QUESTIONS = {"q": YesNoQuestion("Is this unusual?")}
+ANSWER = DecisionResult(answers={"q": YesNoAnswer(0.9)}, input_tokens=10, output_tokens=1)
 
 
 def _auth(context):
@@ -32,6 +43,15 @@ def _changed_events(context):
         return session.exec(
             select(OutboxMessage).where(OutboxMessage.event_name == "platform.decision_model.changed")
         ).all()
+
+
+def the_decision_model_rejects_then_answers():
+    def step(context):
+        context.rejection = DecisionError(DecisionFailure.KEY_OR_MODEL_REJECTED)
+        context.decide = Mock(side_effect=[context.rejection, ANSWER])
+        context.injector.get(LiteLLMDecisionClient).decide = context.decide
+
+    return step
 
 
 def _decide(context, **options):
@@ -206,6 +226,38 @@ def test_an_agent_whose_key_cannot_be_decrypted_cannot_be_billed():
         with then("it is rejected without a call"):
             assert_that(raised.value.failure, equal_to(DecisionFailure.KEY_OR_MODEL_REJECTED))
             context.decide.assert_not_called()
+
+
+def test_a_rejected_decision_is_asked_again_once_after_the_keys_models_are_set():
+    with given(decisions_api_setup(there_is_an_agent(), the_decision_model_rejects_then_answers())) as context:
+        litellm = context.injector.get(LiteLLMClient)
+        litellm.set_key_models.return_value = True
+
+        with when("LiteLLM rejects the model and the key's list was out of date"):
+            result = _decide(context)
+
+        with then("the key's list is set and the second ask answers"):
+            assert_that(litellm.set_key_models.call_args.args[0], equal_to(FAKE_LITELLM_KEY))
+            assert_that(context.decide.call_count, equal_to(2))
+            assert_that(result, equal_to(ANSWER))
+
+
+@pytest.mark.parametrize(
+    "sync",
+    [{"return_value": False}, {"side_effect": LiteLLMError("Failed to set the Agent key's models")}],
+    ids=["already-current", "sync-failed"],
+)
+def test_a_rejected_decision_is_not_asked_again_unless_the_keys_models_changed(sync):
+    with given(decisions_api_setup(there_is_an_agent(), the_decision_model_rejects_then_answers())) as context:
+        context.injector.get(LiteLLMClient).set_key_models.configure_mock(**sync)
+
+        with when("LiteLLM rejects the model"):
+            with pytest.raises(DecisionError) as raised:
+                _decide(context)
+
+        with then("the original rejection is raised after one ask"):
+            assert_that(raised.value, same_instance(context.rejection))
+            assert_that(context.decide.call_count, equal_to(1))
 
 
 def test_without_a_proxy_decisions_are_unavailable():

@@ -17,6 +17,7 @@ from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.resource_limits.models import ResourceLimitsRead
 from api.domains.resource_limits.service import ResourceLimitsService
 from api.domains.resource_usage.models import (
+    NamespacePeaksRead,
     PlatformAgentDetailsRead,
     PlatformAgentResourceUsageRead,
     PlatformAgentUsagePoint,
@@ -235,6 +236,11 @@ def _capacity(limits: ResourceLimitsRead, committed: Mapping[str, Mapping[str, f
     )
 
 
+# The monitoring chart's scrape interval. A peak sampled any coarser could step over a
+# burst that lasts one scrape.
+_PEAK_STEP_SECONDS = 30
+
+
 @inject
 @singleton
 @dataclass
@@ -336,6 +342,37 @@ class PlatformResourceUsageService:
         except PrometheusError:
             logger.warning("Namespace commitments are unavailable", exc_info=True)
             return _capacity(limits, None)
+
+    def namespace_peaks(self, now: datetime, *, window_hours: int) -> NamespacePeaksRead:
+        """The highest the namespace committed, and the most pods it held, over the last `window_hours`.
+
+        For the environment health page, beside `namespace_capacity`. Every figure is None
+        when Prometheus is not configured or cannot answer, so the current figures still show.
+        """
+        empty = NamespacePeaksRead(window_hours=window_hours)
+        if not self.usage_repository.is_configured:
+            return empty
+        window_seconds = window_hours * 3600
+        try:
+            committed = self.usage_repository.peak_committed(
+                at=now, window_seconds=window_seconds, step_seconds=_PEAK_STEP_SECONDS
+            )
+            pods = self.usage_repository.peak_pods(
+                at=now, window_seconds=window_seconds, step_seconds=_PEAK_STEP_SECONDS
+            )
+        except PrometheusError:
+            logger.warning("Namespace peaks are unavailable", exc_info=True)
+            return empty
+        limits = committed.get("limits", {})
+        requests = committed.get("requests", {})
+        return NamespacePeaksRead(
+            window_hours=window_hours,
+            limits_memory_bytes=_whole(limits.get("memory")),
+            limits_cpu_cores=limits.get("cpu"),
+            requests_memory_bytes=_whole(requests.get("memory")),
+            requests_cpu_cores=requests.get("cpu"),
+            pods=_whole(pods),
+        )
 
     def _agent_requests(self, now: datetime) -> dict[UUID, dict[str, float]]:
         """What each live Agent's pod requests. Unknown when the source cannot say, and only that.

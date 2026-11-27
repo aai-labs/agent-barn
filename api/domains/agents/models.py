@@ -1857,6 +1857,7 @@ class PlatformAgentIdentity(NamedTuple):
     status: AgentStatus
     organization_id: UUID
     organization_name: str
+    created_at: datetime | None = None
 
 
 class PlatformFailedAgent(NamedTuple):

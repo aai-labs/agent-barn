@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.decisions.models import PlatformDecisionSettingsRead, PlatformDecisionSettingsUpdate
@@ -47,6 +48,7 @@ class DecisionService:
     repository: PlatformDecisionRepository
     authority: PlatformAdminService
     agent_keys: AgentLlmBudgetService
+    key_models: AgentKeyModelService
     client: LiteLLMDecisionClient
     config: Config
     dispatcher: EventDeliveryDispatcher
@@ -72,7 +74,19 @@ class DecisionService:
         api_key = self.agent_keys.agent_key(agent_id)
         if api_key is None:
             raise DecisionError(DecisionFailure.KEY_OR_MODEL_REJECTED)
+        try:
+            return self.client.decide(api_key, slug, state, questions)
+        except DecisionError as rejection:
+            if rejection.failure != DecisionFailure.KEY_OR_MODEL_REJECTED or not self._key_models_changed(agent_id):
+                raise
         return self.client.decide(api_key, slug, state, questions)
+
+    def _key_models_changed(self, agent_id: UUID) -> bool:
+        try:
+            return self.key_models.sync_by_id(agent_id)
+        except Exception:
+            logger.exception("Could not set the key models of agent %s after a rejected decision", agent_id)
+            return False
 
     def current_model(self) -> str:
         """The Platform's chosen name, or the deployment default if that is no longer configured."""

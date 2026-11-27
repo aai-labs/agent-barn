@@ -15,6 +15,8 @@ from api.domains.resource_usage.promql import (
     group_totals,
     instant_query,
     namespace_commitments_query,
+    namespace_peak_commitments_query,
+    namespace_peak_pods_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -89,6 +91,18 @@ class ResourceUsageRepository:
         Empty when kube-state-metrics has no pods to report.
         """
         return group_namespace_commitments(self.prometheus.query(namespace_commitments_query(), at))
+
+    def peak_committed(self, *, at: datetime, window_seconds: int, step_seconds: int) -> dict[str, dict[str, float]]:
+        """The highest `committed` reached over the window before `at`, in the same shape. One request."""
+        query = namespace_peak_commitments_query(window_seconds=window_seconds, step_seconds=step_seconds)
+        return group_namespace_commitments(self.prometheus.query(query, at))
+
+    def peak_pods(self, *, at: datetime, window_seconds: int, step_seconds: int) -> float | None:
+        """The most live pods at once over the window before `at`. None when nothing was scraped."""
+        samples = self.prometheus.query(
+            namespace_peak_pods_query(window_seconds=window_seconds, step_seconds=step_seconds), at
+        )
+        return samples[0].value if samples else None
 
     def agent_requests(self, *, at: datetime, agent_ids: list[UUID] | None = None) -> dict[UUID, dict[str, float]]:
         """{agent id: {"memory_request_bytes": bytes, "cpu_request_cores": cores}} for live pods. One request.

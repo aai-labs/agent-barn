@@ -20,6 +20,7 @@ from api.domains.agents.models import AgentStatus
 from api.domains.agents.service import AgentService
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -181,6 +182,23 @@ def test_a_failure_before_the_cluster_calls_is_recorded_the_same_way() -> None:
             body = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
             assert_that(body["status"], equal_to(AgentStatus.ERROR.value))
             assert_that(body["last_error"]["code"], equal_to("PROVISIONING_FAILED"))
+
+
+def test_a_key_whose_models_cannot_be_set_fails_the_start_before_the_deployment() -> None:
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = LiteLLMError("LiteLLM is down")
+
+        with when("the agent starts but its key's models can't be set"):
+            response = context.client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the start fails as a provisioning failure"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            assert_that(response.json()["detail"]["code"], equal_to("PROVISIONING_FAILED"))
+
+        with then("the agent records it and no Deployment was created"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.ERROR.value))
+            context.injector.get(KubernetesClient).create_deployment.assert_not_called()
 
 
 def test_a_failed_record_of_the_failure_still_returns_the_classified_cause() -> None:

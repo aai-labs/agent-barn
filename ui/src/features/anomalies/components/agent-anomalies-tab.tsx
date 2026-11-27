@@ -22,12 +22,16 @@ import {
 import type { Anomaly, NormalBehaviour, Sensitivity } from "../schemas";
 import {
   BASELINE_DAYS,
+  CATEGORY_LABELS,
   MIN_ACTIVE_DAYS,
   SENSITIVITY_HINTS,
   SENSITIVITY_LABELS,
+  SEVERITY_BADGES,
+  SEVERITY_LABELS,
   SIGNAL_LABELS,
   formatSignalValue,
   isFirstUse,
+  isProbablyFine,
   parseCap,
 } from "../utils";
 
@@ -57,6 +61,15 @@ function AnomalyRow({ anomaly }: { anomaly: Anomaly }) {
         )}
         {!firstUse && <Badge variant={ongoing ? "warn" : "neutral"}>{ongoing ? "Ongoing" : "Ended"}</Badge>}
       </div>
+      {anomaly.classification && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[0.84rem]" style={{ color: "var(--ink-2)" }}>
+          <span>{CATEGORY_LABELS[anomaly.classification.category]}</span>
+          <Badge variant={SEVERITY_BADGES[anomaly.classification.severity]}>
+            {SEVERITY_LABELS[anomaly.classification.severity]}
+          </Badge>
+          {isProbablyFine(anomaly.classification.unusualProbability) && <Badge variant="ok">Probably fine</Badge>}
+        </div>
+      )}
       <div className="mt-1 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
         {firstUse
           ? `First used ${formatDate(anomaly.startedAt)}`

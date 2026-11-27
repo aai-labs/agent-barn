@@ -313,6 +313,22 @@ class AgentRepository:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
 
+    @staticmethod
+    def lock_key_models(session: Session, agent_id: UUID) -> None:
+        session.connection().execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"), {"lock_key": f"agent-key-models:{agent_id}"}
+        )
+
+    def with_key_models_lock[T](self, agent_id: UUID, callback: Callable[[Agent | None], T]) -> T:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            self.lock_key_models(session, agent_id)
+            agent = session.exec(
+                select(Agent).where(col(Agent.id) == agent_id, col(Agent.deleted_at).is_(None))
+            ).first()
+            result = callback(agent)
+            session.commit()
+            return result
+
     def find_membership_with_user(self, membership_id: UUID) -> tuple[OrganizationUser, User | None] | None:
         with Session(self.delegate.engine) as session:
             row = session.exec(
@@ -1963,6 +1979,7 @@ class AgentRepository:
                 col(Agent.status),
                 col(Agent.organization_id),
                 col(Organization.name),
+                col(Agent.created_at),
             )
             .join(Organization, col(Organization.id) == col(Agent.organization_id))
             .where(col(Agent.deleted_at).is_(None))

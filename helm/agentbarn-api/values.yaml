@@ -260,9 +260,10 @@ organizationLlmBudgets:
   defaultAgentUsd: ""
   reconciliation:
     enabled: true
-    # Every 15 minutes. Limits are applied when someone saves them; this pass only
-    # repairs drift (a push that failed while the proxy was down, or a team or Agent
-    # key edited by hand). Runs under Forbid like the other reconcilers.
+    # Every 15 minutes. Limits are applied when someone saves them, and an Agent key's
+    # model list at each start; this pass only repairs drift (a push that failed while
+    # the proxy was down, a team or Agent key edited by hand, or a key whose Agent has
+    # not started since its models changed). Runs under Forbid like the other reconcilers.
     schedule: "12-59/15 * * * *"
   alerts:
     enabled: true

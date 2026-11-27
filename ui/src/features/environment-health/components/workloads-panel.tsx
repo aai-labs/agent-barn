@@ -1,6 +1,6 @@
 import type { EnvironmentHealth, PodIssue, SourceState } from "../schemas";
 import { formatAgo } from "../utils";
-import { AgentLabel, EmptyRow, Section, StatusDot } from "./section";
+import { AgentLabel, EmptyRow, Section, StatusDot, ExpandableList } from "./section";
 
 const KIND_LABEL: Record<PodIssue["kind"], string> = {
   infrastructure: "Platform",
@@ -10,8 +10,12 @@ const KIND_LABEL: Record<PodIssue["kind"], string> = {
 
 const STARTING = new Set(["ContainerCreating", "PodInitializing"]);
 
+function times(count: number): string {
+  return `${count} ${count === 1 ? "time" : "times"}`;
+}
+
 /** Why a pod needs a look, most telling first, then how often it restarted and why it last stopped. */
-function issueText(issue: PodIssue): string {
+function issueText(issue: PodIssue, windowDays: number): string {
   let state: string;
   if (issue.unschedulable) state = "No node has room for it";
   else if (issue.waitingReason && !STARTING.has(issue.waitingReason)) state = issue.waitingReason;
@@ -19,19 +23,34 @@ function issueText(issue: PodIssue): string {
   else if (issue.waitingReason) state = issue.waitingReason;
   else if (!issue.ready) state = "Not ready";
   else state = "Running";
+  // The count within the window when it is known: a lifetime count can be weeks old.
   const restarts =
-    issue.restartCount > 0 ? `restarted ${issue.restartCount} ${issue.restartCount === 1 ? "time" : "times"}` : null;
-  const last = issue.terminationReason ? `last stopped: ${issue.terminationReason}` : null;
-  return [state, restarts, last].filter(Boolean).join(" · ");
+    issue.restartsInWindow !== null
+      ? issue.restartsInWindow > 0
+        ? `restarted ${times(issue.restartsInWindow)} in the last ${windowDays} days`
+        : null
+      : issue.restartCount > 0
+        ? `restarted ${times(issue.restartCount)}`
+        : null;
+  const memory = issue.oomKilled ? "ran out of memory" : null;
+  const last =
+    issue.terminationReason && !(issue.oomKilled && issue.terminationReason === "OOMKilled")
+      ? `last stopped: ${issue.terminationReason}`
+      : null;
+  return [state, restarts, memory, last].filter(Boolean).join(" · ");
 }
 
 /** Pods that are failing, stuck or restarting, platform pods first. */
 export function WorkloadsPanel({
   workloads,
+  issuesTotal,
   podsState,
+  restartWindowDays,
 }: {
   workloads: EnvironmentHealth["workloads"];
+  issuesTotal: number;
   podsState: SourceState | undefined;
+  restartWindowDays: number;
 }) {
   const { podsTotal, podsReady, issues } = workloads;
   return (
@@ -40,14 +59,14 @@ export function WorkloadsPanel({
       testId="environment-workloads"
       description={
         podsState === "available"
-          ? `${podsReady} of ${podsTotal} pods ready. Listed: pods that failed, can't be scheduled, are stuck, or keep restarting.`
+          ? `${podsReady} of ${podsTotal} pods ready. Listed: pods that failed, can't be scheduled, are stuck, keep restarting, or ran out of memory in the last ${restartWindowDays} days.`
           : undefined
       }
     >
       {issues.length === 0 ? (
         <EmptyRow state={podsState}>Every pod is running normally.</EmptyRow>
       ) : (
-        <ul className="af-card m-0 list-none divide-y p-0">
+        <ExpandableList total={issuesTotal}>
           {issues.map((issue) => (
             <li key={issue.podName} className="px-4 py-3 text-[13px]" data-testid="pod-issue">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -65,7 +84,7 @@ export function WorkloadsPanel({
                 </span>
               </div>
               <p className="m-0 mt-1" style={{ color: "var(--ink-2)" }}>
-                {issueText(issue)}
+                {issueText(issue, restartWindowDays)}
               </p>
               {issue.agent && (
                 <p className="m-0 mt-1 text-[12.5px]">
@@ -74,7 +93,7 @@ export function WorkloadsPanel({
               )}
             </li>
           ))}
-        </ul>
+        </ExpandableList>
       )}
     </Section>
   );

@@ -19,6 +19,7 @@ from sqlmodel import Session
 from api.core.config import get_config
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agent_settings.service import AgentSettingsService
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.costs.memory_budget import MemoryBudgetAccounting
@@ -91,6 +92,7 @@ def _parse_timestamp(value: object) -> datetime | None:
 class OrganizationLlmBudgetService:
     organization_repository: OrganizationRepository
     agent_budgets: AgentLlmBudgetService
+    agent_key_models: AgentKeyModelService
     agent_settings: AgentSettingsService
     litellm: LiteLLMClient
     permission_policy: PermissionPolicy
@@ -153,6 +155,7 @@ class OrganizationLlmBudgetService:
         # After the teams: an Agent limit is held beneath its Organization's, so the
         # Organization's must be right first.
         self.agent_budgets.reconcile_key_budgets()
+        self.agent_key_models.reconcile()
 
     def apply_healed_spend(self, organization_ids: set[UUID]) -> None:
         """Push the limit of each Organization on credit that healing found spend for:

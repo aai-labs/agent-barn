@@ -21,6 +21,7 @@ from hamcrest import (
     contains_string,
     equal_to,
     has_entries,
+    has_items,
     has_length,
     has_properties,
     is_not,
@@ -34,6 +35,7 @@ from sqlmodel import Session, select
 from api.core.config import Config
 from api.domains.agent_memory.gateway_models import MemoryViewItem, MemoryViewPage
 from api.domains.agent_memory.view_client import MemoryViewClient
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.conversations.models import MessageDirection
 from api.domains.playbooks.models import PlaybookExtraction, PlaybookExtractionStatus
 from api.domains.playbooks.platform_repository import PlatformPlaybookRepository
@@ -41,6 +43,7 @@ from api.domains.playbooks.prompts import NOTES_SYSTEM_PROMPT, PLAYBOOK_SYSTEM_P
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.service import PlaybookTargetUnavailable, SkillService
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import LambdaWith, given, then, when
 from api.tests.helpers.litellm_proxy import StubProxy, StubReply, completion, litellm_proxy
 from api.tests.steps.agent import FAKE_LITELLM_KEY, there_is_a_skill, there_is_an_agent
@@ -54,6 +57,8 @@ from api.tests.steps.playbooks import (
 
 IN = MessageDirection.INBOUND
 OUT = MessageDirection.OUTBOUND
+RUN_MODEL = "openrouter/anthropic/claude-sonnet"
+NEXT_PLATFORM_MODEL = "openrouter/openai/gpt-5-mini"
 
 PLAYBOOK_BODY = "# Refunds\n\n## How we work\n\n1. Check the order first (seen in 2 conversations)."
 PLAYBOOK = {
@@ -307,6 +312,64 @@ def test_every_model_call_uses_the_source_agents_key_and_the_platform_model():
             assert_that(
                 [r["json"]["model"] for r in requests], only_contains(equal_to("openrouter/anthropic/claude-sonnet"))
             )
+
+
+def test_the_source_agents_key_models_are_set_before_the_first_model_call():
+    with given(
+        _setup(two_refund_conversations(), the_model_proxy_is(model_replies()), there_is_a_playbook_extraction())
+    ) as context:
+        litellm = context.injector.get(LiteLLMClient)
+        model_calls_before: list[int] = []
+        litellm.set_key_models.side_effect = lambda *_: model_calls_before.append(len(context.proxy.requests))
+
+        with when("the worker runs the extraction"):
+            run = process_extraction(context)
+
+        with then("the Agent's key got its list once, before any model call"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that(litellm.set_key_models.call_args.args[0], equal_to(FAKE_LITELLM_KEY))
+            assert_that(model_calls_before, equal_to([0]))
+
+
+def test_a_sync_during_a_run_keeps_the_runs_model_after_the_platform_model_changes():
+    def notes(posted):
+        the_platform_model_is(NEXT_PLATFORM_MODEL)(context)
+        context.injector.get(AgentKeyModelService).sync_by_id(context.agent.id)
+        return _notes("Refund an order")
+
+    with given(
+        _setup(
+            two_refund_conversations(),
+            the_platform_model_is(RUN_MODEL),
+            the_model_proxy_is(model_replies(notes=notes)),
+            there_is_a_playbook_extraction(),
+        )
+    ) as context:
+        litellm = context.injector.get(LiteLLMClient)
+
+        with when("the platform model changes and a sweep syncs the key while notes are taken"):
+            run = process_extraction(context)
+
+        with then("the run finishes on its own model, and the sweep's list still holds it"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that([r["json"]["model"] for r in context.proxy.requests], only_contains(equal_to(RUN_MODEL)))
+            assert_that(litellm.set_key_models.call_args.args[1], has_items(RUN_MODEL, NEXT_PLATFORM_MODEL))
+
+
+def test_a_run_continues_when_the_source_agents_key_models_cannot_be_set():
+    with given(
+        _setup(two_refund_conversations(), the_model_proxy_is(model_replies()), there_is_a_playbook_extraction())
+    ) as context:
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = LiteLLMError(
+            "Failed to set the Agent key's models"
+        )
+
+        with when("the worker runs the extraction"):
+            run = process_extraction(context)
+
+        with then("the run still succeeds"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that(context.proxy.requests, has_length(3))
 
 
 def test_each_conversation_is_read_once_and_memories_reach_the_playbook_step():

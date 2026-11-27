@@ -17,6 +17,10 @@ PROVIDER_KEY = "sk-or-provider-secret"
 LITELLM_PARAMS = {"model": "openrouter/*", "api_key": PROVIDER_KEY, "order": 1}
 MODEL_INFO = {"id": MODEL_ID, "disable_background_health_check": True}
 HEADERS = {"Authorization": "Bearer master-key", "Content-Type": "application/json"}
+KEY_INFO_URL = "http://litellm:4000/key/info"
+KEY_UPDATE_URL = "http://litellm:4000/key/update"
+AGENT_KEY = "sk-agent-virtual-key-secret"
+LISTED_MODELS = ["openrouter/openai/gpt-5-nano", "openrouter/z-ai/glm-5.2"]
 
 
 def _client() -> LiteLLMClient:
@@ -426,3 +430,80 @@ def test_upsert_model_deployment_told_whether_the_route_exists_skips_the_lookup(
         headers=HEADERS,
         timeout=10,
     )
+
+
+def _key_info_response(models: object) -> httpx.Response:
+    return httpx.Response(200, json={"info": {"models": models}}, request=httpx.Request("GET", KEY_INFO_URL))
+
+
+def _key_update_response(status_code: int) -> httpx.Response:
+    return httpx.Response(
+        status_code, content=f'{{"key": "{AGENT_KEY}"}}'.encode(), request=httpx.Request("POST", KEY_UPDATE_URL)
+    )
+
+
+def _generate_key(models: list[str] | None = None) -> dict:
+    client = _client()
+    generated = httpx.Response(200, json={"key": AGENT_KEY}, request=httpx.Request("POST", "http://litellm:4000"))
+    with patch.object(client, "_master_key", return_value=MASTER_KEY), patch.object(client, "ensure_team_exists"):
+        with patch("api.infrastructure.litellm.client.httpx.post", return_value=generated) as post:
+            client.generate_key("agent", "Agent", "org", models=models)
+    return post.call_args.kwargs["json"]
+
+
+def test_generate_key_sends_no_models_when_none_are_given():
+    assert "models" not in _generate_key()
+
+
+def test_generate_key_sends_the_models_it_is_given():
+    assert _generate_key(LISTED_MODELS)["models"] == LISTED_MODELS
+
+
+def _set_key_models(
+    key_infos: list[httpx.Response], update: httpx.Response | None = None
+) -> tuple[bool, MagicMock, MagicMock]:
+    client = _client()
+    with patch.object(client, "_master_key", return_value="master-key"):
+        with patch("api.infrastructure.litellm.client.httpx.get", side_effect=key_infos) as get:
+            with patch("api.infrastructure.litellm.client.httpx.post", return_value=update) as post:
+                wrote = client.set_key_models(AGENT_KEY, LISTED_MODELS)
+    return wrote, get, post
+
+
+def test_set_key_models_writes_nothing_for_the_same_list_in_another_order():
+    wrote, get, post = _set_key_models([_key_info_response(list(reversed(LISTED_MODELS)))])
+
+    assert wrote is False
+    get.assert_called_once()
+    post.assert_not_called()
+
+
+def test_set_key_models_posts_only_the_key_and_models_and_reads_them_back():
+    wrote, get, post = _set_key_models(
+        [_key_info_response(["openrouter/openrouter/free"]), _key_info_response(LISTED_MODELS)],
+        _key_update_response(200),
+    )
+
+    assert wrote is True
+    post.assert_called_once_with(
+        KEY_UPDATE_URL, json={"key": AGENT_KEY, "models": LISTED_MODELS}, headers=HEADERS, timeout=10
+    )
+    assert get.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("key_infos", "update"),
+    [
+        ([_key_info_response([])], _key_update_response(500)),
+        ([_key_info_response([]), _key_info_response([])], _key_update_response(200)),
+    ],
+    ids=["failed write", "unapplied write"],
+)
+def test_set_key_models_raises_without_the_key(key_infos, update, caplog):
+    with caplog.at_level("DEBUG"), pytest.raises(LiteLLMError) as raised:
+        _set_key_models(key_infos, update)
+
+    assert AGENT_KEY not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None or raised.value.__suppress_context__ is True
+    assert AGENT_KEY not in caplog.text

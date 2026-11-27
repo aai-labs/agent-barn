@@ -174,3 +174,31 @@ class AgentRestorePointList(PaginatedItems[AgentRestorePointRead]):
     scheduled_cap: int
     # 0 when scheduled snapshots are off.
     schedule_interval_minutes: int
+
+
+@dataclass(frozen=True)
+class ScheduledBackupFailures:
+    """An Agent's scheduled backups that failed within a window: how many, and the latest."""
+
+    agent_id: UUID
+    failures: int
+    last_failed_at: datetime
+
+
+@dataclass(frozen=True)
+class OverdueScheduledBackup:
+    """A running Agent with no successful scheduled backup for longer than the schedule allows."""
+
+    agent_id: UUID
+    # Its newest successful scheduled backup. None when it never had one.
+    last_backup_at: datetime | None
+
+
+@dataclass(frozen=True)
+class ScheduledBackupHealth:
+    """Whether scheduled backups are working, for the environment health page."""
+
+    # Minutes between an Agent's scheduled backups. 0 when they are switched off.
+    interval_minutes: int
+    failures: list[ScheduledBackupFailures]
+    overdue: list[OverdueScheduledBackup]
