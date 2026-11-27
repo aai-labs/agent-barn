@@ -1,0 +1,21 @@
+{
+  "description": "Self-hosted AI agent control plane for OpenClaw and Hermes on Kubernetes, with Slack and Teams connections, per-agent costs, access controls, and audit logs.",
+  "homepage": "https://agentbarn.dev/",
+  "topics": [
+    "ai-agents",
+    "agentic-ai",
+    "self-hosted",
+    "kubernetes",
+    "helm",
+    "openclaw",
+    "hermes-agent",
+    "slack",
+    "microsoft-teams",
+    "telegram",
+    "discord",
+    "agent-skills",
+    "agent-orchestration",
+    "llmops",
+    "python"
+  ]
+}
