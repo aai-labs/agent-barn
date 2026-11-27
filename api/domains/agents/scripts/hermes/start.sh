@@ -26,6 +26,11 @@ python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/con
 # values (e.g. old home channel) to survive pod restarts.
 rm -f /opt/data/.env
 
+# Keep 7 days of cron sessions in state.db: once now, before the gateway writes to it,
+# then daily, since Hermes' own prune runs only at gateway start. Runs in Hermes' venv.
+/opt/hermes/.venv/bin/python /app/config/session-prune.py || true
+/opt/hermes/.venv/bin/python /app/config/session-prune.py --every 86400 &
+
 python3 /app/config/memory-setup.py
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   export HINDSIGHT_API_KEY="$MEMORY_API_KEY"
