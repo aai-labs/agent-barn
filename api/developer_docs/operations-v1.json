@@ -756,6 +756,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/slack-workspaces",
+    "list_slack_workspaces_organizations__organization_id__slack_workspaces_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/subscription",
     "read_subscription_organizations__organization_id__subscription_get"
   ],

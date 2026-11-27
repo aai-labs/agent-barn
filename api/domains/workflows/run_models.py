@@ -324,3 +324,33 @@ class WorkflowRunRead(DTO):
     step_approval: StepApprovalRead | None = None
     # Every Approval step round of the run, oldest first; only present on the single-run read.
     step_approvals: list[StepApprovalRead] = Field(default_factory=list)
+
+
+ApprovalNoticeState = Literal["PENDING", "SENT", "SKIPPED", "FAILED"]
+
+
+class WorkflowApprovalNotice(BaseModel, table=True):
+    """The Slack direct message about one approval request, when the workflow sends approval requests.
+
+    Recorded when the request is raised, with the recipient chosen on the workflow at that moment;
+    Agent Barn posts and updates it in the background. It never holds the command.
+    """
+
+    __tablename__: str = "workflow_approval_notice"
+    __table_args__ = (
+        sa.CheckConstraint("state IN ('PENDING','SENT','SKIPPED','FAILED')", name="ck_workflow_approval_notice_state"),
+    )
+    request_id: UUID = SqlField(foreign_key="workflow_approval_request.id", ondelete="CASCADE", unique=True)
+    run_id: UUID = SqlField(foreign_key="workflow_run.id", ondelete="CASCADE", index=True)
+    platform: str = "slack"
+    slack_user_id: str
+    slack_team_id: str
+    state: str = "PENDING"
+    # The run's Agent's Slack Connection that posted it; later updates use the same bot.
+    connection_id: UUID | None = SqlField(default=None, foreign_key="communication_connection.id", ondelete="SET NULL")
+    channel_id: str | None = None
+    message_ts: str | None = None
+    # The request state the message currently shows.
+    shown_state: str | None = None
+    # Why nothing was sent, or why sending failed: a short code, never message content.
+    outcome: str | None = SqlField(default=None, max_length=100)

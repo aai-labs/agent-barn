@@ -925,6 +925,22 @@ class CommunicationDirectoryEntryRead(PydanticBaseModel):
     detail: str | None = Field(default=None, max_length=255)
 
 
+class SlackWorkspaceConnectionRead(PydanticBaseModel):
+    """A Slack Connection through which the workspace's people can be searched."""
+
+    agent_id: UUID
+    agent_name: str
+    connection_id: UUID
+
+
+class SlackWorkspaceRead(PydanticBaseModel):
+    """A Slack workspace reached by an enabled Slack Connection of an Agent the caller can update."""
+
+    team_id: str
+    name: str
+    connections: list[SlackWorkspaceConnectionRead]
+
+
 class CommunicationDirectoryPreview(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

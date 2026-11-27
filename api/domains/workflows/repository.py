@@ -14,6 +14,7 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationUser
 from api.domains.workflows.models import (
+    ApprovalNotice,
     Workflow,
     WorkflowDraft,
     WorkflowVersion,
@@ -21,6 +22,23 @@ from api.domains.workflows.models import (
 )
 from api.domains.workflows.run_models import WorkflowRun
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+
+def approval_notice_of(workflow: Workflow) -> ApprovalNotice:
+    return ApprovalNotice(
+        enabled=workflow.approval_notice_enabled,
+        slack_user_id=workflow.approval_notice_user_id,
+        slack_user_name=workflow.approval_notice_user_name,
+        slack_team_id=workflow.approval_notice_team_id,
+    )
+
+
+def _set_approval_notice(workflow: Workflow, notice: ApprovalNotice) -> None:
+    workflow.approval_notice_enabled = notice.enabled
+    workflow.approval_notice_platform = notice.platform if notice.slack_user_id else None
+    workflow.approval_notice_user_id = notice.slack_user_id
+    workflow.approval_notice_user_name = notice.slack_user_name
+    workflow.approval_notice_team_id = notice.slack_team_id
 
 
 class Unchanged:
@@ -218,6 +236,7 @@ class WorkflowRepository:
         draft: WorkflowDraft,
         user_id: UUID,
         default_agent_id: UUID | None,
+        approval_notice: ApprovalNotice | None = None,
     ) -> Workflow:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             workflow = Workflow(
@@ -225,6 +244,8 @@ class WorkflowRepository:
                 created_by_membership_id=membership_id,
                 default_agent_id=default_agent_id,
             )
+            if approval_notice is not None:
+                _set_approval_notice(workflow, approval_notice)
             session.add(workflow)
             session.flush()
             session.add(
@@ -248,8 +269,9 @@ class WorkflowRepository:
         draft: WorkflowDraft | None = None,
         archive: bool = False,
         default_agent_id: UUID | None | Unchanged = UNCHANGED,
+        approval_notice: ApprovalNotice | None = None,
     ) -> Workflow:
-        """Save a version, archive, or change the default Agent, under the workflow's revision."""
+        """Save a version, archive, or change the default Agent or approval notice, under the workflow's revision."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             workflow = session.exec(
                 select(Workflow)
@@ -260,13 +282,17 @@ class WorkflowRepository:
                 raise WorkflowConflict(
                     "Workflow changed or was archived; reload its current revision before saving. Your draft can be kept."
                 )
-            if draft is None and not archive and default_agent_id == workflow.default_agent_id:
+            agent_unchanged = isinstance(default_agent_id, Unchanged) or default_agent_id == workflow.default_agent_id
+            notice_unchanged = approval_notice is None or approval_notice == approval_notice_of(workflow)
+            if draft is None and not archive and agent_unchanged and notice_unchanged:
                 # Nothing changes, so nobody else's open editor is invalidated.
                 return workflow
             if archive:
                 workflow.archived_at = datetime.now(UTC)
             if not isinstance(default_agent_id, Unchanged):
                 workflow.default_agent_id = default_agent_id
+            if approval_notice is not None:
+                _set_approval_notice(workflow, approval_notice)
             if draft is not None:
                 number = (
                     session.exec(

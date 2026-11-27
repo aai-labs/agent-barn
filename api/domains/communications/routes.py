@@ -23,11 +23,13 @@ from api.domains.communications.models import (
     CommunicationJournalStage,
     CommunicationRetryRead,
     PlatformDescriptorRead,
+    SlackWorkspaceRead,
     TelegramLinkRead,
     TelegramLinkTokenCreated,
     TelegramLinkTokenRead,
 )
 from api.domains.communications.service import MAX_DIAGNOSTICS_WINDOW_DAYS, CommunicationsService
+from api.domains.communications.slack_messaging import SlackRecipients
 from api.infrastructure.shared.models import PaginatedItems
 
 communications_router = APIRouter(
@@ -42,6 +44,15 @@ def list_communication_platforms(
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
 ):
     return service.list_platforms(context)
+
+
+@communications_router.get("/slack-workspaces", response_model=list[SlackWorkspaceRead])
+def list_slack_workspaces(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    recipients: Annotated[SlackRecipients, Injected(SlackRecipients)],
+):
+    """Slack workspaces reached by an enabled Slack Connection of an Agent the caller can update."""
+    return recipients.workspaces(context)
 
 
 @communications_router.get(

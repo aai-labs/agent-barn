@@ -155,6 +155,24 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
+    def list_enabled_by_platform_in_scope(
+        self, platform_key: str, authorization_scope: AuthorizationScope
+    ) -> list[tuple[CommunicationConnection, str]]:
+        """Turned-on Connections of one Platform on the Agents in scope, with each Agent's name."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(CommunicationConnection, Agent.name)
+                .join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id))
+                .where(
+                    col(CommunicationConnection.platform_key) == platform_key,
+                    col(CommunicationConnection.enabled).is_(True),
+                    col(CommunicationConnection.retired_at).is_(None),
+                    *agent_scope_predicates(authorization_scope),
+                )
+                .order_by(col(Agent.name).asc(), col(CommunicationConnection.id).asc())
+            ).all()
+            return [(connection, name) for connection, name in rows]
+
     def list_enabled_email_page(
         self, *, after_id: UUID | None = None, limit: int = 100
     ) -> list[CommunicationConnection]:

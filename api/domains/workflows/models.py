@@ -147,15 +147,53 @@ def _require_unique(values: list[str], noun: str, attribute: str) -> None:
         first[value] = index
 
 
+SlackUserId = Annotated[str, StringConstraints(pattern=r"^[UW][A-Z0-9]{2,31}$")]
+SlackTeamId = Annotated[str, StringConstraints(pattern=r"^[TE][A-Z0-9]{2,31}$")]
+
+
+class ApprovalNotice(StrictDTO):
+    """Send approval requests: a Slack direct message to one chosen person when a step's command
+    needs a decision. It only links to the run; the decision is made on the web."""
+
+    enabled: bool = False
+    platform: Literal["slack"] = "slack"
+    slack_user_id: SlackUserId | None = None
+    # The name shown when the user was chosen; Slack names change, the ID does not.
+    slack_user_name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None = None
+    # The Slack workspace (team) the user was chosen from.
+    slack_team_id: SlackTeamId | None = None
+
+    @model_validator(mode="after")
+    def enabled_needs_a_recipient(self) -> ApprovalNotice:
+        if self.enabled and (self.slack_user_id is None or self.slack_team_id is None):
+            raise ValueError("Choose the Slack user who receives approval requests before turning them on")
+        if (self.slack_user_id is None) != (self.slack_team_id is None):
+            raise ValueError("A Slack user is chosen together with the workspace they belong to")
+        return self
+
+
+class ApprovalNoticeRead(DTO):
+    enabled: bool
+    platform: Literal["slack"]
+    # Only for those who may change the workflow; others see whether it is on.
+    slack_user_id: str | None = None
+    slack_user_name: str | None = None
+    slack_team_id: str | None = None
+
+
 class WorkflowCreate(StrictDTO):
     draft: WorkflowDraft
     # Preselected when a run starts; the person starting it may choose another Agent.
     default_agent_id: UUID | None = None
+    approval_notice: ApprovalNotice | None = None
 
 
 class WorkflowUpdate(StrictDTO):
+    """Changes what is not versioned; a field left out keeps its value."""
+
     expected_revision: int = Field(ge=1)
-    default_agent_id: UUID | None
+    default_agent_id: UUID | None = None
+    approval_notice: ApprovalNotice | None = None
 
 
 class WorkflowVersionCreate(StrictDTO):
@@ -167,15 +205,32 @@ class WorkflowArchive(StrictDTO):
     expected_revision: int = Field(ge=1)
 
 
+APPROVAL_NOTICE_CHECK = (
+    "NOT approval_notice_enabled OR (approval_notice_platform = 'slack' "
+    "AND approval_notice_user_id IS NOT NULL AND approval_notice_team_id IS NOT NULL)"
+)
+
+
 class Workflow(BaseModel, table=True):
     __tablename__: str = "workflow"
-    __table_args__ = (sa.CheckConstraint("revision >= 1", name="ck_workflow_revision"),)
+    __table_args__ = (
+        sa.CheckConstraint("revision >= 1", name="ck_workflow_revision"),
+        sa.CheckConstraint(APPROVAL_NOTICE_CHECK, name="ck_workflow_approval_notice"),
+    )
     organization_id: UUID = SqlField(foreign_key="organization.id", ondelete="CASCADE", index=True)
     created_by_membership_id: UUID | None = SqlField(
         default=None, foreign_key="user_organization.id", ondelete="SET NULL"
     )
     default_agent_id: UUID | None = SqlField(default=None, foreign_key="agent.id", ondelete="SET NULL")
     revision: int = SqlField(default=1, nullable=False)
+    # Send approval requests (see ApprovalNotice); off by default.
+    approval_notice_enabled: bool = SqlField(
+        default=False, sa_column=sa.Column(sa.Boolean(), nullable=False, server_default=sa.false())
+    )
+    approval_notice_platform: str | None = SqlField(default=None, max_length=32)
+    approval_notice_user_id: str | None = SqlField(default=None, max_length=32)
+    approval_notice_user_name: str | None = SqlField(default=None, max_length=255)
+    approval_notice_team_id: str | None = SqlField(default=None, max_length=32)
     archived_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
 
 
@@ -238,6 +293,7 @@ class WorkflowRead(DTO):
     created_by: WorkflowCreatorRead | None
     # Null when unset, archived, or not readable by the caller.
     default_agent_id: UUID | None
+    approval_notice: ApprovalNoticeRead
     revision: int
     archived_at: datetime | None
     version: WorkflowVersionRead

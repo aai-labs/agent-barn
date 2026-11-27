@@ -9,11 +9,14 @@ from injector import inject, singleton
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.slack_messaging import SlackRecipients
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.usage.guard import UsageAction, UsageGuard
 from api.domains.workflows.models import (
     TEXT_LIMIT,
+    ApprovalNotice,
+    ApprovalNoticeRead,
     Workflow,
     WorkflowCapabilitiesRead,
     WorkflowCreate,
@@ -34,6 +37,7 @@ from api.domains.workflows.repository import (
     WorkflowCreator,
     WorkflowRepository,
     WorkflowSummaryRow,
+    approval_notice_of,
 )
 from api.infrastructure.shared.models import PaginatedItems
 
@@ -65,6 +69,7 @@ class WorkflowService:
     policy: PermissionPolicy
     agents: AgentAuthorization
     usage: UsageGuard
+    recipients: SlackRecipients
 
     def _member(self, organization_id: UUID, context: CurrentUserContext) -> None:
         self.policy.require_organization(context, organization_id, PermissionKey.ORGANIZATION_READ)
@@ -97,6 +102,30 @@ class WorkflowService:
         if agent_id is not None:
             self.agents.require_visible(context, agent_id)
         return agent_id
+
+    def _approval_notice(
+        self, notice: ApprovalNotice | None, current: Workflow | None, context: CurrentUserContext
+    ) -> ApprovalNotice | None:
+        """A newly chosen Slack user must be found through an Agent the author can update."""
+        if notice is None or notice.slack_user_id is None or notice.slack_team_id is None:
+            return notice
+        stored = approval_notice_of(current) if current is not None else None
+        if stored is not None and (stored.slack_user_id, stored.slack_team_id) == (
+            notice.slack_user_id,
+            notice.slack_team_id,
+        ):
+            return notice.model_copy(update={"slack_user_name": stored.slack_user_name})
+        user = self.recipients.require_user(context, notice.slack_team_id, notice.slack_user_id)
+        return notice.model_copy(update={"slack_user_name": user.label})
+
+    @staticmethod
+    def _approval_notice_read(workflow: Workflow, can_author: bool) -> ApprovalNoticeRead:
+        read = ApprovalNoticeRead(enabled=workflow.approval_notice_enabled, platform="slack")
+        if can_author:
+            read.slack_user_id = workflow.approval_notice_user_id
+            read.slack_user_name = workflow.approval_notice_user_name
+            read.slack_team_id = workflow.approval_notice_team_id
+        return read
 
     def _readable_agents(self, agent_ids: set[UUID | None], context: CurrentUserContext) -> dict[UUID, str]:
         scope = self.agents.authorization_scope(context, PermissionKey.AGENT_READ)
@@ -131,6 +160,7 @@ class WorkflowService:
             id=workflow.id,
             created_by=self._creator(creators, workflow.created_by_membership_id),
             default_agent_id=workflow.default_agent_id if workflow.default_agent_id in readable else None,
+            approval_notice=self._approval_notice_read(workflow, can_author),
             revision=workflow.revision,
             archived_at=workflow.archived_at,
             version=self._version_read(versions[0]),
@@ -235,6 +265,7 @@ class WorkflowService:
             fold_step_outputs(payload.draft),
             context.user.id,
             self._default_agent(payload.default_agent_id, context),
+            self._approval_notice(payload.approval_notice, None, context),
         )
         return self._read(workflow, context)
 
@@ -249,13 +280,17 @@ class WorkflowService:
     def update(
         self, organization_id: UUID, workflow_id: UUID, payload: WorkflowUpdate, context: CurrentUserContext
     ) -> WorkflowRead:
-        self._require_manage(organization_id, workflow_id, context)
+        current = self._require_manage(organization_id, workflow_id, context)
+        default_agent_id: UUID | None | Unchanged = UNCHANGED
+        if "default_agent_id" in payload.model_fields_set:
+            default_agent_id = self._default_agent(payload.default_agent_id, context)
         return self._change(
             organization_id,
             workflow_id,
             payload.expected_revision,
             context,
-            default_agent_id=self._default_agent(payload.default_agent_id, context),
+            default_agent_id=default_agent_id,
+            approval_notice=self._approval_notice(payload.approval_notice, current, context),
         )
 
     def archive(self, organization_id: UUID, workflow_id: UUID, revision: int, context: CurrentUserContext) -> None:
@@ -272,6 +307,7 @@ class WorkflowService:
         draft: WorkflowDraft | None = None,
         archive: bool = False,
         default_agent_id: UUID | None | Unchanged = UNCHANGED,
+        approval_notice: ApprovalNotice | None = None,
     ) -> WorkflowRead:
         try:
             workflow = self.repository.change(
@@ -282,6 +318,7 @@ class WorkflowService:
                 draft=draft,
                 archive=archive,
                 default_agent_id=default_agent_id,
+                approval_notice=approval_notice,
             )
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
