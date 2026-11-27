@@ -35,6 +35,7 @@ from api.domains.workflows.run_models import (
     AttemptFailure,
     AttemptRead,
     AttemptResult,
+    WorkflowApprovalNotice,
     WorkflowApprovalRequest,
     WorkflowAttempt,
     WorkflowCheckpoint,
@@ -829,6 +830,7 @@ class WorkflowRunRepository:
                 live_until=now + timedelta(seconds=live_seconds),
             )
             session.add(request)
+            self._stage_notice(session, run, request)
             # The deadline covers the whole window; a decision gives back the part not waited.
             attempt.expires_at += request.live_until - now + timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
             session.add(attempt)
@@ -838,6 +840,21 @@ class WorkflowRunRepository:
             )
             session.commit()
             return request, delivery_ids
+
+    @staticmethod
+    def _stage_notice(session: Session, run: WorkflowRun, request: WorkflowApprovalRequest) -> None:
+        """Note whom to tell about the request, as the workflow says now; Slack is told in the background."""
+        workflow = session.get_one(Workflow, run.workflow_id)
+        if not workflow.approval_notice_enabled or not workflow.approval_notice_user_id:
+            return
+        session.add(
+            WorkflowApprovalNotice(
+                request_id=request.id,
+                run_id=run.id,
+                slack_user_id=workflow.approval_notice_user_id,
+                slack_team_id=workflow.approval_notice_team_id or "",
+            )
+        )
 
     def _bound_request(
         self, session: Session, attempt_id: UUID, token: str, request_id: UUID

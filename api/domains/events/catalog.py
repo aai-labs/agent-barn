@@ -114,6 +114,7 @@ AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 WORKFLOW_RUN_CHANGED = "workflow.run.changed"
 WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
+WORKFLOW_APPROVAL_NOTICE_HANDLER = "workflow.approval_notice"
 MAX_LISTED_MODEL_IDS = 20
 MAX_LISTED_ORGANIZATION_IDS = 20
 
@@ -1113,7 +1114,7 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=WORKFLOW_RUN_CHANGED,
             schema_version=1,
             payload_model=WorkflowRunChangedPayload,
-            handler_names=(WORKFLOW_CONTROLLER_HANDLER,),
+            handler_names=(WORKFLOW_CONTROLLER_HANDLER, WORKFLOW_APPROVAL_NOTICE_HANDLER),
         )
     )
     for event_name, payload_model in (

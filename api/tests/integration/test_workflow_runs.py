@@ -102,7 +102,8 @@ def test_start_pins_version_inputs_actor_and_transactional_wakeup() -> None:
         with Session(context.postgres_delegate.engine) as session:
             event = session.exec(select(OutboxMessage).where(OutboxMessage.event_name == "workflow.run.changed")).one()
             deliveries = session.exec(select(EventDelivery).where(EventDelivery.event_id == event.event_id)).all()
-            assert_that(deliveries, has_length(1))
+            # The controller's wakeup, and the approval notice handler's own delivery.
+            assert_that(deliveries, has_length(2))
         history = context.client.get(
             base(context) + f"/workflow-runs/{run['id']}/history", headers=auth(context)
         ).json()
@@ -792,7 +793,9 @@ def test_broker_outage_preserves_a_committed_run_and_pending_wakeup(monkeypatch)
         assert response.status_code == 202, response.text
         with Session(context.postgres_delegate.engine) as session:
             run = session.get_one(WorkflowRun, UUID(response.json()["id"]))
-            delivery = session.exec(select(EventDelivery)).one()
+            delivery = session.exec(
+                select(EventDelivery).where(EventDelivery.handler_name == "workflow.controller")
+            ).one()
             assert (run.state, delivery.status) == ("QUEUED", EventDeliveryStatus.PENDING)
 
 

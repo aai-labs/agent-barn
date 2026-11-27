@@ -39,6 +39,7 @@ from api.domains.tiers.trial_terms import FreeTierTrialTerms
 from api.domains.tiers.usage_policy import TierUsagePolicy
 from api.domains.usage.guard import UsageGuard
 from api.domains.usage.plans import OrganizationPlans, TrialTermsEditor
+from api.domains.workflows.approval_notices import ApprovalNoticeHandler
 from api.domains.workflows.controller import WorkflowControllerHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
@@ -136,6 +137,7 @@ class AppModule(Module):
         security_audit_projection: SecurityAuditProjection,
         product_analytics_handler: ProductAnalyticsHandler,
         workflow_controller_handler: WorkflowControllerHandler,
+        approval_notice_handler: ApprovalNoticeHandler,
     ) -> EventHandlerRegistry:
         return EventHandlerRegistry(
             [
@@ -146,6 +148,7 @@ class AppModule(Module):
                 security_audit_projection,
                 product_analytics_handler,
                 workflow_controller_handler,
+                approval_notice_handler,
             ]
         )
 
