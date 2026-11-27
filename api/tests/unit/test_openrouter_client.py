@@ -9,6 +9,7 @@ from api.domains.agents.service import (
     filter_models_by_allowlist,
     is_model_allowed,
 )
+from api.domains.llm_providers.models import OPENROUTER_SLUG, LlmProviderConnection, ProviderType
 from api.infrastructure.openrouter.client import (
     CreditsStatus,
     OpenRouterClient,
@@ -166,6 +167,11 @@ def _service(openrouter, allowlist=None, default_model=""):
     agent_settings_lookup = MagicMock()
     agent_settings_lookup.resolve_default_model.return_value = default_model
 
+    llm_provider_access = MagicMock()
+    llm_provider_access.open_models.return_value = [
+        (LlmProviderConnection(slug=OPENROUTER_SLUG, name="OpenRouter", provider_type=ProviderType.OPENROUTER), [])
+    ]
+
     return AgentService(
         repository=MagicMock(),
         connection_repository=MagicMock(),
@@ -197,7 +203,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         agent_sizes=MagicMock(),
         artifact_buckets=MagicMock(),
         usage=MagicMock(),
-        llm_provider_access=MagicMock(),
+        llm_provider_access=llm_provider_access,
         key_models=MagicMock(),
     )
 
@@ -223,6 +229,7 @@ def test_service_maps_catalog_to_litellm_openrouter_picker_options():
             "label": "Qwen3.6 Plus",
             "contextLength": 32000,
             "pricing": {"prompt": "0.1"},
+            "connection": "OpenRouter",
             "isDefault": False,
         }
     ]
@@ -265,6 +272,7 @@ def test_service_injects_default_when_absent_from_catalog():
         "label": "openai/gpt-5-mini",
         "contextLength": None,
         "pricing": None,
+        "connection": "OpenRouter",
         "isDefault": True,
     }
     assert {o["value"] for o in options} == {

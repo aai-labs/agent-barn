@@ -6,7 +6,12 @@ from sqlmodel import Session
 
 from api.core.config import Config
 from api.domains.llm_providers.access import ProviderNotOpen, can_use
-from api.domains.llm_providers.models import OPENROUTER_SLUG, OrganizationAccess
+from api.domains.llm_providers.models import (
+    OPENROUTER_SLUG,
+    LlmProviderConnection,
+    LlmProviderModel,
+    OrganizationAccess,
+)
 from api.domains.llm_providers.repository import LlmProviderRepository
 from api.infrastructure.crypto import decrypt_token
 
@@ -41,6 +46,11 @@ class LlmProviderAccessLookup:
     def can_use(self, slug: str, organization_id: UUID) -> bool:
         """Whether the Organization may use the live connection now, read without a lock."""
         return _open(self.repository.access(slug, organization_id), organization_id)
+
+    def open_models(self, organization_id: UUID) -> list[tuple[LlmProviderConnection, list[LlmProviderModel]]]:
+        """The live connections the Organization may use now, read without a lock, OpenRouter first and
+        then by name, each with its stored models by model id."""
+        return self.repository.open_models(organization_id)
 
     def require_open(self, session: Session, slug: str, organization_id: UUID) -> None:
         """Raises ProviderNotOpen unless the Organization may use the live connection, checked in the

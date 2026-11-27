@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid7
 
@@ -12,7 +14,10 @@ from api.domains.llm_providers.models import (
     OPENROUTER_CONNECTION_ID,
     LlmProviderConnection,
     LlmProviderConnectionOrganization,
+    LlmProviderModel,
     OrganizationAccess,
+    PriceSource,
+    ProviderType,
 )
 from api.domains.organizations.models import Organization
 from api.domains.users.organization_users.models import OrganizationRole
@@ -30,6 +35,9 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 LIST_MODELS = "api.infrastructure.openrouter.client.OpenRouterClient.list_models"
 ALLOWED_MODEL = "openai/gpt-5-mini"
 CATALOG = [{"id": ALLOWED_MODEL, "name": "GPT-5 mini"}, {"id": "anthropic/claude-sonnet-5", "name": "Claude Sonnet 5"}]
+ANTHROPIC_MODELS = ["claude-sonnet-4-5", "claude-opus-4-1"]
+OPENAI_MODELS = ["gpt-5", "gpt-4.1"]
+ALLOWED_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 
 
 def _setup(*steps):
@@ -184,4 +192,168 @@ def test_an_organization_with_openrouter_access_is_offered_its_models_and_the_de
         assert_that(
             [model["value"] for model in catalogue],
             equal_to([default, *(f"litellm/openrouter/{model['id']}" for model in CATALOG)]),
+        )
+
+
+def allowed(*entries: str):
+    def step(context):
+        with Session(_engine(context)) as session:
+            organization = session.get_one(Organization, context.organization.id)
+            organization.allowed_models = [*organization.allowed_models, *entries]
+            session.add(organization)
+            session.commit()
+
+    return step
+
+
+def a_connection(
+    slug: str,
+    name: str,
+    provider_type: ProviderType,
+    model_ids: list[str],
+    access: OrganizationAccess = OrganizationAccess.ALL,
+    listed: str | None = None,
+    deleted: bool = False,
+):
+    def step(context):
+        with Session(_engine(context)) as session:
+            connection = LlmProviderConnection(
+                slug=slug,
+                name=name,
+                provider_type=provider_type,
+                organization_access=access,
+                deleted_at=datetime.now(UTC) if deleted else None,
+            )
+            session.add(connection)
+            session.flush()
+            if listed is not None:
+                listed_id = context.organization.id
+                if listed == "other":
+                    other = Organization(name=f"Other Org {slug}")
+                    session.add(other)
+                    session.flush()
+                    listed_id = other.id
+                session.add(LlmProviderConnectionOrganization(connection_id=connection.id, organization_id=listed_id))
+            for index, model_id in enumerate(model_ids):
+                session.add(
+                    LlmProviderModel(
+                        connection_id=connection.id,
+                        model_id=model_id,
+                        input_cost_per_token=Decimal("0.000003") * (index + 1),
+                        output_cost_per_token=Decimal("0.000015") * (index + 1),
+                        cache_read_input_token_cost=Decimal(0),
+                        cache_creation_input_token_cost=Decimal(0),
+                        price_source=PriceSource.MANUAL,
+                    )
+                )
+            session.commit()
+
+    return step
+
+
+def an_anthropic_connection(**fields):
+    return a_connection("anthropic", "Anthropic", ProviderType.ANTHROPIC, ANTHROPIC_MODELS, **fields)
+
+
+def test_an_open_connections_stored_models_are_offered_with_their_connection_and_prices():
+    with given(
+        _setup(_owner_with_allowlist, allowed(f"anthropic/{ALLOWED_ANTHROPIC_MODEL}"), an_anthropic_connection())
+    ) as context:
+        models, _ = _models(context, catalog=False)
+        catalogue, _ = _models(context, catalog=True)
+
+        assert_that(
+            [model for model in models if model["value"].startswith("litellm/anthropic/")],
+            equal_to(
+                [
+                    {
+                        "value": f"litellm/anthropic/{ALLOWED_ANTHROPIC_MODEL}",
+                        "label": ALLOWED_ANTHROPIC_MODEL,
+                        "contextLength": None,
+                        "pricing": {"prompt": "0.000003000000000000", "completion": "0.000015000000000000"},
+                        "connection": "Anthropic",
+                        "isDefault": False,
+                    }
+                ]
+            ),
+        )
+        assert_that(
+            [model["value"] for model in catalogue if model["value"].startswith("litellm/anthropic/")],
+            equal_to([f"litellm/anthropic/{model_id}" for model_id in sorted(ANTHROPIC_MODELS)]),
+        )
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [
+        {"access": OrganizationAccess.NONE},
+        {"access": OrganizationAccess.ONLY, "listed": "other"},
+        {"access": OrganizationAccess.ALL_EXCEPT, "listed": "self"},
+        {"deleted": True},
+    ],
+)
+def test_a_closed_or_deleted_connections_models_are_not_offered(connection):
+    with given(
+        _setup(
+            _owner_with_allowlist,
+            allowed(f"anthropic/{ALLOWED_ANTHROPIC_MODEL}"),
+            an_anthropic_connection(**connection),
+        )
+    ) as context:
+        models, _ = _models(context, catalog=False)
+        catalogue, _ = _models(context, catalog=True)
+
+        assert_that(
+            [model["value"] for model in models if model["value"].startswith("litellm/anthropic/")], equal_to([])
+        )
+        assert_that(
+            [model["value"] for model in catalogue if model["value"].startswith("litellm/anthropic/")], equal_to([])
+        )
+
+
+def test_with_openrouter_closed_only_the_open_connection_is_offered_and_no_platform_default():
+    with given(
+        _setup(
+            _owner_with_allowlist,
+            allowed(f"anthropic/{ALLOWED_ANTHROPIC_MODEL}"),
+            openrouter_access(OrganizationAccess.NONE),
+            an_anthropic_connection(),
+        )
+    ) as context:
+        models, listed = _models(context, catalog=False)
+        catalogue, _ = _models(context, catalog=True)
+
+        assert_that(
+            [(model["value"], model["isDefault"]) for model in models],
+            equal_to([(f"litellm/anthropic/{ALLOWED_ANTHROPIC_MODEL}", False)]),
+        )
+        assert_that(
+            [model["value"] for model in catalogue],
+            equal_to([f"litellm/anthropic/{model_id}" for model_id in sorted(ANTHROPIC_MODELS)]),
+        )
+        listed.assert_not_called()
+
+
+def test_the_default_comes_first_then_openrouter_then_other_connections_by_name_and_model_id():
+    with given(
+        _setup(
+            _owner_with_allowlist,
+            a_connection("openai", "OpenAI", ProviderType.OPENAI, OPENAI_MODELS),
+            an_anthropic_connection(),
+        )
+    ) as context:
+        default = context.injector.get(Config).agent_default_model
+
+        catalogue, _ = _models(context, catalog=True)
+
+        assert_that(
+            [(model["value"], model["connection"]) for model in catalogue],
+            equal_to(
+                [
+                    (default, "OpenRouter"),
+                    *((f"litellm/openrouter/{model['id']}", "OpenRouter") for model in CATALOG),
+                    *((f"litellm/anthropic/{model_id}", "Anthropic") for model_id in sorted(ANTHROPIC_MODELS)),
+                    *((f"litellm/openai/{model_id}", "OpenAI") for model_id in sorted(OPENAI_MODELS)),
+                ]
+            ),
         )

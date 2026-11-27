@@ -159,6 +159,7 @@ from api.domains.agents.selection import (
     ensure_max_turns_supported,
     ensure_verbose_mode_supported,
     is_model_allowed,
+    pool_name,
 )
 from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.artifacts.buckets import ArtifactBucketRepository
@@ -4194,15 +4195,15 @@ class AgentService:
                     logger.warning("Could not block LiteLLM key for agent %s", target.id)
 
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
-        """Returns the allowlisted OpenRouter models as picker options, or none while OpenRouter is
-        not open to the Organization.
+        """Returns the Organization's pool as picker options: the allowlisted models of every live
+        connection open to it, OpenRouter's from its catalogue and the others' from their stored
+        models, or none while no connection is open to it.
 
-        The Organization's resolved default model is guaranteed present, flagged
-        is_default, and listed first, so the frontend and backend agree on which
-        model an Agent inherits without a second request. It is normally already in
-        the filtered list, since an Organization picks its default from its own
-        allowlist; the append only fires for an Organization following a platform
-        default its allowlist does not cover.
+        The Organization's resolved default model is flagged is_default and listed first, and is
+        appended when missing while its connection is open, so the frontend and backend agree on
+        which model an Agent inherits without a second request. It is normally already in the
+        filtered list, since an Organization picks its default from its own allowlist; the append
+        only fires for an Organization following a platform default its allowlist does not cover.
         """
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
@@ -4213,39 +4214,70 @@ class AgentService:
                 PermissionKey.ORGANIZATION_UPDATE,
                 detail="You don't have permission to view the full model catalog.",
             )
-        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+        open_connections = self.llm_provider_access.open_models(org_id)
+        if not open_connections:
             return []
-        raw_catalog = self.openrouter.list_models()
 
-        if catalog:
-            allowed = raw_catalog
-        else:
-            allowed_models = self.organization_lookup.get_allowed_models(org_id)
-            if allowed_models is None:
+        allowed_models: list[str] = []
+        if not catalog:
+            listed_models = self.organization_lookup.get_allowed_models(org_id)
+            if listed_models is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            allowed = filter_models_by_allowlist(raw_catalog, allowed_models)
-        options = [
-            {
-                "value": f"litellm/openrouter/{model['id']}",
-                "label": model["name"],
-                "contextLength": model.get("context_length"),
-                "pricing": model.get("pricing"),
-            }
-            for model in allowed
-        ]
+            allowed_models = listed_models
+
+        options: list[dict] = []
+        for connection, models in open_connections:
+            if connection.slug == OPENROUTER_SLUG:
+                raw_catalog = self.openrouter.list_models()
+                offered = raw_catalog if catalog else filter_models_by_allowlist(raw_catalog, allowed_models)
+                options.extend(
+                    {
+                        "value": f"litellm/openrouter/{model['id']}",
+                        "label": model["name"],
+                        "contextLength": model.get("context_length"),
+                        "pricing": model.get("pricing"),
+                        "connection": connection.name,
+                    }
+                    for model in offered
+                )
+                continue
+            for model in models:
+                value = f"litellm/{connection.slug}/{model.model_id}"
+                if catalog or is_model_allowed(value, allowed_models):
+                    options.append(
+                        {
+                            "value": value,
+                            "label": model.model_id,
+                            "contextLength": None,
+                            "pricing": {
+                                "prompt": str(model.input_cost_per_token),
+                                "completion": str(model.output_cost_per_token),
+                            },
+                            "connection": connection.name,
+                        }
+                    )
 
         default_value = self.agent_settings_lookup.resolve_default_model(org_id)
-        if default_value and not any(o["value"] == default_value for o in options):
+        default_connection = next(
+            (
+                connection
+                for connection, _ in open_connections
+                if default_value and pool_name(default_value).startswith(f"{connection.slug}/")
+            ),
+            None,
+        )
+        if default_connection is not None and not any(o["value"] == default_value for o in options):
             options.append(
                 {
                     "value": default_value,
-                    "label": default_value.removeprefix("litellm/openrouter/"),
+                    "label": pool_name(default_value).removeprefix(f"{default_connection.slug}/"),
                     "contextLength": None,
                     "pricing": None,
+                    "connection": default_connection.name,
                 }
             )
 
-        # Stable sort puts the default first while preserving catalogue order.
+        # Stable sort puts the default first while preserving the pool's order.
         options.sort(key=lambda o: o["value"] != default_value)
         for option in options:
             option["isDefault"] = option["value"] == default_value

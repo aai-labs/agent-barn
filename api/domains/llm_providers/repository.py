@@ -165,6 +165,45 @@ class LlmProviderRepository:
         self._lock(session, slug, shared=True)
         return self._access(session, slug, organization_id)
 
+    def open_models(self, organization_id: UUID) -> list[tuple[LlmProviderConnection, list[LlmProviderModel]]]:
+        """The live connections the Organization may use, OpenRouter first and then by name, each with
+        its stored models by model id."""
+        with Session(self.delegate.engine) as session:
+            connections = session.exec(
+                select(LlmProviderConnection)
+                .where(col(LlmProviderConnection.deleted_at).is_(None))
+                .order_by(
+                    sa.case((col(LlmProviderConnection.slug) == OPENROUTER_SLUG, 0), else_=1),
+                    col(LlmProviderConnection.name),
+                    col(LlmProviderConnection.slug),
+                )
+            ).all()
+            listed = frozenset(
+                session.exec(
+                    select(LlmProviderConnectionOrganization.connection_id).where(
+                        LlmProviderConnectionOrganization.organization_id == organization_id
+                    )
+                ).all()
+            )
+            open_connections = [
+                connection
+                for connection in connections
+                if can_use(
+                    connection.organization_access,
+                    {organization_id} if connection.id in listed else set(),
+                    organization_id,
+                )
+            ]
+            models = session.exec(
+                select(LlmProviderModel)
+                .where(col(LlmProviderModel.connection_id).in_([connection.id for connection in open_connections]))
+                .order_by(col(LlmProviderModel.model_id))
+            ).all()
+        return [
+            (connection, [model for model in models if model.connection_id == connection.id])
+            for connection in open_connections
+        ]
+
     def organizations(self, slug: str) -> ListedOrganizations | None:
         """The live connection's Provider Access and its listed Organizations, by name."""
         with Session(self.delegate.engine) as session:
