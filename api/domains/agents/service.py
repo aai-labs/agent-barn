@@ -197,7 +197,14 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
-from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.access import (
+    MODEL_NOT_STORED,
+    NO_LLM_PROVIDER,
+    PROVIDER_NOT_OPEN,
+    ModelNotStored,
+    ProviderNotOpen,
+    UnknownConnection,
+)
 from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import OPENROUTER_SLUG
 from api.domains.mcp_servers import runtime as mcp_runtime
@@ -516,6 +523,27 @@ class AgentService:
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         self.selection.ensure_model_allowed(model, org_id)
+
+    def _require_pool(self, org_id: UUID, check: Callable[[], None]) -> None:
+        try:
+            check()
+        except UnknownConnection as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{pool_name(refused.model)}' does not match any known models in the catalog.",
+            ) from None
+        except ProviderNotOpen as refused:
+            detail = (
+                PROVIDER_NOT_OPEN.format(name=refused.connection_name)
+                if self.llm_provider_access.open_models(org_id)
+                else NO_LLM_PROVIDER
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
+        except ModelNotStored as refused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MODEL_NOT_STORED.format(model=pool_name(refused.model), name=refused.connection_name),
+            ) from None
 
     def _require_size_manage(self, context: CurrentUserContext, org_id: UUID) -> None:
         self.authorization.policy.require(
@@ -1092,8 +1120,11 @@ class AgentService:
     ) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+        run_model = data.model or self.agent_settings_lookup.resolve_default_model(org_id)
+        run_models = [run_model] if run_model else []
+        if not self.llm_provider_access.open_models(org_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
+        self._require_pool(org_id, lambda: self.llm_provider_access.check_models(run_models, org_id))
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
@@ -1289,15 +1320,13 @@ class AgentService:
                         if self.config.artifact_s3_endpoint_url
                         else None
                     ),
-                    in_transaction=lambda session: self.llm_provider_access.require_open(
-                        session, OPENROUTER_SLUG, org_id
+                    in_transaction=lambda session: self._require_pool(
+                        org_id, lambda: self.llm_provider_access.require_models(session, run_models, org_id)
                     ),
                 )
             except AgentSizeUnavailable:
                 # Disabled or withdrawn since the check above.
                 raise _size_unavailable() from None
-            except ProviderNotOpen:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:

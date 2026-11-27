@@ -141,7 +141,7 @@ _GIVEN = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
@@ -169,7 +169,7 @@ _GIVEN_WITH_HERMES_IMAGE = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
@@ -194,7 +194,7 @@ _GIVEN_WITHOUT_GOOGLE_CLIENT = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
@@ -1344,7 +1344,10 @@ def test_a_sweep_during_a_start_does_not_take_the_started_model_off_the_key():
             assert_that(
                 litellm.set_key_models.call_args.args,
                 equal_to(
-                    (FAKE_LITELLM_KEY, sorted(["gpt-5-mini", "openrouter/qwen/qwen3.6-plus", *_PLATFORM_KEY_MODELS]))
+                    (
+                        FAKE_LITELLM_KEY,
+                        sorted(["openrouter/gpt-5-mini", "openrouter/qwen/qwen3.6-plus", *_PLATFORM_KEY_MODELS]),
+                    )
                 ),
             )
 
@@ -2105,7 +2108,7 @@ def test_create_agent_calls_litellm_generate_key():
                 max_budget=25.0,
                 budget_duration="30d",
                 team_budget=100.0,
-                models=sorted(["gpt-5-mini", *_PLATFORM_KEY_MODELS]),
+                models=sorted(["openrouter/gpt-5-mini", *_PLATFORM_KEY_MODELS]),
             )
             litellm.delete_key.assert_not_called()
             litellm.block_key.assert_not_called()
@@ -2309,14 +2312,14 @@ def test_delete_agent_litellm_failure_still_returns_204():
 def test_create_agent_with_model():
     with given(_GIVEN) as context:
         client: TestClient = context.client
-        payload = {**_VALID_CREATE, "model": "litellm/gpt-5"}
+        payload = {**_VALID_CREATE, "model": "litellm/openrouter/gpt-5"}
 
         with when("I create an agent with a model"):
             response = client.post(_BASE, json=payload, headers=_auth(context))
 
         with then("it returns 201 with the model set"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(response.json()["model"], equal_to("litellm/gpt-5"))
+            assert_that(response.json()["model"], equal_to("litellm/openrouter/gpt-5"))
 
 
 def test_create_agent_without_model_defaults_to_empty():
@@ -2433,7 +2436,7 @@ def test_start_agent_uses_default_model_when_empty():
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             assert_that(
                 overlay["agents"]["defaults"]["model"]["primary"],
-                equal_to("litellm/gpt-5-mini"),
+                equal_to("litellm/openrouter/gpt-5-mini"),
             )
 
 
@@ -4764,7 +4767,7 @@ _GIVEN_WITH_FIRECRAWL = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
@@ -4788,7 +4791,7 @@ _GIVEN_HERMES_WITH_FIRECRAWL = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
@@ -4929,7 +4932,7 @@ _GIVEN_WITHOUT_FIRECRAWL = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
@@ -6092,7 +6095,7 @@ _GIVEN_WITH_GOOGLE_CLIENT = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_EXTERNAL_URL": "https://api.test.com",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",

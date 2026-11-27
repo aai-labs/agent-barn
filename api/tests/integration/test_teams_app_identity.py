@@ -31,7 +31,7 @@ _GIVEN = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "SKIP_DISCORD_TOKEN_VALIDATION": "true",
             "SKIP_TEAMS_TOKEN_VALIDATION": "true",

@@ -76,7 +76,7 @@ _GIVEN = [
             "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             "LITELLM_BASE_URL": "http://litellm:4000",
             "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_DEFAULT_MODEL": "litellm/openrouter/gpt-5-mini",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
             "SKIP_DISCORD_TOKEN_VALIDATION": "true",
         }
@@ -1097,7 +1097,7 @@ def test_a_sweep_during_a_start_does_not_take_a_bots_started_model_off_its_key()
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         bot_lists = [c.args[1] for c in litellm.set_key_models.call_args_list if c.args[0] == BOT_KEY]
-        assert_that(bot_lists[-1], has_items("gpt-5-mini", "openrouter/qwen/qwen3.6-plus"))
+        assert_that(bot_lists[-1], has_items("openrouter/gpt-5-mini", "openrouter/qwen/qwen3.6-plus"))
 
 
 def test_a_bot_whose_key_cannot_be_set_again_once_saved_still_runs():

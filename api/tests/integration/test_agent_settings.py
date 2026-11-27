@@ -13,22 +13,28 @@ The contract under test is three rules:
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
 import pytest
 from fastapi import status
 from hamcrest import assert_that, contains_string, empty, equal_to, has_length, is_not, none
-from sqlmodel import Session
+from sqlalchemy import delete
+from sqlmodel import Session, col
 
 from api.domains.agents.models import AgentStatus
 from api.domains.events.catalog import ORGANIZATION_AGENT_SETTINGS_CHANGED
 from api.domains.events.models import OutboxMessage
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.llm_providers.models import (
     OPENROUTER_CONNECTION_ID,
     LlmProviderConnection,
     LlmProviderConnectionOrganization,
+    LlmProviderModel,
     OrganizationAccess,
+    PriceSource,
+    ProviderType,
 )
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
@@ -77,6 +83,9 @@ OWN_DEFAULT_ID = "qwen/qwen3.6-plus"
 OWN_DEFAULT = f"litellm/openrouter/{OWN_DEFAULT_ID}"
 NO_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 _AGENTS = "/api/v1/organizations/{organization_id}/agents"
+ANTHROPIC_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_ENTRY = f"anthropic/{ANTHROPIC_MODEL}"
+ANTHROPIC_DEFAULT = f"litellm/{ANTHROPIC_ENTRY}"
 
 
 def _given(allowed_models: list[str] | None = None, role: OrganizationRole = OrganizationRole.OWNER):
@@ -745,3 +754,99 @@ def test_an_organization_with_openrouter_access_sets_its_default(access, listed)
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(response.json()["default_model"], equal_to(OWN_DEFAULT))
         assert_that(_settings_events(context), has_length(1))
+
+
+def an_anthropic_connection(access: OrganizationAccess = OrganizationAccess.ALL):
+    def step(context):
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            connection = LlmProviderConnection(
+                slug="anthropic", name="Anthropic", provider_type=ProviderType.ANTHROPIC, organization_access=access
+            )
+            session.add(connection)
+            session.flush()
+            session.add(
+                LlmProviderModel(
+                    connection_id=connection.id,
+                    model_id=ANTHROPIC_MODEL,
+                    input_cost_per_token=Decimal("0.000003"),
+                    output_cost_per_token=Decimal("0.000015"),
+                    cache_read_input_token_cost=Decimal(0),
+                    cache_creation_input_token_cost=Decimal(0),
+                    price_source=PriceSource.MANUAL,
+                )
+            )
+            session.commit()
+
+    return step
+
+
+def _remove_the_anthropic_model(context) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        session.exec(delete(LlmProviderModel).where(col(LlmProviderModel.model_id) == ANTHROPIC_MODEL))
+        session.commit()
+
+
+def test_a_default_on_another_open_connection_saves_without_openrouter():
+    with given(
+        [
+            *_given(allowed_models=["openrouter/*", ANTHROPIC_ENTRY]),
+            openrouter_access(OrganizationAccess.NONE),
+            an_anthropic_connection(),
+        ]
+    ) as context:
+        with catalog_contains(OWN_DEFAULT_ID) as catalogue:
+            response = _set_default(context, ANTHROPIC_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json()["default_model"], equal_to(ANTHROPIC_DEFAULT))
+        catalogue.assert_not_called()
+        assert_that(_settings_events(context), has_length(1))
+
+
+@pytest.mark.parametrize(
+    ("access", "model", "detail"),
+    [
+        (
+            OrganizationAccess.NONE,
+            ANTHROPIC_DEFAULT,
+            "This organization can't use Anthropic. Ask a Platform Administrator.",
+        ),
+        (
+            OrganizationAccess.ALL,
+            "litellm/anthropic/claude-unknown",
+            "Model 'anthropic/claude-unknown' is not one of Anthropic's models.",
+        ),
+    ],
+    ids=["closed", "unknown-model"],
+)
+def test_a_default_off_the_organizations_pool_is_refused(access, model, detail):
+    with given(
+        [
+            *_given(allowed_models=["openrouter/*", "anthropic/claude-unknown", ANTHROPIC_ENTRY]),
+            an_anthropic_connection(access),
+        ]
+    ) as context:
+        with catalog_contains(OWN_DEFAULT_ID):
+            response = _set_default(context, model)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(detail))
+        assert_that(context.client.get(_SETTINGS, headers=_auth(context)).json()["default_model"], none())
+        assert_that(_settings_events(context), empty())
+
+
+def test_a_default_whose_model_is_removed_after_the_first_check_is_refused_under_the_lock():
+    with given([*_given(allowed_models=["openrouter/*", ANTHROPIC_ENTRY]), an_anthropic_connection()]) as context:
+        first_check = LlmProviderAccessLookup.check_models
+
+        def check_then_remove(lookup, *args, **kwargs):
+            first_check(lookup, *args, **kwargs)
+            _remove_the_anthropic_model(context)
+
+        with patch.object(LlmProviderAccessLookup, "check_models", autospec=True, side_effect=check_then_remove):
+            response = _set_default(context, ANTHROPIC_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(f"Model '{ANTHROPIC_ENTRY}' is not one of Anthropic's models."))
+        assert_that(context.client.get(_SETTINGS, headers=_auth(context)).json()["default_model"], none())
+        assert_that(_settings_events(context), empty())
