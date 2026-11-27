@@ -70,6 +70,16 @@ export class WorkflowsPage {
       .getByRole("radiogroup", { name: /Default agent/ })
       .getByRole("radio", { name, exact: true });
   }
+  /** Send approval requests: the switch, and the Slack user it sends to. */
+  approvalRequests() {
+    return this.editor().getByRole("switch", { name: "Send approval requests" });
+  }
+  async chooseSlackUser(name: string) {
+    await this.editor().getByRole("button", { name: "Choose Slack user" }).click();
+    const picker = this.page.getByRole("dialog", { name: "Choose who receives approval requests" });
+    await picker.getByRole("option", { name: new RegExp(name) }).click();
+    await picker.getByRole("button", { name: "OK" }).click();
+  }
   async save() {
     await this.editor()
       .getByRole("button", { name: /^Save (workflow|changes)$/ })

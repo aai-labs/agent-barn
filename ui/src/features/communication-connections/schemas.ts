@@ -28,6 +28,20 @@ export const CommunicationDirectoryEntrySchema = z.object({
   detail: z.string().nullable().optional(),
 });
 
+/** A Slack workspace reached by an enabled Slack connection of an agent the viewer can update. */
+export const SlackWorkspaceSchema = z.object({
+  teamId: z.string(),
+  name: z.string(),
+  connections: z.array(
+    z.object({
+      agentId: z.uuid(),
+      agentName: z.string(),
+      connectionId: z.uuid(),
+    }),
+  ),
+});
+export type SlackWorkspace = z.infer<typeof SlackWorkspaceSchema>;
+
 export const CommunicationDirectoryPreviewSchema = z.object({
   entries: z.array(CommunicationDirectoryEntrySchema),
 });

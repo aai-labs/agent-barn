@@ -40,6 +40,7 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "webhook-invocations",
   // Org-dimensioned, but evicted so returning to an org rereads current access.
   "workflows",
+  "slack-workspaces",
 ]);
 
 type OrganizationContextValue = {

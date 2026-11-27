@@ -17,7 +17,9 @@ import { ApiError } from "@/shared/api/error/errors";
 
 import { useWorkflow, useWorkflowActions } from "../hooks/use-workflows";
 import {
+  OFF_APPROVAL_NOTICE,
   WorkflowDraftSchema,
+  type ApprovalNotice,
   type Workflow,
   type WorkflowDraft,
 } from "../schemas";
@@ -27,6 +29,7 @@ import {
   workflowProblems,
   type WorkflowProblem,
 } from "../validation";
+import { ApprovalNoticeSettings, approvalNoticeProblem } from "./approval-notice-settings";
 import { emptyDraft, WorkflowEditor } from "./workflow-editor";
 import { WorkflowSaveAlert } from "./workflow-save-alert";
 
@@ -86,6 +89,11 @@ function EditorForm({
   const [draft, setDraft] = useState(initial);
   const [initialAgent] = useState(source?.defaultAgentId ?? null);
   const [defaultAgentId, setDefaultAgentId] = useState(initialAgent);
+  // A copy starts without a recipient: whom the original notifies is its own setting.
+  const [initialNotice] = useState<ApprovalNotice>(
+    editing ? source.approvalNotice : OFF_APPROVAL_NOTICE,
+  );
+  const [approvalNotice, setApprovalNotice] = useState(initialNotice);
   // What another save changed is shown against the draft this edit started from.
   const [base, setBase] = useState(source?.version.draft ?? initial);
   const [revision, setRevision] = useState(source?.revision ?? 0);
@@ -96,10 +104,11 @@ function EditorForm({
   const [notice, setNotice] = useState<string[]>([]);
   const [discard, setDiscard] = useState(false);
   const body = useRef<HTMLDivElement>(null);
-  const pending = actions.save.isPending || actions.setDefaultAgent.isPending;
+  const pending = actions.save.isPending || actions.update.isPending;
   const draftChanged = !same(normalized(draft), normalized(initial));
   const agentChanged = defaultAgentId !== initialAgent;
-  const unsaved = draftChanged || agentChanged;
+  const noticeChanged = !same(approvalNotice, initialNotice);
+  const unsaved = draftChanged || agentChanged || noticeChanged;
   const maySave = !editing || source.allowedActions.includes("save_version");
   const reveal = (section: string) =>
     body.current
@@ -110,6 +119,13 @@ function EditorForm({
   async function save() {
     setAttempted(true);
     const validated = WorkflowDraftSchema.safeParse(draft);
+    const noticeProblem = approvalNoticeProblem(approvalNotice);
+    if (validated.success && noticeProblem) {
+      setProblems([]);
+      setError(noticeProblem);
+      reveal("approval-notice");
+      return;
+    }
     if (!validated.success) {
       const issues = workflowProblems(validated.error.issues, draft);
       setProblems(issues);
@@ -124,6 +140,7 @@ function EditorForm({
         saved = await actions.save.mutateAsync({
           draft: validated.data,
           defaultAgentId,
+          approvalNotice: noticeChanged ? approvalNotice : undefined,
         });
       } else {
         let current = revision;
@@ -141,11 +158,12 @@ function EditorForm({
           setInitial(draft);
           setBase(saved.version.draft);
         }
-        if (agentChanged)
-          saved = await actions.setDefaultAgent.mutateAsync({
+        if (agentChanged || noticeChanged)
+          saved = await actions.update.mutateAsync({
             workflowId: source.id,
             revision: current,
-            defaultAgentId,
+            ...(agentChanged ? { defaultAgentId } : {}),
+            ...(noticeChanged ? { approvalNotice } : {}),
           });
       }
       if (saved) onSaved(saved);
@@ -159,7 +177,7 @@ function EditorForm({
       setError(
         version === null
           ? message
-          : `Version ${version} was saved, but the default agent was not changed. ${message}`,
+          : `Version ${version} was saved, but the default agent and approval requests were not changed. ${message}`,
       );
       setConflict(failure instanceof ApiError && failure.status === 409);
       if (issues.length) reveal(issues[0].section);
@@ -236,6 +254,16 @@ function EditorForm({
               defaultAgentId={defaultAgentId}
               onDefaultAgentChange={setDefaultAgentId}
             />
+            <fieldset disabled={!maySave || pending} className="mt-6 min-w-0">
+              <ApprovalNoticeSettings
+                value={approvalNotice}
+                onChange={(next) => {
+                  setApprovalNotice(next);
+                  setError("");
+                }}
+                revealed={attempted}
+              />
+            </fieldset>
           </div>
         </ScrollArea>
         <footer className="flex items-center justify-between gap-3 border-t border-[var(--line)] bg-[var(--bg-soft)] px-6 py-4">

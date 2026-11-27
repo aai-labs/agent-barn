@@ -43,6 +43,13 @@ export function workflowFixture(defaultAgentId: string | null = null, viewer = f
     id: WORKFLOW_ID,
     created_by: WORKFLOW_CREATOR as typeof WORKFLOW_CREATOR | null,
     default_agent_id: defaultAgentId,
+    approval_notice: {
+      enabled: false,
+      platform: "slack",
+      slack_user_id: null as string | null,
+      slack_user_name: null as string | null,
+      slack_team_id: null as string | null,
+    },
     revision: 1,
     archived_at: null as string | null,
     version: {

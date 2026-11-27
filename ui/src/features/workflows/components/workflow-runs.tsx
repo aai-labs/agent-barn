@@ -6,6 +6,7 @@ import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, Clock3, FileCheck2, Files, LayoutDashboard } from "lucide-react";
 import { AppErrorState } from "@/components/app-error-state";
+import { ApiError } from "@/shared/api/error/errors";
 import { useAgent } from "@/features/agents/hooks/use-agent";
 import { canAgent } from "@/features/agents/utils";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
@@ -50,6 +51,23 @@ export function WorkflowRunDetail({
   const { agent: runner } = useAgent(
     run.data && !run.data.agentArchived ? run.data.agentId : "",
   );
+  if (run.error instanceof ApiError && run.error.status === 404)
+    return (
+      <section
+        role="alert"
+        aria-label="Run unavailable"
+        className="af-card mx-auto mt-10 max-w-xl px-6 py-6"
+      >
+        <h2 className="text-base font-semibold">This run is unavailable</h2>
+        <p className="mt-2 text-sm text-[var(--ink-3)]">
+          You can’t see this run: it runs on an agent you don’t have access to, or it no longer
+          exists. Seeing a run needs permission to read its agent, and approving or declining
+          needs permission to update it (agent.update). Ask an Owner or Admin of this
+          organization, or someone who manages the agent, to give you access, then open the
+          link again.
+        </p>
+      </section>
+    );
   if (run.error)
     return (
       <AppErrorState

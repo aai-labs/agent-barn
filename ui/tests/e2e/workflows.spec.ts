@@ -11,6 +11,17 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 import { WorkflowDataSupport } from "../pages/data-support/workflow-data-support.po";
 
 const NAME = workflowDraft.name;
+const SLACK_WORKSPACE = {
+  team_id: "T0APPROVE",
+  name: "Acme Slack",
+  connections: [
+    {
+      agent_id: MOCK_AGENT_ID,
+      agent_name: "Maya",
+      connection_id: "c0c0c0c0-0000-4000-8000-000000000001",
+    },
+  ],
+};
 type SavedDraft = {
   name: string;
   steps: { name: string; goal: string; artifact_description: string | null }[];
@@ -408,6 +419,78 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(support.saveRequests).toHaveLength(0);
   });
 
+  test("approval requests are off until a Slack user is chosen, and save without a version", async ({
+    page,
+  }) => {
+    support.slackWorkspaces = [SLACK_WORKSPACE];
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(TEST_ORG_ID, WORKFLOW_ID);
+    await workflows.edit();
+    await expect(workflows.approvalRequests()).toHaveAttribute("aria-checked", "false");
+    await workflows.approvalRequests().click();
+    await expect(workflows.editor()).toContainText(
+      "This Slack user must have an Agent Barn account with permission to update the Agent (agent.update). Otherwise they can open the link but cannot decide.",
+    );
+    // Turning it on without a user is refused before anything is sent.
+    await workflows.save();
+    await expect(workflows.editor()).toContainText("Choose the Slack user who receives approval requests");
+    expect(support.updateRequests).toHaveLength(0);
+    await workflows.chooseSlackUser("Aria");
+    await expect(workflows.editor()).toContainText("Aria");
+    await workflows.save();
+    await expect(workflows.editor()).toHaveCount(0);
+    expect(support.saveRequests).toHaveLength(0);
+    expect(support.updateRequests).toEqual([
+      {
+        expected_revision: 1,
+        approval_notice: {
+          enabled: true,
+          platform: "slack",
+          slack_user_id: "user-one",
+          slack_user_name: "Aria",
+          slack_team_id: SLACK_WORKSPACE.team_id,
+        },
+      },
+    ]);
+    await workflows.edit();
+    await expect(workflows.approvalRequests()).toHaveAttribute("aria-checked", "true");
+    await expect(workflows.editor()).toContainText("Aria");
+  });
+
+  test("with Slack in several workspaces, the workspace is chosen before the user", async ({ page }) => {
+    support.slackWorkspaces = [
+      SLACK_WORKSPACE,
+      { ...SLACK_WORKSPACE, team_id: "T0OTHER", name: "Globex Slack" },
+    ];
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(TEST_ORG_ID, WORKFLOW_ID);
+    await workflows.edit();
+    await workflows.approvalRequests().click();
+    const choose = workflows.editor().getByRole("button", { name: "Choose Slack user" });
+    await expect(choose).toBeDisabled();
+    await expect(workflows.editor()).toContainText("Choose the workspace first.");
+    await workflows.editor().getByRole("combobox", { name: "Slack workspace" }).click();
+    await page.getByRole("option", { name: "Globex Slack" }).click();
+    await workflows.chooseSlackUser("Aria");
+    await workflows.save();
+    await expect(workflows.editor()).toHaveCount(0);
+    expect(support.updateRequests[0]).toMatchObject({
+      approval_notice: { enabled: true, slack_user_id: "user-one", slack_team_id: "T0OTHER" },
+    });
+  });
+
+  test("without Slack on an Agent the author can update, no one can be chosen", async ({ page }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(TEST_ORG_ID, WORKFLOW_ID);
+    await workflows.edit();
+    await workflows.approvalRequests().click();
+    await expect(workflows.editor()).toContainText("None of the agents you can update has Slack connected");
+    await expect(workflows.editor().getByRole("button", { name: "Choose Slack user" })).toBeDisabled();
+  });
+
   test("a changed plan and default Agent save a version, then the default", async ({ page }) => {
     await support.intercept(MOCK_AGENT_ID, { saved: true });
     const workflows = new WorkflowsPage(page);
@@ -569,7 +652,7 @@ test.describe("WF01 Organization workflow authoring", () => {
     support.failUpdate = true;
     await workflows.save();
     await expect(workflows.error()).toContainText(
-      "Version 2 was saved, but the default agent was not changed.",
+      "Version 2 was saved, but the default agent and approval requests were not changed.",
     );
     await workflows.save();
     await expect(workflows.editor()).toHaveCount(0);

@@ -12,6 +12,7 @@ import {
   WorkflowListSchema,
   WorkflowSchema,
   WorkflowVersionListSchema,
+  type ApprovalNotice,
   type Workflow,
   type WorkflowCapabilities,
   type WorkflowDraft,
@@ -165,12 +166,14 @@ export function useWorkflowActions() {
       workflowId,
       revision,
       defaultAgentId = null,
+      approvalNotice,
     }: {
       draft: WorkflowDraft;
       workflowId?: string;
       revision?: number;
-      /** Only read when creating; an existing workflow changes it with `setDefaultAgent`. */
+      /** Only read when creating; an existing workflow changes them with `update`. */
       defaultAgentId?: string | null;
+      approvalNotice?: ApprovalNotice;
     }) => {
       return (
         await api.post<Workflow>(
@@ -179,7 +182,7 @@ export function useWorkflowActions() {
             : `${scope.base}/workflows`,
           workflowId
             ? { draft, expectedRevision: revision }
-            : { draft, defaultAgentId },
+            : { draft, defaultAgentId, approvalNotice },
           { schema: WorkflowSchema },
         )
       ).data;
@@ -187,21 +190,25 @@ export function useWorkflowActions() {
     onSuccess: seed,
     onError: (error, { workflowId }) => refreshAfterFailure(error, workflowId),
   });
-  /** Changes which Agent a run starts with by default, without saving a new version. */
-  const setDefaultAgent = useMutation({
+  /**
+   * Changes what is not versioned: which Agent a run starts with by default and whom approval
+   * requests are sent to. A field left out keeps its value.
+   */
+  const update = useMutation({
     mutationFn: async ({
       workflowId,
       revision,
-      defaultAgentId,
+      ...changes
     }: {
       workflowId: string;
       revision: number;
-      defaultAgentId: string | null;
+      defaultAgentId?: string | null;
+      approvalNotice?: ApprovalNotice;
     }) =>
       (
         await api.patch<Workflow>(
           `${scope.base}/workflows/${workflowId}`,
-          { expectedRevision: revision, defaultAgentId },
+          { expectedRevision: revision, ...changes },
           { schema: WorkflowSchema },
         )
       ).data,
@@ -230,5 +237,5 @@ export function useWorkflowActions() {
       ]),
     onError: (error, { workflowId }) => refreshAfterFailure(error, workflowId),
   });
-  return { save, setDefaultAgent, archive };
+  return { save, update, archive };
 }

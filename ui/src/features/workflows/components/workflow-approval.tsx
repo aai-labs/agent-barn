@@ -150,7 +150,9 @@ export function WorkflowApproval({
           </label>
         ) : (
           <p className="text-sm">
-            Ask someone with permission to manage this Agent to approve or decline.
+            You can see this request but can’t decide it: approving or declining needs
+            permission to update {agentName} (agent.update). Ask someone who can manage this
+            Agent to approve or decline.
           </p>
         )}
       </div>

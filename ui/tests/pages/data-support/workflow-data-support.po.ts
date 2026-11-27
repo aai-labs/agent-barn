@@ -34,6 +34,12 @@ export class WorkflowDataSupport {
   validationSaveErrors: { loc: (string | number)[]; msg: string }[] | null =
     null;
   denyAccess = false;
+  /** Slack workspaces reached through Agents the viewer can update. */
+  slackWorkspaces: {
+    team_id: string;
+    name: string;
+    connections: { agent_id: string; agent_name: string; connection_id: string }[];
+  }[] = [];
   /** GET counts per read family, to assert which views fetch. */
   reads = { list: 0, detail: 0, versions: 0 };
   readPages = { list: [] as number[], versions: [] as number[] };
@@ -115,6 +121,9 @@ export class WorkflowDataSupport {
         },
       }),
     );
+    await this.page.route(`${base}/slack-workspaces`, (route) =>
+      route.fulfill({ json: this.slackWorkspaces }),
+    );
     await this.page.route(`${base}/workflows**`, async (route) => {
       const url = new URL(route.request().url());
       const path = url.pathname;
@@ -138,7 +147,9 @@ export class WorkflowDataSupport {
         workflow = {
           ...workflow,
           revision: workflow.revision + 1,
-          default_agent_id: body.default_agent_id,
+          default_agent_id:
+            "default_agent_id" in body ? body.default_agent_id : workflow.default_agent_id,
+          approval_notice: body.approval_notice ?? workflow.approval_notice,
         };
         await route.fulfill({ json: workflow });
         return;

@@ -18,6 +18,7 @@ import {
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
   CommunicationInstallLinkSchema,
+  SlackWorkspaceSchema,
   type CommunicationConnection,
   type CommunicationDirectoryEntry,
   type CommunicationDirectoryPreview,
@@ -29,6 +30,7 @@ import {
   type CommunicationJournalWindow,
   type PaginatedCommunicationJournalEntries,
   type CommunicationRetry,
+  type SlackWorkspace,
   type CreateCommunicationConnection,
   type UpdateCommunicationConnection,
 } from "../schemas";
@@ -37,6 +39,7 @@ export const communicationConnectionsKey = createQueryKeyStructure("communicatio
 export const communicationPlatformsKey = createQueryKeyStructure("communication-platforms");
 export const communicationDiagnosticsKey = createQueryKeyStructure("communication-connection-diagnostics");
 export const communicationJournalKey = createQueryKeyStructure("communication-connection-journal");
+export const slackWorkspacesKey = createQueryKeyStructure("slack-workspaces");
 
 const JOURNAL_PAGE_SIZE = 20;
 
@@ -53,6 +56,23 @@ export function useCommunicationPlatforms() {
       );
       return response.data;
     },
+  });
+}
+
+/** Slack workspaces whose people the viewer may search: those of agents they can update. */
+export function useSlackWorkspaces(enabled = true) {
+  const orgApiBase = useOrganizationApiBase();
+  const { selectedOrganization } = useOrganizationContext();
+  const organizationId = selectedOrganization?.id ?? "";
+  return useQuery({
+    queryKey: slackWorkspacesKey.list({ organizationId }),
+    queryFn: async () => {
+      const response = await api.get<SlackWorkspace[]>(`${orgApiBase}/slack-workspaces`, {
+        schema: z.array(SlackWorkspaceSchema),
+      });
+      return response.data;
+    },
+    enabled: enabled && Boolean(organizationId),
   });
 }
 

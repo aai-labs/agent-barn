@@ -107,6 +107,22 @@ export const WorkflowVersionSchema = z.object({
   createdByUserId: z.uuid().nullable(),
   draft: WorkflowStoredDraftSchema,
 });
+/** Send approval requests: a Slack direct message to one person, linking to the run to decide there. */
+export const ApprovalNoticeSchema = z.object({
+  enabled: z.boolean(),
+  platform: z.literal("slack"),
+  /** Shown only to those who may change the workflow; others see whether it is on. */
+  slackUserId: z.string().nullable().default(null),
+  slackUserName: z.string().nullable().default(null),
+  slackTeamId: z.string().nullable().default(null),
+});
+export const OFF_APPROVAL_NOTICE: ApprovalNotice = {
+  enabled: false,
+  platform: "slack",
+  slackUserId: null,
+  slackUserName: null,
+  slackTeamId: null,
+};
 export const WorkflowSchema = z.object({
   id: z.uuid(),
   /** The Member who created it; absent once that Membership is removed. */
@@ -119,6 +135,7 @@ export const WorkflowSchema = z.object({
     .nullable(),
   /** Preselected when a run starts; null when unset or not readable by the viewer. */
   defaultAgentId: z.uuid().nullable(),
+  approvalNotice: ApprovalNoticeSchema.default(OFF_APPROVAL_NOTICE),
   revision: z.number().int().positive(),
   archivedAt: z.string().nullable(),
   version: WorkflowVersionSchema,
@@ -154,6 +171,7 @@ export const WorkflowCapabilitiesSchema = z.object({
 export type WorkflowDraft = z.infer<typeof WorkflowDraftSchema>;
 export type WorkflowStep = WorkflowDraft["steps"][number];
 export type Workflow = z.infer<typeof WorkflowSchema>;
+export type ApprovalNotice = z.infer<typeof ApprovalNoticeSchema>;
 export type WorkflowSummary = z.infer<typeof WorkflowSummarySchema>;
 export type WorkflowList = z.infer<typeof WorkflowListSchema>;
 export type WorkflowVersion = z.infer<typeof WorkflowVersionSchema>;

@@ -346,7 +346,7 @@ test.describe("WF02 run progress and text results", () => {
     const gate = page.getByLabel("Approval required");
     await expect(gate.getByText("rm -rf ./out && ./deploy.sh --prod")).toBeVisible();
     await expect(gate.getByRole("button")).toHaveCount(0);
-    await expect(gate.getByText(/Ask someone with permission/)).toBeVisible();
+    await expect(gate.getByText(/can’t decide it: approving or declining needs permission to update/)).toBeVisible();
   });
 
   test("decided commands stay on their step with who decided and the guidance", async ({ page }) => {
@@ -1040,6 +1040,15 @@ test.describe("WF02 run progress and text results", () => {
       page.getByText("This run is unavailable", { exact: true }),
     ).toBeVisible();
     await expect(page.getByLabel("Run summary")).toHaveCount(0);
+  });
+
+  test("a review link to a run on an Agent the viewer cannot read says why", async ({ page }) => {
+    support.failRead = true;
+    await page.goto(`/dashboard/${TEST_ORG_ID}/workflows?workflowRun=${RUN_ID}`);
+    const refusal = page.getByRole("alert", { name: "Run unavailable" });
+    await expect(refusal).toContainText("runs on an agent you don’t have access to");
+    await expect(refusal).toContainText("agent.update");
+    await expect(page.getByRole("button", { name: /Approve/ })).toHaveCount(0);
   });
   test("Organization switching cannot reuse cached text results", async ({
     page,
