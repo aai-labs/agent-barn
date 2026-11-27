@@ -18,7 +18,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 ### 2026-11-26 — AF-479 — Replace one Connection credential at a time — PR pending
 
 - Fixed: editing a Connection with only some credential fields filled in, such as a new Slack bot token alone, replaced the stored credentials as a whole and failed because the other fields were missing. Blank fields now keep their stored values, as the edit form says. Credentials that can no longer be decrypted can still be replaced by filling in every field.
-- Fixed: a configuration validation error returned Pydantic's full text, which echoed the submitted values, including credentials. Errors now name the field and the problem only.
+- Fixed: configuration errors now omit the raw inputs from Pydantic's validation output, which could include submitted credentials.
 
 ### 2026-11-23 — Custom Slack server for Hermes Slack Connections — PR pending
 

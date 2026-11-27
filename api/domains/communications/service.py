@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, NoReturn
 from uuid import UUID
 
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from pydantic import ValidationError
@@ -67,7 +68,7 @@ _OPENCLAW_MENTION_CONFLICT = (
 
 
 def _problem(exc: Exception, plugin) -> str:
-    """What was wrong with a configuration, naming fields but never echoing values: they can be credentials."""
+    """Describe configuration errors without Pydantic's raw validation inputs."""
     if not isinstance(exc, ValidationError):
         return str(exc)
     fields = {**plugin.settings_model.model_fields, **plugin.credentials_model.model_fields}
@@ -759,7 +760,7 @@ class CommunicationsService:
         try:
             raw = json.loads(decrypt_token(ciphertext, self.config.agent_token_encryption_key))
             return plugin.validate_stored_credentials(raw)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (InvalidToken, ValueError, TypeError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Stored Communication Connection credentials are invalid",
