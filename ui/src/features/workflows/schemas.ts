@@ -148,7 +148,6 @@ export const WorkflowListSchema = z.object({
   pageSize: z.number(),
 });
 export const WorkflowCapabilitiesSchema = z.object({
-  authoring: z.boolean(),
   execution: z.boolean(),
   reviewDestinations: z.array(z.literal("web")),
 });
@@ -168,8 +167,3 @@ export const WorkflowVersionListSchema = z.object({
 export type WorkflowVersionList = z.infer<typeof WorkflowVersionListSchema>;
 export type WorkflowCapabilities = z.infer<typeof WorkflowCapabilitiesSchema>;
 
-export const PlatformWorkflowSettingsSchema = z.object({
-  authoringEnabled: z.boolean(),
-  updatedAt: z.string().nullable(),
-});
-export type PlatformWorkflowSettings = z.infer<typeof PlatformWorkflowSettingsSchema>;

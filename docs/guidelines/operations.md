@@ -962,8 +962,7 @@ attempt receipts are added lazily to the existing PVC SQLite journal; retain tha
 journal to preserve dispatch deduplication across restarts. Failed/expired attempts
 block for inspection rather than replaying possible external effects. Parked runs
 keep file pins until cancellation; see the [file workflow contract](../features/agent-workflows.md#file-workflow-inputs-and-results).
-The Platform Admin authoring setting controls definition changes only. Before
-running saved workflows, apply the migration. The Agent chosen for a run must be running,
+Before running saved workflows, apply the migration. The Agent chosen for a run must be running,
 and Agents started before this release must be restarted once so their trigger
 server can accept workflow steps. Each step runs as a session in that Agent, under
 its tools, Integrations, approval mode and spend limits. No runtime image pinning,
@@ -1018,15 +1017,11 @@ owns the column changes and the exact downgrade behavior.
 
 ## Workflow authoring (WF01)
 
-After migrating and verifying WF01, Platform Administrators can enable authoring
-at **Platform Settings → Workflows** and save the choice. It takes effect on
-subsequent API requests without a redeploy and allows manual definition creation,
-version saving, default-Agent changes and archive across all Organizations. Definition/version reads
-remain available when disabled. Authoring defaults to `false` until a Platform
-Admin saves a choice. The persisted choice survives restarts, with no environment
-or Helm override. Disable authoring through Platform Settings to stop new
-definition mutations; requests already admitted may finish. Execution of saved
-versions remains independent of this authoring setting. Natural-language
+Workflows are on for every installation once migrated; there is no Platform
+setting, environment or Helm override to turn them off. The Organization's Tier
+decides whether new workflows can be added or run. Migration `463f987cd60d`
+drops the former Platform workflow setting; rolling it back restores the setting
+with authoring on. Natural-language
 draft generation is deferred to a separate PR, with no model setting or provider
 credential required for manual building. The [feature specification](../features/agent-workflows.md)
 owns the product contract.
@@ -1037,7 +1032,8 @@ workflow authoring.
 Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
 after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`
 and the migrated WF01 API contracts before rollout. Migration `a38802d7f002`
-follows it and creates the singleton Platform workflow setting. Merge revision
+follows it and creates the singleton Platform workflow setting, which
+`463f987cd60d` drops. Merge revision
 `c32e42bb0396` joins that workflow branch with staging head `d72b85f19c40`;
 merge revision `49e4d8bea6de` joins it with the later staging head `517d402a59fd`,
 so fresh installs and upgrades retain a single migration head. Downgrading only

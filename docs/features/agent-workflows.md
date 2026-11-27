@@ -135,7 +135,7 @@ under an Agent; the Agent that runs a run is a field of the run. The earlier
 
 | Route | Behavior |
 | --- | --- |
-| `GET /workflow-capabilities` | Independent authoring/execution availability; web review only |
+| `GET /workflow-capabilities` | `authoring` (always true) and `execution`; web review only |
 | `GET /workflows` | Paginated card summaries, including archives; no full snapshots. Each carries `default_agent_name` and `run_count`, both limited to Agents the caller can read. Filters: `created_by_me=true`, `archived=true\|false` |
 | `POST /workflows` | `{draft, default_agent_id?}`; 201 immutable v1 |
 | `GET /workflows/{id}` | Latest saved snapshot, revision, archive status, creator, default Agent and current allowed actions |
@@ -160,11 +160,9 @@ transfer to the API or browser. Detail and version-history endpoints retain full
 snapshots. DTOs use snake_case. Definition reads carry `created_by`
 (`membership_id`, `user_id`, `name`; null once that Membership is removed) and
 `default_agent_id`. Definition
-`allowed_actions` contains `save_version` and `archive` only while enabled,
-unarchived and permitted for the current actor (creator or Organization
-Owner/Admin); the same authority covers changing the default Agent. Read APIs
-remain available with the authoring gate off; create, save, default-Agent change
-and archive return 409 while it is off.
+`allowed_actions` contains `save_version` and `archive` only while unarchived and
+permitted for the current actor (creator or Organization Owner/Admin); the same
+authority covers changing the default Agent.
 
 Run reads carry `agent_id`, `agent_name` and `agent_archived`, the optional
 `title` (up to 200 characters) given at start, and `name`, the workflow name of
@@ -172,33 +170,15 @@ the pinned version. `status=active` selects runs that have not settled;
 `status=settled` selects Succeeded, Failed, Cancelled and Rejected runs. Run behavior is
 described under WF02 below.
 
-## Platform authoring setting
+## Availability
 
-Platform Administrators enable or disable authoring at **Platform Settings →
-Workflows** (`/dashboard/platform/settings?section=workflows`). The switch uses an
-explicit Save/Cancel flow and applies across all Organizations. It enables
-manual creation, new versions, default-Agent changes and archive; it never
-enables execution or grants Agent permissions. Saved definitions and history remain available through the existing read APIs
-while disabled; the Workflows UI is hidden on the Organization page and on Agents.
-
-`GET/PUT /api/v1/platform/settings/workflows` require the shared Platform Admin
-authority, independently of Organization membership. Organization Owners/Admins
-cannot manage this setting. Read-only Personal API Keys cannot change it. The
-strict update body contains only the boolean `authoring_enabled`; reads include
-that effective value and a nullable `updated_at`.
-
-The singleton `platform_workflow_settings` row persists the choice, update time
-and acting User. Before any choice is saved, authoring defaults to `false`.
-The saved choice survives API restarts; there is no environment override. Each capability/read/mutation request reads
-the effective setting from PostgreSQL; saving needs no redeploy. UI affordances
-in other sessions can retain the documented 30-second cached view, but the server
-checks authoring admission on every mutation. Requests already admitted may finish.
-
-Effective changes commit atomically with a Platform-scoped
-`platform.workflow_authoring.changed` event for the Security Audit projection,
-carrying previous/current booleans and safe actor/subject display snapshots.
-Repeated saves of an unchanged choice do not emit another event. Saving the
-current default still persists that explicit choice.
+Workflows are on for every installation; there is no Platform setting to turn
+them off. Migration `463f987cd60d` drops the former `platform_workflow_settings`
+table and its `GET/PUT /api/v1/platform/settings/workflows` routes; its downgrade
+restores the table with authoring on, because the API before it reads a missing
+row as off. The Organization's Tier still decides whether new workflows can be
+added or run. `platform.workflow_authoring.changed` is no longer emitted; it
+stays registered so stored events and Security Audit records still resolve.
 
 ## UI and configuration
 
@@ -246,14 +226,9 @@ A count of the approval requests the viewer may decide is shown on the Workflows
 of the Organization navigation, across every Agent the viewer can read, and on
 the Workflows item of an Agent's navigation panel, for that Agent.
 
-The navigation item and the Agent tab appear only when the installation
-capability enables authoring. While disabled (or before capability loading first
-succeeds), navigation omits Workflows and a link to an Agent's Workflows tab
-renders the Agent's default view. The Organization page stays reachable by URL:
-it says authoring is disabled, offers no New workflow, and still lists saved
-workflows and runs. This is UI visibility only: saved data and the existing API
-contracts are unchanged. A failed capability refresh keeps the last known state,
-so an open editor and its draft stay.
+The navigation item appears for every Member of an Organization, and an Agent's
+Workflows tab for anyone with `agent.read` on it. A failed capability refresh
+keeps the last known state, so an open editor and its draft stay.
 
 The editor is a dialog over the page. It holds the name, a description, the
 default Agent (any Agent the author can see, or none), the steps and the inputs.
@@ -343,15 +318,15 @@ and any other opens the Agent's Workflows tab, keeping the run it names.
 Leaving the Workflows page discards its unsaved local draft; save or discard
 changes before navigating away.
 
-See [operations](../guidelines/operations.md#workflow-authoring-wf01) for the
-installation gate and migration/rollback guidance.
+See [operations](../guidelines/operations.md#workflow-authoring-wf01) for
+migration and rollback guidance.
 
 ## Change impact and deferred slices
 
 Implementation lives in `api/domains/workflows/` and
 `ui/src/features/workflows/`.
 Schema migrations: `a38801c6e001` after `c42e91b7a603` creates authoring records;
-`a38802d7f002` adds the Platform authoring setting. Merge revision `c32e42bb0396`
+`a38802d7f002` adds the Platform authoring setting, which `463f987cd60d` removes. Merge revision `c32e42bb0396`
 joins it with staging head `d72b85f19c40`. Execution revision `a38901e8a003`
 and current staging head `a4e9c2d7b615` join at no-op merge `f8740a67b788`. Changes to snapshots must
 move DTO validation, migration where needed, UI Zod schemas, tests and this
@@ -379,7 +354,7 @@ without storage. Every completed step
 reports its actual result in its summary, bounded to 4,000 characters, including
 facts later steps need. Summaries are requested as readable Markdown without expiring artifact download links; users download published files from the attachments. The last step's summary also serves as the final result.
 
-Execution is independent of the authoring setting. A Member explicitly reviews
+A Member explicitly reviews
 a saved version's typed inputs, chooses the Agent to run as and starts it, which
 requires `agent.update` on that Agent. The Agent must be running. A run
 pins its Agent, version, initiator User/Membership, inputs and the Agent's runtime kind; none of them can change afterwards. It

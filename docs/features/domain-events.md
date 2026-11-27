@@ -106,10 +106,11 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `organization.deleted` — staged in the same transaction as the Organization's hard delete, with a User Actor (the deleting Owner). The outbox and delivery rows have no foreign key to the Organization, so they outlive it. Its only intended handler is `product_analytics.posthog`.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
 
-Workflow authoring adds the Platform-scoped `platform.workflow_authoring.changed`
-event, carrying previous/current booleans and safe actor/subject display snapshots,
-projected by `security_audit.projection`. Its atomic settings boundary and no-op
-behavior are owned by [Agent workflows](agent-workflows.md#platform-authoring-setting).
+The Platform-scoped `platform.workflow_authoring.changed` event, carrying
+previous/current booleans and safe actor/subject display snapshots, is no longer
+emitted since the Platform workflow setting was removed; it stays registered and
+projected by `security_audit.projection` so stored events and audit records still
+resolve. See [Agent workflows](agent-workflows.md#availability).
 
 Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
 

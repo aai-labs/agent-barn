@@ -42,7 +42,7 @@ import {
 } from "../nav-model";
 import { useAwaitingApprovals } from "@/features/workflows/hooks/use-workflow-runs";
 import { waitsOnViewer } from "@/features/workflows/run-schemas";
-import { useCachedAgent, useCachedWorkflowAuthoring } from "./use-cached-agent";
+import { useCachedAgent } from "./use-cached-agent";
 
 export type ContextPanelModel = {
   title: string;
@@ -67,7 +67,6 @@ export function useContextPanel(): ContextPanelModel | null {
   const agentRoute = parseAgentRoute(pathname);
   const agent = useCachedAgent(agentRoute?.agentId);
   const pod = useCachedAgent(agent?.parentAgentId ?? agentRoute?.agentId);
-  const workflowAuthoring = useCachedWorkflowAuthoring();
   const queryClient = useQueryClient();
   const awaiting = useAwaitingApprovals(agentRoute?.agentId, Boolean(agent));
 
@@ -111,7 +110,7 @@ export function useContextPanel(): ContextPanelModel | null {
     }
 
     const tabs = agent
-      ? visibleAgentPageTabs(agent, role, { workflowAuthoring })
+      ? visibleAgentPageTabs(agent, role)
       : [];
     const requested = searchParams.get("tab") as AgentPageTab | null;
     // Only the Agent page itself has a selected section; its sub-pages (a connection,

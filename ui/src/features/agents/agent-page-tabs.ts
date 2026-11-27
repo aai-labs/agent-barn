@@ -68,8 +68,6 @@ export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
 export function visibleAgentPageTabs(
   agent: Pick<Agent, "allowedActions" | "parentAgentId"> | null | undefined,
   role: OrganizationRole | undefined,
-  /** Whether this installation offers workflows (the Organization's workflow capabilities). */
-  { workflowAuthoring = false }: { workflowAuthoring?: boolean } = {},
 ): AgentPageTab[] {
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
@@ -81,10 +79,9 @@ export function visibleAgentPageTabs(
     ...(canReadActivity
       ? (["chat", "conversations", "tool-calls", "logs", "memory"] as AgentPageTab[])
       : []),
-    // The Agent's workflow runs are readable with agent.read, and only where the platform
-    // offers workflows. Workflows themselves belong to the Organization.
-    ...(workflowAuthoring && canAgent(agent, "agent.read") ? (["workflows"] as AgentPageTab[]) : []),
-    ...(canAgent(agent, "agent.read") ? (["files"] as AgentPageTab[]) : []),
+    // The Agent's workflow runs are readable with agent.read. Workflows themselves belong
+    // to the Organization.
+    ...(canAgent(agent, "agent.read") ? (["workflows", "files"] as AgentPageTab[]) : []),
     ...(canExtractPlaybooks ? (["playbooks"] as AgentPageTab[]) : []),
     ...(canAgent(agent, "task.read") ? (["tasks"] as AgentPageTab[]) : []),
     ...(canReadActivity ? (["file-sync"] as AgentPageTab[]) : []),

@@ -48,6 +48,7 @@ ORGANIZATION_DELETED = "organization.deleted"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
+# No longer emitted: the setting was removed. Registered so stored events and audit records still resolve.
 PLATFORM_WORKFLOW_AUTHORING_CHANGED = "platform.workflow_authoring.changed"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"

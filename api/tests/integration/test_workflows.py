@@ -14,7 +14,7 @@ from api.domains.workflows.repository import WorkflowConflict, WorkflowRepositor
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
-from api.tests.helpers.workflows import authoring_is_enabled, draft, legacy_version, set_authoring
+from api.tests.helpers.workflows import draft, legacy_version
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -35,7 +35,6 @@ _GIVEN = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_an_agent(status=AgentStatus.STOPPED),
-    authoring_is_enabled,
 ]
 
 
@@ -533,20 +532,6 @@ def test_removed_membership_loses_access() -> None:
         )
 
 
-def test_authoring_gate_keeps_reads_available_but_blocks_mutations() -> None:
-    with given(_GIVEN) as context:
-        saved = create(context)
-        set_authoring(context, False)
-        assert_that(
-            context.client.get(base(context) + f"/workflows/{saved['id']}", headers=auth(context)).status_code,
-            equal_to(200),
-        )
-        assert_that(
-            post_draft(context, draft()).status_code,
-            equal_to(409),
-        )
-
-
 def test_authentication_required_and_unknown_workflow_versions_are_not_found() -> None:
     with given(_GIVEN) as context:
         create(context)
@@ -574,7 +559,6 @@ def test_upgrade_from_previous_head_preserves_existing_agents_and_can_rollback_e
             assert_that(name, equal_to(context.agent.name))
         finally:
             command.upgrade(config, "head")
-        authoring_is_enabled(context)
         created = create(context)
         assert_that(created["version"]["number"], equal_to(1))
 
@@ -705,201 +689,28 @@ def test_manual_authoring_slice_has_no_generation_api_or_storage() -> None:
         assert_that("workflow_plan_generation" in inspect(engine).get_table_names(), is_(False))
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT"])
-def test_only_platform_admin_can_manage_workflow_setting(method: str) -> None:
-    with given(_GIVEN) as context:
-        url = "/api/v1/platform/settings/workflows"
-        payload = {"authoring_enabled": False} if method == "PUT" else None
-        assert_that(context.client.request(method, url, json=payload).status_code, equal_to(401))
-        assert_that(context.client.request(method, url, headers=auth(context), json=payload).status_code, equal_to(403))
-
-
-def test_platform_workflow_setting_overrides_default_and_gates_all_mutations_immediately() -> None:
-    from api.tests.helpers.workflows import platform_admin_headers
-
-    with given(_GIVEN) as context:
-        saved = create(context)
-        admin = platform_admin_headers(context)
-        settings_url = "/api/v1/platform/settings/workflows"
-        set_authoring(context, False)
-        assert_that(context.client.get(settings_url, headers=admin).json()["authoring_enabled"], is_(False))
-        response = context.client.put(settings_url, headers=admin, json={"authoring_enabled": True})
-        assert_that(response.status_code, equal_to(200))
-        assert_that(response.json()["updated_at"] is not None, is_(True))
-        # Saved settings apply to subsequent reads and writes.
-        from api.domains.workflows.platform_repository import PlatformWorkflowRepository
-
-        repository = context.injector.get(PlatformWorkflowRepository)
-        assert_that(repository.read().authoring_enabled, is_(True))
-        assert_that(
-            post_draft(context, draft()).status_code,
-            equal_to(201),
-        )
-        context.client.put(settings_url, headers=admin, json={"authoring_enabled": False})
-        assert_that(repository.read().authoring_enabled, is_(False))
-        capabilities = context.client.get(base(context) + "/workflow-capabilities", headers=auth(context)).json()
-        assert_that(capabilities["authoring"], is_(False))
-        assert_that(capabilities["execution"], is_(True))
-        detail_url = base(context) + f"/workflows/{saved['id']}"
-        detail = context.client.get(detail_url, headers=auth(context))
-        assert_that(detail.status_code, equal_to(200))
-        assert_that(detail.json()["allowed_actions"], equal_to([]))
-        items = context.client.get(base(context) + "/workflows", headers=auth(context)).json()["items"]
-        assert_that(all(not item["allowed_actions"] for item in items), is_(True))
-        assert_that(context.client.get(detail_url + "/versions", headers=auth(context)).status_code, equal_to(200))
-        for url, payload in [
-            (base(context) + "/workflows", {"draft": draft()}),
-            (detail_url + "/versions", {"expected_revision": 1, "draft": draft()}),
-            (detail_url + "/archive", {"expected_revision": 1}),
-        ]:
-            assert_that(context.client.post(url, headers=auth(context), json=payload).status_code, equal_to(409))
-        assert_that(
-            context.client.patch(
-                detail_url, headers=auth(context), json={"expected_revision": 1, "default_agent_id": None}
-            ).status_code,
-            equal_to(409),
-        )
-        context.client.put(settings_url, headers=admin, json={"authoring_enabled": True})
-        assert_that(
-            context.client.post(
-                detail_url + "/versions", headers=auth(context), json={"expected_revision": 1, "draft": draft()}
-            ).status_code,
-            equal_to(201),
-        )
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {},
-        {"authoring_enabled": "true"},
-        {"authoring_enabled": 1},
-        {"authoring_enabled": None},
-        {"authoring_enabled": True, "execution": True},
-    ],
-)
-def test_invalid_platform_workflow_settings_leave_default_unchanged(payload: dict) -> None:
-    from api.tests.helpers.workflows import platform_admin_headers
-
-    with given(_GIVEN[:-1]) as context:
-        headers = platform_admin_headers(context)
-        url = "/api/v1/platform/settings/workflows"
-        assert_that(context.client.put(url, headers=headers, json=payload).status_code, equal_to(422))
-        assert_that(context.client.get(url, headers=headers).json()["updated_at"], is_(None))
-
-
-def test_platform_workflow_setting_audits_changes_once_and_blocks_read_only_keys() -> None:
-    from sqlmodel import Session, select
-
-    from api.domains.events.models import EventDelivery, EventScope, OutboxMessage
-    from api.domains.events.processor import EventDeliveryProcessor
-    from api.domains.events.repository import OutboxMessageRepository
-    from api.domains.events.security_audit import SecurityAuditRecord
-    from api.tests.helpers.workflows import platform_admin_headers
-
-    with given(_GIVEN) as context:
-        headers = platform_admin_headers(context)
-        url = "/api/v1/platform/settings/workflows"
-        for _ in range(2):
-            assert_that(
-                context.client.put(url, headers=headers, json={"authoring_enabled": False}).status_code, equal_to(200)
-            )
-        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
-            events = session.exec(
-                select(OutboxMessage).where(OutboxMessage.event_name == "platform.workflow_authoring.changed")
-            ).all()
-            assert_that(events, has_length(1))
-            assert_that(events[0].event_scope, equal_to(EventScope.PLATFORM))
-            assert_that(events[0].organization_id, is_(None))
-            assert_that(events[0].payload["previous"], is_(True))
-            assert_that(events[0].payload["current"], is_(False))
-            delivery = session.exec(select(EventDelivery).where(EventDelivery.event_id == events[0].event_id)).one()
-            # Projection tests drive delivery explicitly; CI has no Redis broker.
-            context.injector.get(OutboxMessageRepository).mark_delivery_enqueued(delivery.id)
-            assert_that(context.injector.get(EventDeliveryProcessor).process(delivery.id), is_(True))
-            audits = session.exec(
-                select(SecurityAuditRecord).where(SecurityAuditRecord.action == "platform.workflow_authoring.changed")
-            ).all()
-            assert_that(audits, has_length(1))
-        token = context.client.post(
-            "/api/v1/auth/me/api-keys", headers=headers, json={"name": "read-only platform", "access_mode": "READ_ONLY"}
-        ).json()["token"]
-        read_headers = {"Authorization": f"Bearer {token}"}
-        assert_that(context.client.get(url, headers=read_headers).status_code, equal_to(200))
-        assert_that(
-            context.client.put(url, headers=read_headers, json={"authoring_enabled": True}).status_code, equal_to(403)
-        )
-
-
-def test_platform_workflow_setting_migration_preserves_saved_workflows_and_rolls_back() -> None:
+def test_dropping_the_platform_workflow_setting_keeps_workflows_and_rolls_back_with_authoring_on() -> None:
     from alembic import command
     from sqlalchemy import inspect
 
     from api.tests.conftest import config
-    from api.tests.helpers.workflows import platform_admin_headers
 
     with given(_GIVEN) as context:
-        # Rolling back Organization ownership keeps only workflows that name an Agent.
-        saved = create(context, default_agent_id=context.agent.id)
+        saved = create(context)
         engine = context.injector.get(PostgresRepositoryDelegate).engine
-        command.downgrade(config, "a38801c6e001")
+        assert_that("platform_workflow_settings" in inspect(engine).get_table_names(), is_(False))
+        command.downgrade(config, "b3d81c5e9f42")
         try:
-            assert_that("platform_workflow_settings" in inspect(engine).get_table_names(), is_(False))
+            with engine.connect() as connection:
+                enabled = connection.execute(
+                    text("SELECT authoring_enabled FROM platform_workflow_settings WHERE id = 1")
+                ).scalar_one()
+            # The API before this migration reads a missing row as off.
+            assert_that(enabled, is_(True))
         finally:
             command.upgrade(config, "head")
-        url = "/api/v1/platform/settings/workflows"
-        headers = platform_admin_headers(context)
-        assert_that(context.client.get(url, headers=headers).json()["updated_at"], is_(None))
+        assert_that("platform_workflow_settings" in inspect(engine).get_table_names(), is_(False))
         assert_that(
             context.client.get(base(context) + f"/workflows/{saved['id']}", headers=auth(context)).status_code,
             equal_to(200),
         )
-        context.client.put(url, headers=headers, json={"authoring_enabled": False})
-        with pytest.raises(DBAPIError), engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO platform_workflow_settings (id, authoring_enabled, updated_at) VALUES (2, true, now())"
-                )
-            )
-
-
-def test_saving_current_workflow_default_persists_choice_without_a_change_event() -> None:
-    from sqlmodel import Session, select
-
-    from api.domains.events.models import OutboxMessage
-    from api.tests.helpers.workflows import platform_admin_headers
-
-    with given(_GIVEN[:-1]) as context:
-        headers = platform_admin_headers(context)
-        url = "/api/v1/platform/settings/workflows"
-        response = context.client.put(url, headers=headers, json={"authoring_enabled": False})
-        assert_that(response.status_code, equal_to(200))
-        assert_that(context.client.get(url, headers=headers).json()["authoring_enabled"], is_(False))
-        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
-            assert_that(
-                session.exec(
-                    select(OutboxMessage).where(OutboxMessage.event_name == "platform.workflow_authoring.changed")
-                ).all(),
-                has_length(0),
-            )
-
-
-def test_workflow_setting_is_not_committed_if_audit_staging_fails(monkeypatch) -> None:
-    from api.domains.events.repository import OutboxMessageRepository
-    from api.tests.helpers.workflows import platform_admin_headers
-
-    with given(_GIVEN) as context:
-        headers = platform_admin_headers(context)
-        url = "/api/v1/platform/settings/workflows"
-
-        before = context.client.get(url, headers=headers).json()
-
-        def fail_stage(**kwargs):
-            raise RuntimeError("audit staging unavailable")
-
-        monkeypatch.setattr(context.injector.get(OutboxMessageRepository), "stage", fail_stage)
-        with pytest.raises(RuntimeError, match="audit staging unavailable"):
-            context.client.put(url, headers=headers, json={"authoring_enabled": False})
-        response = context.client.get(url, headers=headers)
-        assert_that(response.json()["authoring_enabled"], is_(True))
-        assert_that(response.json(), equal_to(before))

@@ -246,6 +246,7 @@ class WorkflowRead(DTO):
 
 
 class WorkflowCapabilitiesRead(DTO):
-    authoring: bool
+    # Always true: workflows are on for every installation. Kept for clients that read it.
+    authoring: bool = True
     execution: bool = False
     review_destinations: list[Literal["web"]] = Field(default_factory=default_destinations)

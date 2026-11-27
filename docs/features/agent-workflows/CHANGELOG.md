@@ -17,6 +17,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-11-19 — Workflows on for every installation
+
+- Removed: the Platform workflow authoring setting (**Platform Settings → Workflows**, `GET/PUT /api/v1/platform/settings/workflows`) and every check of it. Creating, saving, changing the default Agent and archiving no longer return 409 for a disabled installation; the Organization's Tier still decides whether new workflows can be added or run. The Workflows navigation item and an Agent's Workflows tab no longer wait for the capability read.
+- Changed: `GET /workflow-capabilities` keeps `authoring`, always true, for clients that read it. `platform.workflow_authoring.changed` is no longer emitted and stays registered for stored events and audit records.
+- Migration: `463f987cd60d` after staging head `b3d81c5e9f42` drops `platform_workflow_settings`; its downgrade restores the table with authoring on.
+- Verification: workflow, run, Tier and contract API suites, the drop migration test, and the workflows, workflow-runs, navigation and Agent detail Playwright specs.
+
 ### 2026-11-18 — Approval steps (UI)
 
 - Added: "Add step:" with Agent and Approval in the editor, and Allowed decisions chips on an Approval step (Approve always on; the API refuses other decisions with 422); the decision in the waiting Approval step's pane, which the run opens on, with Approve, Request changes and Reject; Approval step rounds and earlier results on step detail; the Rejected run state; Approval steps in the approvals inbox and badges.

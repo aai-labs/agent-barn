@@ -535,19 +535,6 @@ def test_postgresql_rejects_repinning_a_started_run() -> None:
                 )
 
 
-def test_authoring_setting_does_not_disable_saved_workflow_execution() -> None:
-    from api.tests.helpers.workflows import set_authoring
-
-    with given(_RUN_GIVEN) as context:
-        saved = create(context)
-        set_authoring(context, False)
-        response, _, _ = start(context, saved)
-        assert_that(response.status_code, equal_to(202))
-        repository, row, token = attempt(context, response.json()["id"])
-        admitted, _, _ = repository.admit(row.id, token)
-        assert_that(str(admitted.id), equal_to(response.json()["id"]))
-
-
 @pytest.mark.parametrize("extra", [{"artifact": {"format": "text", "content": "file"}}, {"final_artifact": None}])
 def test_file_result_fields_are_rejected(extra: dict) -> None:
     with given(_RUN_GIVEN) as context:
