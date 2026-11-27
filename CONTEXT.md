@@ -613,6 +613,14 @@ carry verbatim guidance. A late Decision does not release the command; it
 continues the step's session with that context, and the Agent may ask again.
 _Avoid_: grant, verdict, allowlist entry
 
+**Approval Notice**:
+A Slack direct message telling the one person chosen on a Workflow (under Send
+approval requests) that a Workflow Approval Request waits for a decision. It shows
+the workflow, Agent, step and time left, never the command, and links to the run,
+where the person decides if they hold `agent.update` on the run's Agent. Agent Barn
+sends and updates it; it records no Approval Decision.
+_Avoid_: approval DM button, Slack approval, notification decision
+
 **Awaiting Approval**:
 The run state in which the run waits for a person: either a step's session has
 been stopped with a Workflow Approval Request unanswered, or the run reached an

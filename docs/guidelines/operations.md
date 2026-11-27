@@ -1029,6 +1029,13 @@ owns the product contract.
 No runtime image, worker, storage service or cluster permission is added for
 workflow authoring.
 
+Migration `cb14de9a231b` (after `463f987cd60d`) adds the Send approval requests
+setting, off for every existing workflow, and the per-request Slack message table.
+The event worker posts the messages with the run's Agent's Slack Connection; it
+reaches Slack as the API already does and builds the link from `WEB_APP_URL` in the
+shared Secret, so no chart change is needed. Rolling it back drops the setting and the table; messages already posted
+stay in Slack unchanged. See the [feature specification](../features/agent-workflows.md#send-approval-requests).
+
 Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
 after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`
 and the migrated WF01 API contracts before rollout. Migration `a38802d7f002`

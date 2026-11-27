@@ -17,6 +17,15 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-11-27 — Send approval requests to Slack
+
+- Added: a workflow setting, **Send approval requests** (off by default), that sends one Slack user, chosen by search, a direct message when a step's command needs a decision. The message has a title, the time left and a **Review and approve** link to the run; it never contains the command, and the decision is made on the web.
+- Added: `approval_notice` on workflow create, `PATCH` and reads (recipient fields only for those who may change the workflow); `GET /organizations/{organization_id}/slack-workspaces` for the workspaces reached through Agents the caller can update. A newly chosen user is checked on save; turning it on without a user is refused.
+- Added: the `workflow.approval_notice` handler on `workflow.run.changed`. Agent Barn posts with the run's own Agent's Slack Connection when its workspace matches, and updates the message as the request is parked, approved, declined or lapses. Slack failures are retried by the outbox without touching the step or a decision; refusals are recorded. No runtime or trigger server change.
+- Changed: people who cannot read a run's Agent see why when they open its link, and the approval card names `agent.update` for those who cannot decide.
+- Migration: `cb14de9a231b` after `463f987cd60d` adds the workflow's `approval_notice_*` columns and `workflow_approval_notice`.
+- Verification: new approval notice and migration integration tests, the workflow, run, approval and Communications suites, and the workflows and workflow-runs Playwright specs.
+
 ### 2026-11-19 — Workflows on for every installation
 
 - Removed: the Platform workflow authoring setting (**Platform Settings → Workflows**, `GET/PUT /api/v1/platform/settings/workflows`) and every check of it. Creating, saving, changing the default Agent and archiving no longer return 409 for a disabled installation; the Organization's Tier still decides whether new workflows can be added or run. The Workflows navigation item and an Agent's Workflows tab no longer wait for the capability read.

@@ -137,9 +137,9 @@ under an Agent; the Agent that runs a run is a field of the run. The earlier
 | --- | --- |
 | `GET /workflow-capabilities` | `authoring` (always true) and `execution`; web review only |
 | `GET /workflows` | Paginated card summaries, including archives; no full snapshots. Each carries `default_agent_name` and `run_count`, both limited to Agents the caller can read. Filters: `created_by_me=true`, `archived=true\|false` |
-| `POST /workflows` | `{draft, default_agent_id?}`; 201 immutable v1 |
-| `GET /workflows/{id}` | Latest saved snapshot, revision, archive status, creator, default Agent and current allowed actions |
-| `PATCH /workflows/{id}` | `{expected_revision, default_agent_id}` (null clears it); new revision, no new version, or 409. Sending the default it already has changes nothing and keeps the revision |
+| `POST /workflows` | `{draft, default_agent_id?, approval_notice?}`; 201 immutable v1 |
+| `GET /workflows/{id}` | Latest saved snapshot, revision, archive status, creator, default Agent, [approval notice](#send-approval-requests) and current allowed actions |
+| `PATCH /workflows/{id}` | `{expected_revision, default_agent_id?, approval_notice?}`; a field left out keeps its value, and a null `default_agent_id` clears it. New revision, no new version, or 409. Sending the values it already has changes nothing and keeps the revision |
 | `GET /workflows/{id}/versions` | Paginated immutable snapshots, newest first |
 | `POST /workflows/{id}/versions` | Full draft plus `expected_revision`; 201 new version or 409 |
 | `POST /workflows/{id}/archive` | `expected_revision`; 204, versions retained |
@@ -325,6 +325,9 @@ migration and rollback guidance.
 
 Implementation lives in `api/domains/workflows/` and
 `ui/src/features/workflows/`.
+Approval notices live in `api/domains/workflows/approval_notices.py` and
+`approval_notice_repository.py`, with the Slack calls behind
+`api/domains/communications/slack_messaging.py`.
 Schema migrations: `a38801c6e001` after `c42e91b7a603` creates authoring records;
 `a38802d7f002` adds the Platform authoring setting, which `463f987cd60d` removes. Merge revision `c32e42bb0396`
 joins it with staging head `d72b85f19c40`. Execution revision `a38901e8a003`
@@ -335,8 +338,9 @@ actual run inputs; what a step may do is governed by the configuration of the
 Agent chosen for the run. Migration `e4b439a1c7d2` moves ownership to the
 Organization; see [Organization ownership migration](#organization-ownership-migration-af-439).
 
-Command approvals are delivered by [Workflow approvals](#workflow-approvals-af-390);
-notifications, provider adapters and fanout belong to later AF-387 slices. No release version bump accompanies WF02.
+Command approvals are delivered by [Workflow approvals](#workflow-approvals-af-390),
+and a Slack direct message about them by [Send approval requests](#send-approval-requests);
+other notifications, provider adapters and fanout belong to later AF-387 slices. No release version bump accompanies WF02.
 
 ## WF02 execution and outputs
 
@@ -521,7 +525,8 @@ each completed step's `summary`, shown under “What each step did”, and a
 completion card. The last step is excluded from the per-step card on success to
 avoid repeating its text. Run and selected-step file attachments are delivered
 through the shared [Agent artifact service](agent-artifacts.md) alongside summaries.
-Dedicated preview pages and approval notifications remain follow-ups.
+Dedicated preview pages remain a follow-up; command approvals can also reach one
+person in Slack ([Send approval requests](#send-approval-requests)).
 
 ## Workflow approvals (AF-390)
 
@@ -564,8 +569,12 @@ Hermes command approval; they never widen what its approval mode allows.
 - **Bounds.** The third decline in one step blocks the run (cancel only) and fences
   the session.
 - **Authority.** Deciding requires current `agent.update` on the run's Agent, checked at
-  decision time; the decider is recorded. Runtime callbacks use the attempt
-  capability and cannot decide. A late decision continues only while the Agent runs,
+  decision time; the decider is recorded. Runtime callbacks cannot record a decision:
+  the attempt capability reaches only raise, status, park and released
+  (`/workflow-runtime/v1/attempts/{id}/approvals…`), and released is refused (409)
+  unless a person already approved the request. Only the product route
+  `POST /workflow-runs/{run_id}/approvals/{request_id}/decision`, with a signed-in
+  person's `agent.update`, decides. A late decision continues only while the Agent runs,
   the initiator keeps authority and the decider still holds `agent.update`; until then
   the run stays Awaiting Approval with the decision recorded. If the decider lost
   access, the request returns to `PARKED` for someone else to decide. Agent stops,
@@ -600,6 +609,70 @@ parked runs. Agents need the updated trigger server (Agent update/restart) for l
 approvals; older trigger servers keep the previous stop-and-block behavior. Refusing
 an empty resumed session needs the updated Hermes base image; older images ignore
 `resume_require_history`.
+
+## Send approval requests
+
+Terms follow [`CONTEXT.md`](../../CONTEXT.md): **Approval Notice**. A workflow can
+send one chosen Slack user a direct message whenever one of its steps raises a
+[Workflow Approval Request](#workflow-approvals-af-390). Slack only tells them; the
+decision is made on the web, which checks their access when they decide.
+
+- **Setting.** `approval_notice` on the workflow, outside its versions: `enabled`
+  (off by default), `platform` (`slack` only), `slack_user_id`, `slack_user_name` (the
+  name when chosen) and `slack_team_id` (the workspace the user was chosen from).
+  Turning it on without a user is refused (422); the database refuses it too. It is
+  changed with the default Agent's authority (creator or `workflow.manage`), through
+  `PATCH /workflows/{id}` or on create. Reads return the recipient fields only to
+  those who may change the workflow; everyone else sees only whether it is on.
+- **Choosing the user.** `GET /organizations/{organization_id}/slack-workspaces`
+  lists the Slack workspaces reached by an enabled Slack Connection of an Agent the
+  caller holds `agent.update` on, each with those Connections. The editor searches
+  people through one of them with the Connection's existing directory route
+  (`…/connections/{connection_id}/directory/users`, which needs that same
+  `agent.update`); with more than one workspace the author picks the workspace first.
+  Saving a newly chosen user repeats the check on the server: the workspace must be
+  one the author reaches that way and the user an active, human member of it, or the
+  save is refused (400); the stored name is the one Slack reports. Keeping an
+  already-saved user is not re-checked. The person chosen needs no Slack link and is
+  not matched by email.
+- **Who is told.** When a request is raised, the API notes the workflow's current
+  recipient beside the request (`workflow_approval_notice`), in the same transaction
+  and without calling Slack; the runtime's response stays `{id, live_seconds}`. A
+  handler of its own on `workflow.run.changed` (`workflow.approval_notice`) then posts
+  the message only if the run's own Agent has an enabled Slack Connection whose
+  workspace (Slack `auth.test`, cached for ten minutes) is the stored one. Otherwise
+  nothing is sent and the request stays on the web; another Agent's Slack in that
+  workspace is never used. Changing or turning off the setting later does not
+  redirect a request already raised.
+- **The message.** A title, the Agent, the step number and the workflow's name, the
+  time left while live (Slack shows the deadline in the reader's time zone), and one
+  link button, **Review and approve**, to
+  `{WEB_APP_URL}/dashboard/{organization_id}/workflows?workflowRun={run_id}`. The link
+  is a plain URL with no token; opening it needs a signed-in session and never
+  decides. The message never contains the command or guidance.
+- **Keeping it current.** The handler updates the message as the request moves on:
+  `PARKED` keeps the button and says the step is paused, waiting for a decision; the
+  button goes away on `APPROVED` (and `RELEASED`, which follows it), `DECLINED` and
+  `LAPSED`. A request that settled before the message was posted is not posted. The
+  Slack channel and message timestamp are stored with the notice, and later updates
+  use the same Connection's bot. Work on one notice is serialized with a
+  transaction-level advisory lock, never a lock on the request, so a decision on the
+  web never waits for Slack.
+- **Failures.** The handler has its own Event Delivery, so a slow, failing or
+  unreachable Slack never touches the step, the run or a decision. Slack being
+  unreachable or rate limiting is retried by the outbox; a Slack refusal (for example
+  `user_not_found`) is recorded on the notice as `FAILED` with its code and not
+  retried. The runtime never learns whom to message.
+- **Opening the link.** The run page shows the approval card with the command and
+  Approve and Decline to those with `agent.update`. Someone who can read the Agent
+  but not update it sees the request and a refusal naming `agent.update`; someone who
+  cannot read it sees that the run runs on an Agent they cannot access, rather than
+  an empty page.
+
+Migration `cb14de9a231b` adds the workflow's `approval_notice_*` columns, off for
+every existing workflow, and `workflow_approval_notice`. Its downgrade drops both;
+messages already posted stay in Slack unchanged. No Agent update or restart is
+needed.
 
 ## Approval steps
 

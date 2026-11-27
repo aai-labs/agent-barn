@@ -390,6 +390,12 @@ workflow operator pass handles missed events, expired attempts and retention. Ru
 the event payload. These are workflow wakeup facts, not Security Audit or product
 analytics projections. See the [workflow feature](agent-workflows.md#wf02-execution-and-outputs).
 
+The same event also goes to `workflow.approval_notice`, a delivery of its own, which
+posts and updates the run's [Approval Notices](agent-workflows.md#send-approval-requests)
+in Slack. It reads the notice and request as they are now, so duplicate or late
+events only bring a message up to date. Slack being unreachable raises a retryable
+error for that delivery alone; the controller's delivery and the run are unaffected.
+
 ## Personal API Key security events
 
 Platform-scoped `api_key.created` and `api_key.revoked` events record account credential lifecycle with a User actor and User subject. Their payloads contain only the User ID, key record ID, access mode, and safe display fields. The API Key repository commits each key mutation and outbox/delivery rows in one transaction; the Security Audit projection persists the resulting record.
