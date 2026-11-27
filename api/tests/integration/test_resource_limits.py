@@ -282,7 +282,35 @@ def test_the_storage_and_pod_ceilings_are_saved_and_each_change_is_recorded():
             )
 
 
-@pytest.mark.parametrize("body", [{"pods": 0}, {"pods": 1.5}, {"requests_storage_bytes": 2**61}])
+def test_the_volume_claim_and_service_ceilings_are_saved_and_each_change_is_recorded():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-claims-services@example.com")]) as context:
+        with when("the admin enters the persistentvolumeclaims and services quota lines"):
+            response = _put(context, {"persistentvolumeclaims": 60, "services": 40})
+
+        with then("both come back, and each leaves its own event named as the quota names it"):
+            body = response.json()
+            assert_that(body["persistentvolumeclaims"], equal_to(60))
+            assert_that(body["services"], equal_to(40))
+            moves = [
+                (e.payload["setting"], e.payload["previous"], e.payload["current"]) for e in _limit_events(context)
+            ]
+            assert_that(
+                moves,
+                contains_inanyorder(("persistentvolumeclaims", None, 60.0), ("services", None, 40.0)),
+            )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"pods": 0},
+        {"pods": 1.5},
+        {"requests_storage_bytes": 2**61},
+        {"persistentvolumeclaims": 0},
+        {"services": 2.5},
+        {"services": 10_000_000},
+    ],
+)
 def test_a_storage_or_pod_ceiling_that_cannot_be_real_is_refused(body):
     with given([*_BASE_GIVEN, *_platform_admin("admin-storage-bounds@example.com")]) as context:
         assert_that(_put(context, body).status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))

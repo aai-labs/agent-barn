@@ -7,6 +7,7 @@ from fastapi_injector import Injected
 from api.domains.workflows.routes import Context
 from api.domains.workflows.run_models import (
     ApprovalDecisionCreate,
+    StepApprovalDecisionCreate,
     WorkflowHistoryRead,
     WorkflowRunCancel,
     WorkflowRunCreate,
@@ -69,6 +70,13 @@ def decide_approval(
     run_id: UUID, request_id: UUID, payload: ApprovalDecisionCreate, context: Context, service: Service
 ):
     return service.decide(run_id, request_id, payload, context)
+
+
+@router.post("/{run_id}/step-approvals/{approval_id}/decision", response_model=WorkflowRunRead)
+def decide_step_approval(
+    run_id: UUID, approval_id: UUID, payload: StepApprovalDecisionCreate, context: Context, service: Service
+):
+    return service.decide_step(run_id, approval_id, payload, context)
 
 
 @router.get("/{run_id}/history", response_model=PaginatedItems[WorkflowHistoryRead])

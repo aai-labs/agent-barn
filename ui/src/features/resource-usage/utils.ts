@@ -26,8 +26,8 @@ export const DEFAULT_OVERVIEW_PERIOD: OverviewPeriod = "THIRTY_DAYS";
 /** Both figures move slowly; a minute matches how often Prometheus is worth asking. */
 export const RESOURCE_USAGE_REFETCH_MS = 60_000;
 
-/** Health is a separate request per row, so the overview polls it less often than the
- *  Agent page does. */
+/** How often the overview rereads its rows' health (one request for the whole table);
+ *  less often than the Agent page, which watches one Agent. */
 export const OVERVIEW_HEALTH_REFETCH_MS = 30_000;
 
 /** A meter turns amber at this share of its limit, and red at the next. */

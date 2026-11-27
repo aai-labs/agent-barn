@@ -13,6 +13,13 @@ Related context: [implementation brief](IMPLEMENTATION-BRIEF.md), [current role 
 
 ## Changes
 
+### 2026-11-16 — [AF-453](https://aai-labs.atlassian.net/browse/AF-453) — PR pending — anomaly detection Permissions
+
+- Delivered: `anomaly.read` and `anomaly.manage`, Organization-scoped Permissions granted to Owners and Admins, gating the anomaly detection opt-in, an Agent's Anomalies and learned normal, and its override.
+- Changed: the Permission catalogue gains two rows, inserted by the AF-453 migration with the immutability trigger lifted for those statements only; no Agent Access Role carries them, so a Member who owns an Agent does not see its Anomalies. The anomaly check joins the background-work exception.
+- Verified: migration round-trip (rows present, removed on downgrade), the exact Organization Role matrix, and integration tests for Owner, Admin, Member, a Member who owns the Agent and a Member without access.
+- Follow-up: none.
+
 ### 2026-11-12 — [AF-439](https://aai-labs.atlassian.net/browse/AF-439) — PR pending — Organization-owned workflows
 
 - Delivered: workflow definitions are Organization resources read and created by any accepted Member (`organization.read`); saving a version, changing the default Agent and archiving are limited to the creating Membership and holders of the new Organization Permission `workflow.manage` (Owners and Admins). Workflow runs are subordinate resources of the Agent that runs them (`agent.read` to see, `agent.update` to start, cancel, decide and re-run), with the Agent named in the request body rather than the route.

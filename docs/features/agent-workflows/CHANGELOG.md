@@ -11,6 +11,7 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Verification: complete API suite **6,578 passed**, complete UI suite **1,053 passed / 5 skipped**, Kubernetes client **19 passed**, Hermes/OpenClaw runtime suites **16 / 12 passed**, both artifact byte workflows and the persistent deployment/browser contract passed. Quality, migration/chart/monitoring checks and API/production UI builds passed. [Artifact evidence](../agent-artifacts/EVIDENCE.md#pr-preparation-and-complete-verification--2026-10-29) records the final results, harness corrections, screenshot provenance and live-acceptance limits.
 - [PR #365](https://github.com/aai-labs/agent-barn/pull/365) (AF-390, merged into staging): Hermes step commands are approved live or after the session parks; late decisions resume the step's own session. Checked on local k3d with a real Hermes Agent (live approve, park and late approve).
 - In transition: [PR #367](https://github.com/aai-labs/agent-barn/pull/367) (AF-439, API slice) moves workflows to the Organization and removes the `/agents/{agent_id}/…` workflow routes, and [PR #368](https://github.com/aai-labs/agent-barn/pull/368) (UI slice) moves the screens to the Organization routes. Neither works without the other; both must reach staging together through the `AF-439-organization-workflows` integration branch.
+- In review: Approval steps (API and UI) on branch `workflow-approval-steps`, on staging after AF-439 ([PR #366](https://github.com/aai-labs/agent-barn/pull/366)). Its migration follows staging's head `0a07b0b57b62`.
 - Next: OpenClaw approvals ([AF-444](https://aai-labs.atlassian.net/browse/AF-444)) and out-of-app approval notifications ([AF-393](https://aai-labs.atlassian.net/browse/AF-393)). Future reviews must pin exact IDs/checksums independently of bearer URL lifetime.
 - Blockers: live model/session execution on both runtimes, truthful OpenClaw stop/quiescence and run-read-policy acceptance remain open. Deployment/provisioning is separate operational work. Explicit recovery/reconciliation is not exposed by this slice.
 
@@ -20,8 +21,22 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 - Removed: the Platform workflow authoring setting (**Platform Settings → Workflows**, `GET/PUT /api/v1/platform/settings/workflows`) and every check of it. Creating, saving, changing the default Agent and archiving no longer return 409 for a disabled installation; the Organization's Tier still decides whether new workflows can be added or run. The Workflows navigation item and an Agent's Workflows tab no longer wait for the capability read.
 - Changed: `GET /workflow-capabilities` keeps `authoring`, always true, for clients that read it. `platform.workflow_authoring.changed` is no longer emitted and stays registered for stored events and audit records.
-- Migration: `463f987cd60d` after `c87b17ccfe1a` drops `platform_workflow_settings`; its downgrade restores the table with authoring on.
+- Migration: `463f987cd60d` after staging head `b3d81c5e9f42` drops `platform_workflow_settings`; its downgrade restores the table with authoring on.
 - Verification: workflow, run, Tier and contract API suites, the drop migration test, and the workflows, workflow-runs, navigation and Agent detail Playwright specs.
+
+### 2026-11-18 — Approval steps (UI)
+
+- Added: "Add step:" with Agent and Approval in the editor, and Allowed decisions chips on an Approval step (Approve always on; the API refuses other decisions with 422); the decision in the waiting Approval step's pane, which the run opens on, with Approve, Request changes and Reject; Approval step rounds and earlier results on step detail; the Rejected run state; Approval steps in the approvals inbox and badges.
+- Changed: run reads add an Approval step's `instructions` and an Agent step's `earlier_rounds`.
+- Verification: Playwright against stubbed routes (editor, approve, request changes over two rounds, reject, Viewer, inbox and badge). Live on local k3d with a Hermes Agent: a three-step workflow authored in the editor ran step 1, waited, ran step 1 again with the reviewer's notes after Request changes (the revised result followed them), was approved and completed step 3 with the approved text; Run again was then rejected and settled as Rejected with no further steps. The live run found that a rejected Approval step read as in progress under Time taken; fixed.
+
+### 2026-11-18 — Approval steps (API)
+
+- Added: an Approval step type. A run reaching one waits as Awaiting Approval until someone with `agent.update` on the run's Agent approves (the run continues), requests changes (the step before runs again in a fresh session with their notes and its previous result, then a new round opens) or rejects (the run settles as `REJECTED`).
+- Changed: `POST /workflow-runs/{run_id}/step-approvals/{approval_id}/decision`; run reads add `step_approval`, `step_approvals`, step `type` and `round`; `awaiting_decision` and the badge include waiting Approval steps.
+- Migration: `b7e2c41d9a63` after `0a07b0b57b62` adds `workflow_step_approval`, checkpoint rounds and the `REJECTED` state.
+- Follow-up: the UI slice. Versions with Approval steps are unreadable by an API without this change.
+- Verification: new integration and migration tests, plus the existing workflow, approval, Tier, cross-Organization and API contract suites.
 
 ### 2026-11-17 — AF-439 — [PR #368](https://github.com/aai-labs/agent-barn/pull/368) — Organization Workflows page and Agent run history (UI)
 

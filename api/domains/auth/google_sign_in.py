@@ -37,6 +37,7 @@ from api.domains.auth.service import GOOGLE_LOGIN_METHOD, JWT_ENCODING_ALGORITHM
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.models import ActorIdentity, ActorIdentityType
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import CreditGrantKind, Organization
@@ -126,6 +127,7 @@ class GoogleSignInService:
     telegram: AgentBarnTelegramService
     event_delivery_dispatcher: EventDeliveryDispatcher
     plans: OrganizationPlans
+    llm_provider_access: LlmProviderAccessLookup
 
     def redirect_uri(self) -> str:
         # Must be registered on the Google client, and identical in the authorize request
@@ -301,7 +303,9 @@ class GoogleSignInService:
         organization = Organization(
             name=AuthService._default_organization_name(identity.name),
             created_by_user_id=user.id,
-            allowed_models=[self.config.agent_default_model.removeprefix("litellm/openrouter/")],
+            allowed_models=self.llm_provider_access.initial_allowed_models(
+                session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+            ),
             is_trial=True,
             tier_id=self.plans.trial_plan_id(),
             llm_budget_usd=credit,
@@ -345,7 +349,9 @@ class GoogleSignInService:
         organization = Organization(
             name=AuthService._default_organization_name(identity.name),
             created_by_user_id=user.id,
-            allowed_models=[self.config.agent_default_model.removeprefix("litellm/openrouter/")],
+            allowed_models=self.llm_provider_access.initial_allowed_models(
+                session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+            ),
             tier_id=plan_id,
             llm_budget_usd=0,
             llm_budget_duration=ONE_OFF_BUDGET_WINDOW,

@@ -49,6 +49,7 @@ export const mockCommunicationPlatforms = [
         channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
         listen_in_channel_ids: { title: "Listen-in channels", type: "array", items: { type: "string" } },
+        api_url: { title: "Custom Slack server", anyOf: [{ type: "string" }, { type: "null" }], default: null },
       },
     },
     credentials_schema: {

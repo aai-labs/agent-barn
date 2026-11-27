@@ -1857,6 +1857,7 @@ class PlatformAgentIdentity(NamedTuple):
     status: AgentStatus
     organization_id: UUID
     organization_name: str
+    created_at: datetime | None = None
 
 
 class PlatformFailedAgent(NamedTuple):
@@ -1935,6 +1936,10 @@ class AgentRuntimeDiagnosticsRead(PydanticBaseModel):
 class AgentHealthRead(PydanticBaseModel):
     status: str
     reason: str | None = None
+
+
+class AgentHealthItemRead(AgentHealthRead):
+    agent_id: UUID
 
 
 def get_agent_filter(

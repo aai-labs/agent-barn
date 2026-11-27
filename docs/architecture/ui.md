@@ -51,6 +51,8 @@ Section lists that navigation and its page both show come from one helper (`visi
 
 Dashboard navigation has route-level `../../ui/src/app/dashboard/loading.tsx` and `../../ui/src/app/dashboard/error.tsx` boundaries. Client-owned query loading and follow-up failures remain inside feature components with inline retry UI. A hook error does not automatically reach an App Router error boundary.
 
+Every route segment under `../../ui/src/app/dashboard/` that has child routes carries its own `loading.tsx` (re-exporting `DashboardRouteLoading`). A client navigation only re-renders below the deepest segment the two routes share, and a `loading.tsx` only covers navigations inside its own folder. Without a boundary at or below that shared segment, a click on a link to a dynamic route (any `[param]` route) waits for the server to render the page before anything changes on screen. With one, Next.js prefetches the route's shell and the click switches immediately to the skeleton. A new folder that gets child routes needs its own `loading.tsx`; a leaf page does not.
+
 ## Testing
 
 Playwright specs live in `../../ui/tests/e2e/`. Selectors and interactions belong in page objects under `../../ui/tests/pages/`; domain request interception and fixtures belong in shared data-support helpers. Assertions stay in specs.
@@ -67,7 +69,7 @@ Use `make lint-ui`, `make check-ui`, and relevant Playwright tests for changed b
 | Organization selection and cache isolation | `../../ui/src/features/organizations/providers/organization-provider.tsx`                                               |
 | API client and interceptors                | `../../ui/src/shared/api/`                                                                                              |
 | Query-key factory                          | `../../ui/src/shared/query-keys.ts`                                                                                     |
-| Route boundaries                           | `../../ui/src/app/error.tsx`, `../../ui/src/app/dashboard/loading.tsx`, `../../ui/src/app/dashboard/error.tsx`                      |
+| Route boundaries                           | `../../ui/src/app/error.tsx`, `../../ui/src/app/dashboard/loading.tsx` and the per-segment `loading.tsx` files below it, `../../ui/src/app/dashboard/error.tsx` |
 | SSE proxy and client                       | `../../ui/src/app/api/v1/organizations/[organizationId]/agents/[agentId]/logs/stream/route.ts`, `../../ui/src/features/agents/hooks/use-agent-log-stream.ts` |
 | Playwright configuration and support       | `../../ui/playwright.config.ts`, `../../ui/tests/`                                                                            |
 

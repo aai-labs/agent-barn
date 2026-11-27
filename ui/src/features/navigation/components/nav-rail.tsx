@@ -5,6 +5,7 @@ import Link from "next/link";
 import { LogoMark } from "@/components/logo-mark";
 
 import { useRailModel } from "../hooks/use-rail-model";
+import { LinkPendingHint } from "./link-pending-hint";
 import { PLATFORM_RAIL_BACKGROUND, RAIL_BACKGROUND, type NavItem } from "../nav-model";
 
 /**
@@ -55,6 +56,7 @@ function RailLink({ item, tone }: { item: NavItem; tone: "neutral" | "platform" 
         </span>
       ) : null}
       <span className="max-w-full truncate">{item.label}</span>
+      <LinkPendingHint />
     </Link>
   );
 }

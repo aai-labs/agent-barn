@@ -17,10 +17,10 @@ from api.domains.file_sync.rules import rules_manifest
 
 from .artifacts import (
     ARTIFACT_COMMAND,
-    ARTIFACT_INSTRUCTIONS,
     ARTIFACT_TOOL,
     artifact_command_mount,
     artifact_command_volume,
+    artifact_instructions,
 )
 from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids, bot_mounts, bot_volumes
 from .memory import (
@@ -40,6 +40,7 @@ _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 _TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
 _LISTEN_IN = _SCRIPTS / "plugins" / "agentbarn-listen-in"
 _SLACK_ACCESS = _SCRIPTS / "plugins" / "agentbarn-slack-access"
+_SLACK_COMPAT = _SCRIPTS / "plugins" / "agentbarn-slack-compat"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
@@ -60,6 +61,8 @@ LISTEN_IN_PLUGIN_INIT: str = (_LISTEN_IN / "__init__.py").read_text()
 LISTEN_IN_CHECK_PY: str = (_SCRIPTS / "listen-in-check.py").read_text()
 SLACK_ACCESS_PLUGIN_YAML: str = (_SLACK_ACCESS / "plugin.yaml").read_text()
 SLACK_ACCESS_PLUGIN_INIT: str = (_SLACK_ACCESS / "__init__.py").read_text()
+SLACK_COMPAT_PLUGIN_YAML: str = (_SLACK_COMPAT / "plugin.yaml").read_text()
+SLACK_COMPAT_PLUGIN_INIT: str = (_SLACK_COMPAT / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -236,12 +239,16 @@ def build_hermes_gateway_config(
     max_turns: int | None = None,
     slack_listen_in: list[str] | None = None,
     discord_listen_in: list[str] | None = None,
+    custom_slack: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-tasks"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
     if native_slack:
         plugins.append("agentbarn-slack-access")
+        if custom_slack:
+            # Sends this Connection's Slack calls to its Custom Slack server.
+            plugins.append("agentbarn-slack-compat")
     config = _hermes_config_core(
         model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
     )
@@ -401,6 +408,11 @@ def native_slack_env(
     }
     if settings.get("group_policy", "allowlist") == "allowlist":
         env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
+    if api_url := settings.get("api_url"):
+        # Read by agentbarn-slack-compat, which routes only calls carrying these tokens.
+        env["AGENTBARN_SLACK_COMPAT_API_URL"] = api_url
+        env["AGENTBARN_SLACK_COMPAT_BOT_TOKEN"] = credentials["bot_token"]
+        env["AGENTBARN_SLACK_COMPAT_APP_TOKEN"] = credentials["app_token"]
     if home_channel is not None:
         env["SLACK_HOME_CHANNEL"] = home_channel.id
         env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
@@ -526,6 +538,7 @@ def build_hermes_config_map(
     skills_json: str | None = None,
     memory_enabled: bool = False,
     artifacts_enabled: bool = False,
+    chat_attachments: bool = False,
     bots_manifest: str | None = None,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
@@ -541,7 +554,7 @@ def build_hermes_config_map(
         "TOOLS.md": tools_md,
         "AGENTS.md": agents_md
         + TASK_TOOL_INSTRUCTIONS
-        + (ARTIFACT_INSTRUCTIONS if artifacts_enabled else "")
+        + (artifact_instructions(chat_attachments) if artifacts_enabled else "")
         + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -557,6 +570,8 @@ def build_hermes_config_map(
         "listen-in-check.py": LISTEN_IN_CHECK_PY,
         "slack-access-plugin.yaml": SLACK_ACCESS_PLUGIN_YAML,
         "slack-access-init.py": SLACK_ACCESS_PLUGIN_INIT,
+        "slack-compat-plugin.yaml": SLACK_COMPAT_PLUGIN_YAML,
+        "slack-compat-init.py": SLACK_COMPAT_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
@@ -716,7 +731,7 @@ def build_hermes_deployment(
                         client.V1Container(
                             name="agent",
                             image=image,
-                            command=["sh", "/app/config/start.sh"],
+                            command=["/usr/bin/tini", "--", "sh", "/app/config/start.sh"],
                             resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(

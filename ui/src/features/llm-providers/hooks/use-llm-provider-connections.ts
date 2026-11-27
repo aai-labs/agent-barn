@@ -17,7 +17,7 @@ const BASE = "/api/v1/platform/settings/llm-providers";
 
 export const llmProvidersKey = createQueryKeyStructure("platform-llm-providers");
 
-function connectionUrl(slug: string) {
+export function connectionUrl(slug: string) {
   return `${BASE}/${encodeURIComponent(slug)}`;
 }
 

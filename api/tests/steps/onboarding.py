@@ -40,3 +40,17 @@ def trial_settings_are_configured(
             session.commit()
 
     return step
+
+
+def the_tier_is_offered(key: str = FREE_TIER_KEY, *, offered: bool = True):
+    """A Tier of the catalog offered to new Organizations, or withdrawn."""
+
+    def step(context):
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            tier = session.exec(select(Tier).where(Tier.key == key)).one()
+            tier.enabled = offered
+            session.add(tier)
+            session.commit()
+
+    return step

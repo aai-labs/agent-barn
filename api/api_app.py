@@ -3,6 +3,7 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import anyio.to_thread
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_injector import Injected, attach_injector
@@ -10,7 +11,7 @@ from injector import Injector
 from prometheus_client import REGISTRY
 from sqlmodel import Session, select
 
-from api.core.config import get_config
+from api.core.config import Config, get_config
 from api.core.metrics import (
     CONTENT_TYPE_LATEST,
     PROBE_REGISTRY,
@@ -35,6 +36,7 @@ from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agen
 from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
+from api.domains.anomalies.routes import anomalies_router
 from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.artifacts.routing import router as agent_artifacts_router
 from api.domains.auth.routes import auth_router
@@ -62,6 +64,7 @@ from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.llm_providers.lookup import OpenRouterKeyLookup
 from api.domains.llm_providers.routes import platform_llm_providers_router
+from api.domains.mcp_servers.routes import agent_mcp_servers_router, mcp_oauth_callback_router, mcp_servers_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
 from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
@@ -101,9 +104,18 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 logger = logging.getLogger(__name__)
 
 
+def apply_thread_limit(config: Config) -> None:
+    """Size the thread pool sync routes run on (see ``Config.api_thread_limit``).
+
+    AnyIO's limiter belongs to the running event loop, so this runs at startup.
+    """
+    anyio.to_thread.current_default_thread_limiter().total_tokens = config.api_thread_limit
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     config = get_config()
+    apply_thread_limit(config)
     if not config.is_email_delivery_enabled:
         log_email_delivery_disabled_warning(logger)
 
@@ -166,6 +178,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(workflow_runs_router)
     app_v1.include_router(workflow_runtime_router)
     subapi.include_router(agent_settings_router)
+    subapi.include_router(anomalies_router)
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_llm_providers_router)
     subapi.include_router(platform_agent_sizes_router)
@@ -205,6 +218,9 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(member_router)
     subapi.include_router(platform_member_router)
     subapi.include_router(shared_credentials_router)
+    subapi.include_router(mcp_servers_router)
+    subapi.include_router(agent_mcp_servers_router)
+    subapi.include_router(mcp_oauth_callback_router)
     subapi.include_router(skills_router)
     subapi.include_router(agent_skills_router)
     subapi.include_router(platform_skills_router)

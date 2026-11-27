@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, NoReturn
 from uuid import UUID
 
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from pydantic import ValidationError
@@ -59,10 +60,27 @@ MAX_DIAGNOSTICS_WINDOW_DAYS = 90
 
 # OpenClaw has one rule per Agent for untagged messages, so it can't answer them in
 # some channels while only listening in others.
+_CUSTOM_SLACK_UNSUPPORTED = "A Custom Slack server is available only for Hermes Agents, not OpenClaw Agents or Bots"
 _OPENCLAW_MENTION_CONFLICT = (
     "On OpenClaw, Require @mention can't be off while the Agent has listen-in channels. "
     "Turn it on, or remove the listen-in channels."
 )
+
+
+def _problem(exc: Exception, plugin) -> str:
+    """Describe configuration errors without Pydantic's raw validation inputs."""
+    if not isinstance(exc, ValidationError):
+        return str(exc)
+    fields = {**plugin.settings_model.model_fields, **plugin.credentials_model.model_fields}
+    problems = []
+    for error in exc.errors(include_url=False, include_input=False, include_context=False):
+        loc = error["loc"]
+        message = error["msg"].removeprefix("Value error, ")
+        field = fields.get(str(loc[0])) if loc else None
+        name = (field.title if field and field.title else None) or ".".join(str(part) for part in loc)
+        problems.append(f"{name}: {message}" if name else message)
+    return "; ".join(problems)
+
 
 # A directory read talks to the provider, so a failure is usually the operator's
 # credentials or scopes rather than a bug. 401/403 are deliberately never used:
@@ -179,7 +197,7 @@ class CommunicationsService:
                 guild_id=guild_id,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -207,7 +225,7 @@ class CommunicationsService:
             credentials = plugin.credentials_model.model_validate(data.credentials)
             entries = plugin.list_directory_entries(settings, credentials, kind=data.kind, guild_id=data.guild_id)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -241,6 +259,7 @@ class CommunicationsService:
             agent_id=agent.id,
         )
         self._require_openclaw_mention_rule(agent, context, plugin.key, validated.settings, data.enabled)
+        self._require_custom_slack_runtime(agent, plugin.key, validated.settings)
         connection = CommunicationConnection(
             organization_id=agent.organization_id,
             agent_id=agent.id,
@@ -309,7 +328,8 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        self._reject_web_chat_mutation(connection.platform_key)
+        if connection.platform_key == "web":
+            return self._release_held_web_chat(agent, connection, data)
         if data.enabled and not connection.enabled:
             self.usage.check(
                 agent.organization_id, UsageAction.CONNECT_CHANNEL, UsageSubject(platform_key=connection.platform_key)
@@ -318,7 +338,7 @@ class CommunicationsService:
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(connection.platform_key)
-        credentials = data.credentials or self._decrypt_credentials(plugin, connection.credentials_encrypted)
+        credentials = self._replaced_credentials(plugin, connection.credentials_encrypted, data.credentials)
         settings = data.settings if data.settings is not None else connection.settings
         validated = self._validate(
             plugin,
@@ -331,6 +351,7 @@ class CommunicationsService:
         self._require_openclaw_mention_rule(
             agent, context, connection.platform_key, validated.settings, enabled, replacing=connection.id
         )
+        self._require_custom_slack_runtime(agent, connection.platform_key, validated.settings)
         if data.display_name is not None:
             connection.display_name = data.display_name.strip()
         if data.enabled is not None:
@@ -557,7 +578,7 @@ class CommunicationsService:
                 detail=f"{plugin.display_name} does not provide a bot install link",
             ) from exc
         except (ValidationError, ValueError, PermissionError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
 
     def build_app_package(
         self,
@@ -606,7 +627,34 @@ class CommunicationsService:
                 detail=f"{plugin.display_name} does not provide an installable app package",
             ) from exc
         except (ValidationError, ValueError, PermissionError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
+
+    def _release_held_web_chat(
+        self, agent: Agent, connection: CommunicationConnection, data: CommunicationConnectionUpdate
+    ) -> CommunicationConnectionRead:
+        """The built-in Web Chat Connection is Agent Barn's: the only change it takes is being
+        enabled again after a Tier Hold switched it off, once the Tier covers Web Chat again."""
+        if connection.suspended_at is None or data.model_fields_set != {"revision", "enabled"} or not data.enabled:
+            self._reject_web_chat_mutation(connection.platform_key)
+        connection.enabled = True
+        connection.resume()
+        # Nothing reports Web Chat's status; it is connected whenever it is enabled.
+        connection.observed_status = ConnectionObservedStatus.CONNECTED
+        try:
+            return self._read(
+                self.repository.update(
+                    connection,
+                    expected_revision=data.revision,
+                    check_entitlement=lambda session: self.usage.check(
+                        agent.organization_id,
+                        UsageAction.CONNECT_CHANNEL,
+                        UsageSubject(platform_key=connection.platform_key),
+                        session=session,
+                    ),
+                )
+            )
+        except CommunicationConnectionConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     @staticmethod
     def _reject_web_chat_mutation(platform_key: str) -> None:
@@ -621,6 +669,18 @@ class CommunicationsService:
             return self.plugins.require(key)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @staticmethod
+    def _require_custom_slack_runtime(agent: Agent, platform_key: str, settings: dict) -> None:
+        """Only the Hermes runtime can route its Slack app to a Slack-compatible server.
+
+        The Hermes plugin that does it is configured for the whole process, so a Bot's
+        profile cannot carry its own server.
+        """
+        if platform_key != "slack" or not settings.get("api_url"):
+            return
+        if agent.agent_type != AgentType.HERMES or agent.parent_agent_id is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CUSTOM_SLACK_UNSUPPORTED)
 
     def _require_openclaw_mention_rule(
         self,
@@ -658,7 +718,7 @@ class CommunicationsService:
                 agent_id=agent_id,
             )
         except (ValidationError, ValueError, PermissionError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_problem(exc, plugin)) from exc
 
     def _encrypt_credentials(self, credentials: dict) -> str:
         return encrypt_token(
@@ -711,11 +771,24 @@ class CommunicationsService:
         plugin = self._require_plugin(connection.platform_key)
         return self._decrypt_credentials(plugin, connection.credentials_encrypted)
 
+    def _replaced_credentials(self, plugin, ciphertext: str, submitted: dict | None) -> dict:
+        """The stored credentials with the submitted fields replaced; a blank field keeps its stored value."""
+        supplied = {key: value for key, value in (submitted or {}).items() if value not in ("", None)}
+        try:
+            stored = self._decrypt_credentials(plugin, ciphertext)
+        except HTTPException:
+            # Credentials that can no longer be read can still be replaced as a whole.
+            required = {name for name, field in plugin.credentials_model.model_fields.items() if field.is_required()}
+            if not required <= supplied.keys():
+                raise
+            return supplied
+        return stored | supplied
+
     def _decrypt_credentials(self, plugin, ciphertext: str) -> dict:
         try:
             raw = json.loads(decrypt_token(ciphertext, self.config.agent_token_encryption_key))
             return plugin.validate_stored_credentials(raw)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (InvalidToken, ValueError, TypeError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Stored Communication Connection credentials are invalid",

@@ -699,7 +699,7 @@ def test_dropping_the_platform_workflow_setting_keeps_workflows_and_rolls_back_w
         saved = create(context)
         engine = context.injector.get(PostgresRepositoryDelegate).engine
         assert_that("platform_workflow_settings" in inspect(engine).get_table_names(), is_(False))
-        command.downgrade(config, "c87b17ccfe1a")
+        command.downgrade(config, "b3d81c5e9f42")
         try:
             with engine.connect() as connection:
                 enabled = connection.execute(

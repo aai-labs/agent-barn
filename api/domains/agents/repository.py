@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -313,6 +313,22 @@ class AgentRepository:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
 
+    @staticmethod
+    def lock_key_models(session: Session, agent_id: UUID) -> None:
+        session.connection().execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"), {"lock_key": f"agent-key-models:{agent_id}"}
+        )
+
+    def with_key_models_lock[T](self, agent_id: UUID, callback: Callable[[Agent | None], T]) -> T:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            self.lock_key_models(session, agent_id)
+            agent = session.exec(
+                select(Agent).where(col(Agent.id) == agent_id, col(Agent.deleted_at).is_(None))
+            ).first()
+            result = callback(agent)
+            session.commit()
+            return result
+
     def find_membership_with_user(self, membership_id: UUID) -> tuple[OrganizationUser, User | None] | None:
         with Session(self.delegate.engine) as session:
             row = session.exec(
@@ -329,6 +345,17 @@ class AgentRepository:
                 *agent_scope_predicates(authorization_scope),
             )
             return session.exec(query).first()
+
+    def list_active_in_scope(self, agent_ids: Collection[UUID], authorization_scope: AuthorizationScope) -> list[Agent]:
+        """The active Agents among ``agent_ids`` that the scope reaches; the rest are left out."""
+        if not agent_ids:
+            return []
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(
+                col(Agent.id).in_(list(agent_ids)),
+                *agent_scope_predicates(authorization_scope),
+            )
+            return list(session.exec(query).all())
 
     def get_deleted_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         if not authorization_scope.has_organization_visibility:
@@ -393,6 +420,17 @@ class AgentRepository:
                 )
                 or 0
             )
+
+    def find_live_ids_by_org(self, org_id: UUID) -> list[UUID]:
+        """Ids of an Organization's non-deleted Agents, oldest first. Unscoped: for
+        background work only."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(Agent.id))
+                .where(col(Agent.organization_id) == org_id, col(Agent.deleted_at).is_(None))
+                .order_by(col(Agent.created_at))
+            )
+            return list(session.exec(query).all())
 
     def count_active_by_org(self, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
@@ -1008,6 +1046,7 @@ class AgentRepository:
         actor_display: str | None = None,
         artifact_bucket: ArtifactBucket | None = None,
         agent_limit: int | None = None,
+        in_transaction: Callable[[Session], None] | None = None,
     ) -> AgentLifecycleEventResult:
         """Create an Agent and its initial resources in one transaction.
 
@@ -1021,6 +1060,9 @@ class AgentRepository:
 
         A size chosen on hire is re-checked under its locks, as a later choice is, and
         recorded as `agent.agent_size.changed` from the default. Raises AgentSizeUnavailable.
+
+        `in_transaction` runs in that transaction after the Agent-limit check, so whatever it
+        reads or locks holds until the commit; if it raises, nothing is created.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if agent_limit is not None:
@@ -1039,6 +1081,8 @@ class AgentRepository:
                 )
                 if (live or 0) >= agent_limit:
                     raise AgentLimitReached(agent_limit)
+            if in_transaction is not None:
+                in_transaction(session)
             size = None
             if agent.agent_size_id is not None:
                 size = self._lock_choosable_size(session, agent.organization_id, agent.agent_size_id, any_enabled=False)
@@ -1935,6 +1979,7 @@ class AgentRepository:
                 col(Agent.status),
                 col(Agent.organization_id),
                 col(Organization.name),
+                col(Agent.created_at),
             )
             .join(Organization, col(Organization.id) == col(Agent.organization_id))
             .where(col(Agent.deleted_at).is_(None))

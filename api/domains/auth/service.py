@@ -37,6 +37,7 @@ from api.domains.events import (
 )
 from api.domains.events.catalog import EVENT_REGISTRY, USER_LOGGED_IN
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.exceptions import EmailTakenHTTPException
@@ -83,6 +84,7 @@ class AuthService:
     email_service: EmailService
     outbox_repository: OutboxMessageRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
+    llm_provider_access: LlmProviderAccessLookup
 
     def login(self, email: str, password: str) -> Token:
         user = self.user_repository.get_by_email(email)
@@ -178,7 +180,9 @@ class AuthService:
             organization = Organization(
                 name=self._default_organization_name(full_name),
                 created_by_user_id=user.id,
-                allowed_models=[self.config.agent_default_model.removeprefix("litellm/openrouter/")],
+                allowed_models=self.llm_provider_access.initial_allowed_models(
+                    session, self.config.agent_default_model.removeprefix("litellm/openrouter/")
+                ),
             )
             self.organization_repository.save_with_session(organization, session)
             self.organization_user_repository.save_with_session(

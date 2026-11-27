@@ -12,11 +12,12 @@ from typing import ClassVar, Protocol
 from uuid import uuid4
 
 from injector import inject, singleton
+from sqlmodel import Session
 
 from api.core.config import Config
 from api.domains.subscriptions.models import Buyer, OrganizationSubscription, ProviderStart, SubscriptionProviderKey
 from api.domains.subscriptions.stripe_provider import StripeSubscriptionProvider
-from api.domains.tiers.models import Tier, TierActivation
+from api.domains.tiers.models import Tier
 from api.domains.tiers.repository import TierRepository
 
 
@@ -115,8 +116,6 @@ class SubscriptionProviders:
     def for_key(self, key: str) -> SubscriptionProvider:
         return self.stripe if key == SubscriptionProviderKey.STRIPE.value else self.mock
 
-    def paid_tiers_purchasable(self) -> bool:
+    def paid_tiers_purchasable(self, *, session: Session | None = None) -> bool:
         """Whether an Organization could subscribe to a paid Tier now."""
-        return self.active() is not None and any(
-            tier.activation == TierActivation.PAID for tier in self.tiers.list_offered()
-        )
+        return self.active() is not None and self.tiers.has_offered_paid_tier(session=session)

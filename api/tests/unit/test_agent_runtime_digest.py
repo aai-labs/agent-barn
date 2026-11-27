@@ -34,6 +34,7 @@ _ASSEMBLY_METHODS = {
     "_agentbarn_telegram_runtime",
     "_backfill_google_client_credentials",
     "_spend_limit_kind",
+    "_sync_started_key_models",
 }
 
 

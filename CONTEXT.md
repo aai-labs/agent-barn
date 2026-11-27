@@ -172,6 +172,14 @@ _Avoid_: configured model, current model
 A model provider account Agent Barn reaches models through, with the key it uses, kept by Platform Administrators for every Organization. Agents never hold its key; they reach it through the model proxy with their own keys.
 _Avoid_: provider key, LLM credential, model provider setting
 
+**LLM Provider Model**:
+A model kept for an LLM Provider Connection, with the per-token prices recorded for it. A connection holds each model once.
+_Avoid_: model route, deployment, model price
+
+**Provider Access**:
+The Organizations an LLM Provider Connection is open to: all, none, all except the listed ones, or only the listed ones. "All" and "all except" also cover Organizations created later.
+_Avoid_: provider permission, provider allowlist
+
 **Agent Resource Usage**:
 The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
 _Avoid_: model usage, observed model usage, cost, spend
@@ -400,6 +408,30 @@ _Avoid_: credential
 The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
 _Avoid_: encryption toggle, Shared Credential setting
 
+**Organization MCP Server**:
+A remote MCP server an Organization registers once, with one Organization-owned credential, an MCP Server Scope, and an optional tool filter, so its Agents can call the server's tools through their runtime's MCP client. Owners and Admins manage it. Agents reach it only through the credential gateway, so the credential never enters a pod. It is not an Integration or Shared Credential: no Agent Secret is created. See the [ADR](docs/adr/2026-11-10-organization-mcp-servers-are-gateway-only.md).
+_Avoid_: connector, MCP integration, MCP credential
+
+**Agent MCP Credential**:
+An Agent's own credential for one Organization MCP Server: a token and headers for a token-based server, or the Agent's own OAuth sign-in. When present, the gateway uses it instead of the Organization's. Set by the Agent's editor; it changes whose account the Agent uses, not whether it may use the server.
+_Avoid_: override token, personal MCP server
+
+**Agent MCP Server**:
+A remote MCP server added for one Agent only, with its own credential, by that Agent's Owners and Editors. Like an Organization MCP Server it is reached only through the credential gateway. It is listed only on its Agent, and no Organization setting turns them off.
+_Avoid_: personal MCP server, private MCP server
+
+**Restricted MCP Server**:
+An Organization MCP Server that only Organization Owners and Admins may switch on or off for an Agent, or give an Agent its own credential for. An open one leaves both to the Agent's Owners and Editors.
+_Avoid_: gated server, locked server
+
+**MCP Server Scope**:
+Which Agents may use an Organization MCP Server: All Agents in the Organization, or Selected Agents, meaning only those with an MCP Server Attachment.
+_Avoid_: visibility, sharing
+
+**MCP Server Attachment**:
+One Agent's opt-in to a Selected Agents Organization MCP Server. It is kept when the server's scope changes, and it has no effect while the scope is All Agents.
+_Avoid_: binding, subscription
+
 **Sync Provider**:
 A storage service an Organization can connect so Agent Barn keeps an "Agent Barn" folder there, implemented as a Sync Provider Plugin. OneDrive is the first. See [Sync providers](docs/features/sync-provider/README.md).
 _Avoid_: storage integration, Platform
@@ -442,6 +474,14 @@ _Avoid_: event, activity, tool call
 **Outcome Type**:
 The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value that an Organization may override. A write without an Outcome Type, or with one no longer in the catalogue, is unclassified and never valued. A classified write is valued only when it succeeded. With `UNKNOWN` status it is unverified, and with `ERROR` status it is failed.
 _Avoid_: action type, category
+
+**Anomaly**:
+Something an Agent did that was unusual for that Agent: a rate well above its normal (model tokens or calls, tool calls, failed tool calls, writes), an hourly cap passed, or the first use of a tool, integration, integration action or destination in its baseline window. A rate Anomaly lasts while the deviation does; a first use is a single moment. Recorded only for Organizations that turned anomaly detection on. See [`anomaly-detection.md`](docs/features/anomaly-detection.md).
+_Avoid_: alert, incident, event
+
+**Baseline window**:
+The 14 days before the hour an anomaly check judges, from which an Agent's normal is learned: the median and spread of each rate over its active hours, and what it used. It slides with every check.
+_Avoid_: training period, history
 
 **Request**:
 One piece of work asked of an Agent: an inbound Conversation Message, from a person on any Platform or through Web Chat, or a Webhook Invocation. Scheduled runs are not Requests, though their Tool Calls and spend still count toward an Agent's per-Request figures. See [`business-value.md`](docs/features/business-value.md#organization-activity).
@@ -524,6 +564,8 @@ _Avoid_: webhook
 - An **Agent Template Override** tracks one **Override Source Version** from a Platform or Organization Template lineage. An **Agent Override Update** copies a newer source snapshot into the draft, replacing local override changes; publishing preserves earlier versions for rollback.
 - Each Agent Template Override Draft or Version exposes its **Override Author** to users with Agent visibility; published version provenance is immutable.
 - An **Agent** may have multiple **Skills** and **Agent Secrets**.
+- An **Organization** has zero or more **Organization MCP Servers**. An Agent may use a server when the server is enabled and either its **MCP Server Scope** is All Agents, or the scope is Selected Agents and the Agent has an **MCP Server Attachment** to it.
+- An **Agent** has zero or more **Agent MCP Servers**, which it may use while they are enabled and its Organization allows them. Their identifiers never match an Organization MCP Server's.
 - Agent runtimes send **Telemetry Events** through **Ingest**, where they become **Conversation Messages** or **Tool Calls**.
 - A **Domain Event** has one **Event Scope**. A committed Domain Event is persisted as one **Outbox Message** and may have many **Event Deliveries**, one per intended handler.
 - A **Security Audit Record** may be produced from a **Domain Event**, but it is not itself the Domain Event.
@@ -572,10 +614,24 @@ continues the step's session with that context, and the Agent may ask again.
 _Avoid_: grant, verdict, allowlist entry
 
 **Awaiting Approval**:
-The run state in which a step's session has been stopped with a Workflow Approval
-Request unanswered. Nothing runs while parked; a late Approval Decision continues
-the same session.
+The run state in which the run waits for a person: either a step's session has
+been stopped with a Workflow Approval Request unanswered, or the run reached an
+Approval Step. Nothing runs while it waits; a late Approval Decision continues the
+same session, and a Step Approval decides what happens next.
 _Avoid_: suspended, waiting session, resume
+
+**Approval Step**:
+A step of a Workflow that a person decides on instead of an Agent running it. It
+follows an Agent step, whose result the person approves, sends back with notes or
+rejects.
+_Avoid_: review step, gate, checkpoint
+
+**Step Approval**:
+One round at an Approval Step and the person's decision in it: approve, request
+changes (the step before runs again with their notes, then the next round opens)
+or reject (the run ends as Rejected). Distinct from an Approval Decision, which
+answers one command.
+_Avoid_: review, sign-off, Approval Decision
 
 **Agent Artifact**:
 An immutable published file owned by one Organization and Agent, with PostgreSQL

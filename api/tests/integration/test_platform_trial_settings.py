@@ -11,21 +11,30 @@ from sqlmodel import Session, col, select
 
 from api.domains.events.catalog import PLATFORM_TIER_CHANGED, PLATFORM_TRIAL_SETTINGS_CHANGED
 from api.domains.events.models import OutboxMessage
+from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
-from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector
+from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.events import event_delivery_tables_are_clean
+from api.tests.steps.onboarding import the_tier_is_offered
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 BASE = "/api/v1/platform/settings/trial"
 
 
-def _setup(*steps):
+def _setup(*steps, telegram: bool = True, payments: bool = False):
     return [
+        set_env_variable(
+            {
+                "AGENTBARN_TELEGRAM_BOT_TOKEN": "424242:the-shared-bot-token" if telegram else "",
+                "AGENTBARN_TELEGRAM_BOT_USERNAME": "AgentBarnTestBot" if telegram else "",
+                "TIERS_MOCK_PAYMENTS": str(payments).lower(),
+            }
+        ),
         prepare_injector(),
         prepare_api_server(),
         create_test_client(),
@@ -93,6 +102,7 @@ def test_signup_is_closed_until_an_administrator_configures_it():
                     credit_usd=10.0,
                     agent_limit=1,
                     free_tier_offered=False,
+                    signup_tier_available=False,
                     max_active_trials=none(),
                     updated_at=none(),
                 ),
@@ -247,7 +257,7 @@ def test_an_unauthenticated_caller_cannot_read_trial_settings():
 
 
 def test_signup_can_be_enabled_together_with_positive_credit_and_is_audited():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True, "credit_usd": 20})
         assert_that(response.status_code, equal_to(200), response.text)
         assert_that(
@@ -261,7 +271,7 @@ def test_signup_can_be_enabled_together_with_positive_credit_and_is_audited():
 
 
 def test_signup_cannot_be_enabled_without_positive_credit():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         context.client.put(BASE, headers=auth(context), json={"credit_usd": 0})
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
         assert_that(response.status_code, equal_to(400))
@@ -273,7 +283,7 @@ def test_signup_cannot_be_enabled_without_positive_credit():
 
 
 def test_credit_cannot_be_zeroed_while_signup_is_enabled():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True, "credit_usd": 20})
         response = context.client.put(BASE, headers=auth(context), json={"credit_usd": 0})
         assert_that(response.status_code, equal_to(400))
@@ -285,11 +295,99 @@ def test_credit_cannot_be_zeroed_while_signup_is_enabled():
 
 
 def test_disabling_signup_allows_zero_credit_in_the_same_save():
-    with given(_setup(a_platform_admin())) as context:
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
         context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True, "credit_usd": 20})
         response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": False, "credit_usd": 0})
         assert_that(response.status_code, equal_to(200), response.text)
         assert_that(response.json(), has_entries(self_signup_enabled=False, credit_usd=0))
+
+
+def test_signup_cannot_be_enabled_while_no_tier_is_offered():
+    with given(_setup(a_platform_admin())) as context:
+        with when("a Platform Administrator enables signup with every Tier withdrawn"):
+            response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+
+        with then("it is refused and nothing changes"):
+            assert_that(response.status_code, equal_to(400))
+            assert_that(
+                response.json()["detail"],
+                equal_to(
+                    "Offer Free with Agent Barn Telegram configured, or a purchasable paid tier, before enabling self-signup."
+                ),
+            )
+            assert_that(
+                context.client.get(BASE, headers=auth(context)).json(),
+                has_entries(self_signup_enabled=False, signup_tier_available=False),
+            )
+            assert_that(_trial_setting_events(context), has_length(0))
+
+
+@pytest.mark.parametrize(
+    "key,telegram,payments,expected",
+    [
+        ("free", True, False, 200),
+        ("cloud_1", False, True, 200),
+        ("pilot", True, True, 400),
+        ("cloud_1", True, False, 400),
+        ("free", False, True, 400),
+    ],
+)
+def test_signup_can_be_enabled_only_with_a_usable_tier(key, telegram, payments, expected):
+    with given(_setup(a_platform_admin(), the_tier_is_offered(key), telegram=telegram, payments=payments)) as context:
+        response = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+
+        assert_that(response.status_code, equal_to(expected), response.text)
+        available = expected == 200
+        settings = context.client.get(BASE, headers=auth(context))
+        assert_that(settings.json(), has_entries(self_signup_enabled=available, signup_tier_available=available))
+
+
+def test_signup_already_enabled_stays_editable_after_the_last_tier_is_withdrawn():
+    with given(_setup(a_platform_admin(), the_tier_is_offered())) as context:
+        context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+        the_tier_is_offered(offered=False)(context)
+
+        with when("a Platform Administrator saves the settings as the page sends them"):
+            response = context.client.put(
+                BASE, headers=auth(context), json={"self_signup_enabled": True, "max_active_trials": 5}
+            )
+
+        with then("the save goes through, and the read says no Tier is offered"):
+            assert_that(response.status_code, equal_to(200), response.text)
+            assert_that(
+                response.json(), has_entries(self_signup_enabled=True, max_active_trials=5, signup_tier_available=False)
+            )
+
+
+@pytest.mark.parametrize("offered_key", [None, "cloud_1"])
+def test_signup_rechecks_the_transition_and_catalog_at_write_time(monkeypatch, offered_key):
+    key = offered_key or "free"
+    with given(_setup(a_platform_admin(), the_tier_is_offered(key), payments=True)) as context:
+        repository = context.injector.get(TrialSettingsRepository)
+        if offered_key is None:
+            opened = context.client.put(BASE, headers=auth(context), json={"self_signup_enabled": True})
+            assert_that(opened.status_code, equal_to(200), opened.text)
+            the_tier_is_offered(offered=False)(context)
+        write = repository.set_settings
+
+        def interleave_before_write(*args, **kwargs):
+            if offered_key is None:
+                write({"self_signup_enabled": False}, context.user.id, "Platform Admin")
+            else:
+                the_tier_is_offered(offered_key, offered=False)(context)
+            return write(*args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(repository, "set_settings", interleave_before_write)
+            stale_save = context.client.put(
+                BASE, headers=auth(context), json={"self_signup_enabled": True, "max_active_trials": 5}
+            )
+        assert_that(stale_save.status_code, equal_to(400), stale_save.text)
+        settings = context.client.get(BASE, headers=auth(context))
+        assert_that(
+            settings.json(),
+            has_entries(self_signup_enabled=False, max_active_trials=none(), signup_tier_available=False),
+        )
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT"])

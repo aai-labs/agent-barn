@@ -192,6 +192,13 @@ class TierRepository:
                 ).all()
             )
 
+    def has_offered_paid_tier(self, *, session: Session | None = None) -> bool:
+        query = select(Tier.id).where(col(Tier.enabled).is_(True), Tier.activation == TierActivation.PAID).limit(1)
+        if session is not None:
+            return session.exec(query.with_for_update(read=True)).first() is not None
+        with Session(self.delegate.engine) as read_session:
+            return read_session.exec(query).first() is not None
+
     def system_tier_id(self, key: str) -> UUID:
         """The id of one of the system's Tiers, which the catalog always has."""
         with Session(self.delegate.engine) as session:
@@ -208,6 +215,14 @@ class TierRepository:
                 .join(Organization, col(Organization.tier_id) == col(Tier.id))
                 .where(col(Organization.id) == organization_id)
             ).first()
+
+    def lock_organization_tier(self, session: Session, organization_id: UUID) -> Tier | None:
+        """Serialize with Tier assignment and holds, and keep catalog edits from changing
+        the Tier's entitlements until the caller commits its write."""
+        organization = self._locked_organization(session, organization_id)
+        if organization is None or organization.tier_id is None:
+            return None
+        return session.get(Tier, organization.tier_id, with_for_update={"read": True})
 
     def coverage(self, organization_id: UUID) -> TierCoverage:
         """What the Organization runs that a Tier restricts, counting every live Agent."""

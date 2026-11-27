@@ -13,11 +13,19 @@ const limited = (empty: string, max: number) =>
  * Input limits apply while authoring. Saved snapshots are read back as stored,
  * so a limit mismatch can never hide a definition the API accepted.
  */
+export const STEP_DECISIONS = ["approve", "request_changes", "reject"] as const;
+const stepDecision = z.enum(STEP_DECISIONS);
+export type StepDecision = z.infer<typeof stepDecision>;
+
 function draftSchema(authoring: boolean) {
   const text = authoring ? limited("Enter a description", 4000) : z.string();
   const name = authoring ? limited("Enter a name", 200) : z.string();
   const step = z.object({
     id: authoring ? z.guid() : z.string(),
+    // Agent steps are stored without a type; an Approval step waits for a person.
+    type: z.enum(["agent", "approval"]).default("agent"),
+    // What the person at an Approval step may decide; Approve is always among them.
+    allowedDecisions: z.array(stepDecision).nullable().optional(),
     // Prompt first: the name derives from it (stepNameFromGoal), so a blank prompt
     // reports "Enter a description" rather than its derived name.
     goal: text,
@@ -66,6 +74,19 @@ export const WorkflowDraftSchema = draftSchema(true).superRefine((draft, ctx) =>
       path: ["steps"],
       message: "Each step needs a unique id",
     });
+  // Request changes reruns the step before an Approval step, so that step must be an Agent step.
+  draft.steps.forEach((step, index) => {
+    if (step.type !== "approval") return;
+    const before = draft.steps[index - 1];
+    if (!before || before.type === "approval")
+      ctx.addIssue({
+        code: "custom",
+        path: ["steps", index, "goal"],
+        message: before
+          ? "An approval step can't follow another approval step; put an agent step between them"
+          : "An approval step can't come first; it reviews the agent step before it",
+      });
+  });
   const firstWithKey = new Map<string, number>();
   draft.inputs.forEach(({ key }, index) => {
     const first = firstWithKey.get(key);

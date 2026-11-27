@@ -1,12 +1,20 @@
 import type { SourceState, WarningEvent } from "../schemas";
 import { formatAgo } from "../utils";
-import { AgentLabel, EmptyRow, Section } from "./section";
+import { AgentLabel, EmptyRow, Section, ExpandableList } from "./section";
 
 /**
  * The namespace's recent Warning Events. The cluster's own message is never shown: each Event
  * carries a fixed explanation, and a quota rejection the figures rebuilt from it.
  */
-export function EventsPanel({ events, state }: { events: WarningEvent[]; state: SourceState | undefined }) {
+export function EventsPanel({
+  events,
+  total,
+  state,
+}: {
+  events: WarningEvent[];
+  total: number;
+  state: SourceState | undefined;
+}) {
   return (
     <Section
       title="Recent warnings"
@@ -16,7 +24,7 @@ export function EventsPanel({ events, state }: { events: WarningEvent[]; state: 
       {events.length === 0 ? (
         <EmptyRow state={state}>No warnings in the last six hours.</EmptyRow>
       ) : (
-        <ul className="af-card m-0 list-none divide-y p-0">
+        <ExpandableList total={total}>
           {events.map((event, index) => (
             <li key={`${event.reason}-${event.objectName ?? ""}-${index}`} className="px-4 py-3 text-[13px]" data-testid="warning-event">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -48,7 +56,7 @@ export function EventsPanel({ events, state }: { events: WarningEvent[]; state: 
               )}
             </li>
           ))}
-        </ul>
+        </ExpandableList>
       )}
     </Section>
   );

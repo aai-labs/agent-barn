@@ -6,6 +6,8 @@ import logging
 import secrets
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -70,6 +72,7 @@ from api.domains.agents.exceptions import (
     AgentSuspended,
     refuse_on_bot,
 )
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     MAX_BOTS_PER_PARENT,
@@ -82,6 +85,7 @@ from api.domains.agents.models import (
     AgentCreatorRead,
     AgentDefinition,
     AgentFilter,
+    AgentHealthItemRead,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
@@ -192,6 +196,11 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
+from api.domains.llm_providers.access import NO_LLM_PROVIDER, ProviderNotOpen
+from api.domains.llm_providers.lookup import LlmProviderAccessLookup
+from api.domains.llm_providers.models import OPENROUTER_SLUG
+from api.domains.mcp_servers import runtime as mcp_runtime
+from api.domains.mcp_servers.repository import McpServerRepository
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.organizations.settings_service import OrganizationSettingsService
@@ -247,6 +256,13 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+# The health of a list of Agents asks each ready pod's healthz at once, on threads of its
+# own rather than the request pool. Past the deadline a pod that has not answered counts as
+# unreachable, so one stuck pod cannot hold the whole list (its call still ends on its own
+# timeout).
+_HEALTHZ_FETCHES = ThreadPoolExecutor(max_workers=16, thread_name_prefix="agent-healthz")
+_HEALTHZ_BATCH_DEADLINE_SECONDS = 8
 
 # Google-backed providers whose credential may omit its OAuth client, in which case the
 # server-owned client is filled in at agent start and before live validation.
@@ -434,6 +450,7 @@ class AgentService:
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
     custom_api: CustomApiRepository
+    mcp_servers: McpServerRepository
     integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
@@ -445,6 +462,8 @@ class AgentService:
     agent_sizes: AgentSizeLookupService
     artifact_buckets: ArtifactBucketRepository
     usage: UsageGuard
+    llm_provider_access: LlmProviderAccessLookup
+    key_models: AgentKeyModelService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1067,6 +1086,8 @@ class AgentService:
     ) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER)
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
@@ -1236,6 +1257,7 @@ class AgentService:
                         max_budget=key_budget.agent_limit_usd,
                         budget_duration=key_budget.window,
                         team_budget=key_budget.organization_limit_usd,
+                        models=self.key_models.models_for(agent),
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(
@@ -1261,10 +1283,15 @@ class AgentService:
                         if self.config.artifact_s3_endpoint_url
                         else None
                     ),
+                    in_transaction=lambda session: self.llm_provider_access.require_open(
+                        session, OPENROUTER_SLUG, org_id
+                    ),
                 )
             except AgentSizeUnavailable:
                 # Disabled or withdrawn since the check above.
                 raise _size_unavailable() from None
+            except ProviderNotOpen:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_LLM_PROVIDER) from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:
@@ -2553,6 +2580,7 @@ class AgentService:
             logger.exception("Failed to start agent %s", agent.id)
             raise self._record_provisioning_failure(agent, exc) from exc
         started = self._persist_started(agent, actor, previous_status)
+        self._sync_started_key_models(started)
         # A suspension recorded while it started couldn't stop it, since this start held the
         # lifecycle lock; the row read under the start's write has it, so stop it now.
         if started.suspended_at is not None and started.status == AgentStatus.RUNNING:
@@ -2657,6 +2685,16 @@ class AgentService:
         if preflight:
             return assembled.previous_status
         assert assembled.runtime is not None
+        self.key_models.sync(agent, assembled.effective_model)
+        synced_bots: list[tuple[Agent, _AssembledAgent]] = []
+        for bot, bot_assembled in assembled_bots:
+            try:
+                self.key_models.sync(bot, bot_assembled.effective_model)
+                synced_bots.append((bot, bot_assembled))
+            except Exception as exc:
+                logger.exception("Failed to set the key models of bot %s", bot.id)
+                self._record_provisioning_failure(bot, exc)
+        assembled_bots = synced_bots
 
         # Failures here are recorded and normalized by _start_agent_unchecked, which
         # wraps this whole method rather than only the cluster calls.
@@ -2685,7 +2723,14 @@ class AgentService:
         for bot, bot_assembled in created_bots:
             self._record_started(bot, bot_assembled)
             self.repository.save(bot)
+            self._sync_started_key_models(bot)
         return assembled.previous_status
+
+    def _sync_started_key_models(self, agent: Agent) -> None:
+        try:
+            self.key_models.sync(agent)
+        except Exception:
+            logger.exception("Failed to set the key models of agent %s after its start", agent.id)
 
     def _record_started(self, agent: Agent, assembled: _AssembledAgent) -> None:
         assert assembled.runtime is not None
@@ -2823,6 +2868,7 @@ class AgentService:
                 max_turns=agent.max_turns,
                 slack_listen_in=native_slack[0].get("listen_in_channel_ids") if native_slack else None,
                 discord_listen_in=native_discord.settings.get("listen_in_channel_ids") if native_discord else None,
+                custom_slack=bool(native_slack and native_slack[0].get("api_url")),
             )
             if agent.parent_agent_id is not None:
                 hermes_cfg = bot_gateway_config(
@@ -3030,6 +3076,10 @@ class AgentService:
             by_id.update(custom_api_overrides)
             custom_connections = sorted((row for row in by_id.values() if row is not None), key=lambda row: row.slug)
         snapshot.update(connection_snapshot(custom_connections))
+        # Organization MCP Servers reach the runtime only as gateway URLs plus a reference
+        # to the generation's gateway token; their own credentials stay in the gateway.
+        mcp_servers = self.mcp_servers.effective_for_agent(agent.id)
+        snapshot.update(mcp_runtime.snapshot(mcp_servers))
         custom_artifacts = materialize_custom_api(
             custom_connections,
             self.config.agent_token_encryption_key,
@@ -3062,6 +3112,24 @@ class AgentService:
             )
         secret.string_data.update(custom_artifacts.env)
         secret.string_data.update(artifacts.env)
+        if overlay is not None:
+            # Always present, even empty: init-openclaw.js replaces mcp.servers wholesale, so a
+            # server removed since the last start does not survive on the volume.
+            overlay["mcp"] = {
+                "servers": mcp_runtime.openclaw_mcp_servers(mcp_servers, self.config.credential_gateway_base_url)
+            }
+        if mcp_servers:
+            mcp_token = secrets.token_urlsafe(32)
+            # A preflight builds the configuration without a runtime generation to bind a token to.
+            if runtime is not None:
+                self.mcp_servers.set_gateway_token(
+                    agent.id, agent.organization_id, hashlib.sha256(mcp_token.encode()).hexdigest(), runtime.generation
+                )
+            secret.string_data[mcp_runtime.GATEWAY_TOKEN_ENV] = mcp_token
+            if hermes_cfg is not None:
+                hermes_cfg["mcp_servers"] = mcp_runtime.hermes_mcp_servers(
+                    mcp_servers, self.config.credential_gateway_base_url
+                )
         aai_config_toml = artifacts.files.get("aai-cli-config.toml") or (
             f'secrets_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/aai-secrets.enc.json"\n'
             f'key_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/key"\n'
@@ -3182,16 +3250,15 @@ class AgentService:
         # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
         # being the only route to its integrations, neither of which is true of gog.
         workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
+        # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
+        chat_attachments = any(
+            c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram)
+        )
         agents_md = (
             rendered.agents_md
             + artifacts.policy_md
             + build_local_tools_policy_md(s.name for s in mounted_skills)
-            + build_file_delivery_policy_md(
-                # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
-                workspace_dir
-                if any(c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram))
-                else None
-            )
+            + build_file_delivery_policy_md(workspace_dir if chat_attachments else None)
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
             + build_scheduled_runs_policy_md()
@@ -3249,6 +3316,7 @@ class AgentService:
                 agents_md=agents_md,
                 memory_enabled=agent.memory_enabled,
                 artifacts_enabled=bool(self.config.artifact_s3_endpoint_url),
+                chat_attachments=chat_attachments,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -3279,6 +3347,7 @@ class AgentService:
                 agents_md=agents_md,
                 memory_enabled=agent.memory_enabled,
                 artifacts_enabled=bool(self.config.artifact_s3_endpoint_url),
+                chat_attachments=chat_attachments,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -3291,7 +3360,7 @@ class AgentService:
                 bots_manifest=bots_manifest,
             )
 
-        config_map.data["AGENTS.md"] += custom_artifacts.policy_md
+        config_map.data["AGENTS.md"] += custom_artifacts.policy_md + mcp_runtime.policy_md(mcp_servers)
 
         return _AssembledAgent(
             previous_status=previous_status,
@@ -3366,7 +3435,7 @@ class AgentService:
         agent_id: UUID,
         context: CurrentUserContext,
         tail_lines: int = 0,
-    ) -> Iterator[str]:
+    ) -> Iterator[str | None]:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
         refuse_on_bot(agent)
         if agent.status != AgentStatus.RUNNING:
@@ -4043,6 +4112,21 @@ class AgentService:
                 failures.append((agent, exc))
         return restarted, failures
 
+    def live_agent_ids(self, organization_id: UUID) -> list[UUID]:
+        """An Organization's non-deleted Agents. Background work only (the scheduled
+        anomaly check): no caller and no authorization scope."""
+        return self.repository.find_live_ids_by_org(organization_id)
+
+    def agent_role(self, agent_id: UUID) -> tuple[str, str | None] | None:
+        """The name and description of the template an Agent is pinned to, or None
+        without one. Background work only (the anomaly check's classification): no
+        caller and no authorization scope."""
+        agent = self.repository.get_by_id(agent_id)
+        template = self.template_repository.get_pinned_template(agent) if agent is not None else None
+        if template is None:
+            return None
+        return template.template_name, template.description
+
     def count_active_agents(self, organization_id: UUID) -> int:
         """Number of non-deleted agents in an org. Used by other domains (e.g. org
         deletion) to decide whether an org can be safely torn down."""
@@ -4105,7 +4189,8 @@ class AgentService:
                     logger.warning("Could not block LiteLLM key for agent %s", target.id)
 
     def list_models(self, context: CurrentUserContext, catalog: bool = False) -> list[dict]:
-        """Returns the allowlisted OpenRouter models as picker options.
+        """Returns the allowlisted OpenRouter models as picker options, or none while OpenRouter is
+        not open to the Organization.
 
         The Organization's resolved default model is guaranteed present, flagged
         is_default, and listed first, so the frontend and backend agree on which
@@ -4116,8 +4201,6 @@ class AgentService:
         """
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
-        raw_catalog = self.openrouter.list_models()
-
         if catalog:
             self.authorization.policy.require(
                 context,
@@ -4125,6 +4208,11 @@ class AgentService:
                 PermissionKey.ORGANIZATION_UPDATE,
                 detail="You don't have permission to view the full model catalog.",
             )
+        if not self.llm_provider_access.can_use(OPENROUTER_SLUG, org_id):
+            return []
+        raw_catalog = self.openrouter.list_models()
+
+        if catalog:
             allowed = raw_catalog
         else:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)
@@ -4295,22 +4383,84 @@ class AgentService:
         503. A stopped Agent has no health and is not asked about.
         """
         if agent.status == AgentStatus.ERROR:
-            stored = _stored_provisioning_error(agent)
-            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+            return self._error_health(agent)
 
         name = f"agent-{pod_agent_id(agent)}"
-        ns = self.config.k8s_namespace
-
-        pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
+        pod_status, pod_reason = self.k8s.get_pod_readiness(name, self.config.k8s_namespace)
         self._observe_integration_readiness(agent, pod_status)
+        return self._health_from(agent, pod_status, pod_reason, lambda: self._fetch_healthz(name))
+
+    def agents_health(self, agent_ids: Collection[UUID], context: CurrentUserContext) -> list[AgentHealthItemRead]:
+        """``agent_health`` for a list of Agents, as the Team and Usage pages show them.
+
+        Only the Agents the viewer may read activity for, and only running or failed ones;
+        the rest are left out rather than refused. The pods' readiness comes from one cluster
+        read and their healthz from parallel calls, so the list costs one request, not one
+        per Agent. A pod that cannot be reached reads ``error`` with no reason: what the UI
+        makes of the single-Agent route's 503, so a reason never surfaces as a banner.
+        """
+        scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        agents = [
+            agent
+            for agent in self.repository.list_active_in_scope(agent_ids, scope)
+            if agent.status in (AgentStatus.ERROR, AgentStatus.RUNNING)
+        ]
+        running = [agent for agent in agents if agent.status == AgentStatus.RUNNING]
+        pod_of = {agent.id: f"agent-{pod_agent_id(agent)}" for agent in running}
+        readiness = self.k8s.get_pods_readiness(set(pod_of.values()), self.config.k8s_namespace) if running else {}
+        for agent in running:
+            self._observe_integration_readiness(agent, readiness[pod_of[agent.id]][0])
+
+        # Only the pods of the Agents the viewer may read, whatever else readiness holds.
+        ready_pods = {pod for pod in set(pod_of.values()) if readiness[pod][0] == "ready"}
+        futures = {pod: _HEALTHZ_FETCHES.submit(self._fetch_healthz, pod) for pod in ready_pods}
+        wait_for_futures(futures.values(), timeout=_HEALTHZ_BATCH_DEADLINE_SECONDS)
+        healthz = {pod: future.result() if future.done() else None for pod, future in futures.items()}
+
+        items = []
+        for agent in agents:
+            if agent.status == AgentStatus.ERROR:
+                health = self._error_health(agent)
+            else:
+                pod = pod_of[agent.id]
+                pod_status, pod_reason = readiness[pod]
+                health = self._health_from(agent, pod_status, pod_reason, lambda pod=pod: healthz.get(pod))
+            health = health or AgentHealthRead(status="error")
+            items.append(AgentHealthItemRead(agent_id=agent.id, status=health.status, reason=health.reason))
+        return items
+
+    @staticmethod
+    def _error_health(agent: Agent) -> AgentHealthRead:
+        stored = _stored_provisioning_error(agent)
+        return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+
+    def _fetch_healthz(self, pod_name: str) -> dict | None:
+        """The pod's own healthz report, or None when it cannot be reached."""
+        try:
+            return self.k8s.fetch_agent_healthz(pod_name, self.config.k8s_namespace)
+        except RuntimeError:
+            return None
+        except Exception:
+            # The port-forward fallback asks the cluster for the pod, which can time out.
+            logger.warning("Healthz unreachable for %s", pod_name, exc_info=True)
+            return None
+
+    def _health_from(
+        self,
+        agent: Agent,
+        pod_status: str | None,
+        pod_reason: str | None,
+        healthz: Callable[[], dict | None],
+    ) -> AgentHealthRead | None:
+        """A running Agent's health from its pod's readiness, asking the pod's healthz (and
+        for a Bot, whether its Parent serves it) only once the pod is ready."""
         if pod_status == "crashed":
             return AgentHealthRead(status="crashed", reason=friendly_pod_reason(pod_reason))
         if pod_status != "ready":
             return AgentHealthRead(status="initializing")
 
-        try:
-            data = self.k8s.fetch_agent_healthz(name, ns)
-        except RuntimeError:
+        data = healthz()
+        if data is None:
             return None
         if agent.parent_agent_id is not None:
             if "served_bots" not in data:

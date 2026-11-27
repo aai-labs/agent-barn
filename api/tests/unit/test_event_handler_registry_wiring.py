@@ -168,8 +168,16 @@ def test_file_sync_switch_events_reach_only_the_security_audit(event_name):
     assert_that(_build_production_handler_registry().supports(SECURITY_AUDIT_HANDLER, event_name, 1), is_(True))
 
 
-@pytest.mark.parametrize("event_name", ["platform.llm_provider.created", "platform.llm_provider.deleted"])
-def test_the_llm_provider_created_and_deleted_events_reach_only_the_security_audit(event_name):
+@pytest.mark.parametrize(
+    "event_name",
+    [
+        "platform.llm_provider.created",
+        "platform.llm_provider.deleted",
+        "platform.llm_provider.models_changed",
+        "platform.llm_provider.organizations_changed",
+    ],
+)
+def test_the_llm_provider_events_reach_only_the_security_audit(event_name):
     handler_names = {
         definition.event_name: definition.handler_names
         for definition in EVENT_REGISTRY.list_definitions()

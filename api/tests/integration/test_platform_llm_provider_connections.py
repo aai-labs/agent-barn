@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import Mock
-from uuid import UUID, uuid7
+from uuid import UUID, uuid5, uuid7
 
 import pytest
 from hamcrest import assert_that, equal_to, has_entries, has_length, is_not, none
@@ -8,9 +9,23 @@ from sqlmodel import Session, col, select
 
 from api.core.config import Config
 from api.domains.events.models import OutboxMessage
-from api.domains.llm_providers.models import OPENROUTER_CONNECTION_ID, LlmProviderConnection, ProviderType
+from api.domains.llm_providers.litellm_deployments import key_fingerprint
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    LlmProviderConnection,
+    LlmProviderModel,
+    PriceSource,
+    ProviderType,
+)
 from api.infrastructure.crypto import decrypt_token, encrypt_token
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMModelPrice
+from api.infrastructure.llm_provider_catalogue.catalogue import (
+    LlmProviderCatalogue,
+    ProviderListBusy,
+    ProviderListRefused,
+    ProviderListUnreachable,
+    ProviderListUnreadable,
+)
 from api.infrastructure.llm_provider_keys.checker import (
     BaseUrlNotAnApi,
     BaseUrlNotPublic,
@@ -31,6 +46,7 @@ OPENROUTER_KEY = "sk-or-v1-stored-key-a1b2"
 ANTHROPIC_KEY = "sk-ant-stored-key-c3d4"
 AZURE_KEY = "azure-stored-key-e5f6"
 ENV_KEY = "sk-or-v1-environment-key-9z8y"
+ENV_KEY_LAST4 = "9z8y"
 ADMIN_NAME = "Platform Person"
 AZURE_BASE_URL = "https://contoso.openai.azure.com"
 NEW_KEY = "sk-new-provider-key-g7h8"
@@ -44,6 +60,58 @@ KNOWN_PROVIDERS = [
     (ProviderType.FIREWORKS, "Fireworks"),
     (ProviderType.NOVITA, "Novita"),
 ]
+ROUTED_MODELS = ["gpt-4o", "gpt-4o-mini"]
+ROUTE_PRICES = {
+    "input_cost_per_token": 2.5e-06,
+    "output_cost_per_token": 1e-05,
+    "cache_read_input_token_cost": 1.25e-06,
+    "cache_creation_input_token_cost": 0.0,
+}
+OTHER_ROUTE_ID = "agentbarn:model:0190a1b2-0000-7000-8000-000000000009:0190a1b2-0000-7000-8000-000000000010"
+OTHER_ROUTE = {
+    "model_name": "anthropic/claude-sonnet-4-5",
+    "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": ANTHROPIC_KEY},
+    "model_info": {"id": OTHER_ROUTE_ID, "disable_background_health_check": True},
+}
+MODELS_NOT_STORED = "OpenRouter's models are not stored."
+CUSTOM_KEY = "custom-stored-key-m1n2"
+CUSTOM_BASE_URL = "https://lab.example.com/v1"
+AZURE_DEPLOYMENT_FORMAT = "A deployment name must be 1 to 64 letters, digits or . _ - characters. Nothing was saved."
+RUNS_MODEL_MISSING = "Say which model each deployment priced from LiteLLM runs. Nothing was saved."
+RUNS_MODEL_NOT_TAKEN = "Only an Azure deployment priced from LiteLLM takes the model it runs. Nothing was saved."
+EU_GPT4O_LISTED = ("0.00000275", "0.000011", "0.000001375", "0.00000275")
+GPT4O_LISTED = ("0.0000025", "0.00001", "0.00000125", "0.0000025")
+ANTHROPIC_HAS_NO_KEY = "Anthropic has no key."
+ANTHROPIC_REFUSED_STORED_KEY = "Anthropic did not accept the stored key. Replace the key, then try again."
+ANTHROPIC_LIST_UNREACHABLE = "Anthropic could not be reached to list its models."
+ANTHROPIC_LIST_BUSY = "Anthropic is limiting requests. Try again in a minute."
+ANTHROPIC_LIST_UNREADABLE = "Anthropic's model list could not be read."
+PRICE_LIST_UNREADABLE = "The model proxy's price list could not be read."
+MODELS_CHANGED_EVENT = "platform.llm_provider.models_changed"
+SAVE_LISTED = ["claude-haiku-4-5", "claude-opus-4-1", "claude-sonnet-4-5"]
+SONNET_LISTED = ("0.000003", "0.000015", "0.0000003", "0.00000375")
+SONNET_STORED = ("0.0000025", "0.00001", "0.00000125", "0")
+HAIKU_LISTED = ("0.000001", "0.000005", "0.0000001", "0.00000125")
+TOO_MANY_MODELS = "A connection can have at most 50 models. Nothing was saved."
+MODEL_REPEATED = "A model can be listed only once. Nothing was saved."
+MODEL_ID_FORMAT = "A model id must be 1 to 200 letters, digits or . _ : / - characters. Nothing was saved."
+PRICE_CHOICE = 'Each model takes "litellm", "stored" or its four prices. Nothing was saved.'
+PRICE_FORMAT = "Each price must be a number below 1,000,000 with at most 18 decimal places. Nothing was saved."
+PRICE_RANGE = "Input and output prices must be above 0, and cache prices 0 or more. Nothing was saved."
+ANTHROPIC_NOT_LISTED = "Anthropic does not list one of these models. Nothing was saved."
+NO_CHAT_PRICE = "LiteLLM has no chat price for one of these models; type its prices. Nothing was saved."
+PRICES_NOT_STORED = "Only a stored model can keep its stored prices. Nothing was saved."
+MODELS_CHANGED_WHILE_READING = "The connection changed while its models were read. Nothing was saved."
+MODELS_NOT_ROUTED = "The model proxy could not be updated. Your models were not changed."
+NO_PRICES = {
+    "litellm_price_key": None,
+    "input_cost_per_token": None,
+    "output_cost_per_token": None,
+    "cache_read_input_token_cost": None,
+    "cache_creation_input_token_cost": None,
+}
+KEY_NOT_ROUTED = "The model proxy could not be updated. Your key was not changed."
+ROUTES_NOT_REMOVED = "The model proxy could not be updated. Nothing was deleted."
 
 
 def _setup(*steps):
@@ -164,6 +232,9 @@ def test_a_fresh_platform_lists_openrouter_alone_without_a_key():
                         "updated_at": None,
                         "updated_by": None,
                         "env_key_configured": False,
+                        "env_key_last4": None,
+                        "organization_access": "all",
+                        "organization_count": 0,
                     }
                 ]
             ),
@@ -220,6 +291,55 @@ def test_only_openrouter_reports_the_environment_key():
             [(item["slug"], item["env_key_configured"]) for item in response.json()],
             equal_to([("openrouter", True), ("anthropic", False)]),
         )
+
+
+def test_only_openrouter_reports_the_environment_keys_last_four():
+    with given(_setup(admin, env_key(ENV_KEY))) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            [(item["slug"], item["env_key_last4"]) for item in response.json()],
+            equal_to([("openrouter", ENV_KEY_LAST4), ("anthropic", None)]),
+        )
+
+
+def test_the_environment_keys_last_four_are_null_without_the_variable():
+    with given(_setup(admin, env_key(""))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json()[0], has_entries(slug="openrouter", env_key_last4=None))
+
+
+@pytest.mark.parametrize("short_key", ["sk-1", "sk-12345"])
+def test_an_environment_key_of_8_characters_or_fewer_reports_no_last_four(short_key):
+    with given(_setup(admin, env_key(short_key))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json()[0], has_entries(slug="openrouter", env_key_configured=True, env_key_last4=None))
+
+
+def test_only_env_key_last4_carries_the_end_of_the_environment_key():
+    with given(_setup(admin, env_key(ENV_KEY))) as context:
+        _store_openrouter_key(context, OPENROUTER_KEY, context.admin_id)
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC, **_with_key(ANTHROPIC_KEY))
+
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert ENV_KEY not in response.text
+        carriers = [
+            (item["slug"], field)
+            for item in response.json()
+            for field, value in item.items()
+            if isinstance(value, str) and ENV_KEY_LAST4 in value
+        ]
+        assert_that(carriers, equal_to([("openrouter", "env_key_last4")]))
+        assert_that(response.text.count(ENV_KEY_LAST4), equal_to(1))
 
 
 def test_the_list_never_carries_a_key_or_its_ciphertext():
@@ -1102,3 +1222,1506 @@ def test_a_deleted_connection_has_no_key_to_replace():
 
         assert_that(response.status_code, equal_to(404))
         context.check.assert_not_called()
+
+
+def _model(context, connection: LlmProviderConnection, model_id: str, **fields) -> LlmProviderModel:
+    row = LlmProviderModel(
+        connection_id=connection.id,
+        model_id=model_id,
+        input_cost_per_token=fields.get("input_cost_per_token", Decimal("0.0000025")),
+        output_cost_per_token=fields.get("output_cost_per_token", Decimal("0.00001")),
+        cache_read_input_token_cost=fields.get("cache_read_input_token_cost", Decimal("0.00000125")),
+        cache_creation_input_token_cost=fields.get("cache_creation_input_token_cost", Decimal(0)),
+        price_source=fields.get("price_source", PriceSource.MANUAL),
+        litellm_price_key=fields.get("litellm_price_key"),
+    )
+    with _session(context) as session:
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+    return row
+
+
+def _models(context, connection: LlmProviderConnection) -> list[LlmProviderModel]:
+    with _session(context) as session:
+        return list(session.exec(select(LlmProviderModel).where(LlmProviderModel.connection_id == connection.id)))
+
+
+def _route_id(connection: LlmProviderConnection, model: LlmProviderModel) -> str:
+    return f"agentbarn:model:{connection.id}:{model.id}"
+
+
+def _model_info(route_id: str, key: str) -> dict:
+    return {"id": route_id, "disable_background_health_check": True, "key_fingerprint": key_fingerprint(key)}
+
+
+def _other_routes() -> dict[str, dict]:
+    return {"agentbarn:openrouter": OPENROUTER_ROUTE, OTHER_ROUTE_ID: OTHER_ROUTE}
+
+
+def _azure_routes(context, key: str, base_url: str) -> dict[str, dict]:
+    return {
+        _route_id(context.connection, model): {
+            "model_name": f"azure-eu/{model.model_id}",
+            "litellm_params": {
+                "model": f"azure/{model.model_id}",
+                "api_base": base_url,
+                "api_version": "v1",
+                "api_key": key,
+                **ROUTE_PRICES,
+            },
+            "model_info": _model_info(_route_id(context.connection, model), key),
+        }
+        for model in context.models
+    }
+
+
+def _record_route(routes: dict[str, dict]):
+    """Stands in for LiteLLM: writes the route, and checks the caller knew whether it was there."""
+
+    def write(exists=None, **route):
+        assert exists == (route["model_info"]["id"] in routes), "upsert was told the wrong `exists`"
+        routes[route["model_info"]["id"]] = route
+
+    return write
+
+
+def azure_with_routed_models(context):
+    routes: dict[str, dict] = {}
+    litellm = context.injector.get(LiteLLMClient)
+    litellm.list_model_deployments.side_effect = lambda id_prefix: [
+        route for route_id, route in routes.items() if route_id.startswith(id_prefix)
+    ]
+    litellm.upsert_model_deployment.side_effect = _record_route(routes)
+    litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
+    context.routes = routes
+    azure_connected(context)
+    context.models = [_model(context, context.connection, model_id) for model_id in ROUTED_MODELS]
+    routes.update({**_other_routes(), **_azure_routes(context, AZURE_KEY, AZURE_BASE_URL)})
+
+
+def test_a_new_key_is_routed_for_every_model_before_it_is_stored():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        stored_while_routing = []
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+
+        def record(**route):
+            stored_while_routing.append(_stored(context, "azure-eu")[0])
+            write(**route)
+
+        upsert.side_effect = record
+
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(stored_while_routing, equal_to([AZURE_KEY, AZURE_KEY]))
+        assert_that(
+            context.routes, equal_to({**_other_routes(), **_azure_routes(context, REPLACED_KEY, AZURE_BASE_URL)})
+        )
+        assert_that(_stored(context, "azure-eu"), equal_to((REPLACED_KEY, AZURE_BASE_URL)))
+
+
+def test_a_new_base_url_is_routed_for_every_model():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        response = _replace(context, "azure-eu", base_url=FABRIKAM_BASE_URL)
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            context.routes, equal_to({**_other_routes(), **_azure_routes(context, REPLACED_KEY, FABRIKAM_BASE_URL)})
+        )
+        assert_that(_stored(context, "azure-eu"), equal_to((REPLACED_KEY, FABRIKAM_BASE_URL)))
+
+
+def test_a_route_failure_part_way_keeps_the_key_and_a_retry_leaves_one_route_per_model():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        leftover_id = f"agentbarn:model:{context.connection.id}:{uuid7()}"
+        context.routes[leftover_id] = {**OTHER_ROUTE, "model_info": {"id": leftover_id}}
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_second(**route):
+            written.append(route)
+            if len(written) == 2:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_second
+
+        failed = _replace(context, "azure-eu")
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+        upsert.side_effect = write
+        retried = _replace(context, "azure-eu")
+
+        assert_that(retried.status_code, equal_to(200), retried.text)
+        assert_that(
+            context.routes, equal_to({**_other_routes(), **_azure_routes(context, REPLACED_KEY, AZURE_BASE_URL)})
+        )
+
+
+def test_a_route_failure_part_way_puts_the_stored_key_and_base_url_back_on_every_route():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_second(**route):
+            written.append(route)
+            if len(written) == 2:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_second
+
+        failed = _replace(context, "azure-eu", base_url=FABRIKAM_BASE_URL)
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+        assert_that(context.routes, equal_to({**_other_routes(), **_azure_routes(context, AZURE_KEY, AZURE_BASE_URL)}))
+
+
+def test_a_route_failure_that_also_fails_to_restore_still_stores_nothing():
+    with given(_setup(admin, provider_answers(True), azure_with_routed_models)) as context:
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+        written = []
+
+        def fail_after_first(**route):
+            written.append(route)
+            if len(written) > 1:
+                raise LiteLLMError("route not written")
+            write(**route)
+
+        upsert.side_effect = fail_after_first
+
+        failed = _replace(context, "azure-eu")
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": KEY_NOT_ROUTED}))
+        _assert_unchanged(context, failed, "azure-eu", AZURE_KEY, AZURE_BASE_URL)
+
+
+def test_deleting_a_connection_removes_its_routes_before_its_models():
+    with given(_setup(admin, azure_with_routed_models)) as context:
+        models_while_removing = []
+        delete = context.injector.get(LiteLLMClient).delete_model_deployment
+        remove = delete.side_effect
+
+        def record(model_id):
+            models_while_removing.append(len(_models(context, context.connection)))
+            return remove(model_id)
+
+        delete.side_effect = record
+
+        response = _delete(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(204), response.text)
+        assert_that(models_while_removing, equal_to([2, 2]))
+        assert_that(context.routes, equal_to(_other_routes()))
+        assert_that(_models(context, context.connection), has_length(0))
+        [row] = _rows(context, "azure-eu")
+        assert_that(row.deleted_at, is_not(none()))
+
+
+@pytest.mark.parametrize("failing", ["list_model_deployments", "delete_model_deployment"])
+def test_a_route_removal_failure_deletes_nothing(failing):
+    with given(_setup(admin, azure_with_routed_models)) as context:
+        getattr(context.injector.get(LiteLLMClient), failing).side_effect = LiteLLMError("proxy down")
+
+        response = _delete(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": ROUTES_NOT_REMOVED}))
+        [row] = _rows(context, "azure-eu")
+        assert_that(row.deleted_at, none())
+        assert_that(_stored(context, "azure-eu"), equal_to((AZURE_KEY, AZURE_BASE_URL)))
+        assert_that(_models(context, context.connection), has_length(2))
+        assert_that(_deleted_events(context), has_length(0))
+
+
+def test_a_key_replaced_while_the_connection_is_deleted_routes_nothing():
+    with given(_setup(admin, azure_with_routed_models)) as context:
+
+        def delete_while_checking(*_):
+            assert_that(_delete(context, "azure-eu").status_code, equal_to(204))
+            return True
+
+        context.injector.get(LlmProviderKeyChecker).check = Mock(side_effect=delete_while_checking)
+
+        response = _replace(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        assert_that(context.routes, equal_to(_other_routes()))
+        assert_that(_changed_events(context), has_length(0))
+
+
+def _list_models(context, slug: str, headers: dict | None = None):
+    return context.client.get(f"{BASE}/{slug}/models", headers=headers or auth(context))
+
+
+def test_an_organization_owner_cannot_list_a_connections_models():
+    with given(_setup(anthropic_connected)) as context:
+        response = _list_models(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+
+
+def test_listing_a_connections_models_needs_a_signed_in_user():
+    with given(_setup(anthropic_connected)) as context:
+        response = context.client.get(f"{BASE}/anthropic/models")
+
+        assert_that(response.status_code, equal_to(401))
+
+
+def test_a_read_only_api_key_of_a_platform_admin_can_list_a_connections_models():
+    with given(_setup(admin, anthropic_connected)) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _list_models(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(200), response.text)
+
+
+def test_a_connections_models_are_listed_by_id_with_exact_prices():
+    with given(_setup(admin, anthropic_connected)) as context:
+        _model(context, context.connection, "claude-sonnet-4-5")
+        _model(
+            context,
+            context.connection,
+            "claude-haiku-4-5",
+            input_cost_per_token=Decimal("0.000001"),
+            output_cost_per_token=Decimal("0.000005"),
+            cache_read_input_token_cost=Decimal("0.0000001"),
+            cache_creation_input_token_cost=Decimal("0.00000125"),
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="claude-haiku-4-5",
+        )
+        other = _connection(context, "openai", "OpenAI", ProviderType.OPENAI, **_with_key(NEW_KEY))
+        _model(context, other, "gpt-4o")
+
+        response = _list_models(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "claude-haiku-4-5",
+                        "input_cost_per_token": "0.000001000000000000",
+                        "output_cost_per_token": "0.000005000000000000",
+                        "cache_read_input_token_cost": "0.000000100000000000",
+                        "cache_creation_input_token_cost": "0.000001250000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "claude-haiku-4-5",
+                    },
+                    {
+                        "model_id": "claude-sonnet-4-5",
+                        "input_cost_per_token": "0.000002500000000000",
+                        "output_cost_per_token": "0.000010000000000000",
+                        "cache_read_input_token_cost": "0.000001250000000000",
+                        "cache_creation_input_token_cost": "0.000000000000000000",
+                        "price_source": "manual",
+                        "litellm_price_key": None,
+                    },
+                ]
+            ),
+        )
+
+
+def test_a_connection_without_models_lists_none():
+    with given(_setup(admin, azure_connected)) as context:
+        response = _list_models(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), equal_to([]))
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_the_models_of_a_missing_connection_are_not_found(deleted):
+    with given(_setup(admin)) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _list_models(context, "xai")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+
+
+def test_openrouter_has_no_stored_models():
+    with given(_setup(admin)) as context:
+        response = _list_models(context, "openrouter")
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": MODELS_NOT_STORED}))
+
+
+def provider_lists(answer: list[str] | Exception):
+    def step(context):
+        listing = Mock(side_effect=answer) if isinstance(answer, Exception) else Mock(return_value=answer)
+        context.injector.get(LlmProviderCatalogue).list_models = listing
+        context.list_models = listing
+
+    return step
+
+
+def litellm_prices(*prices: LiteLLMModelPrice):
+    def step(context):
+        context.injector.get(LiteLLMClient).get_model_prices.return_value = {price.key: price for price in prices}
+
+    return step
+
+
+def _price(
+    key: str,
+    input_price: str,
+    output_price: str,
+    cache_read: str | None = None,
+    cache_creation: str | None = None,
+    mode: str | None = "chat",
+) -> LiteLLMModelPrice:
+    return LiteLLMModelPrice(
+        key=key,
+        mode=mode,
+        input_cost_per_token=Decimal(input_price),
+        output_cost_per_token=Decimal(output_price),
+        cache_read_input_token_cost=None if cache_read is None else Decimal(cache_read),
+        cache_creation_input_token_cost=None if cache_creation is None else Decimal(cache_creation),
+    )
+
+
+def _catalogue(context, slug: str, headers: dict | None = None):
+    return context.client.get(f"{BASE}/{slug}/model-catalogue", headers=headers or auth(context))
+
+
+def test_an_organization_owner_cannot_read_a_connections_model_catalogue():
+    with given(_setup(anthropic_connected, provider_lists([]), litellm_prices())) as context:
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(403))
+        context.list_models.assert_not_called()
+
+
+def test_reading_a_connections_model_catalogue_needs_a_signed_in_user():
+    with given(_setup(anthropic_connected, provider_lists([]), litellm_prices())) as context:
+        response = context.client.get(f"{BASE}/anthropic/model-catalogue")
+
+        assert_that(response.status_code, equal_to(401))
+        context.list_models.assert_not_called()
+
+
+def test_a_read_only_api_key_of_a_platform_admin_can_read_a_connections_model_catalogue():
+    with given(_setup(admin, anthropic_connected, provider_lists([]), litellm_prices())) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _catalogue(context, "anthropic", headers=read_only)
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(response.json(), equal_to([]))
+
+
+def test_the_catalogue_lists_the_providers_models_with_litellms_chat_prices():
+    listed = ["claude-3-embed", "claude-haiku-4-5", "claude-opus-4-1", "claude-sonnet-4-5", "claude-unknown"]
+    prices = litellm_prices(
+        _price("claude-3-embed", "0.0000001", "0.0000001", mode="embedding"),
+        _price("claude-haiku-4-5", "0.000001", "0.000005", "0.0000001", "0.00000125"),
+        _price("claude-opus-4-1", "0.0000150000000000005", "0.000075"),
+        _price("claude-sonnet-4-5", "0.000003", "0.000015", "0.0000003", "0.00000375"),
+        _price("gpt-4o", "0.0000025", "0.00001"),
+    )
+    with given(_setup(admin, anthropic_connected, provider_lists(listed), prices)) as context:
+        _model(context, context.connection, "claude-3-embed")
+        _model(
+            context,
+            context.connection,
+            "claude-haiku-4-5",
+            input_cost_per_token=Decimal("0.000001"),
+            output_cost_per_token=Decimal("0.000005"),
+            cache_read_input_token_cost=Decimal("0.0000001"),
+            cache_creation_input_token_cost=Decimal("0.00000125"),
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="claude-haiku-4-5",
+        )
+        _model(
+            context,
+            context.connection,
+            "claude-opus-4-1",
+            input_cost_per_token=Decimal("0.000015000000000001"),
+            output_cost_per_token=Decimal("0.000075"),
+            cache_read_input_token_cost=Decimal("0.000015000000000001"),
+            cache_creation_input_token_cost=Decimal("0.000015000000000001"),
+        )
+        _model(context, context.connection, "claude-sonnet-4-5")
+        other = _connection(context, "openai", "OpenAI", ProviderType.OPENAI, **_with_key(NEW_KEY))
+        _model(context, other, "claude-unknown")
+
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {"model_id": "claude-3-embed", "stored": True, **NO_PRICES, "prices_differ": False},
+                    {
+                        "model_id": "claude-haiku-4-5",
+                        "stored": True,
+                        "litellm_price_key": "claude-haiku-4-5",
+                        "input_cost_per_token": "0.000001000000000000",
+                        "output_cost_per_token": "0.000005000000000000",
+                        "cache_read_input_token_cost": "0.000000100000000000",
+                        "cache_creation_input_token_cost": "0.000001250000000000",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "claude-opus-4-1",
+                        "stored": True,
+                        "litellm_price_key": "claude-opus-4-1",
+                        "input_cost_per_token": "0.000015000000000001",
+                        "output_cost_per_token": "0.000075000000000000",
+                        "cache_read_input_token_cost": "0.000015000000000001",
+                        "cache_creation_input_token_cost": "0.000015000000000001",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "claude-sonnet-4-5",
+                        "stored": True,
+                        "litellm_price_key": "claude-sonnet-4-5",
+                        "input_cost_per_token": "0.000003000000000000",
+                        "output_cost_per_token": "0.000015000000000000",
+                        "cache_read_input_token_cost": "0.000000300000000000",
+                        "cache_creation_input_token_cost": "0.000003750000000000",
+                        "prices_differ": True,
+                    },
+                    {"model_id": "claude-unknown", "stored": False, **NO_PRICES, "prices_differ": False},
+                ]
+            ),
+        )
+        context.list_models.assert_called_once_with(ProviderType.ANTHROPIC, ANTHROPIC_KEY)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    ],
+)
+def test_a_stored_model_differing_in_any_one_price_is_marked(field):
+    stored = {
+        "input_cost_per_token": Decimal("0.000003"),
+        "output_cost_per_token": Decimal("0.000015"),
+        "cache_read_input_token_cost": Decimal("0.0000003"),
+        "cache_creation_input_token_cost": Decimal("0.00000375"),
+    }
+    stored[field] += Decimal("0.000000000000000001")
+    prices = litellm_prices(_price("claude-sonnet-4-5", "0.000003", "0.000015", "0.0000003", "0.00000375"))
+    with given(_setup(admin, anthropic_connected, provider_lists(["claude-sonnet-4-5"]), prices)) as context:
+        _model(context, context.connection, "claude-sonnet-4-5", **stored)
+
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        [entry] = response.json()
+        assert_that(entry, has_entries(stored=True, prices_differ=True))
+
+
+def test_a_custom_connection_is_listed_at_its_base_url_without_prices():
+    prices = litellm_prices(_price("llama-3", "0.000001", "0.000002"), _price("openai/llama-3", "0.000001", "0.000002"))
+    with given(_setup(admin, provider_lists(["llama-3"]), prices)) as context:
+        _connection(
+            context,
+            "custom-lab",
+            "Aardvark lab",
+            ProviderType.CUSTOM,
+            base_url=CUSTOM_BASE_URL,
+            **_with_key(CUSTOM_KEY),
+        )
+
+        response = _catalogue(context, "custom-lab")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(), equal_to([{"model_id": "llama-3", "stored": False, **NO_PRICES, "prices_differ": False}])
+        )
+        context.list_models.assert_called_once_with(ProviderType.CUSTOM, CUSTOM_KEY, CUSTOM_BASE_URL)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code", "detail"),
+    [
+        (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
+        (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListBusy(), 503, ANTHROPIC_LIST_BUSY),
+        (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
+    ],
+)
+def test_a_provider_list_that_fails_gives_its_status(failure, status_code, detail):
+    with given(_setup(admin, anthropic_connected, provider_lists(failure), litellm_prices())) as context:
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(status_code))
+        assert_that(response.json(), equal_to({"detail": detail}))
+
+
+def test_a_price_list_litellm_cannot_give_is_unavailable():
+    with given(_setup(admin, anthropic_connected, provider_lists(["claude-sonnet-4-5"]))) as context:
+        context.injector.get(LiteLLMClient).get_model_prices.side_effect = LiteLLMError("proxy down")
+
+        response = _catalogue(context, "anthropic")
+
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": PRICE_LIST_UNREADABLE}))
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_the_catalogue_of_a_missing_connection_is_not_found(deleted):
+    with given(_setup(admin, provider_lists([]), litellm_prices())) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _catalogue(context, "xai")
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        context.list_models.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("slug", "detail"),
+    [("openrouter", MODELS_NOT_STORED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
+)
+def test_a_connection_whose_models_are_not_listed_is_refused_before_the_provider_is_asked(slug, detail):
+    with given(_setup(admin, azure_connected, provider_lists([]), litellm_prices())) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC)
+
+        response = _catalogue(context, slug)
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+
+
+def _claude_prices():
+    return litellm_prices(
+        _price("claude-haiku-4-5", "0.000001", "0.000005", "0.0000001", "0.00000125"),
+        _price("claude-opus-4-1", "0.000015", "0.000075"),
+        _price("claude-sonnet-4-5", "0.000003", "0.000015", "0.0000003", "0.00000375"),
+        _price("claude-3-embed", "0.0000001", "0.0000001", mode="embedding"),
+    )
+
+
+def _without_key(route: dict) -> dict:
+    return {**route, "litellm_params": {k: v for k, v in route["litellm_params"].items() if k != "api_key"}}
+
+
+def _route_store(context) -> None:
+    routes: dict[str, dict] = dict(_other_routes())
+    litellm = context.injector.get(LiteLLMClient)
+    litellm.list_model_deployments.side_effect = lambda id_prefix: [
+        _without_key(route) for route_id, route in routes.items() if route_id.startswith(id_prefix)
+    ]
+    litellm.upsert_model_deployment.side_effect = _record_route(routes)
+    litellm.delete_model_deployment.side_effect = lambda model_id: routes.pop(model_id, None) is not None
+    context.routes = routes
+
+
+def anthropic_with_routes(context):
+    _route_store(context)
+    anthropic_connected(context)
+
+
+def azure_with_routes(context):
+    _route_store(context)
+    azure_connected(context)
+
+
+def _claude_route(context, model_id: str, row_id: UUID, prices: tuple[str, str, str, str]) -> dict[str, dict]:
+    route_id = f"agentbarn:model:{context.connection.id}:{row_id}"
+    return {
+        route_id: {
+            "model_name": f"anthropic/{model_id}",
+            "litellm_params": {
+                "model": f"anthropic/{model_id}",
+                "api_key": ANTHROPIC_KEY,
+                "input_cost_per_token": float(prices[0]),
+                "output_cost_per_token": float(prices[1]),
+                "cache_read_input_token_cost": float(prices[2]),
+                "cache_creation_input_token_cost": float(prices[3]),
+            },
+            "model_info": _model_info(route_id, ANTHROPIC_KEY),
+        }
+    }
+
+
+def _stored_claude(context, model_id: str, prices: tuple[str, str, str, str], **fields) -> LlmProviderModel:
+    model = _model(
+        context,
+        context.connection,
+        model_id,
+        input_cost_per_token=Decimal(prices[0]),
+        output_cost_per_token=Decimal(prices[1]),
+        cache_read_input_token_cost=Decimal(prices[2]),
+        cache_creation_input_token_cost=Decimal(prices[3]),
+        **fields,
+    )
+    context.routes.update(_claude_route(context, model_id, model.id, prices))
+    return model
+
+
+def _typed(input_price: str, output_price: str, cache_read: str, cache_creation: str) -> dict:
+    return {
+        "input_cost_per_token": input_price,
+        "output_cost_per_token": output_price,
+        "cache_read_input_token_cost": cache_read,
+        "cache_creation_input_token_cost": cache_creation,
+    }
+
+
+def _save(context, slug: str, models: list[dict], headers: dict | None = None):
+    return context.client.put(f"{BASE}/{slug}/models", headers=headers or auth(context), json={"models": models})
+
+
+def _models_changed_events(context) -> list[OutboxMessage]:
+    with _session(context) as session:
+        return list(
+            session.exec(select(OutboxMessage).where(col(OutboxMessage.event_name) == MODELS_CHANGED_EVENT)).all()
+        )
+
+
+def _stored_prices(context) -> dict[str, tuple]:
+    return {
+        model.model_id: (
+            model.input_cost_per_token,
+            model.output_cost_per_token,
+            model.cache_read_input_token_cost,
+            model.cache_creation_input_token_cost,
+            model.price_source,
+            model.litellm_price_key,
+        )
+        for model in _models(context, context.connection)
+    }
+
+
+def _assert_nothing_saved(context, before: dict[str, tuple], routes_before: dict[str, dict]) -> None:
+    assert_that(_stored_prices(context), equal_to(before))
+    assert_that(context.routes, equal_to(routes_before))
+    assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_an_organization_owner_cannot_save_a_connections_models():
+    with given(_setup(anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(403))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_read_only_api_key_cannot_save_a_connections_models():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        created = context.client.post(
+            "/api/v1/auth/me/api-keys", json={"name": "Automation", "access_mode": "READ_ONLY"}, headers=auth(context)
+        )
+        read_only = {"Authorization": f"Bearer {created.json()['token']}"}
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}], read_only)
+
+        assert_that(response.status_code, equal_to(403))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_saved_models_are_stored_routed_and_audited():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        response = _save(
+            context,
+            "anthropic",
+            [
+                {"model_id": "claude-sonnet-4-5", "price": "litellm"},
+                {"model_id": "claude-opus-4-1", "price": "litellm"},
+                {"model_id": "claude-haiku-4-5", "price": _typed("0.0000012", "0.000006", "0.00000012", "0")},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "claude-haiku-4-5",
+                        "input_cost_per_token": "0.000001200000000000",
+                        "output_cost_per_token": "0.000006000000000000",
+                        "cache_read_input_token_cost": "0.000000120000000000",
+                        "cache_creation_input_token_cost": "0.000000000000000000",
+                        "price_source": "manual",
+                        "litellm_price_key": None,
+                    },
+                    {
+                        "model_id": "claude-opus-4-1",
+                        "input_cost_per_token": "0.000015000000000000",
+                        "output_cost_per_token": "0.000075000000000000",
+                        "cache_read_input_token_cost": "0.000015000000000000",
+                        "cache_creation_input_token_cost": "0.000015000000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "claude-opus-4-1",
+                    },
+                    {
+                        "model_id": "claude-sonnet-4-5",
+                        "input_cost_per_token": "0.000003000000000000",
+                        "output_cost_per_token": "0.000015000000000000",
+                        "cache_read_input_token_cost": "0.000000300000000000",
+                        "cache_creation_input_token_cost": "0.000003750000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "claude-sonnet-4-5",
+                    },
+                ]
+            ),
+        )
+        connection_id = context.connection.id
+        assert_that(
+            context.routes,
+            equal_to(
+                {
+                    **_other_routes(),
+                    **_claude_route(
+                        context,
+                        "claude-haiku-4-5",
+                        uuid5(connection_id, "claude-haiku-4-5"),
+                        ("0.0000012", "0.000006", "0.00000012", "0"),
+                    ),
+                    **_claude_route(
+                        context,
+                        "claude-opus-4-1",
+                        uuid5(connection_id, "claude-opus-4-1"),
+                        ("0.000015", "0.000075", "0.000015", "0.000015"),
+                    ),
+                    **_claude_route(
+                        context,
+                        "claude-sonnet-4-5",
+                        uuid5(connection_id, "claude-sonnet-4-5"),
+                        ("0.000003", "0.000015", "0.0000003", "0.00000375"),
+                    ),
+                }
+            ),
+        )
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            equal_to(
+                {
+                    "connection_id": str(connection_id),
+                    "slug": "anthropic",
+                    "provider_type": "anthropic",
+                    "added_count": 3,
+                    "removed_count": 0,
+                    "repriced_count": 0,
+                    "added_model_ids": ["claude-haiku-4-5", "claude-opus-4-1", "claude-sonnet-4-5"],
+                    "removed_model_ids": [],
+                    "repriced_model_ids": [],
+                    "model_ids_truncated": False,
+                    "actor_display": ADMIN_NAME,
+                    "subject_display": "Anthropic",
+                }
+            ),
+        )
+        assert_that(event.subject, has_entries(type="SYSTEM", id=str(connection_id)))
+        assert ANTHROPIC_KEY not in str(event.payload)
+        context.list_models.assert_called_once_with(ProviderType.ANTHROPIC, ANTHROPIC_KEY)
+
+
+def test_a_model_left_out_is_removed_with_its_route():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        haiku = _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        routes_before = dict(context.routes)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that([model["model_id"] for model in response.json()], equal_to(["claude-sonnet-4-5"]))
+        assert_that(list(_stored_prices(context)), equal_to(["claude-sonnet-4-5"]))
+        haiku_route = _route_id(context.connection, haiku)
+        assert_that(context.routes, equal_to({k: v for k, v in routes_before.items() if k != haiku_route}))
+        upsert.assert_not_called()
+        context.injector.get(LiteLLMClient).get_model_prices.assert_not_called()
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            has_entries(
+                added_count=0,
+                removed_count=1,
+                repriced_count=0,
+                added_model_ids=[],
+                removed_model_ids=["claude-haiku-4-5"],
+                repriced_model_ids=[],
+                model_ids_truncated=False,
+            ),
+        )
+
+
+def test_only_the_routes_that_differ_are_written():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(
+            context,
+            "anthropic",
+            [
+                {"model_id": "claude-sonnet-4-5", "price": "litellm"},
+                {"model_id": "claude-haiku-4-5", "price": "stored"},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(upsert.call_count, equal_to(1))
+        assert_that(upsert.call_args.kwargs["model_info"]["id"], equal_to(_route_id(context.connection, sonnet)))
+        assert_that(
+            context.routes[_route_id(context.connection, sonnet)],
+            equal_to(
+                _claude_route(context, "claude-sonnet-4-5", sonnet.id, SONNET_LISTED)[
+                    _route_id(context.connection, sonnet)
+                ]
+            ),
+        )
+        assert_that(
+            _stored_prices(context)["claude-sonnet-4-5"],
+            equal_to((*(Decimal(price) for price in SONNET_LISTED), PriceSource.LITELLM, "claude-sonnet-4-5")),
+        )
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            has_entries(added_count=0, removed_count=0, repriced_count=1, repriced_model_ids=["claude-sonnet-4-5"]),
+        )
+
+
+def test_a_price_source_change_alone_is_audited_without_writing_the_route():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_LISTED)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        upsert.assert_not_called()
+        assert_that(
+            _stored_prices(context)["claude-sonnet-4-5"][4:], equal_to((PriceSource.LITELLM, "claude-sonnet-4-5"))
+        )
+        [event] = _models_changed_events(context)
+        assert_that(event.payload, has_entries(repriced_count=1, repriced_model_ids=["claude-sonnet-4-5"]))
+
+
+def test_a_save_that_changes_nothing_records_nothing():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        before, routes_before = _stored_prices(context), dict(context.routes)
+        litellm = context.injector.get(LiteLLMClient)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        litellm.upsert_model_deployment.assert_not_called()
+        litellm.delete_model_deployment.assert_not_called()
+        _assert_nothing_saved(context, before, routes_before)
+
+
+def test_a_save_that_changes_nothing_still_restores_a_missing_route():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        route_id = _route_id(context.connection, sonnet)
+        expected = dict(context.routes)
+        del context.routes[route_id]
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(context.routes, equal_to(expected))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_a_save_that_changes_nothing_rewrites_a_route_left_on_another_key():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+        route_id = _route_id(context.connection, sonnet)
+        expected = dict(context.routes)
+        # As a key replacement that failed part way leaves it: the new key, which was never stored.
+        stale = context.routes[route_id]
+        context.routes[route_id] = {
+            **stale,
+            "litellm_params": {**stale["litellm_params"], "api_key": REPLACED_KEY},
+            "model_info": _model_info(route_id, REPLACED_KEY),
+        }
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(context.routes, equal_to(expected))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_the_audited_ids_are_cut_to_twenty_each():
+    model_ids = [f"model-{number:02d}" for number in range(21)]
+    with given(_setup(admin, anthropic_with_routes, provider_lists(model_ids), litellm_prices())) as context:
+        response = _save(
+            context,
+            "anthropic",
+            [{"model_id": model_id, "price": _typed("0.000001", "0.000002", "0", "0")} for model_id in model_ids],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        [event] = _models_changed_events(context)
+        assert_that(
+            event.payload,
+            has_entries(added_count=21, added_model_ids=model_ids[:20], model_ids_truncated=True),
+        )
+
+
+def _many(count: int) -> list[dict]:
+    return [
+        {"model_id": f"model-{number:02d}", "price": _typed("0.000001", "0.000002", "0", "0")}
+        for number in range(count)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("models", "detail"),
+    [
+        (_many(51), TOO_MANY_MODELS),
+        ([{"model_id": "claude-sonnet-4-5", "price": "litellm"}] * 2, MODEL_REPEATED),
+        ([{"model_id": "claude sonnet", "price": "litellm"}], MODEL_ID_FORMAT),
+        ([{"model_id": "", "price": "litellm"}], MODEL_ID_FORMAT),
+        ([{"model_id": "m" * 201, "price": "litellm"}], MODEL_ID_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": "cheapest"}], PRICE_CHOICE),
+        ([{"model_id": "claude-sonnet-4-5", "price": {"input_cost_per_token": "0.000001"}}], PRICE_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("abc", "0.000002", "0", "0")}], PRICE_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("NaN", "0.000002", "0", "0")}], PRICE_FORMAT),
+        (
+            [{"model_id": "claude-sonnet-4-5", "price": _typed("0.0000010000000000001", "0.000002", "0", "0")}],
+            PRICE_FORMAT,
+        ),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("1000000", "0.000002", "0", "0")}], PRICE_FORMAT),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0", "0.000002", "0", "0")}], PRICE_RANGE),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0.000001", "-0.000002", "0", "0")}], PRICE_RANGE),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0.000001", "0.000002", "-0.1", "0")}], PRICE_RANGE),
+        ([{"model_id": "claude-sonnet-4-5", "price": _typed("0.000001", "0.000002", "0", "-0.1")}], PRICE_RANGE),
+    ],
+)
+def test_a_body_that_breaks_a_rule_is_refused_before_the_provider_is_asked(models, detail):
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        before, routes_before = _stored_prices(context), dict(context.routes)
+
+        response = _save(context, "anthropic", models)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, before, routes_before)
+
+
+@pytest.mark.parametrize(
+    ("models", "detail"),
+    [
+        ([{"model_id": "claude-unlisted", "price": _typed("0.000001", "0.000002", "0", "0")}], ANTHROPIC_NOT_LISTED),
+        ([{"model_id": "claude-unpriced", "price": "litellm"}], NO_CHAT_PRICE),
+        ([{"model_id": "claude-3-embed", "price": "litellm"}], NO_CHAT_PRICE),
+        ([{"model_id": "claude-sonnet-4-5", "price": "stored"}], PRICES_NOT_STORED),
+    ],
+)
+def test_a_model_the_provider_or_litellm_cannot_back_is_refused(models, detail):
+    listed = [*SAVE_LISTED, "claude-3-embed", "claude-unpriced"]
+    with given(_setup(admin, anthropic_with_routes, provider_lists(listed), _claude_prices())) as context:
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        before, routes_before = _stored_prices(context), dict(context.routes)
+
+        response = _save(context, "anthropic", models)
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        _assert_nothing_saved(context, before, routes_before)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code", "detail"),
+    [
+        (ProviderListRefused(), 409, ANTHROPIC_REFUSED_STORED_KEY),
+        (ProviderListUnreachable(), 503, ANTHROPIC_LIST_UNREACHABLE),
+        (ProviderListBusy(), 503, ANTHROPIC_LIST_BUSY),
+        (ProviderListUnreadable(), 502, ANTHROPIC_LIST_UNREADABLE),
+    ],
+)
+def test_a_provider_list_that_fails_saves_nothing(failure, status_code, detail):
+    with given(_setup(admin, anthropic_with_routes, provider_lists(failure), _claude_prices())) as context:
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(status_code))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_price_list_litellm_cannot_give_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED))) as context:
+        context.injector.get(LiteLLMClient).get_model_prices.side_effect = LiteLLMError("proxy down")
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": PRICE_LIST_UNREADABLE}))
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_litellm_failure_part_way_leaves_the_models_unchanged_and_a_retry_repairs_the_routes():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        _stored_claude(context, "claude-haiku-4-5", HAIKU_LISTED)
+        before = _stored_prices(context)
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+        write = upsert.side_effect
+
+        def fail_after_the_first_write(**route):
+            if upsert.call_count > 1:
+                raise LiteLLMError("proxy down")
+            write(**route)
+
+        upsert.side_effect = fail_after_the_first_write
+        models = [
+            {"model_id": "claude-opus-4-1", "price": "litellm"},
+            {"model_id": "claude-sonnet-4-5", "price": "litellm"},
+        ]
+
+        failed = _save(context, "anthropic", models)
+
+        assert_that(failed.status_code, equal_to(503))
+        assert_that(failed.json(), equal_to({"detail": MODELS_NOT_ROUTED}))
+        assert_that(_stored_prices(context), equal_to(before))
+        assert_that(_models_changed_events(context), has_length(0))
+
+        upsert.side_effect = write
+        retried = _save(context, "anthropic", models)
+
+        assert_that(retried.status_code, equal_to(200), retried.text)
+        connection_id = context.connection.id
+        assert_that(
+            context.routes,
+            equal_to(
+                {
+                    **_other_routes(),
+                    **_claude_route(
+                        context,
+                        "claude-opus-4-1",
+                        uuid5(connection_id, "claude-opus-4-1"),
+                        ("0.000015", "0.000075", "0.000015", "0.000015"),
+                    ),
+                    **_claude_route(
+                        context, "claude-sonnet-4-5", uuid5(connection_id, "claude-sonnet-4-5"), SONNET_LISTED
+                    ),
+                }
+            ),
+        )
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_saving_the_models_of_a_missing_connection_is_not_found(deleted):
+    with given(_setup(admin, provider_lists([]), litellm_prices())) as context:
+        if deleted:
+            _connection(context, "xai", "xAI", ProviderType.XAI, deleted_at=datetime.now(UTC))
+
+        response = _save(context, "xai", [])
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        context.list_models.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("slug", "detail"),
+    [("openrouter", MODELS_NOT_STORED), ("anthropic", ANTHROPIC_HAS_NO_KEY)],
+)
+def test_a_connection_whose_models_are_not_listed_cannot_save_them(slug, detail):
+    with given(_setup(admin, azure_connected, provider_lists([]), litellm_prices())) as context:
+        _connection(context, "anthropic", "Anthropic", ProviderType.ANTHROPIC)
+
+        response = _save(context, slug, [])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+
+
+def test_a_key_replaced_while_the_models_were_listed_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, _claude_prices())) as context:
+
+        def replace_key_while_listing(provider_type, api_key):
+            with _session(context) as session:
+                row = session.get(LlmProviderConnection, context.connection.id)
+                assert row is not None
+                row.api_key_encrypted = encrypt_token(REPLACED_KEY, TEST_ENCRYPTION_KEY)
+                row.api_key_last4 = REPLACED_KEY[-4:]
+                session.add(row)
+                session.commit()
+            return SAVE_LISTED
+
+        context.injector.get(LlmProviderCatalogue).list_models = Mock(side_effect=replace_key_while_listing)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": MODELS_CHANGED_WHILE_READING}))
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_a_stored_model_removed_while_the_models_were_listed_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, _claude_prices())) as context:
+        sonnet = _stored_claude(context, "claude-sonnet-4-5", SONNET_STORED)
+
+        def remove_model_while_listing(provider_type, api_key):
+            with _session(context) as session:
+                session.delete(session.get(LlmProviderModel, sonnet.id))
+                session.commit()
+            return SAVE_LISTED
+
+        context.injector.get(LlmProviderCatalogue).list_models = Mock(side_effect=remove_model_while_listing)
+        routes_before = dict(context.routes)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "stored"}])
+
+        assert_that(response.status_code, equal_to(409))
+        assert_that(response.json(), equal_to({"detail": MODELS_CHANGED_WHILE_READING}))
+        _assert_nothing_saved(context, {}, routes_before)
+
+
+def test_a_connection_deleted_while_the_models_were_listed_saves_nothing():
+    with given(_setup(admin, anthropic_with_routes, _claude_prices())) as context:
+
+        def delete_while_listing(provider_type, api_key):
+            assert_that(context.client.delete(f"{BASE}/anthropic", headers=auth(context)).status_code, equal_to(204))
+            return SAVE_LISTED
+
+        context.injector.get(LlmProviderCatalogue).list_models = Mock(side_effect=delete_while_listing)
+
+        response = _save(context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(404))
+        assert_that(response.json(), equal_to({"detail": NOT_FOUND}))
+        assert_that(context.routes, equal_to(_other_routes()))
+        assert_that(_models(context, context.connection), has_length(0))
+        assert_that(_models_changed_events(context), has_length(0))
+
+
+def test_a_custom_connection_saves_typed_prices_routed_at_its_base_url():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(["llama-3"]), litellm_prices())) as context:
+        custom = _connection(
+            context,
+            "custom-lab",
+            "Aardvark lab",
+            ProviderType.CUSTOM,
+            base_url=CUSTOM_BASE_URL,
+            **_with_key(CUSTOM_KEY),
+        )
+
+        response = _save(
+            context, "custom-lab", [{"model_id": "llama-3", "price": _typed("0.000001", "0.000002", "0", "0")}]
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        route_id = f"agentbarn:model:{custom.id}:{uuid5(custom.id, 'llama-3')}"
+        assert_that(
+            context.routes[route_id],
+            equal_to(
+                {
+                    "model_name": "custom-lab/llama-3",
+                    "litellm_params": {
+                        "model": "openai/llama-3",
+                        "api_base": CUSTOM_BASE_URL,
+                        "api_key": CUSTOM_KEY,
+                        "input_cost_per_token": 1e-06,
+                        "output_cost_per_token": 2e-06,
+                        "cache_read_input_token_cost": 0.0,
+                        "cache_creation_input_token_cost": 0.0,
+                    },
+                    "model_info": _model_info(route_id, CUSTOM_KEY),
+                }
+            ),
+        )
+        context.list_models.assert_called_once_with(ProviderType.CUSTOM, CUSTOM_KEY, CUSTOM_BASE_URL)
+
+
+def test_a_custom_model_cannot_take_litellms_price():
+    with given(
+        _setup(admin, provider_lists(["llama-3"]), litellm_prices(_price("openai/llama-3", "0.000001", "0.000002")))
+    ) as context:
+        _connection(
+            context,
+            "custom-lab",
+            "Aardvark lab",
+            ProviderType.CUSTOM,
+            base_url=CUSTOM_BASE_URL,
+            **_with_key(CUSTOM_KEY),
+        )
+
+        response = _save(context, "custom-lab", [{"model_id": "llama-3", "price": "litellm"}])
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": NO_CHAT_PRICE}))
+
+
+def _azure_prices():
+    return litellm_prices(
+        _price("azure/eu/gpt-4o", "0.00000275", "0.000011", "0.000001375"),
+        _price("azure/global/gpt-5", "0.00000125", "0.00001", "0.000000125", "0.00000125"),
+        _price("azure/gpt-4o", "0.0000025", "0.00001", "0.00000125"),
+        _price("azure/text-embedding-3-small", "0.00000002", "0.00000002", mode="embedding"),
+        _price("claude-sonnet-4-5", *SONNET_LISTED),
+    )
+
+
+def _azure_route(context, deployment: str, row_id: UUID, prices: tuple[str, str, str, str]) -> dict[str, dict]:
+    route_id = f"agentbarn:model:{context.connection.id}:{row_id}"
+    return {
+        route_id: {
+            "model_name": f"azure-eu/{deployment}",
+            "litellm_params": {
+                "model": f"azure/{deployment}",
+                "api_base": AZURE_BASE_URL,
+                "api_version": "v1",
+                "api_key": AZURE_KEY,
+                "input_cost_per_token": float(prices[0]),
+                "output_cost_per_token": float(prices[1]),
+                "cache_read_input_token_cost": float(prices[2]),
+                "cache_creation_input_token_cost": float(prices[3]),
+            },
+            "model_info": _model_info(route_id, AZURE_KEY),
+        }
+    }
+
+
+def _stored_deployment(context, deployment: str, prices: tuple[str, str, str, str], **fields) -> LlmProviderModel:
+    model = _model(
+        context,
+        context.connection,
+        deployment,
+        input_cost_per_token=Decimal(prices[0]),
+        output_cost_per_token=Decimal(prices[1]),
+        cache_read_input_token_cost=Decimal(prices[2]),
+        cache_creation_input_token_cost=Decimal(prices[3]),
+        **fields,
+    )
+    context.routes.update(_azure_route(context, deployment, model.id, prices))
+    return model
+
+
+def test_an_azure_deployment_is_priced_from_the_model_it_runs():
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        response = _save(
+            context,
+            "azure-eu",
+            [
+                {"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "eu/gpt-4o"},
+                {"model_id": "lab.mini_2", "price": _typed("0.000001", "0.000002", "0", "0")},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "lab.mini_2",
+                        "input_cost_per_token": "0.000001000000000000",
+                        "output_cost_per_token": "0.000002000000000000",
+                        "cache_read_input_token_cost": "0.000000000000000000",
+                        "cache_creation_input_token_cost": "0.000000000000000000",
+                        "price_source": "manual",
+                        "litellm_price_key": None,
+                    },
+                    {
+                        "model_id": "prod-gpt4o",
+                        "input_cost_per_token": "0.000002750000000000",
+                        "output_cost_per_token": "0.000011000000000000",
+                        "cache_read_input_token_cost": "0.000001375000000000",
+                        "cache_creation_input_token_cost": "0.000002750000000000",
+                        "price_source": "litellm",
+                        "litellm_price_key": "azure/eu/gpt-4o",
+                    },
+                ]
+            ),
+        )
+        connection_id = context.connection.id
+        assert_that(
+            context.routes,
+            equal_to(
+                {
+                    **_other_routes(),
+                    **_azure_route(
+                        context,
+                        "lab.mini_2",
+                        uuid5(connection_id, "lab.mini_2"),
+                        ("0.000001", "0.000002", "0", "0"),
+                    ),
+                    **_azure_route(context, "prod-gpt4o", uuid5(connection_id, "prod-gpt4o"), EU_GPT4O_LISTED),
+                }
+            ),
+        )
+        [event] = _models_changed_events(context)
+        assert_that(event.payload, has_entries(added_count=2, added_model_ids=["lab.mini_2", "prod-gpt4o"]))
+        context.list_models.assert_not_called()
+
+
+def test_switching_the_model_a_deployment_runs_reprices_it():
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        prod = _stored_deployment(
+            context,
+            "prod-gpt4o",
+            EU_GPT4O_LISTED,
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="azure/eu/gpt-4o",
+        )
+        _stored_deployment(context, "lab-mini", ("0.000001", "0.000002", "0", "0"))
+        upsert = context.injector.get(LiteLLMClient).upsert_model_deployment
+
+        response = _save(
+            context,
+            "azure-eu",
+            [
+                {"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "gpt-4o"},
+                {"model_id": "lab-mini", "price": "stored"},
+            ],
+        )
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            _stored_prices(context)["prod-gpt4o"],
+            equal_to((*(Decimal(price) for price in GPT4O_LISTED), PriceSource.LITELLM, "azure/gpt-4o")),
+        )
+        assert_that(upsert.call_count, equal_to(1))
+        route_id = _route_id(context.connection, prod)
+        assert_that(
+            context.routes[route_id], equal_to(_azure_route(context, "prod-gpt4o", prod.id, GPT4O_LISTED)[route_id])
+        )
+        [event] = _models_changed_events(context)
+        assert_that(event.payload, has_entries(repriced_count=1, repriced_model_ids=["prod-gpt4o"]))
+
+
+@pytest.mark.parametrize(
+    ("model", "detail"),
+    [
+        ({"model_id": "prod gpt4o", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "prod:gpt4o", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "eu/prod", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "d" * 65, "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "", "price": "litellm", "runs_model": "gpt-4o"}, AZURE_DEPLOYMENT_FORMAT),
+        ({"model_id": "prod-gpt4o", "price": "litellm"}, RUNS_MODEL_MISSING),
+        (
+            {"model_id": "prod-gpt4o", "price": _typed("0.000001", "0.000002", "0", "0"), "runs_model": "gpt-4o"},
+            RUNS_MODEL_NOT_TAKEN,
+        ),
+        ({"model_id": "lab-mini", "price": "stored", "runs_model": "gpt-4o"}, RUNS_MODEL_NOT_TAKEN),
+        ({"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "eu/gpt-9"}, NO_CHAT_PRICE),
+        ({"model_id": "prod-gpt4o", "price": "litellm", "runs_model": "text-embedding-3-small"}, NO_CHAT_PRICE),
+        ({"model_id": "prod-gpt4o", "price": "litellm", "runs_model": ""}, NO_CHAT_PRICE),
+    ],
+)
+def test_an_azure_deployment_that_breaks_a_rule_is_refused(model, detail):
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        _stored_deployment(context, "lab-mini", ("0.000001", "0.000002", "0", "0"))
+        before, routes_before = _stored_prices(context), dict(context.routes)
+
+        response = _save(context, "azure-eu", [model])
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": detail}))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, before, routes_before)
+
+
+def test_only_an_azure_deployment_takes_the_model_it_runs():
+    with given(_setup(admin, anthropic_with_routes, provider_lists(SAVE_LISTED), _claude_prices())) as context:
+        response = _save(
+            context, "anthropic", [{"model_id": "claude-sonnet-4-5", "price": "litellm", "runs_model": "x"}]
+        )
+
+        assert_that(response.status_code, equal_to(422))
+        assert_that(response.json(), equal_to({"detail": RUNS_MODEL_NOT_TAKEN}))
+        context.list_models.assert_not_called()
+        _assert_nothing_saved(context, {}, _other_routes())
+
+
+def test_the_azure_catalogue_lists_litellms_azure_chat_models():
+    with given(_setup(admin, azure_with_routes, provider_lists([]), _azure_prices())) as context:
+        _stored_deployment(
+            context,
+            "prod-gpt4o",
+            EU_GPT4O_LISTED,
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="azure/eu/gpt-4o",
+        )
+        _stored_deployment(
+            context,
+            "old-gpt4o",
+            ("0.000002", "0.000008", "0.000001", "0.000002"),
+            price_source=PriceSource.LITELLM,
+            litellm_price_key="azure/gpt-4o",
+        )
+        _stored_deployment(context, "lab-mini", GPT4O_LISTED)
+
+        response = _catalogue(context, "azure-eu")
+
+        assert_that(response.status_code, equal_to(200), response.text)
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "model_id": "eu/gpt-4o",
+                        "stored": True,
+                        "litellm_price_key": "azure/eu/gpt-4o",
+                        "input_cost_per_token": "0.000002750000000000",
+                        "output_cost_per_token": "0.000011000000000000",
+                        "cache_read_input_token_cost": "0.000001375000000000",
+                        "cache_creation_input_token_cost": "0.000002750000000000",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "global/gpt-5",
+                        "stored": False,
+                        "litellm_price_key": "azure/global/gpt-5",
+                        "input_cost_per_token": "0.000001250000000000",
+                        "output_cost_per_token": "0.000010000000000000",
+                        "cache_read_input_token_cost": "0.000000125000000000",
+                        "cache_creation_input_token_cost": "0.000001250000000000",
+                        "prices_differ": False,
+                    },
+                    {
+                        "model_id": "gpt-4o",
+                        "stored": True,
+                        "litellm_price_key": "azure/gpt-4o",
+                        "input_cost_per_token": "0.000002500000000000",
+                        "output_cost_per_token": "0.000010000000000000",
+                        "cache_read_input_token_cost": "0.000001250000000000",
+                        "cache_creation_input_token_cost": "0.000002500000000000",
+                        "prices_differ": True,
+                    },
+                ]
+            ),
+        )
+        context.list_models.assert_not_called()

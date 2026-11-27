@@ -1,14 +1,14 @@
 """Workflows are on for every installation: drop the Platform workflow authoring setting.
 
 Revision ID: 463f987cd60d
-Revises: c87b17ccfe1a
+Revises: b3d81c5e9f42
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "463f987cd60d"
-down_revision: str | None = "c87b17ccfe1a"
+down_revision: str | None = "b3d81c5e9f42"
 branch_labels: str | None = None
 depends_on: str | None = None
 

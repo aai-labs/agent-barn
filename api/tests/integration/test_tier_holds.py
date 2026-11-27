@@ -27,6 +27,7 @@ from api.domains.agent_webhooks.models import AgentWebhook
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.service import AgentService
 from api.domains.communications.models import CommunicationConnection
+from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.subscriptions.service import SubscriptionService
@@ -403,6 +404,63 @@ def test_an_upgrade_releases_nothing_until_the_owner_re_enables_it():
             assert_that(enabled.json(), has_entries(enabled=True, suspended_at=None))
             assert_that(released.status_code, equal_to(status.HTTP_200_OK), released.text)
             assert_that(stored(context, "Newest"), has_properties_of(suspended_at=None, status=AgentStatus.STOPPED))
+
+
+def test_a_held_web_chat_is_released_by_enabling_it_once_the_tier_covers_it(monkeypatch):
+    def free_without_web_chat(context):
+        context.injector.get(TierRepository).update_with_events(
+            TIER_IDS["free"],
+            {"allowed_platform_keys": ["agentbarn_telegram"]},
+            actor=Actor(user_id=context.user.id, display="Platform Admin"),
+        )
+        _ensure_native_connection(context, "web", settings={})
+
+    def enable(context, **changes):
+        (web,) = connections_of(context)
+        return context.client.patch(
+            agent_url(context, f"/connections/{web.id}"),
+            json={"revision": web.revision, **changes},
+            headers=as_owner(context),
+        )
+
+    with given(_setup(agents_named("Only"), free_without_web_chat)) as context:
+        put_on(context, "free")
+        (web,) = connections_of(context)
+        assert_that((web.enabled, web.suspension_reason), equal_to((False, SuspensionReason.TIER)))
+
+        with then("it stays held while the Tier leaves Web Chat out"):
+            refused = enable(context, enabled=True)
+            assert_that(refused.status_code, equal_to(status.HTTP_403_FORBIDDEN), refused.text)
+
+        with when("a downgrade completes just before the release writes"):
+            put_on(context, "cloud_2")
+            repository = context.injector.get(CommunicationConnectionRepository)
+            update = repository.update
+
+            def downgrade_then_update(*args, **kwargs):
+                put_on(context, "free")
+                return update(*args, **kwargs)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(repository, "update", downgrade_then_update)
+                raced = enable(context, enabled=True)
+            assert_that(raced.status_code, equal_to(status.HTTP_403_FORBIDDEN), raced.text)
+            (stored,) = connections_of(context)
+            assert_that((stored.enabled, stored.suspension_reason), equal_to((False, SuspensionReason.TIER)))
+
+        with when("the Organization moves to a Tier with Web Chat and the owner enables it"):
+            put_on(context, "cloud_2")
+            renamed = enable(context, enabled=True, display_name="Renamed")
+            enabled = enable(context, enabled=True)
+
+        with then("only the release is taken: Web Chat is back on, and nothing else changes"):
+            assert_that(renamed.status_code, equal_to(status.HTTP_400_BAD_REQUEST), renamed.text)
+            assert_that(enabled.status_code, equal_to(status.HTTP_200_OK), enabled.text)
+            assert_that(enabled.json(), has_entries(enabled=True, suspended_at=None, display_name=web.display_name))
+
+        with then("an enabled Web Chat takes no further change"):
+            again = enable(context, enabled=True)
+            assert_that(again.status_code, equal_to(status.HTTP_400_BAD_REQUEST), again.text)
 
 
 def test_a_member_cannot_choose_what_the_organization_keeps():

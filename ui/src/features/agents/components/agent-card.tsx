@@ -6,7 +6,7 @@ import Link from "next/link";
 
 import type { Agent, AgentHealth } from "../schemas";
 import { canAgent, currentModelOf, formatModelName, isQuiet, isRecent } from "../utils";
-import { useAgentHealth } from "../hooks/use-agent-health";
+import { useListedAgentHealth } from "../hooks/use-agents-health";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentMetaBadges } from "./agent-meta-badges";
 
@@ -56,11 +56,8 @@ function BotCount({ bots }: { bots: Agent[] }) {
 
 export function AgentCard({ agent, bots, href }: AgentCardProps) {
   const hasActivityPermission = canAgent(agent, "activity.read");
-  const { health } = useAgentHealth(
-    agent.id,
-    agent.status === "RUNNING" && hasActivityPermission,
-    30_000,
-  );
+  // The Team page reads the whole team's health in one request (`useAgentsHealth`).
+  const health = useListedAgentHealth(agent.id, agent.status === "RUNNING" && hasActivityPermission);
   const presence = presenceOf(agent.status, health, hasActivityPermission);
   const creatorName = agent.creator?.fullName?.trim() || agent.creator?.email;
   const createdAt = new Date(agent.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });

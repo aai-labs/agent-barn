@@ -6,23 +6,35 @@ what each scenario says; the rules for reading their objects are covered field b
 `tests/unit/test_environment_health_cluster.py`.
 """
 
+import json
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4, uuid7
 
+import pytest
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_item, none
+from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_item, none, not_none
 from kubernetes.client import (
     CoreV1Event,
     V1ContainerState,
     V1ContainerStateWaiting,
     V1ContainerStatus,
+    V1CronJob,
+    V1CronJobSpec,
+    V1CronJobStatus,
     V1Deployment,
+    V1DeploymentCondition,
     V1DeploymentSpec,
     V1DeploymentStatus,
+    V1Job,
+    V1JobCondition,
+    V1JobStatus,
+    V1JobTemplateSpec,
     V1LabelSelector,
     V1ObjectMeta,
     V1ObjectReference,
+    V1OwnerReference,
     V1PersistentVolumeClaim,
     V1PersistentVolumeClaimSpec,
     V1PersistentVolumeClaimStatus,
@@ -32,18 +44,26 @@ from kubernetes.client import (
     V1PodTemplateSpec,
     V1ResourceQuota,
     V1ResourceQuotaStatus,
+    V1Service,
     V1VolumeResourceRequirements,
 )
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config import ConfigException
+from sqlmodel import Session
 
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import AgentRepository
+from api.domains.conversations.models import MessageDirection
+from api.domains.environment_health import cluster
+from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.prometheus.client import PrometheusClient, PrometheusError, PrometheusSample
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
+from api.tests.steps.conversation import there_is_a_recorded_message
+from api.tests.steps.cost import cost_records_are_clean, there_are_cost_records
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.resource_usage import MockPrometheusModule, prometheus_is_not_configured
@@ -123,7 +143,11 @@ def _quiet_cluster(context) -> None:
         "list_pods",
         "list_deployments",
         "list_stateful_sets",
+        "list_replica_sets",
         "list_pvcs",
+        "list_services",
+        "list_cron_jobs",
+        "list_namespace_jobs",
         "list_resource_quotas",
         "list_warning_events",
     ):
@@ -173,6 +197,10 @@ def _deployment(name: str, ready: int) -> V1Deployment:
 
 def _forbidden() -> ApiException:
     return ApiException(status=403, reason="Forbidden")
+
+
+def response_text(body) -> str:
+    return json.dumps(body)
 
 
 def _get(context):
@@ -358,6 +386,465 @@ def test_without_the_quota_the_entered_ceilings_are_compared_with_the_claims_and
         assert_that(body["level"], equal_to("critical"))
 
 
+def test_volume_claims_and_services_are_counted_against_their_entered_ceilings():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-counts@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        k8s.list_resource_quotas.side_effect = _forbidden()
+        k8s.list_pvcs.return_value = [_claim(f"agent-{uuid4()}", "1Gi") for _ in range(60)]
+        k8s.list_services.return_value = [V1Service(metadata=V1ObjectMeta(name=f"svc-{n}")) for n in range(8)]
+        context.client.put(
+            "/api/v1/platform/resource-limits",
+            json={"persistentvolumeclaims": 60, "services": 40},
+            headers=_auth(context.access_token),
+        )
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["services"], equal_to("available"))
+        lines = {line["resource"]: line for line in body["capacity"]}
+        assert_that(
+            lines["persistentvolumeclaims"],
+            has_entries(source="entered", unit="count", used=60, hard=60, level="critical"),
+        )
+        assert_that(lines["services"], has_entries(used=8, hard=40, level="ok"))
+        assert_that(body["ceilings"], has_entries(persistentvolumeclaims=60, services=40))
+
+
+def test_a_spike_in_the_last_day_shows_beside_the_current_figure():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-peaks@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        k8s.list_resource_quotas.side_effect = _forbidden()
+        k8s.list_pods.return_value = [_pod(f"p-{n}") for n in range(5)]
+        context.client.put(
+            "/api/v1/platform/resource-limits",
+            json={"limits_cpu_cores": 40, "pods": 50},
+            headers=_auth(context.access_token),
+        )
+
+        def answer(promql: str, at):
+            if promql.startswith("max_over_time(count("):
+                return [PrometheusSample({}, 21.0)]
+            if promql.startswith("max_over_time("):
+                return [PrometheusSample({"kind": "limits", "resource": "cpu"}, 39.6)]
+            if "kube_pod_container_resource" in promql:
+                return [PrometheusSample({"kind": "limits", "resource": "cpu"}, 10.0)]
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        lines = {line["resource"]: line for line in body["capacity"]}
+        assert_that(lines["limits.cpu"], has_entries(used=10.0, peak=39.6, peak_ratio=0.99, level="warning"))
+        assert_that(lines["pods"], has_entries(used=5, peak=21, level="ok"))
+        assert_that(lines["requests.storage"], has_entries(peak=none()))
+        assert_that(body["peak_window_hours"], equal_to(24))
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_peaks_that_cannot_be_read_leave_the_current_figures():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-peaks-down@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_resource_quotas.side_effect = _forbidden()
+        context.client.put(
+            "/api/v1/platform/resource-limits", json={"limits_cpu_cores": 40}, headers=_auth(context.access_token)
+        )
+
+        def answer(promql: str, at):
+            if promql.startswith("max_over_time("):
+                raise PrometheusError("Prometheus request failed: ReadTimeout")
+            if "kube_pod_container_resource" in promql:
+                return [PrometheusSample({"kind": "limits", "resource": "cpu"}, 10.0)]
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        response = _get(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        lines = {line["resource"]: line for line in response.json()["capacity"]}
+        assert_that(lines["limits.cpu"], has_entries(used=10.0, peak=none(), level="ok"))
+
+
+def test_a_pod_oom_killed_through_the_week_is_listed_from_its_restart_history():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-restarts@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_pods.return_value = [_pod("rabbitmq-0"), _pod("agentbarn-api-1")]
+
+        def answer(promql: str, at):
+            if "kube_pod_container_status_restarts_total" in promql:
+                return [
+                    PrometheusSample({"pod": "rabbitmq-0", "signal": "restarts"}, 15.0),
+                    PrometheusSample({"pod": "rabbitmq-0", "signal": "oom_killed"}, 1.0),
+                    PrometheusSample({"pod": "agentbarn-api-1", "signal": "restarts"}, 1.0),
+                ]
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        assert_that(body["restart_window_days"], equal_to(7))
+        assert_that(
+            body["workloads"]["issues"],
+            contains_exactly(
+                has_entries(pod_name="rabbitmq-0", restarts_in_window=15, oom_killed=True, repeatedly_restarting=True)
+            ),
+        )
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_without_restart_history_the_pods_are_still_judged_by_themselves():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-restarts-down@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_pods.return_value = [_pod("worker-1", ready=False, waiting="CrashLoopBackOff")]
+
+        def answer(promql: str, at):
+            if "kube_pod_container_status_restarts_total" in promql:
+                raise PrometheusError("Prometheus request failed: ReadTimeout")
+            return []
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
+        assert_that(
+            body["workloads"]["issues"],
+            contains_exactly(has_entries(pod_name="worker-1", restarts_in_window=none(), oom_killed=False)),
+        )
+
+
+def _released(name: str, sha: str, rolled_out_at: datetime) -> V1Deployment:
+    return V1Deployment(
+        metadata=V1ObjectMeta(name=name),
+        spec=V1DeploymentSpec(
+            replicas=1,
+            selector=V1LabelSelector(),
+            template=V1PodTemplateSpec(metadata=V1ObjectMeta(annotations={"build-sha": sha})),
+        ),
+        status=V1DeploymentStatus(
+            ready_replicas=1,
+            conditions=[
+                V1DeploymentCondition(
+                    type="Progressing", status="True", reason="NewReplicaSetAvailable", last_update_time=rolled_out_at
+                )
+            ],
+        ),
+    )
+
+
+def test_the_deployed_build_and_when_it_rolled_out_are_shown():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-deployed@example.com")]) as context:
+        _quiet_cluster(context)
+        six_days_ago = datetime(2026, 11, 6, 9, 30, tzinfo=UTC)
+        sha = "7f306e1b4c2d9a8e5f60718293a4b5c6d7e8f901"
+        _cluster(context).list_deployments.return_value = [
+            _released("agentbarn-api", sha, six_days_ago),
+            _released("agentbarn-ui", sha, six_days_ago),
+        ]
+
+        body = _get(context).json()
+
+        assert_that(
+            body["deployed"],
+            has_entries(build_sha=sha, rolled_out_at="2026-11-06T09:30:00Z", mixed=False, behind=[]),
+        )
+        assert_that(body["services"], has_item(has_entries(name="agentbarn-ui", build_sha=sha, rollout="complete")))
+        assert_that(body["level"], equal_to("ok"))
+
+
+def test_services_left_on_an_older_build_are_a_warning():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-mixed@example.com")]) as context:
+        _quiet_cluster(context)
+        now = datetime.now(UTC)
+        _cluster(context).list_deployments.return_value = [
+            _released("agentbarn-api", "7f306e1b", now - timedelta(hours=1)),
+            _released("agentbarn-gateway", "0123abcd", now - timedelta(days=20)),
+        ]
+
+        body = _get(context).json()
+
+        assert_that(body["deployed"], has_entries(build_sha="7f306e1b", mixed=True, behind=["agentbarn-gateway"]))
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_a_cron_job_whose_last_run_failed_is_listed_first_and_warns():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-cron@example.com")]) as context:
+        _quiet_cluster(context)
+        now = datetime.now(UTC)
+        k8s = _cluster(context)
+        k8s.list_cron_jobs.return_value = [
+            V1CronJob(
+                metadata=V1ObjectMeta(name=name, creation_timestamp=now - timedelta(days=30)),
+                spec=V1CronJobSpec(schedule="2-59/5 * * * *", job_template=V1JobTemplateSpec()),
+                status=V1CronJobStatus(
+                    last_schedule_time=now - timedelta(minutes=1),
+                    last_successful_time=now - timedelta(minutes=6),
+                ),
+            )
+            for name in ("agentbarn-event-reconciler", "agentbarn-restore-point-schedule")
+        ]
+        k8s.list_namespace_jobs.return_value = [
+            V1Job(
+                metadata=V1ObjectMeta(
+                    name="agentbarn-restore-point-schedule-29001",
+                    creation_timestamp=now - timedelta(minutes=1),
+                    owner_references=[
+                        V1OwnerReference(
+                            api_version="batch/v1", kind="CronJob", name="agentbarn-restore-point-schedule", uid="1"
+                        )
+                    ],
+                ),
+                status=V1JobStatus(conditions=[V1JobCondition(type="Failed", status="True", last_transition_time=now)]),
+            )
+        ]
+
+        body = _get(context).json()
+
+        assert_that(_sources(body), has_entries(cron_jobs="available", jobs="available"))
+        assert_that(
+            body["cron_jobs"],
+            contains_exactly(
+                has_entries(name="agentbarn-restore-point-schedule", state="failing", schedule="2-59/5 * * * *"),
+                has_entries(name="agentbarn-event-reconciler", state="ok"),
+            ),
+        )
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_refused_cron_jobs_say_so_and_leave_the_rest():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-cron-refused@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_cron_jobs.side_effect = _forbidden()
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["cron_jobs"], equal_to("forbidden"))
+        assert_that(body["cron_jobs"], equal_to([]))
+        assert_that(body["level"], equal_to("ok"))
+
+
+def _backdate(context, agent, age: timedelta) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        row = session.get(Agent, agent.id)
+        assert row is not None
+        row.created_at = datetime.now(UTC) - age
+        session.add(row)
+        session.commit()
+
+
+def _soft_delete(context, agent) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        row = session.get(Agent, agent.id)
+        assert row is not None
+        row.deleted_at = datetime.now(UTC)
+        session.add(row)
+        session.commit()
+
+
+def _scheduled(context, agent, status: RestorePointStatus, age: timedelta, origin=RestorePointOrigin.SCHEDULED):
+    context.injector.get(RestorePointRepository).save(
+        AgentRestorePoint(
+            agent_id=agent.id,
+            status=status,
+            origin=origin,
+            agent_type=agent.agent_type,
+            pvc_name=f"restore-point-{uuid4()}",
+            config_manifest={},
+            failure_reason="Job failed: token=abc" if status == RestorePointStatus.FAILED else None,
+            created_at=datetime.now(UTC) - age,
+        )
+    )
+
+
+def test_failing_and_overdue_scheduled_backups_are_counted_and_named_by_agent():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("env-backups-1@example.com", "env-backups-2@example.com"),
+            *_platform_admin("env-admin-backups@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        ada, cy = context.ada, context.cy
+        there_is_an_agent(name="Bo", status=AgentStatus.RUNNING)(context)
+        bo = context.agent
+        there_is_an_agent(name="Dee", status=AgentStatus.RUNNING)(context)
+        there_is_an_agent(name="Eve", status=AgentStatus.RUNNING)(context)
+        eve = context.agent
+        for agent in (ada, bo, cy, eve):
+            _backdate(context, agent, timedelta(days=3))
+        # Ada's last good backup is two days old and the two tries since failed.
+        _scheduled(context, ada, RestorePointStatus.READY, timedelta(days=2))
+        _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(hours=7))
+        _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(hours=1))
+        # A failure from last week, and a manual capture, are not scheduled backups failing now.
+        _scheduled(context, ada, RestorePointStatus.FAILED, timedelta(days=6))
+        _scheduled(context, bo, RestorePointStatus.FAILED, timedelta(hours=2), origin=RestorePointOrigin.MANUAL)
+        _scheduled(context, bo, RestorePointStatus.READY, timedelta(hours=1))
+        # Eve's last good backup is two days old and nothing has been tried since.
+        _scheduled(context, eve, RestorePointStatus.READY, timedelta(days=2))
+        # Cy is stopped, so it is not backed up on a schedule; Dee is new and has not had its turn.
+        # A failure before Cy was stopped is not a running Agent's backup failing.
+        _scheduled(context, cy, RestorePointStatus.FAILED, timedelta(hours=3))
+        # Fay failed and then backed up; Gus failed and was then deleted.
+        there_is_an_agent(name="Fay", status=AgentStatus.RUNNING)(context)
+        fay = context.agent
+        there_is_an_agent(name="Gus", status=AgentStatus.RUNNING)(context)
+        gus = context.agent
+        for agent in (fay, gus):
+            _backdate(context, agent, timedelta(days=3))
+        _scheduled(context, fay, RestorePointStatus.FAILED, timedelta(hours=3))
+        _scheduled(context, fay, RestorePointStatus.READY, timedelta(hours=1))
+        _scheduled(context, gus, RestorePointStatus.READY, timedelta(hours=5))
+        _scheduled(context, gus, RestorePointStatus.FAILED, timedelta(hours=2))
+        _soft_delete(context, gus)
+        # Hal failed twice, backed up, then failed again: one failure since it recovered.
+        there_is_an_agent(name="Hal", status=AgentStatus.RUNNING)(context)
+        hal = context.agent
+        _backdate(context, hal, timedelta(days=3))
+        _scheduled(context, hal, RestorePointStatus.FAILED, timedelta(hours=10))
+        _scheduled(context, hal, RestorePointStatus.FAILED, timedelta(hours=9))
+        _scheduled(context, hal, RestorePointStatus.READY, timedelta(hours=4))
+        _scheduled(context, hal, RestorePointStatus.FAILED, timedelta(hours=1))
+
+        body = _get(context).json()
+
+        backups = body["backups"]
+        # Ada is overdue too, but is counted and named once, as failing.
+        assert_that(backups, has_entries(enabled=True, interval_minutes=360, failed_total=2, overdue_total=1))
+        assert_that(
+            backups["failed"],
+            contains_exactly(
+                has_entries(agent=has_entries(agent_name="Ada", organization_name=context.acme.name), failures=2),
+                has_entries(agent=has_entries(agent_name="Hal"), failures=1),
+            ),
+        )
+        assert_that(
+            backups["overdue"],
+            contains_exactly(has_entries(agent=has_entries(agent_name="Eve"), last_backup_at=not_none())),
+        )
+        assert_that("token=abc" not in response_text(body), equal_to(True))
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_with_scheduled_backups_switched_off_none_are_overdue():
+    with given(
+        [
+            set_env_variable({"RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES": "0"}),
+            *_BASE_GIVEN,
+            _two_organizations("env-backups-off-1@example.com", "env-backups-off-2@example.com"),
+            *_platform_admin("env-admin-backups-off@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        _backdate(context, context.ada, timedelta(days=3))
+
+        body = _get(context).json()
+
+        assert_that(body["backups"], has_entries(enabled=False, failed=[], overdue=[]))
+        assert_that(body["level"], equal_to("ok"))
+
+
+def test_agents_no_one_wrote_to_for_two_weeks_are_listed_with_what_they_hold():
+    with given(
+        [
+            # Off, so the overdue backups of these month-old Agents do not decide the level.
+            set_env_variable({"RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES": "0"}),
+            *_BASE_GIVEN,
+            cost_records_are_clean(),
+            _two_organizations("env-idle-1@example.com", "env-idle-2@example.com"),
+            *_platform_admin("env-admin-idle@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        ada, cy = context.ada, context.cy
+        there_is_an_agent(name="Bo", status=AgentStatus.RUNNING)(context)
+        bo = context.agent
+        for agent in (ada, bo, cy):
+            _backdate(context, agent, timedelta(days=30))
+        now = datetime.now(UTC)
+        # Ada was last written to three weeks ago, but the platform woke it an hour ago and it
+        # posted a reply of its own then: neither is a person using it.
+        context.agent = ada
+        there_is_a_recorded_message(occurred_at=now - timedelta(days=21))(context)
+        there_is_a_recorded_message(
+            occurred_at=now - timedelta(hours=1), direction=MessageDirection.OUTBOUND, platform_key="teams"
+        )(context)
+        there_are_cost_records(agent_id=ada.id, occurred_at=now - timedelta(hours=1))(context)
+        _scheduled(context, ada, RestorePointStatus.READY, timedelta(hours=2))
+        # Bo was written to yesterday; Cy, stopped, never.
+        context.agent = bo
+        there_is_a_recorded_message(occurred_at=now - timedelta(days=1))(context)
+        _cluster(context).list_pvcs.return_value = [_claim(f"agent-{ada.id}", "2Gi", _agent_labels(ada.id))]
+        _cluster(context).list_pods.return_value = [_pod(f"agent-{ada.id}-1-a", _agent_labels(ada.id))]
+
+        body = _get(context).json()
+
+        assert_that(body["idle_after_days"], equal_to(14))
+        assert_that(
+            body["idle_agents"],
+            contains_exactly(
+                has_entries(agent=has_entries(agent_name="Cy"), last_user_message_at=none(), holds_pod=False),
+                has_entries(
+                    agent=has_entries(agent_name="Ada", organization_name=context.acme.name),
+                    last_user_message_at=not_none(),
+                    last_call_at=not_none(),
+                    holds_pod=True,
+                    volume_claims=1,
+                    requested_bytes=2 * _GiB,
+                    restore_points=1,
+                ),
+            ),
+        )
+        # A cleanup candidate is not a fault.
+        assert_that(body["level"], equal_to("ok"))
+
+
+def test_a_long_list_carries_the_worst_rows_and_says_how_many_there_are(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(cluster, "LIST_LIMIT", 1)
+    with given(
+        [
+            set_env_variable({"RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES": "0"}),
+            *_BASE_GIVEN,
+            _two_organizations("env-limit-1@example.com", "env-limit-2@example.com"),
+            *_platform_admin("env-admin-limit@example.com"),
+        ]
+    ) as context:
+        _quiet_cluster(context)
+        for agent in (context.ada, context.cy):
+            _backdate(context, agent, timedelta(days=30))
+        _cluster(context).list_pods.return_value = [
+            _pod("agentbarn-api-1-a", {"app": "agentbarn-api"}, ready=False),
+            _pod("agentbarn-ui-1-a", {"app": "agentbarn-ui"}, ready=False),
+        ]
+
+        body = _get(context).json()
+
+        assert_that(len(body["idle_agents"]), equal_to(1))
+        assert_that(len(body["workloads"]["issues"]), equal_to(1))
+        assert_that(body["totals"], has_entries(idle_agents=2, pod_issues=2))
+        # The level is worked out from every row, not only those carried.
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_refused_services_leave_their_line_unknown():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-services-refused@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        k8s.list_resource_quotas.side_effect = _forbidden()
+        k8s.list_services.side_effect = _forbidden()
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["services"], equal_to("forbidden"))
+        lines = {line["resource"]: line for line in body["capacity"]}
+        assert_that(lines["services"], has_entries(used=none(), level="unknown"))
+
+
 def test_a_readable_quota_takes_over_from_the_entered_ceilings():
     with given([*_BASE_GIVEN, *_platform_admin("env-admin-quota@example.com")]) as context:
         _quiet_cluster(context)
@@ -414,7 +901,11 @@ def test_with_no_cluster_to_read_the_page_says_so_instead_of_failing():
             "list_pods",
             "list_deployments",
             "list_stateful_sets",
+            "list_replica_sets",
             "list_pvcs",
+            "list_services",
+            "list_cron_jobs",
+            "list_namespace_jobs",
             "list_resource_quotas",
             "list_warning_events",
         ):
@@ -460,6 +951,39 @@ def test_a_failed_runtime_query_keeps_the_firing_alerts():
         assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
         assert_that([a["name"] for a in body["alerts"]], contains_exactly("APIDown"))
         assert_that(body["level"], equal_to("critical"))
+
+
+def test_the_cluster_is_read_all_at_once_not_one_source_after_another():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-together@example.com")]) as context:
+        _quiet_cluster(context)
+        k8s = _cluster(context)
+        reads = [
+            "list_pods",
+            "list_deployments",
+            "list_stateful_sets",
+            "list_replica_sets",
+            "list_pvcs",
+            "list_services",
+            "list_cron_jobs",
+            "list_namespace_jobs",
+            "list_resource_quotas",
+            "list_warning_events",
+        ]
+        # Each read answers only once every read has started: one after another, the first
+        # waits out the barrier and every source reads as unavailable.
+        barrier = threading.Barrier(len(reads), timeout=10)
+
+        def together(*_args, **_kwargs):
+            barrier.wait()
+            return []
+
+        for method in reads:
+            getattr(k8s, method).side_effect = together
+
+        body = _get(context).json()
+
+        sources = _sources(body)
+        assert_that({sources[source] for source in sources if source != "prometheus"}, equal_to({"available"}))
 
 
 def test_a_lost_volume_makes_the_overall_health_a_warning():

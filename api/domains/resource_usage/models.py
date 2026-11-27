@@ -266,6 +266,21 @@ class PlatformCapacityRead(PydanticBaseModel):
     committed_requests_cpu_cores: float | None = None
 
 
+class NamespacePeaksRead(PydanticBaseModel):
+    """The highest the namespace committed over a recent window, named as the quota names it.
+
+    For the environment health page: a burst of cron jobs can touch a ceiling for a minute and
+    be gone by the next look. Each figure is None when it could not be read.
+    """
+
+    window_hours: int
+    limits_memory_bytes: int | None = None
+    limits_cpu_cores: float | None = None
+    requests_memory_bytes: int | None = None
+    requests_cpu_cores: float | None = None
+    pods: int | None = None
+
+
 class PlatformResourceUsageRead(PydanticBaseModel):
     range: ResourceUsageRange
     from_date: datetime

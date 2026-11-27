@@ -18,8 +18,9 @@ from api.infrastructure.openrouter.client import OpenRouterClient, OpenRouterErr
 class PlatformPlaybookService:
     """The model every Organization's Playbook Extractions use.
 
-    Runs are billed to the source Agent's own LiteLLM key, which allows any model, so
-    no key allowlist needs updating and Organization model allowlists do not apply.
+    Runs are billed to the source Agent's own LiteLLM key. Before its first model call a
+    run sets that key's model list, which includes this model, and goes on if that fails.
+    Organization model allowlists do not apply.
     """
 
     repository: PlatformPlaybookRepository

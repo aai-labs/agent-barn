@@ -208,6 +208,13 @@ class Config(BaseSettings):
     prometheus_password: str = ""
     prometheus_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
+    # Threads the product API runs sync routes and dependencies on (AnyIO's default is
+    # 40). A request waiting on the cluster, a pod or Prometheus holds one while it waits,
+    # so too few lets a burst of slow calls queue every other request behind them. Database
+    # sessions are opened per repository call, not per request, so a waiting thread holds
+    # no connection and this can exceed the connection pool.
+    api_thread_limit: int = Field(default=100, ge=1, le=400)
+
     redis_url: str = "redis://localhost:6379/0"
 
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model

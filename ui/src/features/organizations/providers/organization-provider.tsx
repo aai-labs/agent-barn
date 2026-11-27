@@ -31,6 +31,7 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "cost",
   "skills",
   "shared-credentials",
+  "mcp-servers",
   "memory-grants",
   "organization-memory-items",
   "playbook-extractions",
@@ -169,11 +170,11 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   }, [deletingOrganizationId, urlOrganizationId, setDeletingOrganizationId]);
 
   if (!userContext) {
-    return <AuthLoadingFallback message="Unable to load organizations." />;
+    return <AuthLoadingFallback message="Unable to load organizations." busy={false} />;
   }
 
   if (!hasHydrated) {
-    return <AuthLoadingFallback message="Loading organizations..." />;
+    return <AuthLoadingFallback message="Loading organizations…" />;
   }
 
   return (

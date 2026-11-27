@@ -1,12 +1,13 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from api.domains.communications.models import CommunicationErrorDetails
 from api.domains.events.models import EventScope
 from api.domains.events.registry import DomainEventDefinition, DomainEventRegistry
+from api.domains.llm_providers.models import MAX_MODEL_ID_LENGTH, OrganizationAccess
 
 ORGANIZATION_ROLE_CHANGED = "organization.role.changed"
 AGENT_ACCESS_GRANTED = "agent.access.granted"
@@ -39,6 +40,7 @@ TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
+ORGANIZATION_ANOMALY_DETECTION_CHANGED = "organization.anomaly_detection.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_CREATED = "organization.created"
 ORGANIZATION_UPDATED = "organization.updated"
@@ -54,6 +56,8 @@ PLATFORM_DECISION_MODEL_CHANGED = "platform.decision_model.changed"
 PLATFORM_LLM_PROVIDER_CREATED = "platform.llm_provider.created"
 PLATFORM_LLM_PROVIDER_CHANGED = "platform.llm_provider.changed"
 PLATFORM_LLM_PROVIDER_DELETED = "platform.llm_provider.deleted"
+PLATFORM_LLM_PROVIDER_MODELS_CHANGED = "platform.llm_provider.models_changed"
+PLATFORM_LLM_PROVIDER_ORGANIZATIONS_CHANGED = "platform.llm_provider.organizations_changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
@@ -95,8 +99,12 @@ ORGANIZATION_SUBSCRIPTION_CHANGED = "organization.subscription.changed"
 ORGANIZATION_SUBSCRIPTION_RENEWED = "organization.subscription.renewed"
 ORGANIZATION_SUBSCRIPTION_ENDED = "organization.subscription.ended"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
+AGENT_ANOMALY_OVERRIDE_CHANGED = "agent.anomaly_override.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
+ORGANIZATION_MCP_SERVER_CREATED = "organization.mcp_server.created"
+ORGANIZATION_MCP_SERVER_UPDATED = "organization.mcp_server.updated"
+ORGANIZATION_MCP_SERVER_DELETED = "organization.mcp_server.deleted"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
@@ -106,6 +114,10 @@ AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 WORKFLOW_RUN_CHANGED = "workflow.run.changed"
 WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
+MAX_LISTED_MODEL_IDS = 20
+MAX_LISTED_ORGANIZATION_IDS = 20
+
+ModelId = Annotated[str, StringConstraints(max_length=MAX_MODEL_ID_LENGTH)]
 
 
 class WorkflowRunChangedPayload(BaseModel):
@@ -396,6 +408,37 @@ class PlatformLlmProviderDeletedPayload(BaseModel):
     subject_display: str
 
 
+class PlatformLlmProviderModelsChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: UUID
+    slug: str
+    provider_type: str
+    added_count: int
+    removed_count: int
+    repriced_count: int
+    added_model_ids: list[ModelId] = Field(max_length=MAX_LISTED_MODEL_IDS)
+    removed_model_ids: list[ModelId] = Field(max_length=MAX_LISTED_MODEL_IDS)
+    repriced_model_ids: list[ModelId] = Field(max_length=MAX_LISTED_MODEL_IDS)
+    model_ids_truncated: bool
+    actor_display: str
+    subject_display: str
+
+
+class PlatformLlmProviderOrganizationsChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: UUID
+    slug: str
+    previous_organization_access: OrganizationAccess
+    organization_access: OrganizationAccess
+    added_count: int
+    removed_count: int
+    added_organization_ids: list[UUID] = Field(max_length=MAX_LISTED_ORGANIZATION_IDS)
+    removed_organization_ids: list[UUID] = Field(max_length=MAX_LISTED_ORGANIZATION_IDS)
+    organization_ids_truncated: bool
+    actor_display: str
+    subject_display: str
+
+
 class PlaybookExtractionRequestedPayload(BaseModel):
     """The Subject is the source Agent whose transcripts and memories the run reads.
 
@@ -632,6 +675,39 @@ class OrganizationModelAllowlistChangedPayload(BaseModel):
     organization_id: UUID
     added: list[str]
     removed: list[str]
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationAnomalyDetectionChangedPayload(BaseModel):
+    """Anomaly detection turned on or off for an Organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    enabled: bool
+    previous_enabled: bool
+    actor_display: str
+    subject_display: str
+
+
+class AgentAnomalyOverrideChangedPayload(BaseModel):
+    """An Agent's sensitivity and hard caps before and after; a None cap is no cap.
+
+    The LLM token cap is `max_llm_usage_per_hour`: payload keys naming tokens are
+    refused as possible secrets.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    sensitivity: str
+    previous_sensitivity: str
+    max_llm_usage_per_hour: int | None
+    previous_max_llm_usage_per_hour: int | None
+    max_llm_calls_per_hour: int | None
+    previous_max_llm_calls_per_hour: int | None
     actor_display: str
     subject_display: str
 
@@ -1004,6 +1080,32 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationMcpServerChangedPayload(BaseModel):
+    """An MCP server created, changed or deleted, never with its credential.
+
+    The URL is reduced to its host because some servers carry a key in the path.
+    `changed_fields` names what an update changed (empty for a create or delete); the
+    other fields describe the server after the change, or before it for a delete.
+    `agent_id` is set for an Agent MCP Server, whose Event's subject is that Agent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    mcp_server_id: UUID
+    identifier: str
+    url_host: str
+    scope: str
+    enabled: bool
+    auth_type: str
+    changed_fields: list[str]
+    attachment_count: int
+    restricted: bool = False
+    agent_id: UUID | None = None
+    actor_display: str
+    subject_display: str
+
+
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     registry.register(
@@ -1023,6 +1125,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
+        (ORGANIZATION_ANOMALY_DETECTION_CHANGED, OrganizationAnomalyDetectionChangedPayload),
+        (AGENT_ANOMALY_OVERRIDE_CHANGED, AgentAnomalyOverrideChangedPayload),
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
@@ -1037,6 +1141,9 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_SUBSCRIPTION_RENEWED, OrganizationSubscriptionPayload),
         (ORGANIZATION_SUBSCRIPTION_ENDED, OrganizationSubscriptionPayload),
         (ORGANIZATION_TRIAL_EXPIRED, OrganizationTrialExpiredPayload),
+        (ORGANIZATION_MCP_SERVER_CREATED, OrganizationMcpServerChangedPayload),
+        (ORGANIZATION_MCP_SERVER_UPDATED, OrganizationMcpServerChangedPayload),
+        (ORGANIZATION_MCP_SERVER_DELETED, OrganizationMcpServerChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -1273,6 +1380,24 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_LLM_PROVIDER_DELETED,
             schema_version=1,
             payload_model=PlatformLlmProviderDeletedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_LLM_PROVIDER_MODELS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformLlmProviderModelsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_LLM_PROVIDER_ORGANIZATIONS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformLlmProviderOrganizationsChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )

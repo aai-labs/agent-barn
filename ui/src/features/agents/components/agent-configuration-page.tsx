@@ -9,6 +9,10 @@ import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
 import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
+import {
+  AddAgentMcpServerButton,
+  AgentMcpServersSettings,
+} from "@/features/mcp-servers/components/agent-mcp-servers-settings";
 
 import { useAgent } from "../hooks/use-agent";
 import { useAgentConfiguration } from "../hooks/use-agent-configuration";
@@ -183,13 +187,18 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
         {/* The navigation panel lists the sections and leads back to the Agent. */}
         <div className="grid gap-8">
           <div className="min-w-0">
-            <div className="mb-4">
-              <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>
-                {configurationSectionLabel(activeSection)}
-              </h2>
-              <p className="mb-0 mt-1 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-                {section.description}
-              </p>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>
+                  {configurationSectionLabel(activeSection)}
+                </h2>
+                <p className="mb-0 mt-1 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+                  {section.description}
+                </p>
+              </div>
+              {activeSection === "mcp" && (
+                <AddAgentMcpServerButton agentId={agent.id} canEdit={canEdit && canManageSecrets} />
+              )}
             </div>
 
             {activeSection === "template" && (
@@ -245,6 +254,13 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 onEdit={() => toggleEditing("keys")}
               />
               </>
+            )}
+            {activeSection === "mcp" && (
+              <AgentMcpServersSettings
+                agent={agent}
+                canEdit={canEdit && canManageSecrets}
+                canRestart={canManageLifecycle}
+              />
             )}
             {activeSection === "override" && (
               <AgentOverrideSettings

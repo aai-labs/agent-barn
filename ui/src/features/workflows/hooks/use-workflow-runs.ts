@@ -259,5 +259,26 @@ export function useWorkflowRunActions() {
     onSuccess: (run) => client.setQueryData([...scope.key, run.id], run),
     onSettled: invalidate,
   });
-  return { start, cancel, rerun, decide };
+  // One decision on one Approval step round; a stale or repeated decision is refused by the server.
+  const decideStep = useMutation({
+    mutationFn: async ({
+      run,
+      decision,
+      note,
+    }: {
+      run: WorkflowRun;
+      decision: "approve" | "request_changes" | "reject";
+      note?: string;
+    }) =>
+      (
+        await api.post<WorkflowRun>(
+          `${scope.base}/${run.id}/step-approvals/${run.stepApproval!.id}/decision`,
+          { decision, ...(note?.trim() ? { note: note.trim() } : {}) },
+          { schema: WorkflowRunSchema },
+        )
+      ).data,
+    onSuccess: (run) => client.setQueryData([...scope.key, run.id], run),
+    onSettled: invalidate,
+  });
+  return { start, cancel, rerun, decide, decideStep };
 }

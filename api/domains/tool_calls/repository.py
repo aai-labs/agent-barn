@@ -15,6 +15,8 @@ from api.domains.communications.models import CommunicationConnection, Communica
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.tool_calls.models import (
+    HourlyToolActivity,
+    StoredToolCall,
     ToolCall,
     ToolCallFilter,
     ToolCallRead,
@@ -195,6 +197,66 @@ class ToolCallRepository:
             for bucket, active_agent_id in rows:
                 by_bucket.setdefault(bucket, set()).add(active_agent_id)
             return by_bucket
+
+    def hourly_activity(
+        self, agent_id: UUID, since: datetime.datetime, until: datetime.datetime
+    ) -> list[HourlyToolActivity]:
+        """Tool calls and errors per UTC hour of `occurred_at`, for hours with any.
+
+        Unscoped: only the scheduled anomaly check calls this, and no router reaches it.
+        """
+        hour = sa.func.date_trunc("hour", sa.func.timezone("UTC", col(ToolCall.occurred_at)))
+        errors = sa.func.count().filter(col(ToolCall.status) == ToolCallStatus.ERROR)
+        query = (
+            select(sa.func.timezone("UTC", hour), sa.func.count(), errors)
+            .where(
+                col(ToolCall.agent_id) == agent_id,
+                col(ToolCall.occurred_at) >= since,
+                col(ToolCall.occurred_at) < until,
+            )
+            .group_by(hour)
+            .order_by(hour)
+        )
+        with self.get_session() as session:
+            rows = session.exec(query).all()  # type: ignore[call-overload]
+        return [HourlyToolActivity(hour=bucket, calls=calls, errors=errored) for bucket, calls, errored in rows]
+
+    def stored_between(
+        self,
+        agent_id: UUID,
+        *,
+        after: datetime.datetime | None,
+        until: datetime.datetime,
+        argument_keys: tuple[str, ...],
+        occurred_since: datetime.datetime,
+    ) -> list[StoredToolCall]:
+        """Tool calls that happened since `occurred_since` and were stored in (`after`,
+        `until`], oldest first, carrying only `argument_keys` of their arguments.
+
+        `occurred_since` is required: it keeps the read on `ix_tool_call_agent_occurred`
+        rather than every row the Agent ever stored.
+
+        The projection happens in the database, so arguments that can hold customer
+        data (file contents, messages) are never loaded. Unscoped: only the scheduled
+        anomaly check calls this, and no router reaches it.
+        """
+        pairs: list[Any] = []
+        for key in argument_keys:
+            pairs.extend([sa.literal(key), col(ToolCall.arguments)[key]])
+        projected = sa.func.jsonb_strip_nulls(sa.func.jsonb_build_object(*pairs)) if pairs else sa.text("'{}'::jsonb")
+        query = select(col(ToolCall.created_at), col(ToolCall.occurred_at), col(ToolCall.tool_name), projected).where(
+            col(ToolCall.agent_id) == agent_id,
+            col(ToolCall.occurred_at) >= occurred_since,
+            col(ToolCall.created_at) <= until,
+        )
+        if after is not None:
+            query = query.where(col(ToolCall.created_at) > after)
+        with self.get_session() as session:
+            rows = session.exec(query.order_by(col(ToolCall.created_at), col(ToolCall.id))).all()  # type: ignore[call-overload]
+        return [
+            StoredToolCall(stored_at=stored, occurred_at=occurred, tool_name=name, arguments=arguments or {})
+            for stored, occurred, name, arguments in rows
+        ]
 
     def get_session(self) -> Session:
         return Session(self.delegate.engine)

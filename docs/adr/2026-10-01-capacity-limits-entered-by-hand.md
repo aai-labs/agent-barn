@@ -34,6 +34,12 @@ Origin: AF-266.
 - **Two more ceilings.** A full `requests.storage` quota stopped a new Agent on staging, and the quota also caps the number of pods, so the same row holds `requests_storage_bytes` and `pods`, entered the same way and audited the same way. Their committed figures need no kube-state-metrics collector: the API lists the namespace's claims and pods itself to run Agents, so the [environment health](../features/environment-health.md) page adds them up.
 - **The quota takes over when it can be read.** The environment health page asks for the namespace's ResourceQuotas and, when the account may read them and there is one, shows its own figures in place of the entered ceilings. Today the read is refused, the page says so, and the entered ceilings stand. No code change is needed when the grant lands; the ceilings then become a fallback.
 
+## Amendment, 2026-11-12: volume claims and Services
+
+Origin: AF-448.
+
+- **Two more counted ceilings.** On staging the `persistentvolumeclaims` quota sat at 60 of 60 and scheduled backups could not create their claims, while storage was not full. The quota also caps Services, and every Agent has one. The same row holds `persistentvolumeclaims` and `services`, entered and audited like `pods`, and the [environment health](../features/environment-health.md) page counts the claims and Services the API lists.
+
 ## Revisit when
 
 The platform owners let our account read the ResourceQuota. The page could then show the real quota, and the typed ceilings would become an override or be removed.

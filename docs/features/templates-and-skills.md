@@ -23,6 +23,45 @@ Templates provide versioned agent configuration; Skills provide packaged instruc
 - AF-253 Agent Template Overrides are Agent-scoped snapshots, not Organization Template rows. They copy the complete source version—including metadata, all eight Markdown artifacts, and required-skill requirements—into an Agent-owned draft/version lineage when a draft is created. A later direct source update repins the Agent to the newer shared Platform or Organization version without mutating an existing Override Draft; the accepted draft/publish/select/restart contract is documented in the AF-253 feature changelog.
 - Each required-skill row carries a nullable `group_key`. `NULL` means the skill is standalone and AND-required (must be assigned). Rows sharing a non-`NULL` `group_key` on the same template form an "at least one of" group: at hire/update time at least one member must be assigned, and an agent can never be updated down to zero assigned members in a group it once had one in. A skill cannot be both standalone and a group member on the same template version (enforced at the API layer). `TemplateCreate`/`TemplateUpdate` accept groups via `required_skill_groups` (list of `{group_key, skill_ids}`) alongside the existing `required_skill_ids` for standalone skills.
 
+## General Purpose working agreement
+
+The General Purpose seed owns all eight Markdown artifacts in
+`api/domains/templates/predefined/seeds/general-purpose/`, including its own
+`agents.md`; specialist templates and shared defaults keep their existing behavior.
+Its instructions define a team coworker that gathers authorized context, completes
+agreed work, verifies results, checkpoints multi-step work on its Task, recovers ordinary
+failures and communicates useful progress. Explicit authorization carries through
+the agreed scope; runtime approval controls and audience permissions still apply.
+Listening supplies context, not unrestricted authority to execute tasks.
+
+Long analyses should produce editable reports with short chat summaries. Recurring
+work requires an agreed purpose, scope, delivery destination, cadence/timezone and
+end or review condition; silence alone is never a reason to send a message. The
+seed starts with no heartbeat checklist or bootstrap questionnaire, and tool
+instructions refer to actual exposed capabilities rather than assumed tool names.
+
+This is instruction content, not a new task runner, credential recovery service or
+crash supervisor. The Agent's existing Task is its work record; it keeps no separate
+work-note file, because files a turn writes are attached to its Task. Task titles,
+notes and files are readable across the Organization, so the agreement keeps private
+source content out of them. `BOOT.md` only reconciles unfinished Tasks and notes what
+it finds: startup runs are not tracked as Tasks, so resuming work there would leave it
+unrecorded. Memory uses the portable `memory/YYYY-MM-DD.md` and `MEMORY.md` names,
+which Hermes maps to its own paths. See [Agent Tasks](agent-tasks.md) for the current
+tooling boundary and [runtime and deployment](../architecture/runtime-and-deployment.md)
+for scheduling and transport behavior.
+
+Seed changes only affect initial creation of missing Platform Template lineages.
+For existing installations, publish the reviewed content as a new Platform Template
+Version through the draft flow, then explicitly update the selected Agent pins
+(and restart running Agents through the existing apply flow). Organization forks
+and Agent Overrides retain their snapshots until explicitly updated. Existing
+`USER.md` is preserved at runtime startup, so changing the seed's user context does
+not overwrite a running Agent's learned profile. Retain the prior Template Version
+for rollback. Behavioral effectiveness requires the
+[General Purpose pilot scenarios](../guidelines/testing.md#general-purpose-template-pilot);
+loading and rendering tests alone do not establish model behavior.
+
 ## Skill invariants
 
 - Skills have three additive scopes: Platform (`organization_id IS NULL`, `agent_id IS NULL`), Organization (`organization_id` set, `agent_id IS NULL`), and Agent (`organization_id` and `agent_id` set). An Agent can see Platform Skills, its Organization's Skills, and its own private Skills; another Agent's private Skills are never visible.

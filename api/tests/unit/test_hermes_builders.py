@@ -27,7 +27,10 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.artifacts import ARTIFACT_INSTRUCTIONS
+from api.domains.agents.builders.artifacts import (
+    ARTIFACT_INSTRUCTIONS,
+    ARTIFACT_INSTRUCTIONS_WITH_CHAT_ATTACHMENTS,
+)
 from api.domains.agents.builders.common import BOT_CONFIG_ROOT, BOT_SECRET_ROOT
 from api.domains.agents.builders.hermes import (
     BOT_ENV_DIR,
@@ -508,6 +511,12 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
     assert deployment.spec.template.spec.containers[0].name == "agent"
 
 
+def test_deployment_runs_start_sh_under_tini() -> None:
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
+
+    assert deployment.spec.template.spec.containers[0].command == ["/usr/bin/tini", "--", "sh", "/app/config/start.sh"]
+
+
 def test_init_container_costs_no_more_quota_than_the_agent() -> None:
     """Same rule as OpenClaw: the pod is charged for its biggest container, so the init
     container must not default to the LimitRange's larger values."""
@@ -651,6 +660,49 @@ def test_artifact_command_and_instructions_are_available_without_memory() -> Non
     assert "never a workspace path (people\ncan't open it)" in config_map.data["AGENTS.md"]
     assert "Reply with\n`[Download <name>](<url>)`, the returned URL unchanged" in config_map.data["AGENTS.md"]
     assert len(ARTIFACT_INSTRUCTIONS) < 1000
+
+
+def test_with_chat_attachments_files_are_attached_and_links_are_the_fallback() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        {},
+        artifacts_enabled=True,
+        chat_attachments=True,
+    )
+    agents_md = config_map.data["AGENTS.md"]
+    assert 'attach it to your reply as "Sending Files" says' in agents_md
+    assert "only when someone asks for a download link or\nattaching fails" in agents_md
+    assert "in every workflow step (pass the step's `--attempt-id`)" in agents_md
+    assert "publish it with `/usr/local/bin/agentbarn-artifacts upload <file>`." not in agents_md
+    assert len(ARTIFACT_INSTRUCTIONS_WITH_CHAT_ATTACHMENTS) < 1000
+
+
+def test_without_chat_attachments_files_are_published_as_links() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        {},
+        artifacts_enabled=True,
+    )
+    assert ARTIFACT_INSTRUCTIONS in config_map.data["AGENTS.md"]
+    assert '"Sending Files"' not in config_map.data["AGENTS.md"]
 
 
 def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
@@ -1082,3 +1134,36 @@ def test_a_bot_without_listen_in_never_inherits_the_parents_rooms() -> None:
     assert platforms["slack"]["extra"]["free_response_channels"] == []
     assert platforms["discord"]["extra"]["free_response_channels"] == []
     assert platforms["telegram"]["extra"]["free_response_chats"] == []
+
+
+def test_custom_slack_server_enables_the_compat_plugin_with_its_tokens() -> None:
+    settings = {"api_url": "https://chat.example.com/slack/api/"}
+    credentials = {"bot_token": "xoxb-custom", "app_token": "xapp-custom"}
+
+    env = native_slack_env(settings, credentials)
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True, custom_slack=True)
+
+    assert env["SLACK_BOT_TOKEN"] == "xoxb-custom"
+    assert env["AGENTBARN_SLACK_COMPAT_API_URL"] == "https://chat.example.com/slack/api/"
+    assert env["AGENTBARN_SLACK_COMPAT_BOT_TOKEN"] == "xoxb-custom"
+    assert env["AGENTBARN_SLACK_COMPAT_APP_TOKEN"] == "xapp-custom"
+    assert config["plugins"]["enabled"][-2:] == ["agentbarn-slack-access", "agentbarn-slack-compat"]
+
+
+def test_slack_itself_gets_no_compat_plugin() -> None:
+    env = native_slack_env({}, {"bot_token": "xoxb-real", "app_token": "xapp-real"})
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
+
+    assert not [name for name in env if name.startswith("AGENTBARN_SLACK_COMPAT_")]
+    assert "agentbarn-slack-compat" not in config["plugins"]["enabled"]
+
+
+def test_config_map_installs_the_slack_compat_plugin() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True, custom_slack=True)
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", config
+    )
+
+    for key, target in (("slack-compat-plugin.yaml", "plugin.yaml"), ("slack-compat-init.py", "__init__.py")):
+        assert key in config_map.data
+        assert f"cp /app/config/{key} /opt/data/plugins/agentbarn-slack-compat/{target}" in config_map.data["start.sh"]

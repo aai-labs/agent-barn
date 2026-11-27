@@ -16,12 +16,21 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 from uuid import uuid7
 
+import pytest
 from fastapi import status
-from hamcrest import assert_that, contains_string, empty, equal_to, is_not, none
+from hamcrest import assert_that, contains_string, empty, equal_to, has_length, is_not, none
+from sqlmodel import Session
 
 from api.domains.agents.models import AgentStatus
 from api.domains.events.catalog import ORGANIZATION_AGENT_SETTINGS_CHANGED
 from api.domains.events.models import OutboxMessage
+from api.domains.llm_providers.models import (
+    OPENROUTER_CONNECTION_ID,
+    LlmProviderConnection,
+    LlmProviderConnectionOrganization,
+    OrganizationAccess,
+)
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -63,6 +72,10 @@ _ENV = set_env_variable(
 )
 
 _SETTINGS = "/api/v1/organizations/{organization_id}/agent-settings"
+LIST_MODELS = "api.infrastructure.openrouter.client.OpenRouterClient.list_models"
+OWN_DEFAULT_ID = "qwen/qwen3.6-plus"
+OWN_DEFAULT = f"litellm/openrouter/{OWN_DEFAULT_ID}"
+NO_PROVIDER = "This organization has no LLM provider. Ask a Platform Administrator."
 _AGENTS = "/api/v1/organizations/{organization_id}/agents"
 
 
@@ -645,3 +658,90 @@ def test_agent_settings_are_concealed_for_another_organization():
                 response.status_code,
                 equal_to(status.HTTP_403_FORBIDDEN),
             )
+
+
+def _set_openrouter_access(context, access: OrganizationAccess, listed: str | None = None) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        if listed == "other":
+            other = Organization(name="Other Org")
+            session.add(other)
+            session.flush()
+            listed_id = other.id
+        else:
+            listed_id = context.organization.id
+        connection = session.get_one(LlmProviderConnection, OPENROUTER_CONNECTION_ID)
+        connection.organization_access = access
+        session.add(connection)
+        if listed is not None:
+            session.add(LlmProviderConnectionOrganization(connection_id=connection.id, organization_id=listed_id))
+        session.commit()
+
+
+def openrouter_access(access: OrganizationAccess, listed: str | None = None):
+    def step(context):
+        _set_openrouter_access(context, access, listed)
+
+    return step
+
+
+def _settings_events(context) -> list[OutboxMessage]:
+    return [m for m in _outbox_messages(context) if m.event_name == ORGANIZATION_AGENT_SETTINGS_CHANGED]
+
+
+@pytest.mark.parametrize(
+    ("access", "listed"),
+    [(OrganizationAccess.NONE, None), (OrganizationAccess.ONLY, "other"), (OrganizationAccess.ALL_EXCEPT, "self")],
+)
+def test_an_organization_without_openrouter_access_cannot_set_a_default(access, listed):
+    with given([*_given(allowed_models=["*"]), openrouter_access(access, listed)]) as context:
+        with catalog_contains(OWN_DEFAULT_ID) as catalogue:
+            response = _set_default(context, OWN_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(NO_PROVIDER))
+        catalogue.assert_not_called()
+        assert_that(context.client.get(_SETTINGS, headers=_auth(context)).json()["default_model"], none())
+        assert_that(_settings_events(context), empty())
+
+
+def test_an_organization_without_openrouter_access_can_clear_its_default():
+    with given(_given(allowed_models=["*"])) as context:
+        with catalog_contains(OWN_DEFAULT_ID):
+            _set_default(context, OWN_DEFAULT)
+        _set_openrouter_access(context, OrganizationAccess.NONE)
+
+        response = _set_default(context, None)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json()["default_model"], none())
+
+
+def test_access_withdrawn_after_the_first_check_still_refuses_the_default():
+    with given(_given(allowed_models=["*"])) as context:
+
+        def withdraw_while_the_catalogue_is_read():
+            _set_openrouter_access(context, OrganizationAccess.NONE)
+            return [{"id": OWN_DEFAULT_ID, "name": OWN_DEFAULT_ID}]
+
+        with patch(LIST_MODELS, side_effect=withdraw_while_the_catalogue_is_read) as catalogue:
+            response = _set_default(context, OWN_DEFAULT)
+
+        catalogue.assert_called_once()
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], equal_to(NO_PROVIDER))
+        assert_that(context.client.get(_SETTINGS, headers=_auth(context)).json()["default_model"], none())
+        assert_that(_settings_events(context), empty())
+
+
+@pytest.mark.parametrize(
+    ("access", "listed"),
+    [(OrganizationAccess.ALL, None), (OrganizationAccess.ONLY, "self"), (OrganizationAccess.ALL_EXCEPT, "other")],
+)
+def test_an_organization_with_openrouter_access_sets_its_default(access, listed):
+    with given([*_given(allowed_models=["*"]), openrouter_access(access, listed)]) as context:
+        with catalog_contains(OWN_DEFAULT_ID):
+            response = _set_default(context, OWN_DEFAULT)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json()["default_model"], equal_to(OWN_DEFAULT))
+        assert_that(_settings_events(context), has_length(1))

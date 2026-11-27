@@ -6,10 +6,12 @@ from uuid import UUID, uuid7
 import pytest
 import yaml
 from fastapi import status
-from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, is_not
+from hamcrest import assert_that, contains_inanyorder, contains_string, equal_to, has_item, has_items, is_not
 from sqlmodel import Session, select
 
 from api.core.config import Config as AppConfig
+from api.domains.agent_settings.models import OrganizationAgentSettings
+from api.domains.agents.key_models import AgentKeyModelService
 from api.domains.agents.models import AgentStatus, AgentType, CommandApprovalMode, pod_agent_id
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
@@ -23,7 +25,7 @@ from api.domains.usage.models import SuspensionReason
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.kubernetes.client import KubernetesClient
-from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.integration.test_communication_connections import _discord_payload, _slack_payload
@@ -48,6 +50,9 @@ BASE = "/api/v1/organizations/{organization_id}/agents"
 ROUTE_MISSING = "Not Found"
 _SYSTEM = ActorIdentity(type=ActorIdentityType.SYSTEM, id="test")
 CREATE = {"name": "Sales", "template_key": "test-template"}
+UNSYNCABLE_MODEL = "litellm/openrouter/contract/unsyncable"
+BOT_KEY = "sk-bot-key-for-tests"
+ORGANIZATION_DEFAULT = "litellm/openrouter/qwen/qwen3.6-plus"
 FIRECRAWL_SECRET = {"provider": "firecrawl", "content": {"api_key": "fc-bot-fixture"}}
 RESTORE_POINT = "01a1b000-0000-7000-8000-000000000000"
 POD_OPERATIONS = [
@@ -418,6 +423,17 @@ def test_creating_a_bot_makes_a_stopped_hermes_agent_inside_its_parent():
         assert_that((stored.bot_slot, stored.file_sync_enabled), equal_to((1, False)))
 
 
+def test_a_new_bots_key_lists_its_own_model():
+    with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
+        response = _create_bot(context, context.parent, model="litellm/openrouter/openai/gpt-5-nano")
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(
+            context.injector.get(LiteLLMClient).generate_key.call_args.kwargs["models"],
+            has_item("openrouter/openai/gpt-5-nano"),
+        )
+
+
 def test_a_new_bot_takes_its_parents_turn_limit():
     with given([*_GIVEN, there_is_a_template(), _parent_with_bots()]) as context:
         context.parent.max_turns = 77
@@ -671,6 +687,28 @@ def test_a_bots_health_comes_from_its_parents_pod():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(_k8s(context).fetch_agent_healthz.call_args.args[0], equal_to(f"agent-{context.parent.id}"))
         assert_that(_k8s(context).get_pod_readiness.call_args.args[0], equal_to(f"agent-{context.parent.id}"))
+
+
+def test_a_batch_asks_a_parents_pod_once_for_the_parent_and_its_bot():
+    with given([*_GIVEN, _parent_with_bots(1, status=AgentStatus.RUNNING)]) as context:
+        k8s = _k8s(context)
+        pod = f"agent-{context.parent.id}"
+        k8s.get_pods_readiness.return_value = {pod: ("ready", None)}
+        k8s.fetch_agent_healthz.return_value = {"status": "ok", "served_bots": [str(context.bot.id)]}
+
+        response = context.client.get(
+            f"{BASE}/health",
+            params={"agent_ids": [str(context.parent.id), str(context.bot.id)]},
+            headers=_auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            {item["agent_id"]: item["status"] for item in response.json()},
+            equal_to({str(context.parent.id): "ok", str(context.bot.id): "ok"}),
+        )
+        assert_that([c.args[0] for c in k8s.fetch_agent_healthz.call_args_list], equal_to([pod]))
+        assert_that(set(k8s.get_pods_readiness.call_args.args[0]), equal_to({pod}))
 
 
 def _firecrawl_configured(context):
@@ -1012,6 +1050,77 @@ def test_a_cluster_failure_on_one_bot_fails_only_that_bot():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
         assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_bot_whose_key_models_cannot_be_set_fails_only_that_bot():
+    with given([*_GIVEN, _parent_with_bots(1, 2)]) as context:
+        bad = context.bots[0]
+        bad.model = UNSYNCABLE_MODEL
+        context.injector.get(AgentRepository).save(bad)
+
+        def set_key_models(key, models):
+            if "openrouter/contract/unsyncable" in models:
+                raise LiteLLMError("LiteLLM is down")
+            return True
+
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = set_key_models
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(_stored(context, bad.id).status, equal_to(AgentStatus.ERROR))
+        assert_that(_stored(context, context.bots[1].id).status, equal_to(AgentStatus.RUNNING))
+        assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
+
+
+def test_a_sweep_during_a_start_does_not_take_a_bots_started_model_off_its_key():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        bot = _stored(context, context.bot.id)
+        bot.litellm_key_encrypted = encrypt_token(BOT_KEY, TEST_ENCRYPTION_KEY)
+        context.injector.get(AgentRepository).save(bot)
+        litellm = context.injector.get(LiteLLMClient)
+
+        def create_deployment(*_):
+            with Session(context.postgres_delegate.engine) as session:
+                session.add(
+                    OrganizationAgentSettings(
+                        organization_id=context.organization.id, default_model=ORGANIZATION_DEFAULT
+                    )
+                )
+                session.commit()
+            context.injector.get(AgentKeyModelService).sync_by_id(bot.id)
+
+        _k8s(context).create_deployment.side_effect = create_deployment
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        bot_lists = [c.args[1] for c in litellm.set_key_models.call_args_list if c.args[0] == BOT_KEY]
+        assert_that(bot_lists[-1], has_items("gpt-5-mini", "openrouter/qwen/qwen3.6-plus"))
+
+
+def test_a_bot_whose_key_cannot_be_set_again_once_saved_still_runs():
+    with given([*_GIVEN, _parent_with_bots(1)]) as context:
+        bot = _stored(context, context.bot.id)
+        bot.litellm_key_encrypted = encrypt_token(BOT_KEY, TEST_ENCRYPTION_KEY)
+        context.injector.get(AgentRepository).save(bot)
+        bot_syncs: list[str] = []
+
+        def set_key_models(key, models):
+            if key == BOT_KEY:
+                bot_syncs.append(key)
+                if len(bot_syncs) > 1:
+                    raise LiteLLMError("LiteLLM is down")
+            return True
+
+        context.injector.get(LiteLLMClient).set_key_models.side_effect = set_key_models
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(len(bot_syncs), equal_to(2))
+        assert_that(_stored(context, bot.id).status, equal_to(AgentStatus.RUNNING))
         assert_that(_stored(context, context.parent.id).status, equal_to(AgentStatus.RUNNING))
 
 

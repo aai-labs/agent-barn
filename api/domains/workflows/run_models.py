@@ -7,20 +7,35 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as DTO
-from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr
+from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field as SqlField
 
 from api.domains.workflows.models import Name, StrictDTO, Text
 from api.infrastructure.postgres.models import BaseModel
 
-TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "REJECTED"})
 RunState = Literal[
-    "QUEUED", "RUNNING", "PAUSED", "BLOCKED", "AWAITING_APPROVAL", "CANCELLING", "CANCELLED", "SUCCEEDED", "FAILED"
+    "QUEUED",
+    "RUNNING",
+    "PAUSED",
+    "BLOCKED",
+    "AWAITING_APPROVAL",
+    "CANCELLING",
+    "CANCELLED",
+    "SUCCEEDED",
+    "FAILED",
+    "REJECTED",
 ]
+RUN_STATE_CHECK = (
+    "state IN ('QUEUED','RUNNING','PAUSED','BLOCKED','AWAITING_APPROVAL','CANCELLING','CANCELLED',"
+    "'SUCCEEDED','FAILED','REJECTED')"
+)
 # A live request is answered while the step's session holds it; a parked one after the session stopped.
 ApprovalState = Literal["LIVE", "PARKED", "APPROVED", "DECLINED", "RELEASED", "LAPSED"]
 DECIDABLE_APPROVAL_STATES = frozenset({"LIVE", "PARKED"})
+# A round at an Approval step waits for a person; each Request changes opens the next round.
+StepApprovalState = Literal["WAITING", "APPROVED", "CHANGES_REQUESTED", "REJECTED", "LAPSED"]
 
 
 class WorkflowFileInput(StrictDTO):
@@ -56,11 +71,7 @@ class WorkflowRun(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("workflow_id", "client_request_id", name="uq_workflow_run_start"),
         sa.CheckConstraint("revision >= 1 AND next_step >= 0 AND generation >= 0", name="ck_workflow_run_counters"),
-        sa.CheckConstraint(
-            "state IN ('QUEUED','RUNNING','PAUSED','BLOCKED','AWAITING_APPROVAL','CANCELLING','CANCELLED',"
-            "'SUCCEEDED','FAILED')",
-            name="ck_workflow_run_state",
-        ),
+        sa.CheckConstraint(RUN_STATE_CHECK, name="ck_workflow_run_state"),
     )
     workflow_id: UUID = SqlField(foreign_key="workflow.id", ondelete="CASCADE", index=True)
     agent_id: UUID = SqlField(foreign_key="agent.id", ondelete="CASCADE", index=True)
@@ -109,11 +120,47 @@ class WorkflowAttempt(BaseModel, table=True):
 
 class WorkflowCheckpoint(BaseModel, table=True):
     __tablename__: str = "workflow_checkpoint"
-    __table_args__ = (sa.UniqueConstraint("run_id", "step_index", name="uq_workflow_checkpoint_step"),)
+    __table_args__ = (
+        sa.UniqueConstraint("run_id", "step_index", "round", name="uq_workflow_checkpoint_round"),
+        sa.CheckConstraint("round >= 1", name="ck_workflow_checkpoint_round"),
+    )
     run_id: UUID = SqlField(foreign_key="workflow_run.id", ondelete="CASCADE", index=True)
     attempt_id: UUID = SqlField(foreign_key="workflow_attempt.id", ondelete="CASCADE")
     step_index: int
+    # A step runs again only when a person requests changes at the Approval step after it.
+    round: int = 1
+    # Set when changes were requested; later steps and the run's result use only the current round.
+    superseded_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
     result: dict[str, Any] = SqlField(sa_column=sa.Column(JSONB, nullable=False))
+
+
+class WorkflowStepApproval(BaseModel, table=True):
+    """One round at an Approval step: a person approves the step before it, requests changes or rejects."""
+
+    __tablename__: str = "workflow_step_approval"
+    __table_args__ = (
+        sa.UniqueConstraint("run_id", "step_index", "round", name="uq_workflow_step_approval_round"),
+        sa.CheckConstraint("round >= 1 AND step_index >= 1", name="ck_workflow_step_approval_counters"),
+        sa.CheckConstraint(
+            "state IN ('WAITING','APPROVED','CHANGES_REQUESTED','REJECTED','LAPSED')",
+            name="ck_workflow_step_approval_state",
+        ),
+        # A run waits at one Approval step at a time; inbox and badge reads use this index.
+        sa.Index(
+            "uq_workflow_step_approval_waiting",
+            "run_id",
+            unique=True,
+            postgresql_where=sa.text("state = 'WAITING'"),
+        ),
+    )
+    run_id: UUID = SqlField(foreign_key="workflow_run.id", ondelete="CASCADE", index=True)
+    step_index: int
+    round: int
+    state: str = "WAITING"
+    decided_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
+    decided_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
+    # Required when changes are requested; optional with an approval or a rejection.
+    note: str | None = None
 
 
 class WorkflowApprovalRequest(BaseModel, table=True):
@@ -186,6 +233,29 @@ class ApprovalDecisionCreate(StrictDTO):
     guidance: str | None = Field(default=None, max_length=4000)
 
 
+class StepApprovalDecisionCreate(StrictDTO):
+    decision: Literal["approve", "request_changes", "reject"]
+    note: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def changes_need_notes(self) -> StepApprovalDecisionCreate:
+        self.note = (self.note or "").strip() or None
+        if self.decision == "request_changes" and self.note is None:
+            raise ValueError("Say what should change when requesting changes")
+        return self
+
+
+class StepApprovalRead(DTO):
+    id: UUID
+    step_index: int
+    round: int
+    state: StepApprovalState
+    created_at: datetime
+    decided_by_user_id: UUID | None
+    decided_at: datetime | None
+    note: str | None
+
+
 class ApprovalRead(DTO):
     id: UUID
     step_index: int
@@ -243,10 +313,14 @@ class WorkflowRunRead(DTO):
     created_at: datetime
     settled_at: datetime | None
     rerun_of_run_id: UUID | None = None
-    allowed_actions: list[Literal["cancel", "rerun", "decide"]]
+    allowed_actions: list[Literal["cancel", "rerun", "decide", "decide_step"]]
     # The running step's current attempt; only present on the single-run read.
     attempt: AttemptRead | None = None
     # The latest approval request of the current step; on list reads only while it awaits a decision.
     approval: ApprovalRead | None = None
     # Every approval request of the run, oldest first; only present on the single-run read.
     approvals: list[ApprovalRead] = Field(default_factory=list)
+    # The Approval step round awaiting a decision, if the run is waiting at one.
+    step_approval: StepApprovalRead | None = None
+    # Every Approval step round of the run, oldest first; only present on the single-run read.
+    step_approvals: list[StepApprovalRead] = Field(default_factory=list)

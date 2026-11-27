@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -16,6 +17,7 @@ from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.resource_limits.models import ResourceLimitsRead
 from api.domains.resource_limits.service import ResourceLimitsService
 from api.domains.resource_usage.models import (
+    NamespacePeaksRead,
     PlatformAgentDetailsRead,
     PlatformAgentResourceUsageRead,
     PlatformAgentUsagePoint,
@@ -43,6 +45,11 @@ _LIMIT_WINDOW_SECONDS = 300
 _THROTTLE_WINDOW_SECONDS = 3600
 
 _HAS_CONTAINER = {AgentStatus.RUNNING, AgentStatus.ERROR}
+
+# An opened row's restarts and usage are read here while its health is read on the request
+# thread, so a slow cluster or Prometheus delays the row by the slowest read, not by all of
+# them in turn. Health stays on the request thread: it also records what it observed.
+_ROW_READS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="platform-agent-row")
 
 
 def _plus(total: float | None, value: float | None) -> float | None:
@@ -229,6 +236,11 @@ def _capacity(limits: ResourceLimitsRead, committed: Mapping[str, Mapping[str, f
     )
 
 
+# The monitoring chart's scrape interval. A peak sampled any coarser could step over a
+# burst that lasts one scrape.
+_PEAK_STEP_SECONDS = 30
+
+
 @inject
 @singleton
 @dataclass
@@ -331,6 +343,37 @@ class PlatformResourceUsageService:
             logger.warning("Namespace commitments are unavailable", exc_info=True)
             return _capacity(limits, None)
 
+    def namespace_peaks(self, now: datetime, *, window_hours: int) -> NamespacePeaksRead:
+        """The highest the namespace committed, and the most pods it held, over the last `window_hours`.
+
+        For the environment health page, beside `namespace_capacity`. Every figure is None
+        when Prometheus is not configured or cannot answer, so the current figures still show.
+        """
+        empty = NamespacePeaksRead(window_hours=window_hours)
+        if not self.usage_repository.is_configured:
+            return empty
+        window_seconds = window_hours * 3600
+        try:
+            committed = self.usage_repository.peak_committed(
+                at=now, window_seconds=window_seconds, step_seconds=_PEAK_STEP_SECONDS
+            )
+            pods = self.usage_repository.peak_pods(
+                at=now, window_seconds=window_seconds, step_seconds=_PEAK_STEP_SECONDS
+            )
+        except PrometheusError:
+            logger.warning("Namespace peaks are unavailable", exc_info=True)
+            return empty
+        limits = committed.get("limits", {})
+        requests = committed.get("requests", {})
+        return NamespacePeaksRead(
+            window_hours=window_hours,
+            limits_memory_bytes=_whole(limits.get("memory")),
+            limits_cpu_cores=limits.get("cpu"),
+            requests_memory_bytes=_whole(requests.get("memory")),
+            requests_cpu_cores=requests.get("cpu"),
+            pods=_whole(pods),
+        )
+
     def _agent_requests(self, now: datetime) -> dict[UUID, dict[str, float]]:
         """What each live Agent's pod requests. Unknown when the source cannot say, and only that.
 
@@ -355,9 +398,13 @@ class PlatformResourceUsageService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
         has_container = agent.status != AgentStatus.STOPPED
-        health = self._health_or_none(agent) if has_container else None
-        diagnostics = self.agent_service.runtime_restarts(agent) if has_container else None
-        usage = self.resource_usage_service.usage_for(agent, ResourceUsageRange.ONE_DAY) if has_container else None
+        health = diagnostics = usage = None
+        if has_container:
+            restarts_read = _ROW_READS.submit(self.agent_service.runtime_restarts, agent)
+            usage_read = _ROW_READS.submit(self.resource_usage_service.usage_for, agent, ResourceUsageRange.ONE_DAY)
+            health = self._health_or_none(agent)
+            diagnostics = restarts_read.result()
+            usage = usage_read.result()
         organization_id = agent.organization_id
         return PlatformAgentDetailsRead(
             agent_id=agent.id,

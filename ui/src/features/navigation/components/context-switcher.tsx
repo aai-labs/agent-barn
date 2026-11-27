@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Building2, Check, ChevronsUpDown, Plus, Shield } from "lucide-react";
 
 import {
@@ -29,19 +29,28 @@ export function ContextSwitcher() {
     canCreateOrganization,
     selectOrganization,
     selectPlatform,
+    prefetchSwitchTargets,
+    isSwitching,
   } = useOrganizationSwitch();
   const [createOpen, setCreateOpen] = useState(false);
+  // Like the rail's links, have every switch target ready in the background, so picking
+  // one shows its loading state at once. Reopening prefetches again in case those expired.
+  useEffect(() => {
+    prefetchSwitchTargets();
+  }, [prefetchSwitchTargets]);
   const label = isPlatformView ? "Platform admin" : (selectedOrganization?.name ?? "Organizations");
 
   return (
     <>
       {/* Not modal, so opening the create dialog from it leaves the page interactive. */}
-      <DropdownMenu modal={false}>
+      {/* The bar under the trigger covers a pick made before the prefetch finished. */}
+      <DropdownMenu modal={false} onOpenChange={(open) => open && prefetchSwitchTargets()}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             aria-label={`Switch organization. Current: ${label}`}
-            className="af-hover-bg flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-[14px] font-semibold"
+            aria-busy={isSwitching}
+            className="af-hover-bg relative flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-[14px] font-semibold"
             style={{ color: isPlatformView ? "var(--accent-ink)" : "var(--ink)" }}
           >
             <span
@@ -56,6 +65,7 @@ export function ContextSwitcher() {
             </span>
             <span className="max-w-[220px] truncate">{label}</span>
             <ChevronsUpDown size={14} aria-hidden style={{ color: "var(--ink-4)" }} />
+            <span aria-hidden className="af-link-pending" data-pending={isSwitching} />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="bottom" align="start" sideOffset={6} className="w-64">

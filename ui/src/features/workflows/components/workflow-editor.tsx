@@ -1,12 +1,17 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Plus, Trash2, UserCheck } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 
-import { type WorkflowDraft, type WorkflowStep } from "../schemas";
+import {
+  STEP_DECISIONS,
+  type StepDecision,
+  type WorkflowDraft,
+  type WorkflowStep,
+} from "../schemas";
 import {
   stepField,
   workflowFieldErrors,
@@ -16,9 +21,11 @@ import { stepNameFromGoal } from "../utils";
 import { AgentPillPicker, type AgentChoice } from "./agent-pill-picker";
 import { WorkflowInputsEditor } from "./workflow-inputs-editor";
 
-export function emptyStep(): WorkflowStep {
+export function emptyStep(type: WorkflowStep["type"] = "agent"): WorkflowStep {
   return {
     id: crypto.randomUUID(),
+    type,
+    ...(type === "approval" ? { allowedDecisions: [...STEP_DECISIONS] } : {}),
     name: "",
     goal: "",
     artifactDescription: null,
@@ -97,6 +104,62 @@ function Control({
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+const decisionLabel: Record<StepDecision, string> = {
+  approve: "Approve",
+  request_changes: "Request changes",
+  reject: "Reject",
+};
+
+/** Which decisions the person at an Approval step is offered; Approve always is. */
+function AllowedDecisions({
+  stepNumber,
+  value,
+  onChange,
+}: {
+  stepNumber: number;
+  value: StepDecision[];
+  onChange: (value: StepDecision[]) => void;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <span aria-hidden="true" className="text-xs text-[var(--ink-3)]">
+        Allowed decisions
+      </span>
+      <div
+        role="group"
+        aria-label={`Step ${stepNumber} allowed decisions`}
+        className="flex flex-wrap gap-1.5"
+      >
+        {STEP_DECISIONS.map((decision) => {
+          const on = value.includes(decision);
+          const locked = decision === "approve";
+          return (
+            <button
+              key={decision}
+              type="button"
+              aria-pressed={on}
+              // Approve is always offered: without it the step could only stop the run.
+              disabled={locked}
+              title={locked ? "Approve is always allowed" : undefined}
+              onClick={() =>
+                onChange(
+                  STEP_DECISIONS.filter((item) =>
+                    item === decision ? !on : value.includes(item),
+                  ),
+                )
+              }
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-color)] disabled:cursor-default ${on ? "bg-[var(--ink)] text-[var(--bg)]" : "border border-[var(--line-strong)] bg-[var(--bg-elev)] text-[var(--ink-3)] hover:text-[var(--ink)]"}`}
+            >
+              {on && <Check size={12} aria-hidden="true" />}
+              {decisionLabel[decision]}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -214,80 +277,133 @@ export function WorkflowEditor({
           </p>
         )}
         <ol className="space-y-2.5">
-          {draft.steps.map((step, index) => (
-            <li
-              key={step.id}
-              data-section={step.id}
-              aria-label={`Step ${index + 1}`}
-              className="group/step flex gap-3 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-3 transition-colors focus-within:border-[var(--line-strong)]"
-            >
-              <div className="flex shrink-0 flex-col items-center gap-0.5">
-                {/* The step being edited shows its number in the accent colour. */}
-                <span className="grid size-6 place-items-center rounded-full bg-[var(--bg-soft)] text-xs font-semibold transition-colors group-focus-within/step:bg-[var(--accent-color)] group-focus-within/step:text-white">
-                  {index + 1}
-                </span>
-                <button
-                  type="button"
-                  className={reorderButton}
-                  aria-label={`Move step ${index + 1} up`}
-                  disabled={disabled || index === 0}
-                  onClick={() => move(index, -1)}
-                >
-                  <ChevronUp size={14} />
-                </button>
-                <button
-                  type="button"
-                  className={reorderButton}
-                  aria-label={`Move step ${index + 1} down`}
-                  disabled={disabled || index === draft.steps.length - 1}
-                  onClick={() => move(index, 1)}
-                >
-                  <ChevronDown size={14} />
-                </button>
-              </div>
-              <div className="flex min-w-0 flex-1 items-start gap-2">
-                <Control
-                  className="flex-1"
-                  label={`Step ${index + 1} instructions`}
-                  hideLabel
-                  area
-                  placeholder="What should the agent do in this step, and what should it produce?"
-                  value={step.goal}
-                  // The step's name, shown in run lists and the timeline, follows its prompt.
-                  onChange={(goal) =>
-                    updateStep(step.id, { goal, name: stepNameFromGoal(goal) })
-                  }
-                  {...field(stepField(step.id, "goal"))}
-                />
-                <button
-                  type="button"
-                  className="af-btn af-btn-icon af-btn-sm mt-0.5 shrink-0"
-                  aria-label={`Remove step ${index + 1}`}
-                  onClick={() =>
-                    step.goal.trim()
-                      ? setRemoving({ step, index })
-                      : removeStep(step.id)
-                  }
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </li>
-          ))}
+          {draft.steps.map((step, index) => {
+            const approval = step.type === "approval";
+            return (
+              <li
+                key={step.id}
+                data-section={step.id}
+                aria-label={approval ? `Step ${index + 1} · Approval step` : `Step ${index + 1}`}
+                className={`group/step flex gap-3 rounded-2xl border p-3 transition-colors focus-within:border-[var(--line-strong)] ${approval ? "border-dashed border-[var(--warn)] bg-[var(--warn-soft)]" : "border-[var(--line)] bg-[var(--bg-elev)]"}`}
+              >
+                <div className="flex shrink-0 flex-col items-center gap-0.5">
+                  {/* The step being edited shows its number in the accent colour. */}
+                  <span className="grid size-6 place-items-center rounded-full bg-[var(--bg-soft)] text-xs font-semibold transition-colors group-focus-within/step:bg-[var(--accent-color)] group-focus-within/step:text-white">
+                    {index + 1}
+                  </span>
+                  <button
+                    type="button"
+                    className={reorderButton}
+                    aria-label={`Move step ${index + 1} up`}
+                    disabled={disabled || index === 0}
+                    onClick={() => move(index, -1)}
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className={reorderButton}
+                    aria-label={`Move step ${index + 1} down`}
+                    disabled={disabled || index === draft.steps.length - 1}
+                    onClick={() => move(index, 1)}
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
+                <div className="flex min-w-0 flex-1 items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    {approval && (
+                      <p
+                        className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold"
+                        style={{ color: "var(--warn)" }}
+                      >
+                        <UserCheck size={14} aria-hidden="true" /> Approval step · a person
+                        decides on the step before
+                      </p>
+                    )}
+                    <Control
+                      label={
+                        approval
+                          ? `Step ${index + 1} approval instructions`
+                          : `Step ${index + 1} instructions`
+                      }
+                      hideLabel
+                      area
+                      placeholder={
+                        approval
+                          ? "What should the person deciding check? e.g. Are the numbers right and the tone on brand?"
+                          : "What should the agent do in this step, and what should it produce?"
+                      }
+                      value={step.goal}
+                      // The step's name, shown in run lists and the timeline, follows its prompt.
+                      onChange={(goal) =>
+                        updateStep(step.id, { goal, name: stepNameFromGoal(goal) })
+                      }
+                      {...field(stepField(step.id, "goal"))}
+                    />
+                    {approval && (
+                      <AllowedDecisions
+                        stepNumber={index + 1}
+                        value={step.allowedDecisions ?? [...STEP_DECISIONS]}
+                        onChange={(allowedDecisions) =>
+                          updateStep(step.id, { allowedDecisions })
+                        }
+                      />
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="af-btn af-btn-icon af-btn-sm mt-0.5 shrink-0"
+                    aria-label={`Remove step ${index + 1}`}
+                    onClick={() =>
+                      step.goal.trim()
+                        ? setRemoving({ step, index })
+                        : removeStep(step.id)
+                    }
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ol>
         <p className="mt-2 text-xs text-[var(--ink-3)]">
-          Each step runs with the skills and tools of the agent chosen for the run.
+          Each step runs with the skills and tools of the agent chosen for the run. An
+          approval step pauses the run until someone who can edit that agent approves the
+          step before it, asks for changes (that step runs again with their notes) or
+          rejects the run.
         </p>
-        <button
-          type="button"
-          className="af-btn af-btn-sm mt-3"
-          disabled={disabled || draft.steps.length >= 50}
-          onClick={() =>
-            onChange({ ...draft, steps: [...draft.steps, emptyStep()] })
-          }
-        >
-          <Plus size={14} /> Add step
-        </button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-sm text-[var(--ink-3)]">Add step:</span>
+          <button
+            type="button"
+            className="af-btn af-btn-sm"
+            aria-label="Add agent step"
+            disabled={disabled || draft.steps.length >= 50}
+            onClick={() =>
+              onChange({ ...draft, steps: [...draft.steps, emptyStep()] })
+            }
+          >
+            <Plus size={14} /> Agent
+          </button>
+          <button
+            type="button"
+            className="af-btn af-btn-sm"
+            aria-label="Add approval step"
+            // An approval step reviews the agent step before it.
+            disabled={
+              disabled ||
+              draft.steps.length >= 50 ||
+              draft.steps.at(-1)?.type !== "agent"
+            }
+            onClick={() =>
+              onChange({ ...draft, steps: [...draft.steps, emptyStep("approval")] })
+            }
+          >
+            <UserCheck size={14} /> Approval
+          </button>
+        </div>
       </div>
 
       <ConfirmationDialog

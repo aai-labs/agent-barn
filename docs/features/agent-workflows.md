@@ -59,7 +59,13 @@ snapshot: name, outcome description, ordered step identities/names/goals,
 required inputs, capability requirements and review destination. Step order is array
 order. Step UUIDs and input keys must be unique. Canonical UUID-shaped step identities
 use the same GUID validation in the UI and API; the manual builder assigns fresh
-step identities when steps are added. A workflow needs 1–50 steps;
+step identities when steps are added. A step is an Agent step (the default; stored
+without a `type`) or an [Approval step](#approval-steps) (`type: "approval"`). An
+Approval step follows an Agent step: it cannot be first or directly follow another
+Approval step, and it carries only its name, its instructions for the person
+deciding, in `goal`, and `allowed_decisions` (any of `approve`, `request_changes`,
+`reject`, always including `approve`; stored in that order, and all three when
+absent). Agent steps carry no `allowed_decisions`. A workflow needs 1–50 steps;
 inputs are bounded to 30 with lowercase keys, text/number/boolean/file type and a
 required flag. Keys start with a letter and allow lowercase letters, digits,
 hyphens and underscores, up to 64 characters. The editor derives an internal key
@@ -144,6 +150,7 @@ under an Agent; the Agent that runs a run is a field of the run. The earlier
 | `POST /workflow-runs/{run_id}/cancel` | `expected_revision` |
 | `POST /workflow-runs/{run_id}/re-run` | `client_request_id` only; see [Run again](#run-again) |
 | `POST /workflow-runs/{run_id}/approvals/{request_id}/decision` | See [Workflow approvals](#workflow-approvals-af-390) |
+| `POST /workflow-runs/{run_id}/step-approvals/{approval_id}/decision` | `{decision: approve\|request_changes\|reject, note?}`; see [Approval steps](#approval-steps) |
 
 Lists default to page size 20, maximum 100. List items retain definition metadata
 and current allowed actions; their `version` contains provenance, name,
@@ -160,7 +167,7 @@ authority covers changing the default Agent.
 Run reads carry `agent_id`, `agent_name` and `agent_archived`, the optional
 `title` (up to 200 characters) given at start, and `name`, the workflow name of
 the pinned version. `status=active` selects runs that have not settled;
-`status=settled` selects Succeeded, Failed and Cancelled runs. Run behavior is
+`status=settled` selects Succeeded, Failed, Cancelled and Rejected runs. Run behavior is
 described under WF02 below.
 
 ## Availability
@@ -481,7 +488,8 @@ runs; the runs remain readable as described under
 [Ownership and authority](#ownership-and-authority). Hard Agent deletion cascades
 that Agent's runs, and Organization deletion cascades definitions and runs. Active runs
 retain their checkpoint summaries. Settled inputs, checkpoints, content-bearing
-history and approval commands and guidance expire after the module-owned 90-day
+history, approval commands and guidance, and notes at Approval steps (including the
+note quoted in a rejected run's reason) expire after the module-owned 90-day
 retention period, while run status and metadata (including who decided each
 approval, and when) remain. File retention and purge are independent and follow the
 [shared artifact lifecycle](agent-artifacts.md#retention-deletion-and-recovery).
@@ -592,6 +600,74 @@ parked runs. Agents need the updated trigger server (Agent update/restart) for l
 approvals; older trigger servers keep the previous stop-and-block behavior. Refusing
 an empty resumed session needs the updated Hermes base image; older images ignore
 `resume_require_history`.
+
+## Approval steps
+
+An Approval step stops the run until a person decides on the result of the Agent
+step before it. Terms follow [`CONTEXT.md`](../../CONTEXT.md): **Approval Step**
+and **Step Approval**.
+
+- **Waiting.** When the step before it completes, the run opens round 1 of a Step
+  Approval and moves to `AWAITING_APPROVAL` with the reason "Waiting for approval at
+  step N: name"; the Approval step reads as `WAITING`. Nothing is sent to the Agent.
+  The run waits without a deadline: Agent stops, managed updates and authority
+  changes do not end it. Cancelling, deleting the Agent or any other settlement
+  lapses the round. `awaiting_decision=true`, the approvals inbox and the badge
+  include runs waiting at an Approval step.
+- **Deciding.** `POST …/step-approvals/{approval_id}/decision` requires current
+  `agent.update` on the run's Agent, as for command approvals, and accepts only the
+  step's allowed decisions (422 otherwise); read-only keys cannot
+  decide and a deleted Agent's run returns 409. Concurrent decisions serialize under
+  the run lock: the first wins and later ones, or a decision on an earlier round,
+  return 409. The decider, time, outcome and note are recorded per round.
+  - **Approve** (optional note) moves to the next step, or completes the run when the
+    Approval step is last. Later steps receive "A person approved the previous
+    step's result" and the note among the completed steps.
+  - **Request changes** (note required) runs the step before again in a fresh
+    session and then opens the next round. That step's earlier result stays as a
+    superseded round; later steps and the run's result use only its current round.
+    The new attempt's packet carries `revision_request` (`notes` and
+    `previous_result`, including its files), and its instructions say that actions
+    taken outside the workspace last time already happened. This is the one case
+    in which a completed step runs again, and only on a person's request. There is
+    no limit on rounds.
+  - **Reject** (optional note) settles the run as `REJECTED` with the reason
+    "Rejected at step N: note". A rejected run can be run again like other settled
+    runs.
+- **Reads.** Steps carry `type` and `round` (the current round; above 1 after
+  changes were requested), an Approval step its `instructions` and
+  `allowed_decisions`, and an Agent step
+  that ran again its superseded results in `earlier_rounds`. Runs carry
+  `step_approval`, the round awaiting a decision, and the single-run read every
+  round in `step_approvals`. While a round
+  waits, `allowed_actions` is `decide_step` and `cancel` for those with
+  `agent.update`. A run whose last step is an Approval step reports the result of
+  the Agent step before it.
+- **Retention.** Notes are content and expire with the run's other content; the
+  outcome, decider and time remain.
+- **UI.** Below the steps, "Add step:" offers **Agent** and **Approval**; an Approval
+  step is a dashed amber card asking what the person deciding should check, with
+  **Allowed decisions** chips (Approve is always on), and Approval is disabled while
+  the last step is one. The editor reports a first or
+  consecutive Approval step on its instructions. The decision sits in the waiting
+  Approval step's pane, outlined in amber: what to check, the reviewed step's result
+  and files, earlier decisions with their notes, a notes field, and the allowed
+  decisions: Approve, Request changes (enabled once notes are written) and Reject
+  (confirmed first). A run waiting at an Approval step opens on that step, and a round
+  that opens while the viewer is on the run overview opens it the same way; the
+  overview links to it, and a decided round returns the viewer to the overview.
+  Viewers see the pane without actions. The step rail marks Approval steps with a person icon and shows
+  "round N" on a step that ran again; that step's detail lists its earlier rounds.
+  A rejected run reads "Run rejected" with its reason. The approvals inbox lists
+  runs waiting at an Approval step ("Approval step N · name"), and the Workflows
+  badges count them for those who may decide.
+
+Migration `b7e2c41d9a63` adds `workflow_step_approval`, numbers step results by
+round (`workflow_checkpoint.round`, `superseded_at`) and adds the `REJECTED` run
+state. Its downgrade cancels runs waiting at an Approval step, turns rejected runs
+into failed ones and keeps only each step's current round. Versions that contain
+Approval steps cannot be read by an API without this change, since steps reject
+unknown fields; versions without them are stored as before.
 
 ## Organization ownership migration (AF-439)
 

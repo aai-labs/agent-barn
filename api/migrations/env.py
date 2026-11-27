@@ -14,6 +14,7 @@ import api.domains.agent_tasks.models
 import api.domains.agent_webhooks.models
 import api.domains.agents.models
 import api.domains.analytics.models
+import api.domains.anomalies.models
 import api.domains.api_keys.models
 import api.domains.artifacts.models
 import api.domains.auth.models
@@ -29,6 +30,7 @@ import api.domains.events.security_audit
 import api.domains.file_sync.models
 import api.domains.integrations.models
 import api.domains.llm_providers.models
+import api.domains.mcp_servers.models
 import api.domains.onboarding.models
 import api.domains.organizations.models
 import api.domains.playbooks.models

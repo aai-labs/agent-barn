@@ -10,16 +10,18 @@ from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
 from api.domains.auth.models import CurrentUserContext
 from api.domains.business_value.catalogue import DEFAULT_MINUTES, OutcomeType
-from api.domains.business_value.classifier import BusinessActionStatus
+from api.domains.business_value.classifier import SHELL_TOOL_NAMES, BusinessActionStatus, command_invocations
 from api.domains.business_value.models import (
     ActivitySeriesPoint,
     ActivityTotalsRead,
     AgentActivityRead,
     AgentValueRead,
+    HourlyWrites,
     OrganizationActivityRead,
     OrganizationValueRead,
     OutcomeMinutesRead,
     OutcomeTypeValueRead,
+    StoredBusinessAction,
     ValueSeriesPoint,
     ValueSettingsRead,
     ValueSettingsUpdate,
@@ -54,6 +56,19 @@ class WriteCategories:
     unverified: int = 0
     failed: int = 0
     unclassified: int = 0
+
+
+def is_shell_tool(tool_name: str) -> bool:
+    """Whether a tool call runs a shell command on either runtime."""
+    return tool_name in SHELL_TOOL_NAMES
+
+
+def shell_invocations(command: str, executables: frozenset[str]) -> list[list[str]]:
+    """The arguments of each invocation of `executables` in a shell tool call's command.
+
+    Exposes the Business Action classifier's shell parsing to other domains.
+    """
+    return command_invocations(command, executables)
 
 
 def effective_minutes(overrides: dict[str, int]) -> dict[OutcomeType, int]:
@@ -163,6 +178,20 @@ class BusinessValueService:
     permission_policy: PermissionPolicy
     organization_lookup: OrganizationLookupService
     event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def hourly_writes(self, agent_id: UUID, since: datetime, until: datetime) -> list[HourlyWrites]:
+        """An Agent's writes and deletes per UTC hour, for the scheduled anomaly check.
+        Background work: no caller and no authorization scope, and no router reaches it."""
+        return self.business_action_repository.hourly_writes(agent_id, since, until)
+
+    def business_actions_stored_between(
+        self, agent_id: UUID, *, after: datetime | None, until: datetime, occurred_since: datetime
+    ) -> list[StoredBusinessAction]:
+        """An Agent's Business Actions stored after a cursor, for the scheduled anomaly
+        check. Background work, like `hourly_writes`."""
+        return self.business_action_repository.stored_between(
+            agent_id, after=after, until=until, occurred_since=occurred_since
+        )
 
     def get_settings(self, organization_id: UUID, context: CurrentUserContext) -> ValueSettingsRead:
         self._require_read(organization_id, context)

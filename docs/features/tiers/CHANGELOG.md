@@ -12,7 +12,9 @@ Related context: [Tiers](../tiers.md), [Credit](../credit.md), [Trial onboarding
   - the Tier's Agent Limit as a layer beneath the Organization's own;
   - Tier Entitlement checks after authorization at every gate point, and the web app hiding what a Tier leaves out;
   - Tier Holds, applied as soon as coverage drops; Owners and Admins swap held Agents and re-enable held items under Settings → Tier;
+  - held Web Chat Connections can be re-enabled when covered, and the Team notice includes all held Agents for Owners and Admins.
   - Free is the trial: sign-up lands on Free or none, and further Organizations on Credit on none while a paid Tier can be bought, the trial's credit and limit live on the Free row, existing trials moved to Free, and Free and none can't buy credit;
+  - enabling self-signup requires Free with Agent Barn Telegram configured or a purchasable paid Tier.
   - the Credit Grant kinds for a paid Tier's one-time credit, allowance and its expiry;
   - subscriptions behind a provider seam: Stripe wherever payments are on (Checkout, upgrades charged now, downgrades at renewal, the customer portal, failed payments and the grace period), and a demo provider (`TIERS_MOCK_PAYMENTS`) otherwise; the Tier sweep, and End period now for demo subscriptions;
   - the onboarding tier step, `/signup?tier=` deep links, and the Billing page's subscription panel;
@@ -51,6 +53,12 @@ Related context: [Tiers](../tiers.md), [Credit](../credit.md), [Trial onboarding
 9. Tier enforcement in one place, in four behavior-preserving phases: (1) the usage guard and its strategies, with every gate moved onto it; (2) the read side and the Agent Limit's Tier layer; (3) Tier Holds as a suspended state each domain owns; (4) a new Organization's starting Tier decided in the tiers domain.
 
 ## Changes
+
+### 2026-11-27 — Tiers — self-signup and Tier Holds fixes
+
+- Signup & trials shows whether a Tier is available for self-signup. Enabling signup requires an available Tier at the time of the write.
+- Owners and Admins get a Team notice based on the full list of held Agents and can re-enable a covered Web Chat Connection.
+- API regression tests cover concurrent signup edits, Tier withdrawal and a Web Chat release racing a downgrade. Browser tests cover the notice when a held Agent is beyond the first page.
 
 ### 2026-11-12 — Tiers — architecture review fixes (PR pending)
 

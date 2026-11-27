@@ -211,6 +211,71 @@ test.describe("WF01 Organization workflow authoring", () => {
     expect(second.name).toMatch(/^Review every open pull request .*request…$/);
   });
 
+  test("an approval step follows an agent step and saves with its type", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.create("Prepare a report");
+    await workflows.buildExample();
+    const addApproval = workflows.editor().getByRole("button", { name: "Add approval step" });
+    await addApproval.click();
+    const steps = workflowDraft.steps.length;
+    // An approval step reviews the agent step before it, so another can't follow straight away.
+    await expect(addApproval).toBeDisabled();
+    await expect(
+      workflows.editor().getByRole("listitem", { name: `Step ${steps + 1} · Approval step` }),
+    ).toBeVisible();
+    await workflows.editor()
+      .getByLabel(`Step ${steps + 1} approval instructions`)
+      .fill("Check the totals\nand the tone");
+    await expect(workflows.editor().getByText("Add step:", { exact: true })).toBeVisible();
+    const decisions = workflows.editor().getByRole("group", {
+      name: `Step ${steps + 1} allowed decisions`,
+    });
+    // Every decision is offered by default, and Approve can't be turned off.
+    await expect(decisions.getByRole("button", { name: "Approve" })).toBeDisabled();
+    await expect(decisions.getByRole("button", { name: "Approve" })).toHaveAttribute("aria-pressed", "true");
+    await decisions.getByRole("button", { name: "Request changes" }).click();
+    await expect(decisions.getByRole("button", { name: "Request changes" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await workflows.save();
+    await expect(page.getByText("Saved v1", { exact: false }).first()).toBeVisible();
+    const saved = draftOf(support.saveRequests[0]).steps as unknown as {
+      type: string;
+      name: string;
+      goal: string;
+      allowed_decisions?: string[] | null;
+    }[];
+    expect(saved.map((step) => step.type)).toEqual([
+      ...workflowDraft.steps.map(() => "agent"),
+      "approval",
+    ]);
+    expect(saved.at(-1)).toMatchObject({
+      name: "Check the totals",
+      goal: "Check the totals\nand the tone",
+      allowed_decisions: ["approve", "reject"],
+    });
+    expect(saved[0].allowed_decisions ?? null).toBeNull();
+  });
+
+  test("an approval step can't come first", async ({ page }) => {
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto();
+    await workflows.create("Prepare a report");
+    await workflows.buildExample();
+    await workflows.editor().getByRole("button", { name: "Add approval step" }).click();
+    const last = workflowDraft.steps.length + 1;
+    await workflows.editor().getByLabel(`Step ${last} approval instructions`).fill("Check it");
+    for (let index = last; index > 1; index--)
+      await workflows.editor().getByRole("button", { name: `Move step ${index} up` }).click();
+    await workflows.save();
+    await expect(
+      workflows.editor().getByText("An approval step can't come first; it reviews the agent step before it").first(),
+    ).toBeVisible();
+    expect(support.saveRequests).toHaveLength(0);
+  });
+
   test("removing every step disables saving until one is added", async ({ page }) => {
     const workflows = new WorkflowsPage(page);
     await workflows.goto();

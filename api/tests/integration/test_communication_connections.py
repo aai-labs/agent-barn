@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import status
 from hamcrest import (
     all_of,
@@ -58,7 +59,7 @@ from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.slack.errors import SlackFetchError
 from api.tests.core.givenpy import given, then, when
@@ -845,6 +846,81 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                 ),
             )
             assert_that(response.json(), not_(has_key("credentials")))
+
+
+def _stored_credentials(context, connection_id: str) -> dict:
+    delegate = context.injector.get(PostgresRepositoryDelegate)
+    with Session(delegate.engine) as session:
+        connection = session.exec(
+            select(CommunicationConnection).where(CommunicationConnection.id == UUID(connection_id))
+        ).one()
+        return json.loads(decrypt_token(connection.credentials_encrypted, TEST_ENCRYPTION_KEY))
+
+
+def test_a_credential_left_blank_keeps_its_stored_value() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_slack_payload(), headers=_auth(context)).json()
+
+        with when("I replace only the bot token"):
+            response = client.patch(
+                f"{_base(context)}/{created['id']}",
+                json={"revision": created["revision"], "credentials": {"bot_token": "xoxb-rotated", "app_token": ""}},
+                headers=_auth(context),
+            )
+
+        with then("the app-level token stays as it was stored"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(
+                _stored_credentials(context, created["id"]),
+                equal_to({"bot_token": "xoxb-rotated", "app_token": TEST_SLACK_APP_TOKEN}),
+            )
+
+
+def test_all_credentials_can_be_replaced_when_the_stored_credentials_cannot_be_decrypted() -> None:
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = _slack_payload()
+        created = client.post(_base(context), json=payload, headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        connection_id = created.json()["id"]
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(CommunicationConnection.id == UUID(connection_id))
+            ).one()
+            connection.credentials_encrypted = encrypt_token(
+                json.dumps(payload["credentials"]), Fernet.generate_key().decode()
+            )
+            session.commit()
+
+        replacement = {"bot_token": "xoxb-rotated", "app_token": "xapp-rotated"}
+        with when("I replace both tokens after the old encryption key was lost"):
+            response = client.patch(
+                f"{_base(context)}/{connection_id}",
+                json={"revision": created.json()["revision"], "credentials": replacement},
+                headers=_auth(context),
+            )
+
+        with then("the replacement is stored under the current encryption key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_stored_credentials(context, connection_id), equal_to(replacement))
+
+
+def test_a_configuration_error_names_the_field_without_echoing_the_credentials() -> None:
+    with given(_GIVEN) as context:
+        secret = "xoxb-must-never-come-back"
+        with when("I submit a Slack Connection without its app-level token"):
+            response = context.client.post(
+                _base(context),
+                json={"platform_key": "slack", "display_name": "Slack", "credentials": {"bot_token": secret}},
+                headers=_auth(context),
+            )
+
+        with then("the error names the missing field and leaves the bot token out"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("App-level token: Field required"))
+            assert_that(response.text, not_(contains_string(secret)))
 
 
 def _discord_with(**settings) -> dict:
@@ -1895,3 +1971,37 @@ def test_journal_pruning_deletes_at_most_one_batch_and_preserves_recent_entries(
         assert operations.prune_journal(retention_days=30, batch_size=2) == 2
         assert operations.prune_journal(retention_days=30, batch_size=2) == 1
         assert operations.prune_journal(retention_days=30, batch_size=2) == 0
+
+
+def _custom_slack_payload() -> dict:
+    return {**_slack_payload(), "settings": {"api_url": "https://chat.example.com/slack/api"}}
+
+
+def test_custom_slack_server_is_accepted_only_on_a_hermes_agent() -> None:
+    with given(_GIVEN_WITH_HERMES_AGENT) as context:
+        client: TestClient = context.client
+        hermes_id = context.agent.id
+
+        with when("I add a Custom Slack server to a Hermes Agent, a Bot, and an OpenClaw Agent"):
+            hermes = client.post(_base(context), json=_custom_slack_payload(), headers=_auth(context))
+            there_is_an_agent(name="Bot", agent_type=AgentType.HERMES, parent_agent_id=hermes_id, bot_slot=1)(context)
+            bot = client.post(_base(context), json=_custom_slack_payload(), headers=_auth(context))
+            there_is_an_agent(name="OpenClaw Agent", agent_type=AgentType.OPENCLAW)(context)
+            openclaw = client.post(_base(context), json=_custom_slack_payload(), headers=_auth(context))
+            own_tokens = {"bot_token": "xoxb-openclaw-own", "app_token": "xapp-openclaw-own"}
+            openclaw_slack = client.post(
+                _base(context), json={**_slack_payload(), "credentials": own_tokens}, headers=_auth(context)
+            )
+            moved_to_custom = client.patch(
+                f"{_base(context)}/{openclaw_slack.json()['id']}",
+                json={"settings": _custom_slack_payload()["settings"], "revision": openclaw_slack.json()["revision"]},
+                headers=_auth(context),
+            )
+
+        with then("only the Hermes Agent keeps it, stored normalized; plain Slack still works everywhere"):
+            assert_that(hermes.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(hermes.json()["settings"]["api_url"], equal_to("https://chat.example.com/slack/api/"))
+            for refused in (bot, openclaw, moved_to_custom):
+                assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+                assert_that(refused.json()["detail"], contains_string("Custom Slack server"))
+            assert_that(openclaw_slack.status_code, equal_to(status.HTTP_201_CREATED))

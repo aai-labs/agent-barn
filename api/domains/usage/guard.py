@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlmodel import Session
+
 from api.domains.usage.models import UsageSummary
 
 
@@ -71,5 +73,13 @@ class UsageGuard(ABC):
         more than its plan covers, which costs a count of what it has."""
 
     @abstractmethod
-    def check(self, organization_id: UUID, action: UsageAction, subject: UsageSubject | None = None) -> None:
-        """Raise the refusal when the action isn't allowed."""
+    def check(
+        self,
+        organization_id: UUID,
+        action: UsageAction,
+        subject: UsageSubject | None = None,
+        *,
+        session: Session | None = None,
+    ) -> None:
+        """Raise the refusal when the action isn't allowed. With a write session, keep the
+        entitlement stable until that transaction ends."""

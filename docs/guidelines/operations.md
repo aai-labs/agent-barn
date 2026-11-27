@@ -85,6 +85,10 @@ LiteLLM's model store is on (`store_model_in_db: true`), so model routes the API
 - Never change it. LiteLLM cannot decrypt stored provider keys under a different value. If it was changed, restore the previous value; otherwise every stored provider key must be saved again so LiteLLM re-encrypts it.
 - The config-file OpenRouter route (`OPENROUTER_API_KEY`) stays at `order: 2` and is rendered only while that key is set. LiteLLM sends requests to the lowest-order healthy route, so a healthy database route at `order: 1` is used instead.
 
+### LiteLLM price list
+
+The chart and Compose set `LITELLM_LOCAL_MODEL_COST_MAP=true`, so LiteLLM uses the price list bundled in its image, at startup and on scheduled or admin reloads. Without it, LiteLLM downloads the list from BerriAI's `main` branch at every start. The list therefore changes only when the LiteLLM image tag changes.
+
 ### OpenRouter key
 
 The OpenRouter key is saved by a Platform Administrator in Platform Admin settings. `OPENROUTER_API_KEY` is optional: while it is set, LiteLLM keeps a config-file route with it and the API falls back to it until a key is saved. A new environment leaves it unset and has no OpenRouter key until one is saved.
@@ -448,10 +452,15 @@ proxy failure returns `502` with the amount already stored, because losing an
 administrator's setting because the proxy blinked is worse than a delayed push. The
 `<release>-llm-budget-reconciler` CronJob pushes stored limits onto every team and
 Agent key every 15 minutes to repair exactly that kind of drift, logging
-`Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
-`concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
-API itself never contacts the proxy at startup. A budget saved while the proxy was
-unreachable is therefore applied within one interval rather than at the next restart.
+`Organization LiteLLM budgets reconciled`. It then sets every live Agent key's model
+list ([LLM Providers](../features/llm-providers.md#provider-access)), logging
+`Agent key models reconciled (<keys> keys, <changed> updated)`, or how many failed with
+each failure logged by Agent id. So a changed default, decision model or Playbook
+model reaches the keys of Agents not started since within one interval. Like the
+other reconcilers it runs under `concurrencyPolicy: Forbid`, so one runner regardless
+of API replica count, and the API itself never contacts the proxy at startup. A
+budget saved while the proxy was unreachable is therefore applied within one interval
+rather than at the next restart.
 Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budget-alerts`.
 
 `ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS` sets the percentages at which an
@@ -625,6 +634,18 @@ Organizations on Credit buy more through Stripe Checkout (see `../features/credi
 - **Testing subscriptions in the sandbox:** pay with `4242 4242 4242 4242`; `4000 0000 0000 0341` subscribes but fails every renewal. Renewals need a Customer on a Stripe test clock, advanced past the period's end.
 - Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
 - A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
+
+## Anomaly checks
+
+The `anomaly-checks` CronJob (`anomalyChecks` chart values, `11-59/15 * * * *`) compares
+each Agent of an Organization that turned [anomaly detection](../features/anomaly-detection.md)
+on with its own last 14 days. It runs five minutes after each cost sync starts, so the LLM
+figures it reads are as fresh as they get; it reads them only up to the last completed sync.
+It needs only the API's Secret (the database), no cluster access. An Agent whose check
+fails is logged and the rest are still checked; the Job succeeds and the next run retries
+that Agent. Only a run that cannot check at all (no database) fails the Job. Locally, `./run.sh` runs it as Compose's
+`anomaly-checks` service every 15 minutes; `make run-anomaly-checks` runs one pass from the
+host.
 
 ## Tier subscriptions and the Tier sweep
 

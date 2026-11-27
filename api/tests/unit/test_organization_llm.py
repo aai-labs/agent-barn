@@ -201,6 +201,7 @@ def organization_service(**overrides):
     deps = {
         "organization_repository": MagicMock(),
         "agent_budgets": MagicMock(),
+        "agent_key_models": MagicMock(),
         "agent_settings": MagicMock(),
         "litellm": MagicMock(),
         "permission_policy": MagicMock(),
@@ -239,6 +240,18 @@ def test_reconcile_brings_agent_keys_in_step_after_the_teams():
     with configured():
         service.reconcile_llm_budgets()
     service.agent_budgets.reconcile_key_budgets.assert_called_once_with()
+
+
+def test_reconcile_sets_agent_key_models_after_the_key_budgets():
+    steps = MagicMock()
+    service = organization_service(agent_budgets=steps.agent_budgets, agent_key_models=steps.agent_key_models)
+    service.organization_repository.list_budget_policies.return_value = []
+    with configured():
+        service.reconcile_llm_budgets()
+    assert_that(
+        [name for name, _, _ in steps.mock_calls],
+        equal_to(["agent_budgets.reconcile_key_budgets", "agent_key_models.reconcile"]),
+    )
 
 
 def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
@@ -300,6 +313,7 @@ def test_reconcile_is_skipped_when_litellm_is_not_configured():
     ):
         service.reconcile_llm_budgets()
     service.litellm.apply_team_budget.assert_not_called()
+    service.agent_key_models.reconcile.assert_not_called()
 
 
 def stored_org(ceiling=None, window="30d", own=None, org_id="org"):

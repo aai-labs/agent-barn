@@ -104,7 +104,7 @@ class WorkflowService:
 
     def capabilities(self, organization_id: UUID, context: CurrentUserContext) -> WorkflowCapabilitiesRead:
         self._member(organization_id, context)
-        return WorkflowCapabilitiesRead(authoring=True, execution=True)
+        return WorkflowCapabilitiesRead(execution=True)
 
     def _actions(self, archived_at: datetime | None, can_author: bool) -> list[Literal["save_version", "archive"]]:
         if can_author and archived_at is None:

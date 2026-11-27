@@ -198,6 +198,16 @@ class PlaybookExtractionRepository:
         with Session(self.delegate.engine) as session:
             return session.get(PlaybookExtraction, extraction_id)
 
+    def running_models(self, source_agent_id: UUID) -> list[str]:
+        with Session(self.delegate.engine) as session:
+            models = session.exec(
+                select(PlaybookExtraction.model).where(
+                    col(PlaybookExtraction.source_agent_id) == source_agent_id,
+                    col(PlaybookExtraction.status) == PlaybookExtractionStatus.RUNNING,
+                )
+            ).all()
+            return [model for model in models if model]
+
     def cancel(self, extraction_id: UUID) -> PlaybookExtraction | None:
         """Cancel a queued or running run; None if it had already finished."""
         now = datetime.now(UTC)

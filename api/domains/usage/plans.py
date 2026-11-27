@@ -44,6 +44,11 @@ class OrganizationPlans(ABC):
         be, so the Organization has no plan and is unrestricted, as before plans existed."""
 
     @abstractmethod
+    def paid_signup_available(self, *, session: Session | None = None) -> bool:
+        """Whether a new Organization can subscribe. With a write session, keep that
+        option available until the transaction ends."""
+
+    @abstractmethod
     def trial_terms(self, session: Session, *, for_update: bool = False) -> TrialTerms | None:
         """The trial's credit, Agent limit and whether it is offered, read in the caller's
         transaction. `for_update` locks them until it ends."""

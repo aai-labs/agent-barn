@@ -131,6 +131,14 @@ test.describe("Hire Dialog", () => {
   });
 
   test("hires on a specific model picked from the model menu", async ({ page }) => {
+    await dataSupport.agents.interceptGetModelsRequest({
+      body: [
+        { value: "litellm/openrouter/z-ai/glm-5.2", label: "GLM 5.2", is_default: true },
+        { value: "litellm/openrouter/openai/gpt-5-mini", label: "GPT-5 mini" },
+      ],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
     await page.getByRole("radio", { name: "Choose a specific model" }).check();
     await page.getByRole("button", { name: "Model", exact: true }).click();
     await page.getByPlaceholder("Search models…").fill("mini");
@@ -147,6 +155,15 @@ test.describe("Hire Dialog", () => {
       approval_mode: "auto",
       model: "litellm/openrouter/openai/gpt-5-mini",
     });
+  });
+
+  test("offers no models when the Organization has none", async ({ page }) => {
+    await page.getByRole("radio", { name: "Choose a specific model" }).click();
+
+    await expect(page.getByRole("radio", { name: /use organization default/i })).toBeChecked();
+    await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveCount(0);
+    await expect(page.getByText("GLM 5.2")).toHaveCount(0);
+    await expect(page.getByText("GPT-5 mini")).toHaveCount(0);
   });
 
   test("offers file sync, on by default, when a connected provider syncs files", async ({ page }) => {
