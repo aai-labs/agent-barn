@@ -47,6 +47,7 @@ AF453_TABLES = {
 # AF-464: who was already emailed for an alert delivery.
 AF464_TABLES = {"anomaly_alert_email_receipt"}
 AF464_REVISION = "2180817c8927"
+PRE_AF464_REVISION = "b3d81c5e9f42"
 # AF-464: whether an Organization emails its alerts.
 AF464_ALERTS_REVISION = "4010f1f2d1f1"
 AF453_PERMISSIONS = (PermissionKey.ANOMALY_READ, PermissionKey.ANOMALY_MANAGE)
@@ -201,7 +202,7 @@ def test_the_alert_receipt_migration_creates_its_table_and_removes_it_on_downgra
     command.upgrade(scratch_database.config, AF464_REVISION)
     assert_that(tables(), equal_to(AF464_TABLES))
 
-    command.downgrade(scratch_database.config, AF453_REVISION)
+    command.downgrade(scratch_database.config, PRE_AF464_REVISION)
     assert_that(tables(), equal_to(set()))
 
 

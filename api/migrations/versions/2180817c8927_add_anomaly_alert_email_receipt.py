@@ -1,7 +1,7 @@
 """Add anomaly alert email receipts
 
 Revision ID: 2180817c8927
-Revises: 92996d692c89
+Revises: b3d81c5e9f42
 Create Date: 2026-11-25
 
 Owners and Admins are emailed when a check flags unusual activity worth a look. One
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "2180817c8927"
-down_revision: str | Sequence[str] | None = "92996d692c89"
+down_revision: str | Sequence[str] | None = "b3d81c5e9f42"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
