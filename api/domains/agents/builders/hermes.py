@@ -48,6 +48,7 @@ HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
+HERMES_SESSION_PRUNE_PY: str = (_SCRIPTS / "session-prune.py").read_text()
 BOT_SETUP_PY: str = (_SCRIPTS / "bot-setup.py").read_text()
 BOT_RUN_PY: str = (_SCRIPTS / "bot-run.py").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
@@ -180,7 +181,8 @@ def _hermes_config_core(
         "cron": {"wrap_response": False},
         # Hermes keeps every session in state.db unless pruned; frequent crons grew one
         # Agent's past 1 GB, where checkpoints lag and corruption costs the most. Pruning
-        # runs at gateway start, at most daily, and only touches ended sessions.
+        # runs at gateway start, at most daily, and only touches ended sessions. Cron
+        # sessions get 7 days instead, pruned daily by session-prune.py from start.sh.
         "sessions": {"auto_prune": True, "retention_days": HERMES_SESSION_RETENTION_DAYS},
         "group_sessions_per_user": False,
         "plugins": {
@@ -643,6 +645,7 @@ def build_hermes_config_map(
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
+        "session-prune.py": HERMES_SESSION_PRUNE_PY,
         "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,

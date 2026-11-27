@@ -465,6 +465,18 @@ def test_gateway_config_prunes_old_sessions_so_state_db_stays_bounded() -> None:
     assert config["sessions"] == {"auto_prune": True, "retention_days": 30}
 
 
+def test_start_script_prunes_cron_sessions_at_boot_and_daily_before_the_gateway() -> None:
+    """Every cron run adds a session, and Hermes' own prune keeps 30 days of them and runs
+    only at gateway start; one Agent's 1 GiB volume filled with cron transcripts."""
+    data = _config_map_with().data
+    start = data["start.sh"]
+    once = "/opt/hermes/.venv/bin/python /app/config/session-prune.py || true"
+    daily = "/opt/hermes/.venv/bin/python /app/config/session-prune.py --every 86400 &"
+
+    assert "CRON_RETENTION_DAYS = 7" in data["session-prune.py"]
+    assert start.index(once) < start.index(daily) < start.index("exec hermes gateway run")
+
+
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
     """Auxiliary tasks left on the openrouter lane reach the proxy without the
     agent's key; smart approval then escalates every flagged command to the user.
