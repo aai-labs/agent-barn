@@ -108,7 +108,7 @@ What an Organization's Tier no longer covers is held: stopped or switched off, n
 | What | Held means | Released by |
 | --- | --- | --- |
 | Agent | Suspended (`agent.suspended_at`, `suspension_reason` `tier`) and stopped. Every start path refuses it with `409` `AGENT_SUSPENDED` and `reason` `tier`, and it takes no place in the Agent Limit. Its configuration, volume, Connections and data stay. | An Owner or Admin releasing it while the Agent Limit has a place; it stays stopped until started |
-| Connection | Suspended: `enabled` false, `suspended_at` set, `suspension_reason` `tier` | Enabling it again, which the Platform check allows once the Tier covers it. The built-in Web Chat Connection takes no other change, but a held one is released the same way |
+| Connection | Suspended: `enabled` false, `suspended_at` set, `suspension_reason` `tier` | Enabling it again, which the Platform check allows once the Tier covers it. A held built-in Web Chat Connection can only be re-enabled. That release is serialized with Tier assignment and catalog edits |
 | Agent Webhook | Suspended: `enabled` false, `suspended_at` set, `suspension_reason` `tier`; its ingress refuses jobs at once | Enabling it again |
 | Agent Memory | `memory_enabled` false, `agent.memory_suspended_at` set, `memory_suspension_reason` `tier`; stored memories are kept, as when memory is turned off | Turning memory on again |
 

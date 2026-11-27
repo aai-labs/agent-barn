@@ -26,11 +26,12 @@ export function TierHoldsNotice({ organizationId, heldAgents }: { organizationId
   const { holds } = useTierHolds(organizationId, canChoose);
   const { tier, hasFeature, allowsPlatform } = useTierEntitlements();
 
+  const heldAgentCount = canChoose && holds ? holds.agents.filter((agent) => agent.suspendedAt).length : heldAgents;
   const connections = holds?.connections ?? [];
   const webhooks = holds?.webhooks ?? [];
   const memory = holds?.memory ?? [];
   const parts = [
-    heldAgents > 0 && count(heldAgents, "agent", "agents"),
+    heldAgentCount > 0 && count(heldAgentCount, "agent", "agents"),
     connections.length > 0 && count(connections.length, "channel", "channels"),
     webhooks.length > 0 && count(webhooks.length, "webhook", "webhooks"),
     memory.length > 0 && `memory on ${count(memory.length, "agent", "agents")}`,
@@ -43,7 +44,7 @@ export function TierHoldsNotice({ organizationId, heldAgents }: { organizationId
     (webhooks.length > 0 && !hasFeature("agent_webhooks")) ||
     (memory.length > 0 && !hasFeature("agent_memory"));
   // Only switched-off items the tier now includes: nothing to choose, just turn them back on.
-  const releasable = heldAgents === 0 && !leftOut;
+  const releasable = heldAgentCount === 0 && !leftOut;
   const them = connections.length + webhooks.length + memory.length === 1 ? "it" : "them";
 
   return (
