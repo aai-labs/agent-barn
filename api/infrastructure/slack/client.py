@@ -6,13 +6,14 @@ from api.infrastructure.slack.cache import cached, clear_directory_cache
 from api.infrastructure.slack.errors import (
     APP_TOKEN_ERRORS,
     BOT_TOKEN_ERRORS,
+    SlackApiError,
     SlackFetchError,
 )
 from api.infrastructure.slack.transport import request_json
 
 # Re-exported so callers can depend on the client module alone for the public
 # surface, regardless of how the internals are split across modules.
-__all__ = ["SlackClient", "SlackFetchError", "clear_directory_cache"]
+__all__ = ["SlackApiError", "SlackClient", "SlackFetchError", "clear_directory_cache"]
 
 SLACK_API_URL = "https://slack.com/api"
 _PAGE_SIZE = 200
@@ -125,6 +126,47 @@ class SlackClient:
         except Exception:
             return {}
 
+    def get_workspace(self) -> dict:
+        """The workspace this bot token belongs to: team_id, team (its name) and enterprise_id."""
+        body = self._call("auth.test", {})
+        if not body.get("team_id"):
+            raise SlackFetchError("auth.test error: no_team_id")
+        return {
+            "team_id": body["team_id"],
+            "team": body.get("team", ""),
+            "enterprise_id": body.get("enterprise_id") or None,
+        }
+
+    def post_message(
+        self, channel_id: str, text: str, thread_ts: str | None = None, blocks: list[dict] | None = None
+    ) -> str:
+        """Posts `text` (Slack mrkdwn) as the bot, in a thread when one is named; returns the message's ts.
+
+        With `blocks`, Slack shows those and keeps `text` for notifications."""
+        payload: dict = {"channel": channel_id, "text": text, "unfurl_links": False, "unfurl_media": False}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        if blocks:
+            payload["blocks"] = blocks
+        body = self._call("chat.postMessage", payload)
+        if not body.get("ts"):
+            raise SlackFetchError("chat.postMessage error: no_ts")
+        return str(body["ts"])
+
+    def update_message(self, channel_id: str, ts: str, text: str, blocks: list[dict] | None = None) -> None:
+        """Replaces the bot's own message at `ts`; an empty `blocks` list removes the earlier blocks."""
+        payload: dict = {"channel": channel_id, "ts": ts, "text": text, "blocks": blocks or []}
+        self._call("chat.update", payload)
+
+    def _call(self, method: str, payload: dict) -> dict:
+        try:
+            body = self._post(method, payload)
+        except Exception as exc:
+            raise SlackFetchError(f"{method} request failed: {exc}") from exc
+        if not body.get("ok"):
+            raise SlackApiError(method, str(body.get("error") or "unknown_error"))
+        return body
+
     def get_conversation(self, channel_id: str) -> dict:
         body = self._get("conversations.info", {"channel": channel_id})
         if not body.get("ok") or not body.get("channel"):
@@ -134,8 +176,10 @@ class SlackClient:
     def open_dm(self, user_id: str) -> str:
         body = self._post("conversations.open", {"users": user_id})
         channel_id = (body.get("channel") or {}).get("id")
-        if not body.get("ok") or not channel_id:
-            raise SlackFetchError(f"conversations.open error: {body.get('error', 'unknown_error')}")
+        if not body.get("ok"):
+            raise SlackApiError("conversations.open", str(body.get("error") or "unknown_error"))
+        if not channel_id:
+            raise SlackFetchError("conversations.open error: no_channel")
         return str(channel_id)
 
     # --- cached directory listings -----------------------------------------

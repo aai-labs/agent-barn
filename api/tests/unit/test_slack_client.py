@@ -1,9 +1,11 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 from api.infrastructure.slack.client import (
+    SlackApiError,
     SlackClient,
     SlackFetchError,
     clear_directory_cache,
@@ -342,3 +344,64 @@ def test_directory_cache_is_kept_apart_per_server():
 
     assert [u["id"] for u in slack] == ["U1"]
     assert [u["id"] for u in custom] == ["U2"]
+
+
+# --- messages and workspace --------------------------------------------------------
+
+
+def test_post_message_sends_blocks_without_unfurling_and_returns_its_ts():
+    request = _mock_httpx([_resp({"ok": True, "ts": "1780000000.000100"})])
+    with patch("httpx.request", request):
+        ts = SlackClient("xoxb-token").post_message("D1", "fallback", blocks=[{"type": "divider"}])
+
+    sent = json.loads(request.call_args.kwargs["content"])
+    assert ts == "1780000000.000100"
+    assert sent == {
+        "channel": "D1",
+        "text": "fallback",
+        "unfurl_links": False,
+        "unfurl_media": False,
+        "blocks": [{"type": "divider"}],
+    }
+
+
+def test_update_message_replaces_the_blocks_even_when_none_remain():
+    request = _mock_httpx([_resp({"ok": True, "ts": "1"})])
+    with patch("httpx.request", request):
+        SlackClient("xoxb-token").update_message("D1", "1", "settled")
+
+    assert json.loads(request.call_args.kwargs["content"]) == {
+        "channel": "D1",
+        "ts": "1",
+        "text": "settled",
+        "blocks": [],
+    }
+
+
+@pytest.mark.parametrize("call", ["post", "update", "workspace", "open_dm"])
+def test_a_slack_refusal_carries_its_code(call):
+    with patch("httpx.request", _mock_httpx([_resp({"ok": False, "error": "user_not_found"})])):
+        client = SlackClient("xoxb-token")
+        with pytest.raises(SlackApiError) as raised:
+            {
+                "post": lambda: client.post_message("D1", "x"),
+                "update": lambda: client.update_message("D1", "1", "x"),
+                "workspace": client.get_workspace,
+                "open_dm": lambda: client.open_dm("U1"),
+            }[call]()
+
+    assert raised.value.code == "user_not_found"
+
+
+def test_an_unreachable_slack_is_a_fetch_error_not_a_refusal():
+    with patch("httpx.request", _mock_httpx([httpx.ConnectError("down")] * 5)), patch("time.sleep"):
+        with pytest.raises(SlackFetchError) as raised:
+            SlackClient("xoxb-token").post_message("D1", "x")
+
+    assert not isinstance(raised.value, SlackApiError)
+
+
+def test_get_workspace_reads_the_team_from_auth_test():
+    body = {"ok": True, "team_id": "T1", "team": "Acme", "enterprise_id": ""}
+    with patch("httpx.request", _mock_httpx([_resp(body)])):
+        assert SlackClient("xoxb-token").get_workspace() == {"team_id": "T1", "team": "Acme", "enterprise_id": None}

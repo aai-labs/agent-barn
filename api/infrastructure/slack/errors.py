@@ -7,6 +7,14 @@ class SlackFetchError(Exception):
     """
 
 
+class SlackApiError(SlackFetchError):
+    """Slack answered, and refused the call with an error code such as `user_not_found`."""
+
+    def __init__(self, method: str, code: str) -> None:
+        super().__init__(f"{method} error: {code}")
+        self.code = code
+
+
 # Human-facing messages for the Slack error codes token validation can return,
 # keyed by the `error` field of a non-ok auth.test / apps.connections.open response.
 BOT_TOKEN_ERRORS: dict[str, str] = {
