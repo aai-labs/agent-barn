@@ -4,7 +4,7 @@ from uuid import uuid7
 
 import httpx
 import pytest
-from hamcrest import assert_that, close_to, equal_to, is_in
+from hamcrest import assert_that, close_to, equal_to, has_entry, has_key, is_in, is_not
 from sqlmodel import Session
 
 from api.core.config import Config
@@ -55,6 +55,8 @@ BUILT_IN_PRIORITY_COST = 600 * 4.25e-06 + 400 * 2.125e-06 + 100 * 1.7e-05
 BUILT_IN_INPUT_PRICE = Decimal("0.0000025")
 COST_DIGITS = 12
 REFUSED_STATUS = 400
+SESSION_ID = "hermes-session-contract"
+OPENROUTER_MODEL = "openrouter/z-ai/glm-5.2"
 
 
 def platform_admin(context):
@@ -137,10 +139,10 @@ def _save(context, slug: str, *models: tuple[str, tuple[str, str, str, str]]) ->
     assert_that(response.status_code, equal_to(200), response.text)
 
 
-def _chat(context, model: str) -> httpx.Response:
+def _chat(context, model: str, **extra) -> httpx.Response:
     return httpx.post(
         f"{context.litellm_url}/v1/chat/completions",
-        json={"model": model, "messages": [{"role": "user", "content": "hello"}]},
+        json={"model": model, "messages": [{"role": "user", "content": "hello"}], **extra},
         headers={"Authorization": f"Bearer {MASTER_KEY}"},
         timeout=30,
     )
@@ -232,3 +234,23 @@ def test_connections_sharing_a_model_string_keep_their_own_routes(monkeypatch):
         with then("LiteLLM's price list still gives its own price for the model"):
             listed = context.litellm.get_model_prices()[MODEL]
             assert_that(listed.input_cost_per_token, equal_to(BUILT_IN_INPUT_PRICE))
+
+
+def test_a_model_route_drops_openrouters_session_id_and_openrouter_keeps_it(monkeypatch):
+    with given(_setup(monkeypatch, lab_connection("lab", FIRST_KEY))) as context:
+        with when("a model is saved and a request carrying OpenRouter's session_id is sent to its route"):
+            _save(context, "lab", (MODEL, PRICES))
+            served = _chat(context, f"lab/{MODEL}", session_id=SESSION_ID)
+
+        with then("the provider receives the request without session_id"):
+            assert_that(served.status_code, equal_to(200), served.text)
+            assert_that(context.chat_stub.bodies[-1], has_entry("model", MODEL))
+            assert_that(context.chat_stub.bodies[-1], is_not(has_key("session_id")))
+
+        with when("the same request is sent to OpenRouter"):
+            forwarded = _chat(context, OPENROUTER_MODEL, session_id=SESSION_ID)
+
+        with then("OpenRouter receives session_id"):
+            assert_that(forwarded.status_code, equal_to(200), forwarded.text)
+            assert_that(context.chat_stub.keys[-1], equal_to(ENV_KEY))
+            assert_that(context.chat_stub.bodies[-1], has_entry("session_id", SESSION_ID))

@@ -22,6 +22,7 @@ FIXED_API_BASES = {
 }
 AZURE_API_VERSION = "v1"
 KEY_FINGERPRINT_LENGTH = 16
+DROPPED_PARAMS = ["session_id"]
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ def build_model_deployment(
             "output_cost_per_token": float(model.output_cost_per_token),
             "cache_read_input_token_cost": float(model.cache_read_input_token_cost),
             "cache_creation_input_token_cost": float(model.cache_creation_input_token_cost),
+            "additional_drop_params": list(DROPPED_PARAMS),
         },
         model_info={
             "id": model_route_id(connection.id, model.id),

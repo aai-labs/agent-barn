@@ -67,6 +67,7 @@ ROUTE_PRICES = {
     "cache_read_input_token_cost": 1.25e-06,
     "cache_creation_input_token_cost": 0.0,
 }
+DROPPED_PARAMS = {"additional_drop_params": ["session_id"]}
 OTHER_ROUTE_ID = "agentbarn:model:0190a1b2-0000-7000-8000-000000000009:0190a1b2-0000-7000-8000-000000000010"
 OTHER_ROUTE = {
     "model_name": "anthropic/claude-sonnet-4-5",
@@ -1269,6 +1270,7 @@ def _azure_routes(context, key: str, base_url: str) -> dict[str, dict]:
                 "api_version": "v1",
                 "api_key": key,
                 **ROUTE_PRICES,
+                **DROPPED_PARAMS,
             },
             "model_info": _model_info(_route_id(context.connection, model), key),
         }
@@ -1864,6 +1866,7 @@ def _claude_route(context, model_id: str, row_id: UUID, prices: tuple[str, str, 
                 "output_cost_per_token": float(prices[1]),
                 "cache_read_input_token_cost": float(prices[2]),
                 "cache_creation_input_token_cost": float(prices[3]),
+                **DROPPED_PARAMS,
             },
             "model_info": _model_info(route_id, ANTHROPIC_KEY),
         }
@@ -2457,6 +2460,7 @@ def test_a_custom_connection_saves_typed_prices_routed_at_its_base_url():
                         "output_cost_per_token": 2e-06,
                         "cache_read_input_token_cost": 0.0,
                         "cache_creation_input_token_cost": 0.0,
+                        **DROPPED_PARAMS,
                     },
                     "model_info": _model_info(route_id, CUSTOM_KEY),
                 }
@@ -2508,6 +2512,7 @@ def _azure_route(context, deployment: str, row_id: UUID, prices: tuple[str, str,
                 "output_cost_per_token": float(prices[1]),
                 "cache_read_input_token_cost": float(prices[2]),
                 "cache_creation_input_token_cost": float(prices[3]),
+                **DROPPED_PARAMS,
             },
             "model_info": _model_info(route_id, AZURE_KEY),
         }
